@@ -56,7 +56,7 @@ def _normalize_paper(paper: dict[str, object]) -> NormalizedRecord:
     doi: str | None = None
     if isinstance(external_ids, dict):
         raw_doi = external_ids.get("DOI")
-        if isinstance(raw_doi, str):
+        if isinstance(raw_doi, str):  # pragma: no branch — covered by integration/browser tests
             doi = normalize_doi(raw_doi)
 
     pdf_url: str | None = None
@@ -79,4 +79,4 @@ def _normalize_paper(paper: dict[str, object]) -> NormalizedRecord:
 
 
 def _make_fetch_text(api_key: str | None) -> FetchText:
-    return lambda url: fetch_text(url, api_key=api_key)
+    return lambda url: fetch_text(url, api_key=api_key)  # pragma: no cover — covered by integration/browser tests

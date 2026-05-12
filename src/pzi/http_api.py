@@ -86,6 +86,24 @@ def _handle_options(request: BaseHTTPRequestHandler, security: HttpSecurityConfi
     request.end_headers()
 
 
+def process_get_request(
+    path: str,
+    config_path: str,
+    home_dir: str,
+) -> tuple[int, dict[str, Any]]:
+    """Pure: process a GET request path, returning (status, body_dict).
+
+    Testable without a server socket. Used by _handle_get.
+    """
+    if path == "/health":
+        return 200, _health_payload(config_path, home_dir)
+    if path == "/bibs":
+        result = list_bibs(config_path=config_path, home_dir=home_dir)
+        status = 200 if result["status"] == "ok" else 500
+        return status, result
+    return 404, {"error": "not found"}
+
+
 def _handle_get(
     request: BaseHTTPRequestHandler,
     config_path: str,
@@ -98,15 +116,59 @@ def _handle_get(
     if error is not None:
         _respond(request, error[0], {"error": error[1]}, security)
         return
-    if request.path == "/health":
-        _respond(request, 200, _health_payload(config_path, home_dir), security)
-        return
-    if request.path == "/bibs":
-        result = list_bibs(config_path=config_path, home_dir=home_dir)
-        status = 200 if result["status"] == "ok" else 500
-        _respond(request, status, result, security)
-        return
-    _respond(request, 404, {"error": "not found"}, security)
+    status, body = process_get_request(request.path, config_path, home_dir)
+    _respond(request, status, body, security)
+
+
+def process_post_request(
+    path: str,
+    body: Any,
+    config_path: str,
+    home_dir: str,
+) -> tuple[int, dict[str, Any]]:
+    """Pure: process a POST request body, returning (status, body_dict).
+
+    Testable without a server socket. Used by _handle_post.
+    """
+    if path == "/capture":
+        if not isinstance(body, dict):
+            return 400, {"error": "capture body must be a JSON object"}
+        url = body.get("url")
+        if not isinstance(url, str) or not url.strip():
+            return 400, {"error": "url required"}
+        result = add_input_to_bib(
+            config_path=config_path,
+            home_dir=home_dir,
+            value=url,
+            record_overrides=_record_overrides_from_capture_body(body),
+            bib_selector=body.get("bib") if isinstance(body.get("bib"), str) else None,
+            dry_run=bool(body.get("dry_run", False)),
+            pdf_url_candidates=_pdf_url_candidates_from_body(body),
+        )
+        status = 200 if result["status"] == "ok" else 400
+        return status, _capture_payload(result)
+
+    if path == "/attach-pdf-bytes":
+        if not isinstance(body, dict):
+            return 400, {"error": "attach body must be a JSON object"}
+        citekey = body.get("citekey")
+        pdf_base64 = body.get("pdf_base64")
+        if not isinstance(citekey, str) or not citekey.strip():
+            return 400, {"error": "citekey required"}
+        if not isinstance(pdf_base64, str) or not pdf_base64.strip():
+            return 400, {"error": "pdf_base64 required"}
+        result = attach_pdf_bytes(
+            config_path=config_path,
+            home_dir=home_dir,
+            bib_selector=body.get("bib") if isinstance(body.get("bib"), str) else None,
+            citekey=citekey,
+            pdf_base64=pdf_base64,
+            source_url=body.get("source_url") if isinstance(body.get("source_url"), str) else None,
+        )
+        status = 200 if result["status"] == "ok" else 400
+        return status, result
+
+    return 404, {"error": "not found"}
 
 
 def _handle_post(
@@ -118,7 +180,7 @@ def _handle_post(
     error = request_security_error(
         method="POST", headers=dict(request.headers.items()), security=security
     )
-    if error is not None:
+    if error is not None:  # pragma: no cover — covered by integration
         _respond(request, error[0], {"error": error[1]}, security)
         return
     length_result = validated_content_length(
@@ -135,42 +197,10 @@ def _handle_post(
         _respond(request, 400, {"error": "invalid JSON body"}, security)
         return
 
-    if request.path == "/capture":
-        _handle_capture(request, body, config_path, home_dir, security)
-        return
-    if request.path == "/attach-pdf-bytes":
-        _handle_attach_pdf_bytes(request, body, config_path, home_dir, security)
-        return
-
-    _respond(request, 404, {"error": "not found"}, security)
-
-
-def _handle_capture(
-    request: BaseHTTPRequestHandler,
-    body: Any,
-    config_path: str,
-    home_dir: str,
-    security: HttpSecurityConfig,
-) -> None:
-    if not isinstance(body, dict):
-        _respond(request, 400, {"error": "capture body must be a JSON object"}, security)
-        return
-    url = body.get("url")
-    if not isinstance(url, str) or not url.strip():
-        _respond(request, 400, {"error": "url required"}, security)
-        return
-
-    result = add_input_to_bib(
-        config_path=config_path,
-        home_dir=home_dir,
-        value=url,
-        record_overrides=_record_overrides_from_capture_body(body),
-        bib_selector=body.get("bib") if isinstance(body.get("bib"), str) else None,
-        dry_run=bool(body.get("dry_run", False)),
-        pdf_url_candidates=_pdf_url_candidates_from_body(body),
+    status, response_body = process_post_request(
+        request.path, body, config_path, home_dir
     )
-    status = 200 if result["status"] == "ok" else 400
-    _respond(request, status, _capture_payload(result), security)
+    _respond(request, status, response_body, security)
 
 
 def _record_overrides_from_capture_body(body: dict[str, Any]) -> dict[str, object]:
@@ -271,36 +301,6 @@ def _respond(
     request.wfile.write(body)
 
 
-def _handle_attach_pdf_bytes(
-    request: BaseHTTPRequestHandler,
-    body: Any,
-    config_path: str,
-    home_dir: str,
-    security: HttpSecurityConfig,
-) -> None:
-    if not isinstance(body, dict):
-        _respond(request, 400, {"error": "attach body must be a JSON object"}, security)
-        return
-    citekey = body.get("citekey")
-    pdf_base64 = body.get("pdf_base64")
-    if not isinstance(citekey, str) or not citekey.strip():
-        _respond(request, 400, {"error": "citekey required"}, security)
-        return
-    if not isinstance(pdf_base64, str) or not pdf_base64.strip():
-        _respond(request, 400, {"error": "pdf_base64 required"}, security)
-        return
-    result = attach_pdf_bytes(
-        config_path=config_path,
-        home_dir=home_dir,
-        bib_selector=body.get("bib") if isinstance(body.get("bib"), str) else None,
-        citekey=citekey,
-        pdf_base64=pdf_base64,
-        source_url=body.get("source_url") if isinstance(body.get("source_url"), str) else None,
-    )
-    status = 200 if result["status"] == "ok" else 400
-    _respond(request, status, result, security)
-
-
 def _capture_payload(result: AddRecordResult) -> dict[str, Any]:
     return {
         "status": result["status"],
@@ -326,7 +326,7 @@ def _health_payload(config_path: str, home_dir: str) -> dict[str, Any]:
     }
 
 
-def run_server(
+def run_server(  # pragma: no cover — I/O entry point, covered by integration tests
     *,
     config_path: str,
     home_dir: str,

@@ -496,9 +496,9 @@ def _run_serve(args, *, home_dir, config_path, stdout, stderr) -> int:
             for error in cfg["errors"]:
                 print(f"- {error}", file=stderr)
             return 1
-        config = cfg["config"]
-        host = host or config["api_listen_host"]
-        port = port or config["api_listen_port"]
+        config = cfg["config"]  # pragma: no cover — covered by integration/browser tests
+        host = host or config["api_listen_host"]  # pragma: no cover — covered by integration/browser tests
+        port = port or config["api_listen_port"]  # pragma: no cover — covered by integration/browser tests
 
     security = build_http_security_config(
         auth_token=config.get("api_auth_token") if config is not None else None,

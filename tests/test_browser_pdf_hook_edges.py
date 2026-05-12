@@ -114,116 +114,62 @@ def test_ensure_browser_reports_install_failure(monkeypatch) -> None:
     assert hook._ensure_browser("firefox") is False
 
 
-class FakeResponse:
-    def __init__(
-        self,
-        status: int = 200,
-        content_type: str = "application/pdf",
-        body: bytes = b"%PDF-x",
-    ) -> None:
-        self.status = status
-        self.headers = {"content-type": content_type}
-        self._body = body
-
-    def body(self) -> bytes:
-        return self._body
-
-
-class FakeRequest:
-    def __init__(self, response=None, error: Exception | None = None) -> None:
-        self.response = response
-        self.error = error
-
-    def get(self, url: str):
-        if self.error:
-            raise self.error
-        return self.response
-
-
-class FakeBrowserPage:
-    def __init__(self) -> None:
-        self.url = "https://journal.test/article"
-        self.request = FakeRequest(FakeResponse())
-        self.goto_calls: list[str] = []
-        self.evaluate_results: list[object] = []
-        self.goto_responses: list[object] = []
-        self.clickable_selectors: set[str] = set()
-
-    def goto(self, url: str, **kwargs):
-        self.goto_calls.append(url)
-        if self.goto_responses:
-            return self.goto_responses.pop(0)
-        return None
-
-    def wait_for_load_state(self, *args, **kwargs) -> None:
-        return None
-
-    def evaluate(self, script: str):
-        return self.evaluate_results.pop(0) if self.evaluate_results else []
-
-    def locator(self, selector: str) -> FakeLocator:
-        return FakeLocator(self, selector)
-
-
-def test_discover_pdf_url_returns_post_click_pdf_url(monkeypatch) -> None:
-    page = FakeBrowserPage()
-    page.url = "https://journal.test/download.pdf"
-    page.evaluate_results = [[]]
-    monkeypatch.setattr(
-        hook,
-        "_launch_browser",
-        lambda browser, profile_path: (object(), object(), page),
+from tests.fake_session import FakeBrowserSession
+def test_discover_pdf_url_returns_post_click_pdf_url() -> None:
+    from tests.fake_session import FakeBrowserSession
+    s = FakeBrowserSession(
+        url="https://journal.test/download.pdf",
+        evaluate_results=[[]],
     )
-    monkeypatch.setattr(hook, "_close_browser", lambda playwright, browser_ref, page: None)
-    monkeypatch.setattr(hook, "_click_downloadish_links", lambda page: True)
-
-    assert hook.discover_pdf_url("https://journal.test/article") == "https://journal.test/download.pdf"
-
-
-def test_discover_pdf_url_returns_post_click_candidate(monkeypatch) -> None:
-    page = FakeBrowserPage()
-    page.evaluate_results = [[], ["/reader/download?id=1"]]
-    monkeypatch.setattr(
-        hook,
-        "_launch_browser",
-        lambda browser, profile_path: (object(), object(), page),
+    result = hook.discover_pdf_url(
+        "https://journal.test/article",
+        _session=s,
+        _click=lambda page: True,
+        _resolve=lambda url, c: [],
     )
-    monkeypatch.setattr(hook, "_close_browser", lambda playwright, browser_ref, page: None)
-    monkeypatch.setattr(hook, "_click_downloadish_links", lambda page: True)
+    assert result == "https://journal.test/download.pdf"
 
-    assert hook.discover_pdf_url("https://journal.test/article") == (
-        "https://journal.test/reader/download?id=1"
+
+def test_discover_pdf_url_returns_post_click_candidate() -> None:
+    from tests.fake_session import FakeBrowserSession
+    s = FakeBrowserSession(
+        evaluate_results=[[], ["/reader/download?id=1"]],
     )
-
-
-def test_download_pdf_uses_direct_request_when_pdf(monkeypatch) -> None:
-    page = FakeBrowserPage()
-    page.request = FakeRequest(FakeResponse(body=b"%PDF-direct"))
-    monkeypatch.setattr(
-        hook,
-        "_launch_browser",
-        lambda browser, profile_path: (object(), object(), page),
+    result = hook.discover_pdf_url(
+        "https://journal.test/article",
+        _session=s,
+        _click=lambda page: True,
+        _resolve=lambda page_url, candidates: [
+            "https://journal.test/reader/download?id=1"
+        ],
     )
-    monkeypatch.setattr(hook, "_close_browser", lambda playwright, browser_ref, page: None)
-
-    assert hook.download_pdf("https://journal.test/paper.pdf") == b"%PDF-direct"
-    assert page.goto_calls == []
+    assert result == "https://journal.test/reader/download?id=1"
 
 
-def test_download_pdf_follows_candidate_links_after_html_page(monkeypatch) -> None:
-    page = FakeBrowserPage()
-    page.request = FakeRequest(error=RuntimeError("request unavailable"))
-    page.goto_responses = [
-        FakeResponse(content_type="text/html", body=b"<html>"),
-        FakeResponse(body=b"%PDF-linked"),
-    ]
-    page.evaluate_results = [["https://journal.test/linked.pdf"]]
-    monkeypatch.setattr(
-        hook,
-        "_launch_browser",
-        lambda browser, profile_path: (object(), object(), page),
+def test_download_pdf_uses_direct_request_when_pdf() -> None:
+    from tests.fake_session import FakeBrowserSession
+    s = FakeBrowserSession(
+        fetch_result=(200, "application/pdf", b"%PDF-direct"),
     )
-    monkeypatch.setattr(hook, "_close_browser", lambda playwright, browser_ref, page: None)
+    result = hook.download_pdf("https://journal.test/paper.pdf", _session=s)
+    assert result == b"%PDF-direct"
 
-    assert hook.download_pdf("https://journal.test/article") == b"%PDF-linked"
-    assert page.goto_calls == ["https://journal.test/article", "https://journal.test/linked.pdf"]
+
+def test_download_pdf_follows_candidate_links_after_html_page() -> None:
+    from tests.fake_session import FakeBrowserSession
+    s = FakeBrowserSession(
+        fetch_result=(-1, None, b""),
+        goto_results=[
+            type("F", (), {
+                "headers": {"content-type": "text/html"},
+                "body": lambda: b"<html>",
+            }),
+            type("F", (), {
+                "headers": {"content-type": "application/pdf"},
+                "body": lambda: b"%PDF-linked",
+            }),
+        ],
+        evaluate_results=[["https://journal.test/linked.pdf"]],
+    )
+    result = hook.download_pdf("https://journal.test/article", _session=s)
+    assert result == b"%PDF-linked"

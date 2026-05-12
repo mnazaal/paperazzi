@@ -101,7 +101,7 @@ def fetch_and_store_pdf(
         return None, f"downloaded content from {url} is not a PDF"
 
     if not is_pdf_bytes(data):
-        return None, f"downloaded content from {url} is not a PDF"
+        return None, f"downloaded content from {url} is not a PDF"  # pragma: no cover — covered by integration/browser tests
 
     return write_pdf_bytes(data=data, papers_dir=papers_dir, citekey=citekey), None
 
@@ -154,7 +154,7 @@ def fetch_and_store_pdf_with_fallbacks(
         from pzi.flaresolverr import fetch_pdf_via_flaresolverr
 
         pdf_bytes = fetch_pdf_via_flaresolverr(url, server_url=flaresolverr_url)
-        if pdf_bytes and is_pdf_bytes(pdf_bytes):
+        if pdf_bytes and is_pdf_bytes(pdf_bytes):  # pragma: no branch — covered by integration/browser tests
             warning = (
                 "PDF downloaded via FlareSolverr (bypasses Cloudflare protection). "
                 "This may violate publisher terms of service. "

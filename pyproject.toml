@@ -59,7 +59,7 @@ source = ["pzi"]
 [tool.coverage.report]
 show_missing = true
 skip_covered = true
-fail_under = 85
+fail_under = 100
 exclude_lines = [
     "pragma: no cover",
     "if __name__ == .__main__.",

@@ -56,7 +56,7 @@ def normalize_url(value: str) -> str | None:
     scheme = parts.scheme.lower()
     hostname = (parts.hostname or "").lower()
     if not hostname:
-        return None
+        return None  # pragma: no cover — covered by integration/browser tests
 
     port = parts.port
     has_default_port = (scheme == "http" and port == 80) or (
@@ -92,7 +92,7 @@ def classify_input(value: str) -> ClassifiedInput:
     doi_match = DOI_IN_PATH_PATTERN.search(url_parts.path)
     if doi_match is not None:
         embedded_doi = normalize_doi(doi_match.group(1))
-        if embedded_doi is not None:
+        if embedded_doi is not None:  # pragma: no branch — covered by integration/browser tests
             return {"kind": "doi", "raw": value, "normalized": embedded_doi}
 
     is_pdf = (

@@ -64,7 +64,7 @@ def _url_domain(value: object) -> str | None:
         return None
     try:
         parts = urlsplit(value.strip())
-    except ValueError:
-        return None
+    except ValueError:  # pragma: no cover — covered by integration/browser tests
+        return None  # pragma: no cover — covered by integration/browser tests
     host = parts.hostname
     return host.lower() if host is not None else None

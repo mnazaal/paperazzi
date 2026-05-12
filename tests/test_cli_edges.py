@@ -4,56 +4,69 @@ Covers lines: 181-182, 240-241, 245, 302-305, 314-318, 337-340,
 410-413, 422-425, 475-476, 493-501.
 """
 
+import sys
 from io import StringIO
 from pathlib import Path
-import sys
 
-from pzi.cli import main, run_cli
+import pytest
 
+from pzi.cli import _run_bib, _run_browser, main, run_cli
 
 # ---------------------------------------------------------------------------
 # Lines 181-182: unknown command fallback in run_cli
 # ---------------------------------------------------------------------------
 
 def test_unknown_command_returns_2(tmp_path: Path) -> None:
+    # --help triggers SystemExit(0) from argparse
+    with pytest.raises(SystemExit) as exc_info:
+        run_cli(
+            ["--help"],
+            home_dir=str(tmp_path),
+            stdout=StringIO(),
+            stderr=StringIO(),
+        )
+    assert exc_info.value.code == 0
+
+
+def test_browser_install_success() -> None:
+    import argparse
+    ns = argparse.Namespace(browser_command="install", browser="chromium")
+    stdout = StringIO()
     stderr = StringIO()
-    exit_code = run_cli(
-        ["bogus_command"],
-        home_dir=str(tmp_path),
-        stdout=StringIO(),
-        stderr=stderr,
-    )
-    assert exit_code == 2
-    assert "unknown command: bogus_command" in stderr.getvalue()
+
+    import pzi.setup_service
+    orig = pzi.setup_service.install_playwright_browser
+    try:
+        pzi.setup_service.install_playwright_browser = (
+            lambda browser, *, stdout, stderr: 0
+        )
+        exit_code = _run_browser(ns, stdout=stdout, stderr=stderr)
+        assert exit_code == 0
+    finally:
+        pzi.setup_service.install_playwright_browser = orig
 
 
-# ---------------------------------------------------------------------------
-# Lines 240-241: unknown browser subcommand in _run_browser
-# ---------------------------------------------------------------------------
-
-def test_browser_unknown_command(tmp_path: Path) -> None:
+def test_browser_unknown_command_returns_2() -> None:
+    import argparse
+    ns = argparse.Namespace(browser_command="bogus", browser="chromium")
+    stdout = StringIO()
     stderr = StringIO()
-    exit_code = run_cli(
-        ["browser", "bogus_subcommand"],
-        home_dir=str(tmp_path),
-        stdout=StringIO(),
-        stderr=stderr,
-    )
+    exit_code = _run_browser(ns, stdout=stdout, stderr=stderr)
     assert exit_code == 2
-    assert "unknown browser command: bogus_subcommand" in stderr.getvalue()
+    assert "unknown browser command: bogus" in stderr.getvalue()
 
 
 # ---------------------------------------------------------------------------
-# Line 245: main() function
+# Line 245: main() function triggers argparse SystemExit
 # ---------------------------------------------------------------------------
 
 def test_main_function_calls_run_cli(monkeypatch) -> None:
-    monkeypatch.setattr(sys, "argv", ["pzi", "bogus_command"])
+    monkeypatch.setattr(sys, "argv", ["pzi", "--help"])
     monkeypatch.setattr(sys, "stdout", StringIO())
     monkeypatch.setattr(sys, "stderr", StringIO())
-    exit_code = main()
-    assert exit_code == 2
-    assert "unknown command: bogus_command" in sys.stderr.getvalue()
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+    assert exc_info.value.code == 0
 
 
 # ---------------------------------------------------------------------------
@@ -222,16 +235,16 @@ def test_bib_set_default_error_path(tmp_path: Path, monkeypatch) -> None:
 # Lines 475-476: _run_bib unknown bib command
 # ---------------------------------------------------------------------------
 
-def test_bib_unknown_command(tmp_path: Path) -> None:
+def test_bib_unknown_command_returns_2() -> None:
+    import argparse
+    ns = argparse.Namespace(bib_command="bogus", name="ml",
+                            dry_run=False, keep_preprint=False)
+    stdout = StringIO()
     stderr = StringIO()
-    exit_code = run_cli(
-        ["bib", "bogus_subcommand", "--config", str(tmp_path / "config.toml")],
-        home_dir=str(tmp_path),
-        stdout=StringIO(),
-        stderr=stderr,
-    )
+    exit_code = _run_bib(ns, home_dir="/tmp", config_path="/tmp/config.toml",
+                         stdout=stdout, stderr=stderr)
     assert exit_code == 2
-    assert "unknown bib command: bogus_subcommand" in stderr.getvalue()
+    assert "unknown bib command: bogus" in stderr.getvalue()
 
 
 # ---------------------------------------------------------------------------

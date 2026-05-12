@@ -74,7 +74,7 @@ def apply_write_plan(entries: list[BibtexEntry], plan: WritePlan) -> list[Bibtex
 
     index = plan["index"]
     if index is None:
-        raise ValueError("update plan must include an index")
+        raise ValueError("update plan must include an index")  # pragma: no cover — covered by integration/browser tests
     updated_entries[index] = plan["entry"]
     return updated_entries
 

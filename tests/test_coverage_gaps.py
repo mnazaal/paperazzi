@@ -1,8 +1,6 @@
 """Coverage gap tests: small/medium modules with missing branches."""
 
-import json
 import pathlib
-import subprocess
 import sys
 import types
 
@@ -16,7 +14,6 @@ from pzi import (
     fetch_helpers,
     pdf_metadata,
 )
-
 
 # ---------------------------------------------------------------------------
 # __main__.py
