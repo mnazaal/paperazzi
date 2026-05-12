@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>pzi capture</title>
+    <style>
+      body { font-family: sans-serif; width: 320px; padding: 12px; }
+      label { display: block; margin-top: 8px; font-size: 12px; }
+      input, button { width: 100%; box-sizing: border-box; padding: 6px; margin-top: 4px; }
+      pre { background: #f4f4f4; padding: 6px; font-size: 11px; max-height: 200px; overflow: auto; }
+    </style>
+  </head>
+  <body>
+    <h1 style="font-size: 14px; margin: 0;">pzi capture</h1>
+    <label>tags (comma separated) <input id="tags" /></label>
+    <label>API token <input id="token" type="password" autocomplete="off" /></label>
+    <label>bib <select id="bib"><option value="">default</option></select></label>
+    <label><input id="dry" type="checkbox" /> dry run</label>
+    <button id="go">capture</button>
+    <pre id="out"></pre>
+    <script src="popup.js" type="module"></script>
+  </body>
+</html>

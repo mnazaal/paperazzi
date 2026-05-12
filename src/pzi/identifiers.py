@@ -1,0 +1,128 @@
+"""Pure identifier normalization and classification helpers."""
+
+from __future__ import annotations
+
+import re
+from typing import Any, Literal, TypeAlias
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+InputKind = Literal["doi", "url", "pdf_url", "local_pdf", "unknown"]
+
+TRACKING_QUERY_KEYS = frozenset(
+    {
+        "utm_source",
+        "utm_medium",
+        "utm_campaign",
+        "utm_term",
+        "utm_content",
+        "gclid",
+        "fbclid",
+    }
+)
+
+DOI_PATTERN = re.compile(r"(?i)^(?:https?://(?:dx\.)?doi\.org/)?(10\.\d{4,9}/\S+)$")
+DOI_IN_PATH_PATTERN = re.compile(r"(?i)/doi/(10\.\d{4,9}/[^\s?#]+)")
+ARXIV_ABS_PATTERN = re.compile(r"(?i)^/abs/([a-z\-]+/\d{7}|\d{4}\.\d{4,5})(v\d+)?/?$")
+ARXIV_PDF_PATTERN = re.compile(
+    r"(?i)^/pdf/([a-z\-]+/\d{7}|\d{4}\.\d{4,5})(v\d+)?(?:\.pdf)?/?$"
+)
+
+
+ClassifiedInput: TypeAlias = dict[str, Any]
+
+
+
+def normalize_doi(value: str) -> str | None:
+    """Return a canonical DOI string, or None if the input is not DOI-like."""
+    candidate = value.strip()
+    match = DOI_PATTERN.match(candidate)
+    if match is None:
+        return None
+
+    doi = match.group(1).strip()
+    doi = re.sub(r"\s+", "", doi)
+    return doi.lower()
+
+
+def normalize_url(value: str) -> str | None:
+    """Return a normalized HTTP(S) URL, or None if the input is not a supported URL."""
+    candidate = value.strip()
+    parts = urlsplit(candidate)
+    if parts.scheme not in {"http", "https"}:
+        return None
+    if not parts.netloc:
+        return None
+
+    scheme = parts.scheme.lower()
+    hostname = (parts.hostname or "").lower()
+    if not hostname:
+        return None
+
+    port = parts.port
+    has_default_port = (scheme == "http" and port == 80) or (
+        scheme == "https" and port == 443
+    )
+    netloc = hostname if port is None or has_default_port else f"{hostname}:{port}"
+
+    path = parts.path or "/"
+    query_items = [
+        (key, value)
+        for key, value in parse_qsl(parts.query, keep_blank_values=True)
+        if key.lower() not in TRACKING_QUERY_KEYS
+    ]
+    query = urlencode(query_items, doseq=True)
+
+    normalized_path = _normalize_special_path(hostname=hostname, path=path)
+    return urlunsplit((scheme, netloc, normalized_path, query, ""))
+
+
+def classify_input(value: str) -> ClassifiedInput:
+    """Classify raw input into doi, url, pdf_url, or unknown."""
+    normalized_doi = normalize_doi(value)
+    if normalized_doi is not None:
+        return {"kind": "doi", "raw": value, "normalized": normalized_doi}
+
+    normalized_url = normalize_url(value)
+    if normalized_url is None:
+        if value.strip().lower().endswith(".pdf"):
+            return {"kind": "local_pdf", "raw": value, "normalized": value.strip()}
+        return {"kind": "unknown", "raw": value, "normalized": None}
+
+    url_parts = urlsplit(normalized_url)
+    doi_match = DOI_IN_PATH_PATTERN.search(url_parts.path)
+    if doi_match is not None:
+        embedded_doi = normalize_doi(doi_match.group(1))
+        if embedded_doi is not None:
+            return {"kind": "doi", "raw": value, "normalized": embedded_doi}
+
+    is_pdf = (
+        url_parts.path.lower().endswith(".pdf")
+        or (
+            url_parts.netloc.lower() == "arxiv.org"
+            and ARXIV_PDF_PATTERN.match(url_parts.path)
+        )
+    )
+    kind: InputKind = "pdf_url" if is_pdf else "url"
+    return {"kind": kind, "raw": value, "normalized": normalized_url}
+
+
+def _normalize_special_path(*, hostname: str, path: str) -> str:
+    if hostname == "doi.org":
+        stripped = path.lstrip("/")
+        normalized_doi = normalize_doi(stripped)
+        return f"/{normalized_doi}" if normalized_doi is not None else path
+
+    if hostname == "arxiv.org":
+        abs_match = ARXIV_ABS_PATTERN.match(path)
+        if abs_match is not None:
+            identifier, version = abs_match.groups()
+            suffix = version or ""
+            return f"/abs/{identifier.lower()}{suffix.lower()}"
+
+        pdf_match = ARXIV_PDF_PATTERN.match(path)
+        if pdf_match is not None:
+            identifier, version = pdf_match.groups()
+            suffix = version or ""
+            return f"/pdf/{identifier.lower()}{suffix.lower()}.pdf"
+
+    return path or "/"

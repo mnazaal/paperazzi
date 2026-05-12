@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install package and dev tools
+        run: |
+          uv venv .venv
+          uv pip install -e ".[dev]"
+
+      - name: Install Playwright browsers
+        run: .venv/bin/playwright install chromium firefox
+
+      - name: Ruff
+        run: .venv/bin/ruff check .
+
+      - name: Mypy
+        run: .venv/bin/mypy src tests tools
+
+      - name: Pyright
+        run: .venv/bin/pyright
+
+      - name: Tests with coverage
+        run: .venv/bin/pytest --cov=pzi --cov-report=term-missing --cov-report=xml -q
+
+      - name: Build package
+        run: .venv/bin/python -m build

@@ -1,0 +1,93 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pzi"
+version = "0.1.0"
+description = "Capture papers into local BibTeX libraries from DOI, URL, or PDF"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+keywords = ["bibtex", "academic", "papers", "pdf", "zotero", "citation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = ["bibtexparser>=1.4.4", "playwright>=1.40", "pypdf>=4.0"]
+
+[project.optional-dependencies]
+dev = [
+    "build>=1",
+    "coverage[toml]>=7.6",
+    "mypy>=1.10",
+    "pyright>=1.1",
+    "pytest>=8",
+    "pytest-cov>=5",
+    "ruff>=0.4",
+]
+containers = ["podman-compose>=1.5"]
+
+[project.urls]
+Homepage = "https://github.com/mnazaal/pzi"
+Repository = "https://github.com/mnazaal/pzi"
+
+[project.scripts]
+pzi = "pzi.cli:main"
+pzi-browser-hook = "pzi.browser_pdf_hook:main"
+
+[tool.setuptools.package-data]
+pzi = ["config.template.toml", "translation-server.Containerfile"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "src"]
+addopts = ["--strict-markers", "--strict-config"]
+markers = [
+    "browser: tests requiring Playwright browser binaries",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["pzi"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 85
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.",
+    "raise SystemExit",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = false
+check_untyped_defs = true
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = [
+    "pzi.add_service",
+    "pzi.cli",
+    "pzi.flaresolverr",
+    "pzi.merge",
+    "pzi.pdf_discovery",
+    "pzi.promote_service",
+    "pzi.search_service",
+    "tools.browser_pdf_hook",
+]
+ignore_errors = true

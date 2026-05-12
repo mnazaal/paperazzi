@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "pzi capture",
+  "version": "0.1.0",
+  "description": "Send the current tab URL to the local pzi capture service.",
+  "permissions": ["activeTab", "storage", "scripting"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "pzi capture"
+  }
+}
