@@ -1,6 +1,5 @@
 """pytest fixtures for browser integration tests."""
 
-import os
 import socket
 import threading
 from http.server import HTTPServer, SimpleHTTPRequestHandler

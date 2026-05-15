@@ -10,7 +10,6 @@ from pzi.http_api import (
     _health_payload,
     build_http_security_config,
     origin_allowed,
-    process_get_request,
     process_post_request,
     request_security_error,
     validated_content_length,

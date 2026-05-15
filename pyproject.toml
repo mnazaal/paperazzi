@@ -78,16 +78,11 @@ python_version = "3.11"
 strict = false
 check_untyped_defs = true
 ignore_missing_imports = true
+mypy_path = "src"
 
 [[tool.mypy.overrides]]
 module = [
-    "pzi.add_service",
-    "pzi.cli",
     "pzi.flaresolverr",
-    "pzi.merge",
-    "pzi.pdf_discovery",
-    "pzi.promote_service",
-    "pzi.search_service",
-    "tools.browser_pdf_hook",
+    "pzi.services_setup",
 ]
 ignore_errors = true

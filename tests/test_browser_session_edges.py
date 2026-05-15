@@ -3,8 +3,7 @@
 import sys
 import types
 
-from pzi.browser_session import _launch_browser, open_browser_session, BrowserSession
-
+from pzi.browser_session import BrowserSession, _launch_browser, open_browser_session
 
 # --- _launch_browser with mocked Playwright ---
 

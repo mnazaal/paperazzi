@@ -7,10 +7,8 @@ import pytest
 
 from pzi.browser_pdf_hook import discover_pdf_url, download_pdf
 from pzi.browser_session import (
-    BrowserSession,
     open_browser_session,
 )
-
 
 pytestmark = pytest.mark.browser
 
@@ -22,7 +20,6 @@ pytestmark = pytest.mark.browser
 
 def _serve_pdf(http_server):
     """Copy a minimal PDF into fixtures/ so the HTTP server can serve it."""
-    import shutil
     from pathlib import Path
     fixtures = Path(__file__).parent / "fixtures"
     pdf_path = fixtures / "paper.pdf"

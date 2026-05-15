@@ -94,7 +94,7 @@ def fetch_and_store_pdf(
     downloader = fetch_binary or _fetch_binary
     try:
         data, content_type = downloader(url)
-    except Exception as exc:
+    except (OSError, ValueError) as exc:
         return None, f"failed to download PDF from {url}: {exc}"
 
     if not _is_pdf_content_type(content_type) and not is_pdf_bytes(data):

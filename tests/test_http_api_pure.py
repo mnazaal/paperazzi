@@ -6,7 +6,6 @@ import pytest
 
 from pzi import http_api
 
-
 # === process_get_request ===
 
 

@@ -36,16 +36,13 @@ import json
 import re
 import subprocess
 import sys
-from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
 
 from pzi.browser_session import (
     BrowserSession,
-    FetchResult,
-    browser_launch_options,
-    open_browser_session,
 )
+
 PDF_HINT_RE = re.compile(r"pdf|download", re.IGNORECASE)
 
 DISCOVERY_JS = r"""

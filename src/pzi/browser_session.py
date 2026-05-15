@@ -13,10 +13,11 @@ Usage:
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 
 def browser_launch_options(browser: str) -> dict[str, Any]:

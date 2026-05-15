@@ -141,7 +141,7 @@ def test_fetch_and_store_pdf_not_pdf(tmp_path: Path) -> None:
 
 def test_fetch_and_store_pdf_exception(tmp_path: Path) -> None:
     def fake_fetch(url: str) -> tuple[bytes, str | None]:
-        raise RuntimeError("network down")
+        raise OSError("network down")
 
     path, err = fetch_and_store_pdf(
         url="https://example.com/a.pdf",

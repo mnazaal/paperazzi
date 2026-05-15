@@ -1,13 +1,11 @@
 """Pure edge parametrized tests — closing the gap to 100%."""
 
-import json
 from pathlib import Path
 
 import pytest
 
 from pzi import (
     cli,
-    europepmc,
     html_metadata,
     http_api,
     identifiers,
@@ -17,7 +15,6 @@ from pzi import (
     similarity,
     update_service,
 )
-
 
 # ================================================================
 # cli.py: _run_serve with explicit host/port
