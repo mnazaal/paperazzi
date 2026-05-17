@@ -12,13 +12,12 @@ from typing import TextIO
 from pzi import setup_service
 from pzi.add_service import add_input_to_bib
 from pzi.bib_service import list_bibs, set_default_bib
-from pzi.config_loader import default_config_path
+from pzi.config import default_config_path
 from pzi.doctor_service import doctor_check
 from pzi.pdf_service import attach_pdf, retry_pdf
 from pzi.promote_service import promote_bib
 from pzi.search_service import search_bib
-from pzi.tag_service import add_tags, list_tags, remove_tags
-from pzi.tags import parse_tag_csv
+from pzi.tag_service import add_tags, list_tags, parse_tag_csv, remove_tags
 from pzi.update_service import update_bib
 
 
@@ -128,8 +127,8 @@ def build_parser() -> argparse.ArgumentParser:
     browser_parser = subparsers.add_parser("browser")
     browser_sub = browser_parser.add_subparsers(dest="browser_command", required=True)
     browser_install = browser_sub.add_parser("install")
-    browser_install.add_argument("browser", nargs="?", default="chromium",
-                                 choices=("chromium", "firefox", "chrome"))
+    browser_install.add_argument("browser", nargs="?", default="chromium")
+    browser_install.add_argument("--config")
 
     return parser
 
@@ -235,7 +234,9 @@ def _run_services(args, *, config_path: str, stdout: TextIO, stderr: TextIO) -> 
 def _run_browser(args, *, stdout: TextIO, stderr: TextIO) -> int:
     if args.browser_command == "install":
         return setup_service.install_playwright_browser(
-            args.browser, stdout=stdout, stderr=stderr
+            args.browser,
+            stdout=stdout,
+            stderr=stderr,
         )
     print(f"unknown browser command: {args.browser_command}", file=stderr)
     return 2
@@ -483,29 +484,31 @@ def _run_doctor(*, home_dir, config_path, stdout, stderr) -> int:
 
 
 def _run_serve(args, *, home_dir, config_path, stdout, stderr) -> int:
-    from pzi.config_loader import load_config_file
-    from pzi.http_api import build_http_security_config, run_server
+    from pzi.config import load_config_file
+    from pzi.http_api import DEFAULT_MAX_BODY_BYTES, build_http_security_config, run_server
 
     host = args.host
     port = args.port
-    config = None
-    if host is None or port is None:
-        cfg = load_config_file(config_path, home_dir=home_dir)
-        if cfg["config"] is None:
-            print("failed to load config", file=stderr)
-            for error in cfg["errors"]:
-                print(f"- {error}", file=stderr)
-            return 1
-        config = cfg["config"]  # pragma: no cover — covered by integration/browser tests
-        host = host or config["api_listen_host"]  # pragma: no cover — covered by integration/browser tests
-        port = port or config["api_listen_port"]  # pragma: no cover — covered by integration/browser tests
+    cfg = load_config_file(config_path, home_dir=home_dir)
+    config = cfg["config"]
+    if config is None and (host is None or port is None):
+        print("failed to load config", file=stderr)
+        for error in cfg["errors"]:
+            print(f"- {error}", file=stderr)
+        return 1
+
+    if config is not None:
+# pragma: no cover — covered by integration/browser tests
+        host = host or config["api_listen_host"]  # pragma: no cover
+# pragma: no cover — covered by integration/browser tests
+        port = port or config["api_listen_port"]  # pragma: no cover
 
     security = build_http_security_config(
         auth_token=config.get("api_auth_token") if config is not None else None,
         allowed_origins=config.get("api_allowed_origins") if config is not None else None,
-        max_body_bytes=config.get("api_max_body_bytes", 5 * 1024 * 1024)
+        max_body_bytes=config.get("api_max_body_bytes", DEFAULT_MAX_BODY_BYTES)
         if config is not None
-        else 5 * 1024 * 1024,
+        else DEFAULT_MAX_BODY_BYTES,
     )
 
     print(f"serving on {host}:{port}", file=stdout)

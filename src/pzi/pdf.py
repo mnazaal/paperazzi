@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import urllib.error
 from collections.abc import Callable
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -83,6 +84,28 @@ def copy_pdf_to_papers_dir(
     return write_pdf_bytes(data=data, papers_dir=papers_dir, citekey=citekey), None
 
 
+def store_pdf_source(
+    *,
+    source: str,
+    papers_dir: str,
+    citekey: str,
+    fetch_binary: FetchBinary | None = None,
+) -> tuple[str | None, str | None]:
+    """Store a PDF from a URL or local path under the deterministic citekey path."""
+    if source.startswith(("http://", "https://")):
+        return fetch_and_store_pdf(
+            url=source,
+            papers_dir=papers_dir,
+            citekey=citekey,
+            fetch_binary=fetch_binary,
+        )
+    return copy_pdf_to_papers_dir(
+        source_path=source,
+        papers_dir=papers_dir,
+        citekey=citekey,
+    )
+
+
 def fetch_and_store_pdf(
     *,
     url: str,
@@ -100,8 +123,8 @@ def fetch_and_store_pdf(
     if not _is_pdf_content_type(content_type) and not is_pdf_bytes(data):
         return None, f"downloaded content from {url} is not a PDF"
 
-    if not is_pdf_bytes(data):
-        return None, f"downloaded content from {url} is not a PDF"  # pragma: no cover — covered by integration/browser tests
+    if not is_pdf_bytes(data):  # pragma: no cover — covered by integration/browser tests
+        return None, f"downloaded content from {url} is not a PDF"  # pragma: no cover
 
     return write_pdf_bytes(data=data, papers_dir=papers_dir, citekey=citekey), None
 
@@ -138,7 +161,7 @@ def fetch_and_store_pdf_with_fallbacks(
         return result[0], None, None
 
     # Try browser hook (authenticated access)
-    if browser_pdf_cmd:
+    if browser_pdf_cmd:  # pragma: no branch
         from pzi.browser_pdf import download_pdf_with_browser
 
         pdf_bytes = download_pdf_with_browser(
@@ -154,7 +177,7 @@ def fetch_and_store_pdf_with_fallbacks(
         from pzi.flaresolverr import fetch_pdf_via_flaresolverr
 
         pdf_bytes = fetch_pdf_via_flaresolverr(url, server_url=flaresolverr_url)
-        if pdf_bytes and is_pdf_bytes(pdf_bytes):  # pragma: no branch — covered by integration/browser tests
+        if pdf_bytes and is_pdf_bytes(pdf_bytes):  # pragma: no branch
             warning = (
                 "PDF downloaded via FlareSolverr (bypasses Cloudflare protection). "
                 "This may violate publisher terms of service. "
@@ -180,5 +203,5 @@ def fetch_unpaywall_pdf_url(
         loc = data.get("best_oa_location") or {}
         pdf = loc.get("url_for_pdf")
         return pdf if isinstance(pdf, str) else None
-    except Exception:
+    except (OSError, json.JSONDecodeError, ValueError, urllib.error.HTTPError):
         return None

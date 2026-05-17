@@ -2,7 +2,7 @@
 
 import json
 
-from pzi.doaj import _extract_pdf_url, fetch_doaj_pdf_url
+from pzi.metadata_sources import _doaj_extract_pdf_url as _extract_pdf_url, fetch_doaj_pdf_url
 
 # ── fetch_doaj_pdf_url edges ─────────────────────────────────────────────
 

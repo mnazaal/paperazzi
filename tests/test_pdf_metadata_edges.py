@@ -1,4 +1,4 @@
-"""Edge tests for pzi.pdf_metadata covering previously uncovered branches.
+"""Edge tests for pzi.pdf_service PDF metadata extraction.
 
 Covers missing lines in extract_pdf_metadata (ImportError, missing file,
 corrupt PDF, page extraction errors, empty text, etc.).
@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from pzi.pdf_metadata import _extract_doi_from_text, _extract_title_from_text, extract_pdf_metadata
+from pzi.pdf_service import _extract_doi_from_text, _extract_title_from_text, extract_pdf_metadata
 
 # ---------------------------------------------------------------------------
 # extract_pdf_metadata: ImportError (pypdf not installed)

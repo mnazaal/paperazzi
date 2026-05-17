@@ -1,4 +1,4 @@
-from pzi.pdf_acquisition import landing_page_urls, pdf_candidates_from_record
+from pzi.pdf_discovery import landing_page_urls, pdf_candidates_from_record
 
 # --- landing_page_urls tests ---
 

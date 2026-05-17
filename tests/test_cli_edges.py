@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from pzi.cli import _run_bib, _run_browser, main, run_cli
+from pzi.cli import _run_bib, main, run_cli
 
 # ---------------------------------------------------------------------------
 # Lines 181-182: unknown command fallback in run_cli
@@ -26,34 +26,6 @@ def test_unknown_command_returns_2(tmp_path: Path) -> None:
             stderr=StringIO(),
         )
     assert exc_info.value.code == 0
-
-
-def test_browser_install_success() -> None:
-    import argparse
-    ns = argparse.Namespace(browser_command="install", browser="chromium")
-    stdout = StringIO()
-    stderr = StringIO()
-
-    import pzi.setup_service
-    orig = pzi.setup_service.install_playwright_browser
-    try:
-        pzi.setup_service.install_playwright_browser = (
-            lambda browser, *, stdout, stderr: 0
-        )
-        exit_code = _run_browser(ns, stdout=stdout, stderr=stderr)
-        assert exit_code == 0
-    finally:
-        pzi.setup_service.install_playwright_browser = orig
-
-
-def test_browser_unknown_command_returns_2() -> None:
-    import argparse
-    ns = argparse.Namespace(browser_command="bogus", browser="chromium")
-    stdout = StringIO()
-    stderr = StringIO()
-    exit_code = _run_browser(ns, stdout=stdout, stderr=stderr)
-    assert exit_code == 2
-    assert "unknown browser command: bogus" in stderr.getvalue()
 
 
 # ---------------------------------------------------------------------------
@@ -258,7 +230,7 @@ def test_serve_config_load_failure(tmp_path: Path, monkeypatch) -> None:
         return {"config": None, "errors": ["config parse error"]}
 
     monkeypatch.setattr(
-        "pzi.config_loader.load_config_file", fake_load_config_file
+        "pzi.config.load_config_file", fake_load_config_file
     )
 
     stderr = StringIO()

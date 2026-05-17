@@ -7,7 +7,7 @@ from typing import Any, TypeAlias, cast
 
 from pzi.bib_repository import read_bib_file, update_bib_entry
 from pzi.bibtex import NormalizedRecord, record_to_bibtex_entry
-from pzi.service_common import load_and_resolve_bib
+from pzi.config import load_and_resolve_bib
 from pzi.translation_server import fetch_search_translations
 
 UpdatePlanItem: TypeAlias = dict[str, Any]

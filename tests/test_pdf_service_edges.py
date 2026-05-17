@@ -134,7 +134,12 @@ def test_retry_pdf_update_not_found(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         pdf_service, "update_bib_entry",
-        lambda path, citekey, updater: {"found": False, "entries": [], "entry": None, "record": None},
+        lambda path, citekey, updater: {
+            "found": False,
+            "entries": [],
+            "entry": None,
+            "record": None,
+        },
     )
     result = pdf_service.retry_pdf(
         config_path="/f",
@@ -265,7 +270,12 @@ def test_attach_pdf_update_disappeared(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         pdf_service, "update_bib_entry",
-        lambda path, citekey, updater: {"found": False, "entries": [], "entry": None, "record": None},
+        lambda path, citekey, updater: {
+            "found": False,
+            "entries": [],
+            "entry": None,
+            "record": None,
+        },
     )
     result = pdf_service.attach_pdf(
         config_path="/f", home_dir="/h", bib_selector=None,
@@ -465,7 +475,12 @@ def test_attach_pdf_data_update_disappeared(monkeypatch, tmp_path: Path) -> None
     )
     monkeypatch.setattr(
         pdf_service, "update_bib_entry",
-        lambda path, citekey, updater: {"found": False, "entries": [], "entry": None, "record": None},
+        lambda path, citekey, updater: {
+            "found": False,
+            "entries": [],
+            "entry": None,
+            "record": None,
+        },
     )
     result = pdf_service._attach_pdf_data(
         bib_name="ml",
@@ -513,36 +528,40 @@ def test_attach_pdf_data_success(monkeypatch, tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# _store_pdf_source: http source, local missing, local OSError, local non-PDF, local success
+# _store_pdf_source: compatibility wrapper around pzi.pdf.store_pdf_source
 # ---------------------------------------------------------------------------
 
 
-def test_store_pdf_source_http_url(monkeypatch) -> None:
-    """HTTP source → delegates to fetch_and_store_pdf."""
-    monkeypatch.setattr(
-        pdf_service, "fetch_and_store_pdf",
-        lambda url, papers_dir, citekey, fetch_binary: ("/p/smith2024.pdf", None),
-    )
+def test_store_pdf_source_wrapper_delegates_to_shared_pdf_helper(monkeypatch) -> None:
+    """The old private helper stays as a thin compatibility wrapper."""
+    seen = {}
+
+    def fake_store_pdf_source(*, source, papers_dir, citekey, fetch_binary):
+        seen.update(
+            source=source,
+            papers_dir=papers_dir,
+            citekey=citekey,
+            fetch_binary=fetch_binary,
+        )
+        return "/p/smith2024.pdf", None
+
+    monkeypatch.setattr(pdf_service, "store_pdf_source", fake_store_pdf_source)
+    fetch_binary = object()
+
     result = pdf_service._store_pdf_source(
         source="https://example.com/p.pdf",
         papers_dir="/p",
         citekey="smith2024",
+        fetch_binary=fetch_binary,
     )
+
     assert result == ("/p/smith2024.pdf", None)
-
-
-def test_store_pdf_source_http_url_fails(monkeypatch) -> None:
-    """HTTP source → fetch_and_store_pdf returns None."""
-    monkeypatch.setattr(
-        pdf_service, "fetch_and_store_pdf",
-        lambda url, papers_dir, citekey, fetch_binary: (None, "download failed"),
-    )
-    result = pdf_service._store_pdf_source(
-        source="https://example.com/p.pdf",
-        papers_dir="/p",
-        citekey="smith2024",
-    )
-    assert result == (None, "download failed")
+    assert seen == {
+        "source": "https://example.com/p.pdf",
+        "papers_dir": "/p",
+        "citekey": "smith2024",
+        "fetch_binary": fetch_binary,
+    }
 
 
 def test_store_pdf_source_local_missing() -> None:
@@ -556,30 +575,6 @@ def test_store_pdf_source_local_missing() -> None:
     assert "not found" in result[1]
 
 
-def test_store_pdf_source_local_oserror(monkeypatch) -> None:
-    """Local file exists but read_bytes raises OSError."""
-
-    class BadPath:
-        def expanduser(self):
-            return self
-
-        def exists(self):
-            return True
-
-        def read_bytes(self):
-            raise OSError("perm denied")
-
-    monkeypatch.setattr(pdf_service, "Path", lambda s: BadPath())
-
-    result = pdf_service._store_pdf_source(
-        source="/bad/file.pdf",
-        papers_dir="/p",
-        citekey="smith2024",
-    )
-    assert result[0] is None
-    assert "perm denied" in result[1]
-
-
 def test_store_pdf_source_local_not_pdf(monkeypatch, tmp_path: Path) -> None:
     """Local file exists but is not a PDF."""
     fpath = tmp_path / "source.txt"
@@ -591,7 +586,7 @@ def test_store_pdf_source_local_not_pdf(monkeypatch, tmp_path: Path) -> None:
         citekey="smith2024",
     )
     assert result[0] is None
-    assert "not a PDF" in result[1]
+    assert "not a valid PDF" in result[1]
 
 
 def test_store_pdf_source_local_success(monkeypatch, tmp_path: Path) -> None:

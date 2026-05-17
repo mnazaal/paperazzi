@@ -11,7 +11,7 @@ from html.parser import HTMLParser
 
 from pzi.bibtex import NormalizedRecord
 from pzi.identifiers import normalize_doi
-from pzi.service_common import _extract_year_from_str
+from pzi.identifiers import _extract_year_from_str
 
 
 def _parse_embedded_metadata(html: str) -> tuple[dict[str, list[str]], list[object]]:
@@ -110,8 +110,8 @@ def _from_json_ld(json_ld: list[object]) -> NormalizedRecord:
         authors: list[str] = []
         for a in item.get("author") or []:
             if isinstance(a, dict):
-                name = a.get("name")
-                if isinstance(name, str):  # pragma: no branch — covered by integration/browser tests
+                name = a.get("name")  # pragma: no branch — covered by integration/browser tests
+                if isinstance(name, str):  # pragma: no branch
                     authors.append(name)
             elif isinstance(a, str):  # pragma: no cover — covered by integration/browser tests
                 authors.append(a)

@@ -1,10 +1,10 @@
-"""Edge tests for pzi.merge covering previously uncovered branches.
+"""Edge tests for write_plan.merge_entries covering previously uncovered branches.
 
 Covers missing lines in merge_entries and _prefer_more_informative_text.
 """
 
 
-from pzi.merge import _prefer_more_informative_text, merge_entries
+from pzi.bib_repository import _prefer_more_informative_text, merge_entries
 
 # ---------------------------------------------------------------------------
 # merge_entries: tags edge cases

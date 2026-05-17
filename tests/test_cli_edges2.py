@@ -123,7 +123,7 @@ def test_serve_config_load_failure(tmp_path: Path, monkeypatch) -> None:
     def fake_load(path: str, *, home_dir: str) -> dict:
         return {"config": None, "errors": ["bad toml"]}
 
-    monkeypatch.setattr("pzi.config_loader.load_config_file", fake_load)
+    monkeypatch.setattr("pzi.config.load_config_file", fake_load)
 
     stderr = StringIO()
     rc = run_cli(

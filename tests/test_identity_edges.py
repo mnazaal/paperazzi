@@ -1,6 +1,6 @@
-"""Edge tests for identity.py uncovered lines (line 65: _deduplicate_identities)."""
+"""Edge tests for identity functions (now in similarity.py)."""
 
-from pzi.identity import (
+from pzi.similarity import (
     _deduplicate_identities,
     build_identity_index,
     extract_identities,

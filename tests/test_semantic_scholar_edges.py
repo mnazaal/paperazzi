@@ -2,8 +2,8 @@
 
 import json
 
-from pzi.semantic_scholar import (
-    _normalize_paper,
+from pzi.metadata_sources import (
+    _s2_normalize_paper as _normalize_paper,
     fetch_semantic_scholar_record,
 )
 

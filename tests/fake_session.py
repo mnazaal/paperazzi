@@ -20,7 +20,7 @@ class FakeBrowserSession:
         self._gotos = goto_results or []
         self._goto_idx = 0
         self._closed = False
-        self.page = self  # backward compat
+        self.page = self  # acts as its own page
 
     def navigate(self, url, *, wait_until="domcontentloaded", timeout=30000):
         if self._gotos and self._goto_idx < len(self._gotos):
@@ -60,7 +60,7 @@ class FakeBrowserSession:
     def close(self):
         self._closed = True
 
-    # Backward compat for tests that mock the old triple
+    # Legacy triple-format support
     def locator(self, sel):
         return type("L", (), {
             "first": type("F", (), {

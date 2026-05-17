@@ -9,6 +9,7 @@ from pzi.pdf import (
     fetch_unpaywall_pdf_url,
     is_pdf_bytes,
     plan_pdf_path,
+    store_pdf_source,
     write_pdf_bytes,
 )
 
@@ -94,6 +95,34 @@ def test_copy_pdf_to_papers_dir_reports_read_error(tmp_path: Path) -> None:
     assert path is None
     assert error is not None
     assert error.startswith("failed to read source PDF:")
+
+
+def test_store_pdf_source_uses_download_for_urls(tmp_path: Path) -> None:
+    path, error = store_pdf_source(
+        source="https://example.com/paper.pdf",
+        papers_dir=str(tmp_path),
+        citekey="remote2024",
+        fetch_binary=lambda url: (b"%PDF-remote", "application/pdf"),
+    )
+
+    assert error is None
+    assert path == str(tmp_path / "remote2024.pdf")
+    assert (tmp_path / "remote2024.pdf").read_bytes() == b"%PDF-remote"
+
+
+def test_store_pdf_source_uses_copy_for_local_paths(tmp_path: Path) -> None:
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"%PDF-local-source")
+
+    path, error = store_pdf_source(
+        source=str(source),
+        papers_dir=str(tmp_path / "papers"),
+        citekey="local2024",
+    )
+
+    assert error is None
+    assert path == str(tmp_path / "papers" / "local2024.pdf")
+    assert (tmp_path / "papers" / "local2024.pdf").read_bytes() == b"%PDF-local-source"
 
 
 def test_fetch_and_store_pdf_writes_valid_pdf(tmp_path: Path) -> None:

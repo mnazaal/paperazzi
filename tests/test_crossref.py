@@ -1,6 +1,6 @@
 import json
 
-from pzi.crossref import fetch_crossref_record
+from pzi.metadata_sources import fetch_crossref_record
 
 _MAPREDUCE_RESPONSE = {
     "message": {
@@ -84,7 +84,7 @@ _CROSSREF_LINK_RESPONSE = {
 
 
 def test_fetch_crossref_pdf_url_extracts_pdf_from_links() -> None:
-    from pzi.crossref import fetch_crossref_pdf_url
+    from pzi.metadata_sources import fetch_crossref_pdf_url
 
     result = fetch_crossref_pdf_url(
         "10.1038/nature12373",
@@ -94,7 +94,7 @@ def test_fetch_crossref_pdf_url_extracts_pdf_from_links() -> None:
 
 
 def test_fetch_crossref_pdf_url_returns_none_without_pdf_links() -> None:
-    from pzi.crossref import fetch_crossref_pdf_url
+    from pzi.metadata_sources import fetch_crossref_pdf_url
 
     response = {
         "message": {
@@ -116,7 +116,7 @@ def test_fetch_crossref_pdf_url_returns_none_without_pdf_links() -> None:
 
 
 def test_fetch_crossref_pdf_url_returns_none_on_error() -> None:
-    from pzi.crossref import fetch_crossref_pdf_url
+    from pzi.metadata_sources import fetch_crossref_pdf_url
 
     def failing_fetch(url: str) -> str:
         raise OSError("network error")

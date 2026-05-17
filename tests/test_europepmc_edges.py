@@ -2,7 +2,7 @@
 
 import json
 
-from pzi.europepmc import _extract_pdf_url, fetch_europepmc_pdf_url
+from pzi.metadata_sources import _extract_pdf_url, fetch_europepmc_pdf_url
 
 # ── fetch_europepmc_pdf_url edges ────────────────────────────────────────
 

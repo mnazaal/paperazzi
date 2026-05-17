@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import importlib.resources
 import subprocess
 import sys
 from pathlib import Path
 from typing import TextIO
+
+from pzi.service_templates import TRANSLATION_SERVER_CONTAINERFILE, render_compose
 
 
 def render_config(
@@ -42,44 +43,6 @@ def render_config(
     return "\n".join(lines) + "\n"
 
 
-def render_compose(*, with_flaresolverr: bool) -> str:
-    """Render managed compose file for local helper services."""
-    text = """services:
-  translation-server:
-    build:
-      context: ./containers/translation-server
-      dockerfile: Containerfile
-    ports:
-      - "1969:1969"
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:1969"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 60s
-"""
-    if with_flaresolverr:
-        text += """
-  flaresolverr:
-    image: ghcr.io/flaresolverr/flaresolverr:latest
-    ports:
-      - "8191:8191"
-    restart: unless-stopped
-    environment:
-      - LOG_LEVEL=info
-      - LOG_HTML=false
-      - CAPTCHA_SOLVER=none
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:8191/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
-"""
-    return text
-
-
 def write_service_files(config_path: str, *, with_flaresolverr: bool) -> list[str]:
     """Write managed compose + Containerfile beside config."""
     config_dir = Path(config_path).parent
@@ -88,10 +51,10 @@ def write_service_files(config_path: str, *, with_flaresolverr: bool) -> list[st
     compose_path = config_dir / "compose.yml"
     compose_path.write_text(render_compose(with_flaresolverr=with_flaresolverr), encoding="utf-8")
 
-    resource = importlib.resources.files("pzi").joinpath("translation-server.Containerfile")
-    with importlib.resources.as_file(resource) as src:
-        containerfile = Path(src).read_text(encoding="utf-8")
-    (container_dir / "Containerfile").write_text(containerfile, encoding="utf-8")
+    (container_dir / "Containerfile").write_text(
+        TRANSLATION_SERVER_CONTAINERFILE,
+        encoding="utf-8",
+    )
     return [str(compose_path), str(container_dir / "Containerfile")]
 
 

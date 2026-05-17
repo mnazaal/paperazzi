@@ -2,9 +2,9 @@
 
 import json
 
-from pzi.crossref import (
-    _extract_pdf_url,
-    _normalize_work,
+from pzi.metadata_sources import (
+    _crossref_extract_pdf_url as _extract_pdf_url,
+    _crossref_normalize_work as _normalize_work,
     fetch_crossref_pdf_url,
 )
 

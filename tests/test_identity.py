@@ -1,4 +1,4 @@
-from pzi.identity import build_identity_index, extract_identities, find_exact_match
+from pzi.similarity import build_identity_index, extract_identities, find_exact_match
 
 
 def test_extract_identities_returns_present_exact_keys() -> None:

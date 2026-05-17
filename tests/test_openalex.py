@@ -1,6 +1,6 @@
 import json
 
-from pzi.openalex import fetch_openalex_record
+from pzi.metadata_sources import fetch_openalex_record
 
 _OPENALEX_RESPONSE = {
     "id": "https://openalex.org/W2123456789",

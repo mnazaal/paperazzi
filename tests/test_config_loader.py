@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pzi.config_loader import default_config_path, load_config_file, load_default_config
+from pzi.config import default_config_path, load_config_file, load_default_config
 
 
 def test_default_config_path_uses_xdg_style_location() -> None:
@@ -37,7 +37,7 @@ default = true
             "api_listen_port": 8765,
             "api_auth_token": None,
             "api_allowed_origins": None,
-            "api_max_body_bytes": 5242880,
+            "api_max_body_bytes": 67108864,
             "unpaywall_email": None,
             "unpaywall_email_cmd": None,
             "semantic_scholar_api_key": None,

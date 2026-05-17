@@ -5,7 +5,7 @@ Generates browser-specific manifests from manifest.base.json and copies
 shared extension files into dist/firefox/ and dist/chrome/.
 
 Usage:
-  python tools/build-extension.py
+  python tools/build_extension.py
 
 Outputs:
   dist/firefox/   — unpacked extension for Firefox (load in about:debugging)
@@ -39,8 +39,18 @@ def _load_base_manifest() -> dict[str, Any]:
         return json.load(f)
 
 
+def _with_pdf_host_permissions(manifest: dict[str, Any]) -> dict[str, Any]:
+    permissions = list(manifest.get("host_permissions") or [])
+    for pattern in ("https://*/*", "http://*/*"):
+        if pattern not in permissions:
+            permissions.append(pattern)
+    updated = dict(manifest)
+    updated["host_permissions"] = permissions
+    return updated
+
+
 def _build_firefox_manifest(base: dict[str, Any]) -> dict[str, Any]:
-    manifest = dict(base)
+    manifest = _with_pdf_host_permissions(dict(base))
     manifest["background"] = {
         "scripts": ["background.js"],
         "type": "module",
@@ -55,7 +65,7 @@ def _build_firefox_manifest(base: dict[str, Any]) -> dict[str, Any]:
 
 
 def _build_chrome_manifest(base: dict[str, Any]) -> dict[str, Any]:
-    manifest = dict(base)
+    manifest = _with_pdf_host_permissions(dict(base))
     manifest["background"] = {
         "service_worker": "background.js",
         "type": "module",

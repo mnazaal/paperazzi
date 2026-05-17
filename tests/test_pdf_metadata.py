@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from pzi.pdf_metadata import _extract_doi_from_text, _extract_title_from_text, extract_pdf_metadata
+from pzi.pdf_service import _extract_doi_from_text, _extract_title_from_text, extract_pdf_metadata
 
 
 def _make_pdf_with_text(tmp_path: Path, text: str) -> Path:

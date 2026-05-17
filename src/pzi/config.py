@@ -1,9 +1,12 @@
-"""Pure config normalization and validation helpers."""
+"""Config types, validation, TOML loading, and TOML serialization."""
 
 from __future__ import annotations
 
 import os
+import re
+import tomllib
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any, TypeAlias
 from urllib.parse import urlsplit
 
@@ -97,7 +100,7 @@ def validate_app_config(
     ):
         errors.append("api_allowed_origins must be a list of strings when provided")
 
-    raw_api_max_body_bytes = raw.get("api_max_body_bytes", 5 * 1024 * 1024)
+    raw_api_max_body_bytes = raw.get("api_max_body_bytes", 64 * 1024 * 1024)
     if (
         not isinstance(raw_api_max_body_bytes, int)
         or isinstance(raw_api_max_body_bytes, bool)
@@ -242,3 +245,155 @@ def _normalize_path(value: str, *, home_dir: str) -> str:
 def _is_http_url(value: str) -> bool:
     parts = urlsplit(value)
     return parts.scheme in {"http", "https"} and bool(parts.netloc)
+
+
+# ---------------------------------------------------------------------------
+# TOML file loading
+# ---------------------------------------------------------------------------
+
+DEFAULT_CONFIG_RELATIVE_PATH = ".config/pzi/config.toml"
+
+LoadConfigResult: TypeAlias = dict[str, Any]
+
+
+def default_config_path(home_dir: str) -> str:
+    """Return the default TOML config path under the given home directory."""
+    return str(Path(home_dir) / DEFAULT_CONFIG_RELATIVE_PATH)
+
+
+def load_config_file(path: str, *, home_dir: str) -> LoadConfigResult:
+    """Load, parse, and validate a TOML config file."""
+    config_path = Path(path)
+    if not config_path.exists():
+        return {
+            "config": None,
+            "errors": [f"config file not found: {config_path}"],
+            "path": str(config_path),
+        }
+
+    try:
+        raw_bytes = config_path.read_bytes()
+    except OSError as exc:
+        return {
+            "config": None,
+            "errors": [f"failed to read config file: {exc}"],
+            "path": str(config_path),
+        }
+
+    try:
+        raw_config = tomllib.loads(raw_bytes.decode("utf-8"))
+    except UnicodeDecodeError:
+        return {
+            "config": None,
+            "errors": ["config file must be valid UTF-8 text"],
+            "path": str(config_path),
+        }
+    except tomllib.TOMLDecodeError as exc:
+        return {
+            "config": None,
+            "errors": [f"invalid TOML: {exc}"],
+            "path": str(config_path),
+        }
+
+    config, errors = validate_app_config(raw_config, home_dir=home_dir)
+    return {"config": config, "errors": errors, "path": str(config_path)}
+
+
+def load_default_config(*, home_dir: str) -> LoadConfigResult:
+    """Load config from the default path under the given home directory."""
+    return load_config_file(default_config_path(home_dir), home_dir=home_dir)
+
+
+# ---------------------------------------------------------------------------
+# TOML serialization
+# ---------------------------------------------------------------------------
+
+# Characters that must be escaped in TOML basic strings.
+# \\ MUST come first to avoid re-escaping introduced backslashes.
+_TOML_ESCAPE_MAP = {
+    "\\": "\\\\",
+    '"': '\\"',
+    "\b": "\\b",
+    "\t": "\\t",
+    "\n": "\\n",
+    "\f": "\\f",
+    "\r": "\\r",
+}
+
+# Control characters (U+0000-U+001F) not handled by _TOML_ESCAPE_MAP
+_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def _escape(value: str) -> str:
+    """Escape a string value for a TOML basic string."""
+    for char, escaped in _TOML_ESCAPE_MAP.items():
+        value = value.replace(char, escaped)
+
+    def _ctrl_escape(m: re.Match[str]) -> str:
+        return f"\\u{ord(m.group(0)):04x}"
+
+    return _CONTROL_RE.sub(_ctrl_escape, value)
+
+
+def _optional_string(key: str, value: str | None) -> list[str]:
+    """Return a single TOML key = value line if value is not None."""
+    if value is not None:
+        return [f'{key} = "{_escape(value)}"']
+    return []
+
+
+def _optional_int(key: str, value: int | None) -> list[str]:
+    """Return a single TOML key = value line if value is not None."""
+    if value is not None:
+        return [f"{key} = {value}"]
+    return []
+
+
+def _optional_string_list(key: str, value: tuple[str, ...] | None) -> list[str]:
+    """Return a TOML key = [...] line if value is not None and non-empty."""
+    if value:
+        items = ", ".join(f'"{_escape(item)}"' for item in value)
+        return [f"{key} = [{items}]"]
+    return []
+
+
+def dump_app_config(config: AppConfig) -> str:
+    """Serialize a full AppConfig to TOML text."""
+    lines: list[str] = [
+        f'translation_server_url = "{_escape(config["translation_server_url"])}"',
+        f'api_listen_host = "{_escape(config["api_listen_host"])}"',
+        f'api_listen_port = {config["api_listen_port"]}',
+    ]
+
+    lines.extend(_optional_string("api_auth_token", config.get("api_auth_token")))
+    lines.extend(_optional_string_list("api_allowed_origins", config.get("api_allowed_origins")))
+    lines.extend(_optional_int("api_max_body_bytes", config.get("api_max_body_bytes")))
+    lines.extend(_optional_string("unpaywall_email", config.get("unpaywall_email")))
+    lines.extend(_optional_string("unpaywall_email_cmd", config.get("unpaywall_email_cmd")))
+    lines.extend(_optional_string("semantic_scholar_api_key", config.get("semantic_scholar_api_key")))
+    lines.extend(_optional_string("semantic_scholar_api_key_cmd", config.get("semantic_scholar_api_key_cmd")))
+    lines.extend(_optional_string("flaresolverr_url", config.get("flaresolverr_url")))
+    lines.extend(_optional_string("browser_pdf_cmd", config.get("browser_pdf_cmd")))
+
+    for bib in config["bibs"]:
+        lines.append("")
+        lines.append("[[bibs]]")
+        lines.append(f'name = "{_escape(bib["name"])}"')
+        lines.append(f'path = "{_escape(bib["path"])}"')
+        lines.append(f'papers_dir = "{_escape(bib["papers_dir"])}"')
+        lines.append(f"default = {'true' if bib['default'] else 'false'}")
+
+    return "\n".join(lines) + "\n"
+
+
+def load_and_resolve_bib(
+    *, config_path: str, home_dir: str, bib_selector: str | None
+) -> tuple[AppConfig, BibConfig] | list[str]:
+    config_result = load_config_file(config_path, home_dir=home_dir)
+    if config_result["config"] is None:
+        return config_result["errors"]
+    config = config_result["config"]
+    bib = resolve_bib(config["bibs"], bib_selector)
+    if bib is None:
+        return ["no matching bib found or selection is ambiguous"]
+    return config, bib

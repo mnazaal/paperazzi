@@ -1,4 +1,4 @@
-from pzi.write_plan import plan_bib_write
+from pzi.bib_repository import plan_bib_write
 
 
 def test_plan_bib_write_returns_insert_for_new_record() -> None:

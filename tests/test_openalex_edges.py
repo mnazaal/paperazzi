@@ -2,7 +2,7 @@
 
 import json
 
-from pzi.openalex import _normalize_work, fetch_openalex_record
+from pzi.metadata_sources import _normalize_work, fetch_openalex_record
 
 # ── fetch_openalex_record edges ──────────────────────────────────────────
 

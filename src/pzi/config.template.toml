@@ -4,7 +4,7 @@ api_listen_port = 8765
 # Optional localhost API hardening. Set token, then browser extension must send it.
 # api_auth_token = "change-me-long-random-token"
 # api_allowed_origins = ["http://127.0.0.1", "http://localhost", "chrome-extension://", "moz-extension://"]
-# api_max_body_bytes = 5242880
+# api_max_body_bytes = 67108864  # allows browser extension PDF byte uploads
 # unpaywall_email = "your@email.com" # plaintext email for Unpaywall OA PDF lookup
 # unpaywall_email_cmd = "pass show unpaywall-email" # or run a command to get it
 # semantic_scholar_api_key_cmd = "pass show semantic-scholar" # Semantic Scholar API key
@@ -14,7 +14,7 @@ api_listen_port = 8765
 # Firefox: ~/.mozilla/firefox/xxx.default-release
 # Chrome:  ~/.config/google-chrome/Default
 # Chromium: ~/.config/chromium
-# browser_pdf_cmd = "python /absolute/path/to/tools/browser_pdf_hook.py --profile ~/.mozilla/firefox/xxx.default-release"
+# browser_pdf_cmd = "pzi-browser-hook --profile ~/.mozilla/firefox/xxx.default-release --browser firefox"
 
 # FlareSolverr bypasses Cloudflare (gray area — may violate publisher ToS)
 # flaresolverr_url = "http://127.0.0.1:8191"

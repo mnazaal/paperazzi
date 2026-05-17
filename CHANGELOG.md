@@ -21,7 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - File locking for concurrent bib writes
 - Local HTTP API hardening: origin allowlist, optional token auth, request body limit
 - Browser extension API token storage + `X-Pzi-Token` forwarding
-- CI workflow for ruff, mypy, pyright, coverage-gated tests, and package build
+- CI workflow for ruff, pyright, coverage-gated tests, and package build
 - Coverage tooling with branch coverage and baseline fail-under gate
 
 ### Fixed

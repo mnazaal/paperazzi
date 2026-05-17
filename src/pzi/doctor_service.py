@@ -6,7 +6,7 @@ from typing import Any, TypeAlias
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from pzi.config_loader import load_config_file
+from pzi.config import load_config_file
 
 DoctorBibStatus: TypeAlias = dict[str, Any]
 

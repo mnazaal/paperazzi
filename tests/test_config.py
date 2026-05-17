@@ -94,7 +94,7 @@ def test_validate_app_config_applies_defaults() -> None:
         "api_listen_port": 8765,
         "api_auth_token": None,
         "api_allowed_origins": None,
-        "api_max_body_bytes": 5242880,
+        "api_max_body_bytes": 67108864,
         "unpaywall_email": None,
         "unpaywall_email_cmd": None,
         "semantic_scholar_api_key": None,

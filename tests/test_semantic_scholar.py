@@ -1,6 +1,6 @@
 import json
 
-from pzi.semantic_scholar import fetch_semantic_scholar_record
+from pzi.metadata_sources import fetch_semantic_scholar_record
 
 _S2_RESPONSE = {
     "title": "MapReduce: simplified data processing on large clusters",

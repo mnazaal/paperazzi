@@ -27,6 +27,8 @@ default = true
         dry_run=False,
     )
 
+    result.pop("diff", None)
+
     assert result == {
         "status": "ok",
         "bib_name": "ml",
@@ -69,6 +71,8 @@ default = true
         bib_selector=None,
         dry_run=True,
     )
+
+    result.pop("diff", None)
 
     assert result == {
         "status": "ok",
@@ -420,6 +424,8 @@ default = true
         fetch_search=fake_fetch_search,
     )
 
+    result.pop("diff", None)
+
     assert result == {
         "status": "ok",
         "bib_name": "ml",
@@ -737,6 +743,64 @@ default = true
     contents = bib_path.read_text()
     assert "file = {" in contents
     assert "PDF: https://example.com/from-browser-cmd.pdf" in contents
+
+
+def test_add_input_to_bib_browser_pdf_command_argument_overrides_config(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.toml"
+    bib_path = tmp_path / "library.bib"
+    config_hook = tmp_path / "config_hook.py"
+    argument_hook = tmp_path / "argument_hook.py"
+    config_hook.write_text(
+        "import json\nprint(json.dumps({'pdf_url': 'https://example.com/from-config.pdf'}))\n"
+    )
+    argument_hook.write_text(
+        "import json\nprint(json.dumps({'pdf_url': 'https://example.com/from-argument.pdf'}))\n"
+    )
+    config_path.write_text(
+        f"""
+translation_server_url = "http://127.0.0.1:1969"
+browser_pdf_cmd = 'python {config_hook}'
+
+[[bibs]]
+name = "ml"
+path = "{bib_path}"
+default = true
+""".strip()
+    )
+
+    def fake_fetch_search(query: str, *, server_url: str) -> list[dict[str, object]]:
+        return [
+            {
+                "item_type": "conferencePaper",
+                "record": {
+                    "title": "Browser Command Override",
+                    "authors": ["Smith, Jane"],
+                    "year": 2024,
+                    "doi": "10.1234/browserarg",
+                    "canonical_url": "https://example.com/paper",
+                },
+                "attachments": [],
+            }
+        ]
+
+    result = add_input_to_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        value="10.1234/browserarg",
+        record_overrides={},
+        bib_selector=None,
+        dry_run=False,
+        fetch_search=fake_fetch_search,
+        fetch_binary=lambda url: (b"%PDF-1.7\nbody", "application/pdf"),
+        browser_pdf_cmd=f"python {argument_hook}",
+    )
+
+    assert result["status"] == "ok"
+    contents = bib_path.read_text()
+    assert "PDF: https://example.com/from-argument.pdf" in contents
+    assert "from-config.pdf" not in contents
 
 
 def test_add_record_with_page_metadata_overrides_still_inserts_when_fetch_minimal(

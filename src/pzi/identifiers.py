@@ -6,6 +6,8 @@ import re
 from typing import Any, Literal, TypeAlias
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+_YEAR_PATTERN = re.compile(r"(19|20)\d{2}")
+
 InputKind = Literal["doi", "url", "pdf_url", "local_pdf", "unknown"]
 
 TRACKING_QUERY_KEYS = frozenset(
@@ -126,3 +128,9 @@ def _normalize_special_path(*, hostname: str, path: str) -> str:
             return f"/pdf/{identifier.lower()}{suffix.lower()}.pdf"
 
     return path or "/"
+
+
+def _extract_year_from_str(value: str) -> int | None:
+    """Extract a four-digit year string from a date string, or None."""
+    match = _YEAR_PATTERN.search(value)
+    return int(match.group(0)) if match else None

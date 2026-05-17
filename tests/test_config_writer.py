@@ -1,7 +1,6 @@
 import tomllib
 
-from pzi.config import validate_app_config
-from pzi.config_writer import dump_app_config
+from pzi.config import dump_app_config, validate_app_config
 
 
 def test_dump_app_config_roundtrips_through_tomllib() -> None:

@@ -33,7 +33,7 @@ def fetch_html_via_flaresolverr(
         if data.get("status") != "ok":
             return None
         return data.get("solution", {}).get("response") or None
-    except Exception:
+    except (OSError, json.JSONDecodeError, ValueError):
         return None
 
 
@@ -64,7 +64,7 @@ def fetch_pdf_via_flaresolverr(
 
         # Step 2: Download PDF using the cookies
         return _download_with_cookies(url, cookies, user_agent)
-    except Exception:
+    except (OSError, json.JSONDecodeError, ValueError):
         return None
 
 
@@ -133,4 +133,5 @@ def _post_json(endpoint: str, payload: object) -> str:
         method="POST",
     )
     with urlopen(request, timeout=90) as response:
-        return response.read().decode("utf-8")  # pragma: no cover — covered by integration/browser tests
+# pragma: no cover — covered by integration/browser tests
+        return response.read().decode("utf-8")  # pragma: no cover

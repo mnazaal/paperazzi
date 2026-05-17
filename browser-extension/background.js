@@ -31,7 +31,7 @@ export async function captureCurrentTab({ tags = [], bib = null, dryRun = false 
     return { status: "error", errors: ["no active tab"] };
   }
   const pageMetadata = await extractPageMetadata(tab.id, tab.url);
-  const pdfUrlCandidates = await extractPdfUrlCandidates(tab.id);
+  const pdfUrlCandidates = await extractPdfUrlCandidates(tab.id, tab.url);
   const endpoint = await getEndpoint();
   const authHeaders = await getAuthHeaders();
   const response = await fetch(endpoint, {
@@ -51,13 +51,16 @@ export async function captureCurrentTab({ tags = [], bib = null, dryRun = false 
     }),
   });
   const result = await response.json();
-  if (!dryRun && result && result.status === "ok" && result.citekey) {
-    await maybeStreamPdfBytes({
+  if (!dryRun && result && result.status === "ok" && result.citekey && !result.pdf_path) {
+    const pdfAttach = await maybeStreamPdfBytes({
       endpoint,
       citekey: result.citekey,
       bib,
       pdfUrlCandidates,
     });
+    if (pdfAttach) {
+      result.pdf_attach = pdfAttach;
+    }
   }
   return result;
 }
@@ -96,9 +99,19 @@ async function extractPageMetadata(tabId, pageUrl) {
   }
 }
 
-async function extractPdfUrlCandidates(tabId) {
+async function extractPdfUrlCandidates(tabId, pageUrl) {
+  const candidates = [];
+  const addCandidate = (value) => {
+    if (typeof value !== "string") return;
+    const trimmed = value.trim();
+    if (!trimmed || !isSafePublicHttpUrl(trimmed)) return;
+    if (!candidates.includes(trimmed)) candidates.push(trimmed);
+  };
+  if (looksLikePdfUrl(pageUrl)) {
+    addCandidate(pageUrl);
+  }
   if (!tabId) {
-    return [];
+    return candidates;
   }
   try {
     const [{ result }] = await chrome.scripting.executeScript({
@@ -109,28 +122,64 @@ async function extractPdfUrlCandidates(tabId) {
           if (typeof value !== "string") return;
           const trimmed = value.trim();
           if (!trimmed) return;
-          if (!/^https?:\/\//i.test(trimmed)) return;
-          if (!out.includes(trimmed)) out.push(trimmed);
+          let absolute;
+          try {
+            absolute = new URL(trimmed, document.baseURI).href;
+          } catch (_error) {
+            return;
+          }
+          if (!/^https?:\/\//i.test(absolute)) return;
+          if (!out.includes(absolute)) out.push(absolute);
         };
 
         document
-          .querySelectorAll('meta[name="citation_pdf_url"], meta[name="wkhealth_pdf_url"]')
+          .querySelectorAll(
+            'meta[name="citation_pdf_url"], meta[name="wkhealth_pdf_url"], meta[name="eprints.document_url"]'
+          )
           .forEach((node) => add(node.getAttribute("content")));
 
-        document.querySelectorAll("a[href], link[href]").forEach((node) => {
+        document.querySelectorAll('link[rel="alternate"][type="application/pdf"], a[href], link[href]').forEach((node) => {
           const href = node.href || node.getAttribute("href");
-          const text = (node.textContent || node.getAttribute("title") || "").toLowerCase();
-          if (/\.pdf([?#].*)?$/i.test(href || "") || text.includes("pdf")) {
+          const text = (node.textContent || node.getAttribute("title") || node.getAttribute("aria-label") || "").toLowerCase();
+          const type = (node.getAttribute("type") || "").toLowerCase();
+          if (/\.pdf([?#].*)?$/i.test(href || "") || type.includes("pdf") || text.includes("pdf")) {
             add(href);
           }
         });
         return out;
       },
     });
-    return Array.isArray(result) ? result : [];
+    if (Array.isArray(result)) {
+      for (const candidate of result) addCandidate(candidate);
+    }
+    return candidates;
   } catch (_error) {
-    return [];
+    return candidates;
   }
+}
+
+function looksLikePdfUrl(value) {
+  return typeof value === "string" && /\.pdf([?#].*)?$/i.test(value.trim());
+}
+
+function isSafePublicHttpUrl(value) {
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch (_error) {
+    return false;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+  const host = parsed.hostname.toLowerCase();
+  if (!host || host === "localhost" || host === "localhost.localdomain") return false;
+  if (!host.includes(".") || host.endsWith(".localhost") || host.endsWith(".local")) return false;
+  if (host.endsWith(".internal") || host.endsWith(".lan") || host.endsWith(".home")) return false;
+  if (/^(127|10)\./.test(host)) return false;
+  if (/^192\.168\./.test(host)) return false;
+  if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(host)) return false;
+  if (/^(0|169\.254|224|255)\./.test(host)) return false;
+  if (host === "::1" || host.startsWith("fc") || host.startsWith("fd") || host.startsWith("fe80")) return false;
+  return true;
 }
 
 async function maybeStreamPdfBytes({ endpoint, citekey, bib, pdfUrlCandidates }) {
@@ -138,12 +187,15 @@ async function maybeStreamPdfBytes({ endpoint, citekey, bib, pdfUrlCandidates })
     try {
       const response = await fetch(candidate, { credentials: "include" });
       const contentType = response.headers.get("content-type") || "";
-      if (!response.ok || !contentType.toLowerCase().includes("pdf")) {
+      if (!response.ok) {
         continue;
       }
       const bytes = await response.arrayBuffer();
+      if (!looksLikePdfBytes(bytes) && !contentType.toLowerCase().includes("pdf")) {
+        continue;
+      }
       const base64 = arrayBufferToBase64(bytes);
-      await fetch(endpoint.replace(/\/capture$/, "/attach-pdf-bytes"), {
+      const attachResponse = await fetch(endpoint.replace(/\/capture$/, "/attach-pdf-bytes"), {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
         body: JSON.stringify({
@@ -153,18 +205,26 @@ async function maybeStreamPdfBytes({ endpoint, citekey, bib, pdfUrlCandidates })
           pdf_base64: base64,
         }),
       });
-      return;
+      const attachResult = await attachResponse.json();
+      return attachResult;
     } catch (_error) {
       continue;
     }
   }
 }
 
+function looksLikePdfBytes(buffer) {
+  const bytes = new Uint8Array(buffer, 0, Math.min(5, buffer.byteLength));
+  return bytes.length >= 5 && bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46 && bytes[4] === 0x2d;
+}
+
 function arrayBufferToBase64(buffer) {
   const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
   let binary = "";
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    const chunk = bytes.subarray(offset, offset + chunkSize);
+    binary += String.fromCharCode(...chunk);
   }
   return btoa(binary);
 }

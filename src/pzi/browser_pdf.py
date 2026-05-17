@@ -18,6 +18,7 @@ def discover_pdf_url_with_browser(
         shell=False,
         capture_output=True,
         text=True,
+        timeout=120,
     )
     if result.returncode != 0:
         return None

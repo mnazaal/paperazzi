@@ -2,20 +2,67 @@
 
 Each step is a pure function  (record, context) -> record.
 Steps are composed into a fallback chain that runs until pdf_url is found.
+
+Also includes PDF candidate extraction helpers.
 """
 
 from __future__ import annotations
 
+import ipaddress
 from collections.abc import Callable, Mapping
 from typing import Any, TypeAlias
+from urllib.parse import urlsplit
 
 from pzi.bibtex import NormalizedRecord
 
 PdfDiscoveryContext: TypeAlias = dict[str, Any]
 
-
+PdfCandidate: TypeAlias = dict[str, Any]
 
 PdfDiscoveryStep = Callable[[NormalizedRecord, PdfDiscoveryContext], NormalizedRecord]
+
+
+# ---------------------------------------------------------------------------
+# PDF candidate extraction
+# ---------------------------------------------------------------------------
+
+
+def landing_page_urls(
+    *, base_record: Mapping[str, object], raw_value: str
+) -> list[str]:
+    candidates: list[str] = []
+    for value in [
+        base_record.get("canonical_url"),
+        base_record.get("source_url"),
+        base_record.get("abstract_url"),
+        raw_value,
+    ]:
+        if not isinstance(value, str):
+            continue
+        normalized = value.strip()
+        if not normalized.startswith(("http://", "https://")):
+            continue
+        if normalized not in candidates:
+            candidates.append(normalized)
+    return candidates
+
+
+def pdf_candidates_from_record(
+    *, base_record: Mapping[str, object], raw_value: str
+) -> list[PdfCandidate]:
+    pdf_url = base_record.get("pdf_url")
+    if isinstance(pdf_url, str) and pdf_url.strip():
+        return [{"source": "record", "url": pdf_url.strip()}]
+
+    return [
+        {"source": "landing_page", "url": url}
+        for url in landing_page_urls(base_record=base_record, raw_value=raw_value)
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Discovery pipeline
+# ---------------------------------------------------------------------------
 
 
 def apply_pdf_discovery(
@@ -39,17 +86,22 @@ def translation_attachment_step(
     if not attachments:
         return record
 
-    attachment = attachments[0]
-    if not isinstance(attachment, Mapping):
-        return record
+    for attachment in attachments:
+        if not isinstance(attachment, Mapping):
+            continue
 
-    url = attachment.get("url")
-    if not isinstance(url, str) or not url.strip():
-        return record
+        url = attachment.get("url")
+        if not isinstance(url, str) or not url.strip():
+            continue
+        normalized = url.strip()
+        if not _safe_public_http_url(normalized):
+            continue
 
-    updated = dict(record)
-    updated["pdf_url"] = url.strip()
-    return updated
+        updated = dict(record)
+        updated["pdf_url"] = normalized
+        return updated
+
+    return record
 
 
 def pdf_url_candidates_step(
@@ -62,11 +114,38 @@ def pdf_url_candidates_step(
 
     for candidate in candidates:
         if isinstance(candidate, str) and candidate.strip():
+            normalized = candidate.strip()
+            if not _safe_public_http_url(normalized):
+                continue
             updated = dict(record)
-            updated["pdf_url"] = candidate.strip()
+            updated["pdf_url"] = normalized
             return updated
 
     return record
+
+
+def _safe_public_http_url(value: str) -> bool:
+    parts = urlsplit(value)
+    if parts.scheme not in {"http", "https"} or not parts.hostname:
+        return False
+    hostname = parts.hostname.strip().lower()
+    if hostname in {"localhost", "localhost.localdomain"}:
+        return False
+    private_suffixes = (".localhost", ".local", ".internal", ".lan", ".home")
+    if "." not in hostname or hostname.endswith(private_suffixes):
+        return False
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return True
+    return not (
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_reserved
+        or address.is_unspecified
+    )
 
 
 def web_attachment_step(
@@ -77,7 +156,7 @@ def web_attachment_step(
     Also backfills canonical_url / source_url / abstract_url if the translator
     result provides them and the record currently lacks them.
     """
-    from pzi.pdf_acquisition import landing_page_urls
+    from pzi.bibtex import NormalizedRecord
 
     fetch_web = context["fetch_web"]
     candidate_urls = landing_page_urls(base_record=record, raw_value=context["raw_value"])
@@ -93,29 +172,32 @@ def web_attachment_step(
             if not isinstance(attachments, list) or not attachments:
                 continue
 
-            attachment = attachments[0]
-            if not isinstance(attachment, Mapping):
-                continue
+            for attachment in attachments:
+                if not isinstance(attachment, Mapping):
+                    continue
 
-            pdf_url = attachment.get("url")
-            if not isinstance(pdf_url, str) or not pdf_url.strip():
-                continue
+                pdf_url = attachment.get("url")
+                if not isinstance(pdf_url, str) or not pdf_url.strip():
+                    continue
+                normalized_pdf_url = pdf_url.strip()
+                if not _safe_public_http_url(normalized_pdf_url):
+                    continue
 
-            updated = dict(record)
-            updated["pdf_url"] = pdf_url.strip()
+                updated = dict(record)
+                updated["pdf_url"] = normalized_pdf_url
 
-            result_record = result.get("record")
-            if isinstance(result_record, Mapping):  # pragma: no branch — covered by integration/browser tests
-                for key in ("canonical_url", "source_url", "abstract_url"):
-                    value = result_record.get(key)
-                    if (
-                        isinstance(value, str)
-                        and value.strip()
-                        and not record.get(key)
-                    ):
-                        updated[key] = value
+                result_record = result.get("record")
+                if isinstance(result_record, Mapping):  # pragma: no branch
+                    for key in ("canonical_url", "source_url", "abstract_url"):
+                        value = result_record.get(key)
+                        if (
+                            isinstance(value, str)
+                            and value.strip()
+                            and not record.get(key)
+                        ):
+                            updated[key] = value
 
-            return updated
+                return updated
 
     return record
 
@@ -129,7 +211,6 @@ def browser_pdf_step(
         return record
 
     from pzi.browser_pdf import discover_pdf_url_with_browser
-    from pzi.pdf_acquisition import landing_page_urls
 
     doi = record.get("doi") if isinstance(record.get("doi"), str) else None
     for url in landing_page_urls(base_record=record, raw_value=context["raw_value"]):
@@ -154,9 +235,7 @@ def doi_pdf_step(
     if not isinstance(doi, str) or not doi.strip():
         return record
 
-    from pzi.crossref import fetch_crossref_pdf_url
-    from pzi.doaj import fetch_doaj_pdf_url
-    from pzi.europepmc import fetch_europepmc_pdf_url
+    from pzi.metadata_sources import fetch_crossref_pdf_url, fetch_doaj_pdf_url, fetch_europepmc_pdf_url
 
     pdf_url = fetch_crossref_pdf_url(doi)
     if pdf_url:

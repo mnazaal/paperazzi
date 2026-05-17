@@ -1,4 +1,11 @@
-"""Add/capture workflow orchestration."""
+"""Add/capture workflow orchestration.
+
+Public API:
+    add_input_to_bib  — main entry point for CLI / HTTP capture
+    add_record_to_bib — capture a pre-built record
+
+Metadata fetching is delegated to _record_fetching.py.
+"""
 
 from __future__ import annotations
 
@@ -7,33 +14,27 @@ import subprocess
 from collections.abc import Mapping
 from typing import Any, TypeAlias, cast
 
-from pzi.bib_repository import execute_write_plan, read_bib_file
-from pzi.bibtex import NormalizedRecord
-from pzi.citekeys import generate_citekey
-from pzi.config import BibConfig, resolve_bib
-from pzi.config_loader import load_config_file
-from pzi.crossref import fetch_crossref_record
-from pzi.flaresolverr import fetch_html_via_flaresolverr
-from pzi.html_metadata import extract_metadata_from_html
-from pzi.identifiers import classify_input
-from pzi.identity import find_exact_match
-from pzi.openalex import fetch_openalex_record
-from pzi.pdf import copy_pdf_to_papers_dir, fetch_and_store_pdf_with_fallbacks
-from pzi.pdf_discovery import (
-    DEFAULT_DISCOVERY_STEPS,
-    PdfDiscoveryContext,
-    apply_pdf_discovery,
+from pzi._record_fetching import (
+    _fallback_record_for_input,
+    _fetch_record_for_input,
+    _merge_record_sources,
+    _safe_call,
 )
-from pzi.pdf_metadata import extract_pdf_metadata
-from pzi.semantic_scholar import fetch_semantic_scholar_record
-from pzi.similarity import compute_similarity_hint
+from pzi.bib_repository import execute_write_plan, plan_bib_write, read_bib_file
+from pzi.bibtex import BibtexEntry, NormalizedRecord, generate_citekey
+from pzi.config import BibConfig, load_config_file, resolve_bib
+from pzi.identifiers import classify_input
+from pzi.pdf import copy_pdf_to_papers_dir, fetch_and_store_pdf_with_fallbacks
+from pzi.pdf_discovery import DEFAULT_DISCOVERY_STEPS, apply_pdf_discovery
+from pzi.pdf_service import extract_pdf_metadata
+from pzi.similarity import compute_similarity_hint, find_exact_match
 from pzi.translation_server import (
     fetch_search_translations,
     fetch_web_translations,
 )
-from pzi.write_plan import plan_bib_write
 
 AddRecordResult: TypeAlias = dict[str, Any]
+CaptureContext: TypeAlias = dict[str, Any]
 
 
 
@@ -56,43 +57,22 @@ def add_input_to_bib(
     pdf_url_candidates: list[str] | None = None,
     browser_pdf_cmd: str | None = None,
 ) -> AddRecordResult:
-    config_result = load_config_file(config_path, home_dir=home_dir)
-    if config_result["config"] is None:
-        return _error_result(
-            message="failed to load config",
-            errors=config_result["errors"],
-            dry_run=dry_run,
-            warnings=[],
-        )
-
-    config = config_result["config"]
-    bib = resolve_bib(config["bibs"], bib_selector)
-    if bib is None:
-        return _error_result(
-            message="could not resolve target bib",
-            errors=["no matching bib found or selection is ambiguous"],
-            dry_run=dry_run,
-            warnings=[],
-        )
-
-    cmd_email = config["unpaywall_email_cmd"]
-    unpaywall_email = (
-        subprocess.run(
-            shlex.split(cmd_email), capture_output=True, text=True
-        ).stdout.strip()
-        or None
-        if cmd_email
-        else config["unpaywall_email"]
+    context, context_error = _resolve_capture_context(
+        config_path=config_path,
+        home_dir=home_dir,
+        bib_selector=bib_selector,
+        dry_run=dry_run,
+        browser_pdf_cmd_override=browser_pdf_cmd,
     )
-    cmd_s2 = config["semantic_scholar_api_key_cmd"]
-    s2_api_key = (
-        subprocess.run(
-            shlex.split(cmd_s2), capture_output=True, text=True
-        ).stdout.strip()
-        or None
-        if cmd_s2
-        else config["semantic_scholar_api_key"]
-    )
+    if context_error is not None:
+        return context_error
+    assert context is not None
+
+    config = context["config"]
+    bib = context["bib"]
+    unpaywall_email = context["unpaywall_email"]
+    s2_api_key = context["s2_api_key"]
+    effective_browser_pdf_cmd = context["browser_pdf_cmd"]
 
     classified = classify_input(value)
     if classified["kind"] == "local_pdf":
@@ -109,7 +89,7 @@ def add_input_to_bib(
             s2_api_key=s2_api_key,
             fetch_web=fetch_web,
             flaresolverr_url=config.get("flaresolverr_url"),
-            browser_pdf_cmd=config.get("browser_pdf_cmd"),
+            browser_pdf_cmd=effective_browser_pdf_cmd,
         )
 
     try:
@@ -128,10 +108,10 @@ def add_input_to_bib(
             fetch_s2=fetch_s2,
             fetch_flaresolverr=fetch_flaresolverr,
             pdf_url_candidates=pdf_url_candidates,
-            browser_pdf_cmd=config.get("browser_pdf_cmd"),
+            browser_pdf_cmd=effective_browser_pdf_cmd,
         )
     except Exception as exc:
-        manual_record = _merge_record_sources({}, record_overrides)
+        manual_record = _manual_record_from_overrides(record_overrides)
         title = manual_record.get("title")
         doi = manual_record.get("doi")
         authors = manual_record.get("authors")
@@ -146,20 +126,41 @@ def add_input_to_bib(
             )
         )
         if classified["kind"] in {"doi", "url", "pdf_url"} and has_min_meta:
+            fallback_record = _merge_record_sources(
+                _fallback_record_for_input(
+                    kind=cast(str, classified["kind"]),
+                    normalized=cast(str | None, classified["normalized"]),
+                    raw_value=value,
+                ),
+                manual_record,
+            )
+            fallback_record = apply_pdf_discovery(
+                fallback_record,
+                DEFAULT_DISCOVERY_STEPS,
+                {
+                    "raw_value": value,
+                    "server_url": config["translation_server_url"],
+                    "unpaywall_email": unpaywall_email,
+                    "s2_api_key": s2_api_key,
+                    "flaresolverr_url": config.get("flaresolverr_url"),
+                    "browser_pdf_cmd": effective_browser_pdf_cmd,
+                    "pdf_url_candidates": pdf_url_candidates,
+                    "fetch_web": fetch_web,
+                    "fetch_unpaywall": fetch_unpaywall,
+                    "fetch_crossref": fetch_crossref,
+                    "fetch_openalex": fetch_openalex,
+                    "fetch_s2": fetch_s2,
+                    "fetch_flaresolverr": fetch_flaresolverr,
+                    "translation_attachments": None,
+                },
+            )
             return _add_record_with_bib(
                 bib=bib,
-                record=_merge_record_sources(
-                    _fallback_record_for_input(
-                        kind=cast(str, classified["kind"]),
-                        normalized=cast(str | None, classified["normalized"]),
-                        raw_value=value,
-                    ),
-                    manual_record,
-                ),
+                record=fallback_record,
                 dry_run=dry_run,
                 fetch_binary=fetch_binary,
                 flaresolverr_url=config.get("flaresolverr_url"),
-                browser_pdf_cmd=config.get("browser_pdf_cmd"),
+                browser_pdf_cmd=effective_browser_pdf_cmd,
             )
         import urllib.error
         from urllib.parse import urlsplit
@@ -184,14 +185,14 @@ def add_input_to_bib(
             warnings=[],
         )
 
-    merged_record = _merge_record_sources(fetched_record, record_overrides)
+    merged_record = _merge_fetched_record_with_overrides(fetched_record, record_overrides)
     return _add_record_with_bib(
         bib=bib,
         record=merged_record,
         dry_run=dry_run,
         fetch_binary=fetch_binary,
         flaresolverr_url=config.get("flaresolverr_url"),
-        browser_pdf_cmd=config.get("browser_pdf_cmd"),
+        browser_pdf_cmd=effective_browser_pdf_cmd,
     )
 
 
@@ -225,6 +226,92 @@ def add_record_to_bib(
     return _add_record_with_bib(bib=bib, record=record, dry_run=dry_run)
 
 
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+
+def _resolve_capture_context(
+    *,
+    config_path: str,
+    home_dir: str,
+    bib_selector: str | None,
+    dry_run: bool,
+    browser_pdf_cmd_override: str | None,
+) -> tuple[CaptureContext | None, AddRecordResult | None]:
+    """Load config, select the bib, and resolve runtime-only capture options."""
+    config_result = load_config_file(config_path, home_dir=home_dir)
+    if config_result["config"] is None:
+        return None, _error_result(
+            message="failed to load config",
+            errors=config_result["errors"],
+            dry_run=dry_run,
+            warnings=[],
+        )
+
+    config = config_result["config"]
+    bib = resolve_bib(config["bibs"], bib_selector)
+    if bib is None:
+        return None, _error_result(
+            message="could not resolve target bib",
+            errors=["no matching bib found or selection is ambiguous"],
+            dry_run=dry_run,
+            warnings=[],
+        )
+
+    return {
+        "config": config,
+        "bib": bib,
+        "unpaywall_email": _resolve_optional_command(
+            config["unpaywall_email_cmd"], config["unpaywall_email"]
+        ),
+        "s2_api_key": _resolve_optional_command(
+            config["semantic_scholar_api_key_cmd"], config["semantic_scholar_api_key"]
+        ),
+        "browser_pdf_cmd": browser_pdf_cmd_override or config.get("browser_pdf_cmd"),
+    }, None
+
+
+def _resolve_optional_command(command: str | None, fallback: str | None) -> str | None:
+    if not command:
+        return fallback
+    return subprocess.run(
+        shlex.split(command), capture_output=True, text=True
+    ).stdout.strip() or None
+
+
+def _split_record_overrides(
+    record_overrides: Mapping[str, object],
+) -> tuple[dict[str, object], dict[str, object]]:
+    normal: dict[str, object] = {}
+    fallback: dict[str, object] = {}
+    for key, value in record_overrides.items():
+        if key.startswith("fallback_"):
+            fallback[key.removeprefix("fallback_")] = value
+        else:
+            normal[key] = value
+    return normal, fallback
+
+
+def _merge_fetched_record_with_overrides(
+    fetched_record: Mapping[str, object], record_overrides: Mapping[str, object]
+) -> NormalizedRecord:
+    normal, fallback = _split_record_overrides(record_overrides)
+    merged = dict(fetched_record)
+    for key, value in fallback.items():
+        if value is None:
+            continue
+        current = merged.get(key)
+        if current is None or (isinstance(current, str) and not current.strip()):
+            merged[key] = value
+    return _merge_record_sources(merged, normal)
+
+
+def _manual_record_from_overrides(record_overrides: Mapping[str, object]) -> NormalizedRecord:
+    normal, fallback = _split_record_overrides(record_overrides)
+    return _merge_record_sources(fallback, normal)
+
+
 def _add_record_with_bib(
     *,
     bib: BibConfig,
@@ -238,7 +325,7 @@ def _add_record_with_bib(
     typed_existing_records = [
         cast(NormalizedRecord, existing) for existing in read_result["records"]
     ]
-    typed_record = _ensure_citekey(
+    typed_record = _ensure_citekey_for_write(
         cast(NormalizedRecord, dict(record)), typed_existing_records
     )
     record_with_pdf, warnings = _attach_pdf_if_available(
@@ -258,7 +345,7 @@ def _add_record_with_bib(
     citekey = plan["record"].get("citekey")
     pdf_path = plan["record"].get("local_pdf_path")
     prefix = "would " if dry_run else ""
-    return {
+    result: AddRecordResult = {
         "status": "ok",
         "bib_name": bib["name"],
         "bib_path": bib["path"],
@@ -272,179 +359,25 @@ def _add_record_with_bib(
         "errors": [],
     }
 
-
-def _fetch_record_for_input(
-    *,
-    raw_value: str,
-    classified: Mapping[str, object],
-    server_url: str,
-    fetch_web,
-    fetch_search,
-    unpaywall_email: str | None = None,
-    s2_api_key: str | None = None,
-    flaresolverr_url: str | None = None,
-    fetch_unpaywall=None,
-    fetch_crossref=None,
-    fetch_openalex=None,
-    fetch_s2=None,
-    fetch_flaresolverr=None,
-    pdf_url_candidates: list[str] | None = None,
-    browser_pdf_cmd: str | None = None,
-) -> NormalizedRecord:
-    kind = classified["kind"]
-    normalized = cast(str | None, classified["normalized"])
-    fallback = _fallback_record_for_input(
-        kind=cast(str, kind), normalized=normalized, raw_value=raw_value
-    )
-
-    def _discovery_context(
-        translation_attachments: list[dict[str, object]] | None = None,
-    ) -> PdfDiscoveryContext:
-        return {
-            "raw_value": raw_value,
-            "server_url": server_url,
-            "unpaywall_email": unpaywall_email,
-            "s2_api_key": s2_api_key,
-            "flaresolverr_url": flaresolverr_url,
-            "browser_pdf_cmd": browser_pdf_cmd,
-            "pdf_url_candidates": pdf_url_candidates,
-            "fetch_web": fetch_web,
-            "fetch_unpaywall": fetch_unpaywall,
-            "fetch_crossref": fetch_crossref,
-            "fetch_openalex": fetch_openalex,
-            "fetch_s2": fetch_s2,
-            "fetch_flaresolverr": fetch_flaresolverr,
-            "translation_attachments": translation_attachments,
-        }
-
-    def _with_pdf_discovery(
-        base_record: NormalizedRecord,
-        *,
-        translation_attachments: list[dict[str, object]] | None = None,
-    ) -> NormalizedRecord:
-        return apply_pdf_discovery(
-            base_record,
-            DEFAULT_DISCOVERY_STEPS,
-            _discovery_context(translation_attachments=translation_attachments),
+    if dry_run:
+        result["diff"] = _dry_run_diff(
+            plan=plan, existing_entries=read_result["entries"]
         )
 
-    if kind == "doi" and normalized is not None:
-        results = _safe_call(lambda: fetch_search(normalized, server_url=server_url))
-        if results:
-            best = dict(_merge_record_sources(results[0]["record"], fallback))
-            return _with_pdf_discovery(
-                best, translation_attachments=results[0].get("attachments")
-            )
-
-        meta = (fetch_crossref or fetch_crossref_record)(normalized)
-        if meta is None:
-            meta = (fetch_openalex or fetch_openalex_record)(normalized)
-        if meta is None:
-            s2_fn = fetch_s2 or (lambda d: fetch_semantic_scholar_record(d, api_key=s2_api_key))
-            meta = s2_fn(normalized)
-        if meta is not None:
-            best = dict(_merge_record_sources(meta, fallback))
-            return _with_pdf_discovery(best)
-
-        from urllib.parse import urlsplit as _urlsplit
-
-        raw_as_url = (
-            raw_value if _urlsplit(raw_value).scheme in {"http", "https"} else None
-        )
-        if raw_as_url:
-            web_results = _safe_call(
-                lambda: fetch_web(raw_as_url, server_url=server_url)
-            )
-            if web_results:
-                best = dict(
-                    _merge_record_sources(web_results[0]["record"], fallback)
-                )
-                return _with_pdf_discovery(
-                    best, translation_attachments=web_results[0].get("attachments")
-                )
-
-            if flaresolverr_url is not None:  # pragma: no branch — covered by integration/browser tests
-                fn = fetch_flaresolverr or (
-                    lambda u: fetch_html_via_flaresolverr(u, server_url=flaresolverr_url)
-                )
-                html = fn(raw_as_url)
-                if html:  # pragma: no branch — covered by integration/browser tests
-                    meta = extract_metadata_from_html(html)
-                    if meta is not None:  # pragma: no branch — covered by integration/browser tests
-                        best = dict(_merge_record_sources(meta, fallback))
-                        return _with_pdf_discovery(best)
-
-        suffix = (
-            " (page may be Cloudflare-protected — configure flaresolverr_url to bypass)"
-            if raw_as_url and flaresolverr_url is None
-            else ""
-        )
-        raise ValueError(f"no metadata found for DOI: {normalized}{suffix}")
-
-    if kind in {"url", "pdf_url"} and normalized is not None:
-        results = _safe_call(lambda: fetch_web(normalized, server_url=server_url))
-        if results:
-            best = dict(results[0]["record"])
-            best = _with_pdf_discovery(
-                best, translation_attachments=results[0].get("attachments")
-            )
-            return _merge_record_sources(best, fallback)
-
-        if flaresolverr_url is not None:
-            fn = fetch_flaresolverr or (
-                lambda u: fetch_html_via_flaresolverr(u, server_url=flaresolverr_url)
-            )
-            html = fn(normalized)
-            if html:
-                meta = extract_metadata_from_html(html)
-                if meta is not None:
-                    best = dict(_merge_record_sources(meta, fallback))
-                    return _with_pdf_discovery(best)
-
-        raise ValueError(f"translation server returned no results for URL: {normalized}")
-
-    return fallback
+    return result
 
 
-def _safe_call(fn):
-    """Run callable, swallowing urllib HTTPError and returning []."""
-    import urllib.error
-
-    try:
-        return fn()
-    except urllib.error.HTTPError:
-        return []
-
-
-def _fallback_record_for_input(
-    *, kind: str, normalized: str | None, raw_value: str
-) -> NormalizedRecord:
-    if kind == "doi" and normalized is not None:
-        return {"doi": normalized}
-    if kind == "pdf_url" and normalized is not None:
-        return {"pdf_url": normalized, "source_url": normalized}
-    if kind == "url" and normalized is not None:
-        return {
-            "canonical_url": normalized,
-            "source_url": normalized,
-            "abstract_url": normalized,
-        }
-    return {"source_url": raw_value}
-
-
-def _merge_record_sources(
-    base: Mapping[str, object], overrides: Mapping[str, object]
-) -> NormalizedRecord:
-    merged = dict(base)
-    for key, value in overrides.items():
-        if value is not None:
-            merged[key] = value
-    return cast(NormalizedRecord, merged)
-
-
-def _ensure_citekey(
+def _ensure_citekey_for_write(
     record: NormalizedRecord, existing_records: list[NormalizedRecord]
 ) -> NormalizedRecord:
+    match_index = find_exact_match(record, existing_records)
+    if match_index is not None:
+        existing_citekey = existing_records[match_index].get("citekey")
+        if isinstance(existing_citekey, str) and existing_citekey.strip():
+            matched = dict(record)
+            matched["citekey"] = existing_citekey
+            return cast(NormalizedRecord, matched)
+
     ck = record.get("citekey")
     if isinstance(ck, str) and bool(ck.strip()):
         return record
@@ -465,6 +398,9 @@ def _ensure_citekey(
         existing_keys,
     )
     return cast(NormalizedRecord, generated)
+
+
+_ensure_citekey = _ensure_citekey_for_write
 
 
 def _add_local_pdf(
@@ -647,3 +583,46 @@ def _attach_similarity_hint(
     updated = dict(record)
     updated["note"] = combined
     return cast(NormalizedRecord, updated)
+
+
+
+# Re-exports from _record_fetching for test monkeypatching
+_fetch_record_for_input = _fetch_record_for_input
+_merge_record_sources = _merge_record_sources
+_safe_call = _safe_call
+_fallback_record_for_input = _fallback_record_for_input
+
+
+def _dry_run_diff(
+    *,
+    plan: dict[str, Any],
+    existing_entries: list[BibtexEntry],
+) -> str:
+    """Return a human-readable diff of what the write plan would change."""
+    from pzi.bib_repository import serialize_bibtex
+
+    new_entry = plan["entry"]
+    new_text = serialize_bibtex([new_entry]).rstrip()
+
+    if plan["action"] == "insert":
+        action = "new entry"
+        old_text = "(none — new entry)"
+    else:
+        action = "update entry"
+        index = plan["index"]
+        try:
+            old_entry = existing_entries[index] if index is not None else None
+        except IndexError:
+            old_entry = None
+        if old_entry is None:
+            old_text = "(original entry not available)"
+        else:
+            old_text = serialize_bibtex([old_entry]).rstrip()
+
+    changed = ", ".join(plan["changed_fields"]) if plan["changed_fields"] else "none"
+    return (
+        f"--- {action} (changed: {changed}) ---\n"
+        f"{old_text}\n"
+        f"+++\n"
+        f"{new_text}"
+    )

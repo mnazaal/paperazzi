@@ -1,45 +1,57 @@
 # pzi
 
-Capture papers into local BibTeX libraries from DOI, URL, or PDF.
+pzi is a local-first paper capture tool that makes a Zotero-style capture workflow easy to use with plain BibTeX. Give it a DOI, URL, or PDF; it writes a BibTeX entry and, when possible, saves the PDF next to your library.
 
-One source of truth: your `.bib` file + a sibling `papers/` dir for PDFs. No database.
+One source of truth: your `.bib` file + a sibling `papers/` dir. No database.
 
-## Getting started
+## Quickstart
 
-### CLI
+### Requirements
+
+- Python 3.11+
+- `uv` or `pipx` for installation
+- Podman if you want `pzi services up` to manage Zotero translation-server
+- A repo checkout if you want to build the browser extension
+
+### 1. Install
 
 ```sh
-# 1. install CLI tool from GitHub
-uv tool install git+https://github.com/mnazaal/pzi.git
+uv tool install 'pzi[browser] @ git+https://github.com/mnazaal/pzi.git'
 # or:
-pipx install git+https://github.com/mnazaal/pzi.git
+pipx install 'pzi[browser] @ git+https://github.com/mnazaal/pzi.git'
+```
 
-# 2. create config + managed service files + browser fallback
+### 2. Create config and start metadata lookup
+
+```sh
 pzi init --setup --bib ~/bibs/main.bib
-
-# 3. start Zotero translation-server
 pzi services up
+```
 
-# 4. capture papers
+This creates `~/.config/pzi/config.toml`, helper service files, and a BibTeX library at `~/bibs/main.bib`.
+
+### 3. Capture a paper from the CLI
+
+```sh
 pzi add https://arxiv.org/abs/2301.07041
 pzi add 10.1145/1327452.1327492 --tags systems,classic
 pzi add ~/Downloads/paper.pdf
 ```
 
-Want FlareSolverr too? Use explicit opt-in:
+Expected result:
+
+- BibTeX entries are written to `~/bibs/main.bib`
+- PDFs are saved to `~/bibs/papers/` when pzi can find or fetch them
+
+### 4. Optional: capture from the browser
+
+Use this for authenticated publisher pages, pages with PDF links visible only in the browser, or quick one-click capture.
 
 ```sh
-pzi init --setup --with-flaresolverr --bib ~/bibs/main.bib --force
-pzi services up
-```
+# keep this running while using the extension
+pzi serve
 
-### Browser extension
-
-```sh
-# 1–3. same as CLI above, plus:
-pzi serve          # starts HTTP API on 127.0.0.1:8765
-
-# 4. from the repo checkout, build the extension
+# from the repo checkout
 python tools/build_extension.py
 ```
 
@@ -47,13 +59,26 @@ python tools/build_extension.py
 
 **Chrome**: open `chrome://extensions`, enable developer mode, click "Load unpacked", select `dist/chrome/`
 
-Navigate to any paper page, click the pzi icon, optionally choose a bib from the dropdown, and hit **capture**.
+Then open a paper page, click the pzi icon, optionally choose a bib/tags/dry-run, and hit **capture**. The extension sends page hints to the local API. If a PDF is visible to your browser, the extension can fetch it with your browser session cookies and attach it to the BibTeX entry.
+
+### 5. Optional: advanced PDF fallback
+
+Prefer the browser extension or `browser_pdf_cmd` for authenticated access. If you need a Cloudflare fallback, opt into FlareSolverr explicitly:
+
+```sh
+pzi init --setup --with-flaresolverr --bib ~/bibs/main.bib --force
+pzi services up
+```
+
+FlareSolverr may violate publisher terms of service; pzi warns when it is used.
 
 ---
 
-## Config
+## Reference
 
-`pzi init --setup --bib ~/bibs/main.bib` creates `~/.config/pzi/config.toml`, writes managed service files beside it, and installs Playwright Chromium for the packaged browser fallback.
+### Config
+
+`pzi init --setup --bib ~/bibs/main.bib` creates `~/.config/pzi/config.toml` and writes managed service files beside it.
 
 Generated config looks like:
 
@@ -63,8 +88,8 @@ api_listen_host = "127.0.0.1"
 api_listen_port = 8765
 # api_auth_token = "change-me-long-random-token"  # optional but recommended
 # api_allowed_origins = ["http://127.0.0.1", "http://localhost", "chrome-extension://", "moz-extension://"]
-# api_max_body_bytes = 5242880
-unpaywall_email = "your@email.com"        # optional — enables open-access PDF lookup
+# api_max_body_bytes = 67108864  # allows browser extension PDF byte uploads
+unpaywall_email = "your@email.com"        # optional - enables open-access PDF lookup
 # unpaywall_email_cmd = "pass show unpaywall-email"  # or resolve via command
 
 [[bibs]]
@@ -79,16 +104,16 @@ path = "~/bibs/sys.bib"
 
 `papers_dir` defaults to `<bib-dir>/papers/` when omitted.
 
-`unpaywall_email` enables [Unpaywall](https://unpaywall.org) lookups — the same service Zotero uses for "Find Available PDF". When set, pzi will try to find an open-access PDF by DOI for any paper where the translation server returns no attachment.
+`unpaywall_email` enables [Unpaywall](https://unpaywall.org) lookups - the same service Zotero uses for "Find Available PDF". When set, pzi will try to find an open-access PDF by DOI for any paper where the translation server returns no attachment.
 
-## CLI reference
+### CLI reference
 
 ```sh
 pzi init [--force]                        # create config from template
 pzi init --setup --bib ~/bibs/main.bib    # config + services + browser fallback
 pzi init --setup --with-flaresolverr      # explicit Cloudflare fallback opt-in
 pzi services up|down|status               # manage local helper services
-pzi browser install [chromium|firefox|chrome]
+pzi browser install [chromium|firefox|chrome]  # install Playwright browser binary
 pzi add <doi-or-url-or-pdf> [--tags t1,t2] [--bib NAME] [--dry-run]
 pzi pdf retry <citekey> [--bib NAME]
 pzi pdf attach <citekey> <url-or-path> [--bib NAME]
@@ -103,14 +128,14 @@ pzi doctor                                # config + translation-server check (J
 pzi serve [--host H --port P]             # run local HTTP capture API
 ```
 
-## HTTP API
+### HTTP API
 
 `pzi serve` exposes:
 
-- `POST /capture` — body: `{url, bib?, tags?, dry_run?, pdf_url_candidates?, page_title?, canonical_url?, source_url?, abstract_url?, doi?}` → insert/update result
-- `POST /attach-pdf-bytes` — body: `{citekey, bib?, source_url?, pdf_base64}` → attach browser-fetched PDF bytes
-- `GET /bibs` — configured bibs (used by extension popup dropdown)
-- `GET /health` — config + translation-server status
+- `POST /capture` - body: `{url, bib?, tags?, dry_run?, pdf_url_candidates?, page_title?, canonical_url?, source_url?, abstract_url?, doi?}` → insert/update result
+- `POST /attach-pdf-bytes` - body: `{citekey, bib?, source_url?, pdf_base64}` → attach browser-fetched PDF bytes
+- `GET /bibs` - configured bibs (used by extension popup dropdown)
+- `GET /health` - config + translation-server status
 
 Same ingest pipeline as CLI. CORS responses reflect only allowed local/extension origins.
 
@@ -132,19 +157,22 @@ Pure functions at core, side effects at edges.
 ```
 cli.py / http_api.py              # boundary: argparse + stdlib http.server
 add_service.py                    # add/capture orchestration
-pdf_discovery.py                  # pure functional PDF URL discovery pipeline
+pdf_discovery.py                  # pure functional PDF URL discovery + candidates
 bib_service.py                    # bib list + default selection
-tag_service.py                    # tags + tag search
-pdf_service.py                    # PDF retry / attach
+tag_service.py                    # tags, tag search, tag normalization
+pdf_service.py                    # PDF retry / attach + PDF metadata extraction
 doctor_service.py                 # health/config checks
 update_service.py                 # metadata enrichment/update
-service_common.py
-translation_server.py  pdf.py  browser_pdf.py   # network edges
-bib_repository.py                 # filesystem + fcntl lock
-identifiers.py  bibtex.py
-identity.py  merge.py  citekeys.py  similarity.py  write_plan.py   # pure
-config.py  config_loader.py  config_writer.py                      # TOML
-tags.py
+promote_service.py                # preprint → published promotion
+translation_server.py             # Zotero translation-server client + HTTP utils
+bib_repository.py                 # filesystem + fcntl lock + write planning + merge
+similarity.py                     # exact-identity + fuzzy dedup
+bibtex.py                         # record ↔ BibTeX mapping + citekey generation
+identifiers.py                    # DOI/URL normalization + classification + year extraction
+config.py                         # TOML types, validation, loading, serialization
+setup_service.py                  # setup command orchestration
+service_templates.py              # single-source helper-service templates
+metadata_sources.py               # Crossref, OpenAlex, Semantic Scholar, DOAJ, Europe PMC
 ```
 
 **Ingest pipeline**
@@ -153,7 +181,7 @@ tags.py
 
 **Data flow (add/capture)**
 
-CLI/HTTP/Extension → `add_input_to_bib()` → `classify_input()` → metadata fetch (translation-server / Crossref / OpenAlex / Semantic Scholar) → `merge()` + overrides → `apply_pdf_discovery()` (7-step pure fallback: translation attachment → candidate URLs → web attachments → browser hook → Crossref/Europe PMC/DOAJ → Unpaywall → arXiv) → `identity.find_exact_match()` / `write_plan.plan_bib_write()` → `bib_repository.execute_write_plan()` → `.bib` file + PDF.
+CLI/HTTP/Extension → `add_input_to_bib()` → `classify_input()` → metadata fetch (translation-server / Crossref / OpenAlex / Semantic Scholar) → merge + overrides → `apply_pdf_discovery()` (7-step pure fallback: translation attachment → candidate URLs → web attachments → browser hook → Crossref/Europe PMC/DOAJ → Unpaywall → arXiv) → `find_exact_match()` / `plan_bib_write()` → `bib_repository.execute_write_plan()` → `.bib` file + PDF.
 
 **Config & multi-library**
 
@@ -161,10 +189,10 @@ CLI/HTTP/Extension → `add_input_to_bib()` → `classify_input()` → metadata 
 
 **Design patterns**
 
-- `TypedDict` everywhere — structural typing, zero boilerplate, immutability by convention.
-- Explicit dependency injection — service functions accept `fetch_web`, `fetch_search`, etc. as keyword args with real defaults; tests pass lambdas.
-- Pure logic, thin I/O — `pdf_discovery.py`, `merge.py`, `write_plan.py` have no side effects. Network/filesystem lives in `translation_server.py`, `bib_repository.py`, `cli.py`.
-- Composable pipeline — `PdfDiscoveryStep = (record, context) → record`. Steps are independently testable and reorderable.
+- `TypedDict` everywhere - structural typing, zero boilerplate, immutability by convention.
+- Explicit dependency injection - service functions accept `fetch_web`, `fetch_search`, etc. as keyword args with real defaults; tests pass lambdas.
+- Pure logic, thin I/O - `pdf_discovery.py` and `bib_repository.py` have no side effects. Network/filesystem lives in `translation_server.py`, `bib_repository.py`, `cli.py`.
+- Composable pipeline - `PdfDiscoveryStep = (record, context) → record`. Steps are independently testable and reorderable.
 
 **Design decisions**
 
@@ -194,11 +222,7 @@ CLI/HTTP/Extension → `add_input_to_bib()` → `classify_input()` → metadata 
 browser_pdf_cmd = "pzi-browser-hook --browser chromium"
 ```
 
-The hook uses Playwright headless Chromium to load the landing page, inspect PDF-like links and meta tags, click obvious “PDF” / “Download PDF” controls, and return the discovered PDF URL to pzi. To install/reinstall browser binaries manually:
-
-```sh
-pzi browser install chromium
-```
+The hook uses Playwright headless Chromium to load the landing page, inspect PDF-like links and meta tags, click obvious "PDF" / "Download PDF" controls, and return the discovered PDF URL to pzi. Browser binaries install automatically on first use, or manually via `playwright install chromium`.
 
 ## Compatibility
 
@@ -216,8 +240,8 @@ Expected coverage for common sources. ✅ = works out-of-box. ⚠️ = needs con
 
 **Required config**
 
-- `unpaywall_email` — free sign-up at [unpaywall.org](https://unpaywall.org/products/api), enables OA PDF lookup by DOI
-- `semantic_scholar_api_key` — optional, free at [api.semanticscholar.org](https://api.semanticscholar.org/), higher rate limits
+- `unpaywall_email` - free sign-up at [unpaywall.org](https://unpaywall.org/products/api), enables OA PDF lookup by DOI
+- `semantic_scholar_api_key` - optional, free at [api.semanticscholar.org](https://api.semanticscholar.org/), higher rate limits
 
 For secrets in a password manager, use `_cmd` variants (`unpaywall_email_cmd`, `semantic_scholar_api_key_cmd`) so keys are never written to disk.
 
@@ -225,7 +249,7 @@ For secrets in a password manager, use `_cmd` variants (`unpaywall_email_cmd`, `
 
 Many publisher sites (ACM, IEEE, Springer) require authentication. pzi supports:
 
-### Option 1: Browser profile (recommended — legal)
+### Option 1: Browser profile (recommended - legal)
 
 Reuse your browser's authenticated session (institutional login, subscriptions):
 
@@ -262,9 +286,9 @@ flaresolverr_url = "http://127.0.0.1:8191"
 ### How it works
 
 PDF download tries in order:
-1. **Direct download** — fastest, works for open-access papers
-2. **Browser profile** — uses your authenticated session (legal)
-3. **FlareSolverr** — bypasses Cloudflare (gray area, warns user)
+1. **Direct download** - fastest, works for open-access papers
+2. **Browser profile** - uses your authenticated session (legal)
+3. **FlareSolverr** - bypasses Cloudflare (gray area, warns user)
 
 ## Troubleshooting capture flow
 
@@ -439,10 +463,9 @@ uv pip install -e ".[dev]"
 ## Tests
 
 ```sh
-.venv/bin/ruff check .
-.venv/bin/mypy src tests tools
+.venv/bin/ruff check src tools
 .venv/bin/pyright
-.venv/bin/pytest --cov=pzi --cov-report=term-missing -q
-# 353 passed, coverage gate >=78%
+.venv/bin/pytest --cov=pzi --cov-report=term-missing -q -k "not browser"
+# ~1000 passed, browser tests skipped (need Playwright binaries), coverage gate >=80%
 .venv/bin/python -m build
 ```

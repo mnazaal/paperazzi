@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hmac
 import json
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from typing import Any, TypedDict
+from urllib.parse import urlsplit
 
 from pzi.add_service import AddRecordResult, add_input_to_bib
 from pzi.bib_service import list_bibs
@@ -18,7 +20,7 @@ DEFAULT_ALLOWED_ORIGINS = (
     "chrome-extension://",
     "moz-extension://",
 )
-DEFAULT_MAX_BODY_BYTES = 5 * 1024 * 1024
+DEFAULT_MAX_BODY_BYTES = 64 * 1024 * 1024
 AUTH_HEADER = "X-Pzi-Token"
 
 
@@ -26,6 +28,30 @@ class HttpSecurityConfig(TypedDict):
     auth_token: str | None
     allowed_origins: tuple[str, ...]
     max_body_bytes: int
+    rate_limit_rpm: int
+
+
+class _RateLimiter:
+    """In-memory token-bucket rate limiter keyed by client identifier."""
+
+    def __init__(self, max_requests: int = 60, window_seconds: int = 60) -> None:
+        self._max = max_requests
+        self._window = window_seconds
+        self._buckets: dict[str, tuple[float, int]] = {}
+
+    def check(self, client_id: str) -> tuple[bool, int, int]:
+        """Return (allowed, remaining, reset_seconds)."""
+        now = time.time()
+        window_start, count = self._buckets.get(client_id, (0.0, 0))
+        if now - window_start >= self._window:
+            window_start = now
+            count = 0
+        if count >= self._max:
+            reset = int(window_start + self._window - now) + 1
+            return False, 0, reset
+        count += 1
+        self._buckets[client_id] = (window_start, count)
+        return True, self._max - count, int(window_start + self._window - now)
 
 
 def build_http_security_config(
@@ -33,6 +59,7 @@ def build_http_security_config(
     auth_token: str | None = None,
     allowed_origins: tuple[str, ...] | list[str] | None = None,
     max_body_bytes: int = DEFAULT_MAX_BODY_BYTES,
+    rate_limit_rpm: int = 60,
 ) -> HttpSecurityConfig:
     """Normalize HTTP security knobs without touching request state."""
     origins = tuple(
@@ -49,6 +76,7 @@ def build_http_security_config(
         "auth_token": normalized_token,
         "allowed_origins": origins,
         "max_body_bytes": max(0, int(max_body_bytes)),
+        "rate_limit_rpm": max(1, int(rate_limit_rpm)),
     }
 
 
@@ -64,6 +92,7 @@ def build_handler_class(
         (BaseHTTPRequestHandler,),
         {
             "server_version": "pzi/0.1",
+            "_rate_limiter": _RateLimiter(max_requests=security_config["rate_limit_rpm"]),
             "do_OPTIONS": lambda request: _handle_options(request, security_config),
             "do_GET": lambda request: _handle_get(request, config_path, home_dir, security_config),
             "do_POST": lambda request: _handle_post(
@@ -116,8 +145,15 @@ def _handle_get(
     if error is not None:
         _respond(request, error[0], {"error": error[1]}, security)
         return
+    client_id = request.client_address[0] if request.client_address else "unknown"
+    allowed, remaining, reset = request._rate_limiter.check(client_id)  # type: ignore[attr-defined]
+    if not allowed:
+        _respond(request, 429, {"error": "rate limit exceeded"}, security,
+                 rate_remaining=0, rate_reset=reset)
+        return
     status, body = process_get_request(request.path, config_path, home_dir)
-    _respond(request, status, body, security)
+    _respond(request, status, body, security,
+             rate_remaining=remaining, rate_reset=reset)
 
 
 def process_post_request(
@@ -183,6 +219,12 @@ def _handle_post(
     if error is not None:  # pragma: no cover — covered by integration
         _respond(request, error[0], {"error": error[1]}, security)
         return
+    client_id = request.client_address[0] if request.client_address else "unknown"
+    allowed, post_remaining, post_reset = request._rate_limiter.check(client_id)  # type: ignore[attr-defined]
+    if not allowed:
+        _respond(request, 429, {"error": "rate limit exceeded"}, security,
+                 rate_remaining=0, rate_reset=post_reset)
+        return
     length_result = validated_content_length(
         request.headers.get("Content-Length"), max_body_bytes=security["max_body_bytes"]
     )
@@ -200,7 +242,8 @@ def _handle_post(
     status, response_body = process_post_request(
         request.path, body, config_path, home_dir
     )
-    _respond(request, status, response_body, security)
+    _respond(request, status, response_body, security,
+             rate_remaining=post_remaining, rate_reset=post_reset)
 
 
 def _record_overrides_from_capture_body(body: dict[str, Any]) -> dict[str, object]:
@@ -209,11 +252,11 @@ def _record_overrides_from_capture_body(body: dict[str, Any]) -> dict[str, objec
     if isinstance(raw_tags, list):
         record_overrides["tags"] = [tag for tag in raw_tags if isinstance(tag, str) and tag.strip()]
     for body_key, record_key in [
-        ("page_title", "title"),
-        ("canonical_url", "canonical_url"),
-        ("source_url", "source_url"),
-        ("abstract_url", "abstract_url"),
-        ("doi", "doi"),
+        ("page_title", "fallback_title"),
+        ("canonical_url", "fallback_canonical_url"),
+        ("source_url", "fallback_source_url"),
+        ("abstract_url", "fallback_abstract_url"),
+        ("doi", "fallback_doi"),
     ]:
         value = body.get(body_key)
         if isinstance(value, str) and value.strip():
@@ -236,11 +279,30 @@ def origin_allowed(origin: str | None, allowed_origins: tuple[str, ...]) -> bool
     """Return whether Origin is acceptable for local API access."""
     if origin is None or not origin.strip():
         return True
-    value = origin.strip()
-    return any(
-        value == allowed.rstrip("/") or value.startswith(allowed)
-        for allowed in allowed_origins
-    )
+    value = origin.strip().rstrip("/")
+    for allowed in allowed_origins:
+        normalized_allowed = allowed.strip().rstrip("/")
+        if not normalized_allowed:
+            continue
+        if normalized_allowed in {"chrome-extension:", "moz-extension:"}:
+            if value.startswith(normalized_allowed + "//"):
+                return True
+            continue
+        if normalized_allowed in {"chrome-extension://", "moz-extension://"}:
+            if value.startswith(normalized_allowed):
+                return True
+            continue
+        if value == normalized_allowed:
+            return True
+        allowed_parts = urlsplit(normalized_allowed)
+        value_parts = urlsplit(value)
+        if (
+            allowed_parts.scheme in {"chrome-extension", "moz-extension"}
+            and value_parts.scheme == allowed_parts.scheme
+            and value_parts.netloc == allowed_parts.netloc
+        ):
+            return True
+    return False
 
 
 def request_security_error(
@@ -290,12 +352,19 @@ def _send_cors_headers(request: BaseHTTPRequestHandler, security: HttpSecurityCo
 
 
 def _respond(
-    request: BaseHTTPRequestHandler, status: int, data: Any, security: HttpSecurityConfig
+    request: BaseHTTPRequestHandler, status: int, data: Any, security: HttpSecurityConfig,
+    rate_remaining: int | None = None, rate_reset: int | None = None,
 ) -> None:
     body = json.dumps(data, sort_keys=True, default=str).encode("utf-8")
     request.send_response(status)
     request.send_header("Content-Type", "application/json")
     request.send_header("Content-Length", str(len(body)))
+    if rate_remaining is not None:
+        request.send_header("X-RateLimit-Remaining", str(rate_remaining))
+    if rate_reset is not None:
+        request.send_header("X-RateLimit-Reset", str(rate_reset))
+    if status == 429:
+        request.send_header("Retry-After", str(rate_reset or 60))
     _send_cors_headers(request, security)
     request.end_headers()
     request.wfile.write(body)
@@ -337,6 +406,7 @@ def run_server(  # pragma: no cover — I/O entry point, covered by integration 
 ) -> None:
     handler = build_handler_class(config_path=config_path, home_dir=home_dir, security=security)
     server = server_class((host, port), handler)
+    server.socket.settimeout(30)
     try:
         server.serve_forever()
     finally:

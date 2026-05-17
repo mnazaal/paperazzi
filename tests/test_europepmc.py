@@ -1,6 +1,6 @@
 import json
 
-from pzi.europepmc import fetch_europepmc_pdf_url
+from pzi.metadata_sources import fetch_europepmc_pdf_url
 
 _EUROPEPMC_OA_RESPONSE = {
     "resultList": {

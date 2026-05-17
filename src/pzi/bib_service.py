@@ -5,9 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, TypeAlias, cast
 
-from pzi.config import AppConfig, BibConfig
-from pzi.config_loader import load_config_file
-from pzi.config_writer import dump_app_config
+from pzi.config import AppConfig, BibConfig, dump_app_config, load_config_file
 
 BibInfo: TypeAlias = dict[str, Any]
 

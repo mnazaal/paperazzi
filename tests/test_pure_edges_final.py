@@ -9,7 +9,7 @@ from pzi import (
     html_metadata,
     http_api,
     identifiers,
-    pdf_metadata,
+    pdf_service,
     preprint_detector,
     search_service,
     similarity,
@@ -41,7 +41,7 @@ def test_run_serve_explicit_host_port(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_europepmc_pdf_non_string_availability() -> None:
-    from pzi.europepmc import _extract_pdf_url
+    from pzi.metadata_sources import _extract_pdf_url
     url = _extract_pdf_url({
         "fullTextUrlList": {
             "fullTextUrl": [{
@@ -110,12 +110,12 @@ def test_classify_input_relative_pdf_path() -> None:
 
 
 # ================================================================
-# pdf_metadata.py
+# pdf_service.py
 # ================================================================
 
 
 def test_extract_title_only_short_lines() -> None:
-    result = pdf_metadata._extract_title_from_text("a\nb\nc\nd\ne\nf\ng\nh\ni\nj")
+    result = pdf_service._extract_title_from_text("a\nb\nc\nd\ne\nf\ng\nh\ni\nj")
     assert result is None
 
 

@@ -175,7 +175,7 @@ def test_pdf_url_candidates_step_skips_non_string() -> None:
 def test_web_attachment_step_no_candidate_urls(monkeypatch) -> None:
     """landing_page_urls returns no candidates → return unchanged."""
     monkeypatch.setattr(
-        "pzi.pdf_acquisition.landing_page_urls",
+        "pzi.pdf_discovery.landing_page_urls",
         lambda base_record, raw_value: [],
     )
     record = {"title": "Paper"}
@@ -191,7 +191,7 @@ def test_web_attachment_step_no_candidate_urls(monkeypatch) -> None:
 def test_web_attachment_step_no_attachments_in_result(monkeypatch) -> None:
     """Result dict has no 'attachments' key → skipped."""
     monkeypatch.setattr(
-        "pzi.pdf_acquisition.landing_page_urls",
+        "pzi.pdf_discovery.landing_page_urls",
         lambda base_record, raw_value: ["https://example.com/paper"],
     )
 
@@ -211,7 +211,7 @@ def test_web_attachment_step_no_attachments_in_result(monkeypatch) -> None:
 def test_web_attachment_step_empty_attachments_list(monkeypatch) -> None:
     """First result has attachments=[] → skipped."""
     monkeypatch.setattr(
-        "pzi.pdf_acquisition.landing_page_urls",
+        "pzi.pdf_discovery.landing_page_urls",
         lambda base_record, raw_value: ["https://example.com/paper"],
     )
 
@@ -231,7 +231,7 @@ def test_web_attachment_step_empty_attachments_list(monkeypatch) -> None:
 def test_web_attachment_step_attachment_not_mapping(monkeypatch) -> None:
     """First attachment is not a Mapping → skipped."""
     monkeypatch.setattr(
-        "pzi.pdf_acquisition.landing_page_urls",
+        "pzi.pdf_discovery.landing_page_urls",
         lambda base_record, raw_value: ["https://example.com/paper"],
     )
 
@@ -251,7 +251,7 @@ def test_web_attachment_step_attachment_not_mapping(monkeypatch) -> None:
 def test_web_attachment_step_empty_pdf_url_in_attachment(monkeypatch) -> None:
     """Attachment has url="" → skipped."""
     monkeypatch.setattr(
-        "pzi.pdf_acquisition.landing_page_urls",
+        "pzi.pdf_discovery.landing_page_urls",
         lambda base_record, raw_value: ["https://example.com/paper"],
     )
 
@@ -271,7 +271,7 @@ def test_web_attachment_step_empty_pdf_url_in_attachment(monkeypatch) -> None:
 def test_web_attachment_step_oserror_on_fetch(monkeypatch) -> None:
     """fetch_web raises OSError → skipped, move to next URL."""
     monkeypatch.setattr(
-        "pzi.pdf_acquisition.landing_page_urls",
+        "pzi.pdf_discovery.landing_page_urls",
         lambda base_record, raw_value: ["https://example.com/paper"],
     )
 
@@ -291,7 +291,7 @@ def test_web_attachment_step_oserror_on_fetch(monkeypatch) -> None:
 def test_web_attachment_step_value_error_on_fetch(monkeypatch) -> None:
     """fetch_web raises ValueError → skipped."""
     monkeypatch.setattr(
-        "pzi.pdf_acquisition.landing_page_urls",
+        "pzi.pdf_discovery.landing_page_urls",
         lambda base_record, raw_value: ["https://example.com/paper"],
     )
 
@@ -317,7 +317,7 @@ def test_web_attachment_step_tries_multiple_urls(monkeypatch) -> None:
         return ["https://fail.example.com", "https://ok.example.com"]
 
     monkeypatch.setattr(
-        "pzi.pdf_acquisition.landing_page_urls",
+        "pzi.pdf_discovery.landing_page_urls",
         fake_landing_page_urls,
     )
 
@@ -341,7 +341,7 @@ def test_web_attachment_step_tries_multiple_urls(monkeypatch) -> None:
 def test_web_attachment_step_backfills_only_missing_keys(monkeypatch) -> None:
     """When result has record with fields, only missing ones are backfilled."""
     monkeypatch.setattr(
-        "pzi.pdf_acquisition.landing_page_urls",
+        "pzi.pdf_discovery.landing_page_urls",
         lambda base_record, raw_value: ["https://example.com/paper"],
     )
 
@@ -372,7 +372,7 @@ def test_web_attachment_step_backfills_only_missing_keys(monkeypatch) -> None:
 def test_web_attachment_step_multiple_results_first_with_attachment_wins(monkeypatch) -> None:
     """First result has no attachments, second does."""
     monkeypatch.setattr(
-        "pzi.pdf_acquisition.landing_page_urls",
+        "pzi.pdf_discovery.landing_page_urls",
         lambda base_record, raw_value: ["https://example.com/paper"],
     )
 
@@ -415,7 +415,7 @@ def test_browser_pdf_step_cmd_is_none() -> None:
 def test_browser_pdf_step_no_landing_urls(monkeypatch) -> None:
     """landing_page_urls returns empty → return unchanged."""
     monkeypatch.setattr(
-        "pzi.pdf_acquisition.landing_page_urls",
+        "pzi.pdf_discovery.landing_page_urls",
         lambda base_record, raw_value: [],
     )
     record = {"title": "Paper"}
@@ -429,7 +429,7 @@ def test_browser_pdf_step_no_landing_urls(monkeypatch) -> None:
 def test_browser_pdf_step_discovers_pdf(monkeypatch) -> None:
     """browser discovers a PDF URL → returned."""
     monkeypatch.setattr(
-        "pzi.pdf_acquisition.landing_page_urls",
+        "pzi.pdf_discovery.landing_page_urls",
         lambda base_record, raw_value: ["https://example.com/page"],
     )
     monkeypatch.setattr(
@@ -447,7 +447,7 @@ def test_browser_pdf_step_discovers_pdf(monkeypatch) -> None:
 def test_browser_pdf_step_no_doi(monkeypatch) -> None:
     """Record has no doi → doi=None passed to discover function."""
     monkeypatch.setattr(
-        "pzi.pdf_acquisition.landing_page_urls",
+        "pzi.pdf_discovery.landing_page_urls",
         lambda base_record, raw_value: ["https://example.com/page"],
     )
     capture = {}
@@ -499,7 +499,7 @@ def test_doi_pdf_step_whitespace_doi() -> None:
 def test_doi_pdf_step_crossref_returns_url(monkeypatch) -> None:
     """crossref returns a PDF URL → use it."""
     monkeypatch.setattr(
-        "pzi.crossref.fetch_crossref_pdf_url",
+        "pzi.metadata_sources.fetch_crossref_pdf_url",
         lambda doi: "https://crossref.example.com/p.pdf",
     )
     record = {"doi": "10.1/foo"}
@@ -510,11 +510,11 @@ def test_doi_pdf_step_crossref_returns_url(monkeypatch) -> None:
 def test_doi_pdf_step_europepmc_returns_url(monkeypatch) -> None:
     """crossref returns None, europepmc returns URL."""
     monkeypatch.setattr(
-        "pzi.crossref.fetch_crossref_pdf_url",
+        "pzi.metadata_sources.fetch_crossref_pdf_url",
         lambda doi: None,
     )
     monkeypatch.setattr(
-        "pzi.europepmc.fetch_europepmc_pdf_url",
+        "pzi.metadata_sources.fetch_europepmc_pdf_url",
         lambda doi: "https://europepmc.example.com/p.pdf",
     )
     record = {"doi": "10.1/foo"}
@@ -525,15 +525,15 @@ def test_doi_pdf_step_europepmc_returns_url(monkeypatch) -> None:
 def test_doi_pdf_step_doaj_returns_url(monkeypatch) -> None:
     """crossref and europepmc fail, doaj returns URL."""
     monkeypatch.setattr(
-        "pzi.crossref.fetch_crossref_pdf_url",
+        "pzi.metadata_sources.fetch_crossref_pdf_url",
         lambda doi: None,
     )
     monkeypatch.setattr(
-        "pzi.europepmc.fetch_europepmc_pdf_url",
+        "pzi.metadata_sources.fetch_europepmc_pdf_url",
         lambda doi: None,
     )
     monkeypatch.setattr(
-        "pzi.doaj.fetch_doaj_pdf_url",
+        "pzi.metadata_sources.fetch_doaj_pdf_url",
         lambda doi: "https://doaj.example.com/p.pdf",
     )
     record = {"doi": "10.1/foo"}
@@ -544,15 +544,15 @@ def test_doi_pdf_step_doaj_returns_url(monkeypatch) -> None:
 def test_doi_pdf_step_all_return_none(monkeypatch) -> None:
     """All resolvers return None → record unchanged."""
     monkeypatch.setattr(
-        "pzi.crossref.fetch_crossref_pdf_url",
+        "pzi.metadata_sources.fetch_crossref_pdf_url",
         lambda doi: None,
     )
     monkeypatch.setattr(
-        "pzi.europepmc.fetch_europepmc_pdf_url",
+        "pzi.metadata_sources.fetch_europepmc_pdf_url",
         lambda doi: None,
     )
     monkeypatch.setattr(
-        "pzi.doaj.fetch_doaj_pdf_url",
+        "pzi.metadata_sources.fetch_doaj_pdf_url",
         lambda doi: None,
     )
     record = {"doi": "10.1/foo", "title": "Paper"}

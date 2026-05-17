@@ -1,4 +1,4 @@
-from pzi.merge import merge_entries
+from pzi.bib_repository import merge_entries
 
 
 def test_merge_entries_unions_tags_and_preserves_existing_pdf_path() -> None:

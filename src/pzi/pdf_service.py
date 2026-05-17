@@ -1,20 +1,21 @@
-"""PDF retry workflow service."""
+"""PDF retry, attach, and metadata extraction services."""
 
 from __future__ import annotations
 
 import base64
+import re
 from pathlib import Path
 from typing import Any, TypeAlias, cast
 
-from pzi.bib_repository import read_bib_file, update_bib_entry
+from pzi.bib_repository import _find_entry_index, read_bib_file, update_bib_entry
 from pzi.bibtex import (
     BibtexEntry,
     NormalizedRecord,
     extract_note_field,
     record_to_bibtex_entry,
 )
-from pzi.pdf import fetch_and_store_pdf
-from pzi.service_common import _find_entry_index, load_and_resolve_bib
+from pzi.config import load_and_resolve_bib
+from pzi.pdf import fetch_and_store_pdf, store_pdf_source, write_pdf_bytes
 
 PdfRetryResult: TypeAlias = dict[str, Any]
 
@@ -303,9 +304,7 @@ def _attach_pdf_data(
             "errors": [f"citekey not found: {citekey}"],
         }
 
-    destination = Path(papers_dir) / f"{citekey}.pdf"
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_bytes(data)
+    destination = write_pdf_bytes(data=data, papers_dir=papers_dir, citekey=citekey)
 
     update_result = update_bib_entry(
         bib_path,
@@ -313,7 +312,7 @@ def _attach_pdf_data(
         lambda entry, record: _entry_with_pdf_fields(
             entry,
             cast(NormalizedRecord, dict(record)),
-            local_pdf_path=str(destination),
+            local_pdf_path=destination,
             pdf_url=source_url,
         ),
     )
@@ -333,7 +332,7 @@ def _attach_pdf_data(
         "status": "ok",
         "bib_name": bib_name,
         "citekey": citekey,
-        "local_pdf_path": str(destination),
+        "local_pdf_path": destination,
         "source_url": source_url,
         "message": "attached PDF bytes",
         "warnings": [],
@@ -344,28 +343,12 @@ def _attach_pdf_data(
 def _store_pdf_source(
     *, source: str, papers_dir: str, citekey: str, fetch_binary=None
 ) -> tuple[str | None, str | None]:
-    if source.startswith(("http://", "https://")):
-        return fetch_and_store_pdf(
-            url=source,
-            papers_dir=papers_dir,
-            citekey=citekey,
-            fetch_binary=fetch_binary,
-        )
-
-    source_path = Path(source).expanduser()
-    if not source_path.exists():
-        return None, f"PDF source not found: {source}"
-    try:
-        data = source_path.read_bytes()
-    except OSError as exc:
-        return None, f"failed to read PDF source {source}: {exc}"
-    if not data.startswith(b"%PDF-"):
-        return None, f"source is not a PDF: {source}"
-
-    destination = Path(papers_dir) / f"{citekey}.pdf"
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_bytes(data)
-    return str(destination), None
+    return store_pdf_source(
+        source=source,
+        papers_dir=papers_dir,
+        citekey=citekey,
+        fetch_binary=fetch_binary,
+    )
 
 
 def _entry_with_pdf_fields(
@@ -383,3 +366,91 @@ def _entry_with_pdf_fields(
         cast(NormalizedRecord, updated_record),
         entry_type=entry["entry_type"],
     )
+
+
+# ---------------------------------------------------------------------------
+# PDF metadata extraction
+# ---------------------------------------------------------------------------
+
+PdfExtractionResult: TypeAlias = dict[str, Any]
+
+_DOI_IN_TEXT_PATTERN = re.compile(
+    r"(?i)\b(10\.\d{3,9}/[-._;()/:\w]+)\b"
+)
+
+
+def extract_pdf_metadata(path: str) -> PdfExtractionResult:
+    """Extract DOI and title candidate from first pages of a PDF."""
+    try:
+        from pypdf import PdfReader
+    except ImportError:
+        return {"doi": None, "title": None, "text_sample": None}
+
+    file_path = Path(path)
+    if not file_path.exists():
+        return {"doi": None, "title": None, "text_sample": None}
+
+    try:
+        reader = PdfReader(str(file_path))
+    except (OSError, ValueError):
+        return {"doi": None, "title": None, "text_sample": None}
+
+    text_pages: list[str] = []
+    for page in reader.pages[:3]:
+        try:
+            text = page.extract_text()
+            if text:
+                text_pages.append(text)
+        except (OSError, ValueError, AttributeError):
+            continue
+
+    full_text = "\n".join(text_pages)
+    if not full_text.strip():
+        return {"doi": None, "title": None, "text_sample": None}
+
+    doi = _extract_doi_from_text(full_text)
+    title = _extract_title_from_text(full_text)
+
+    sample = full_text[:2000].strip() or None
+
+    return {"doi": doi, "title": title, "text_sample": sample}
+
+
+def _extract_doi_from_text(text: str) -> str | None:
+    """Find first DOI in extracted text."""
+    match = _DOI_IN_TEXT_PATTERN.search(text)
+    if match is None:
+        return None
+    candidate = match.group(1).strip()
+    candidate = re.sub(r"\s+", "", candidate)
+    return candidate.lower()
+
+
+def _extract_title_from_text(text: str) -> str | None:
+    """Heuristic: first non-empty line that looks like a title."""
+    skip_prefixes = (
+        "doi:", "doi ", "http", "www.", "copyright", "©",
+        "proceedings", "journal", "conference", "arxiv:",
+        "received", "accepted", "published", "keywords:",
+        "abstract", "introduction", "vol.", "pp.", "page",
+        "fig.", "figure", "table", "issn", "isbn",
+    )
+    skip_patterns = (
+        re.compile(r"^\s*\d+\s*$"),
+        re.compile(r"^\s*[-–—]+\s*$"),
+        re.compile(r"^\s*\*\s*$"),
+    )
+
+    for line in text.splitlines():
+        stripped = line.strip()
+        if len(stripped) < 10:
+            continue
+        lower = stripped.lower()
+        if any(lower.startswith(p) for p in skip_prefixes):
+            continue
+        if any(p.match(stripped) for p in skip_patterns):
+            continue
+        if 10 <= len(stripped) <= 200:
+            return stripped
+
+    return None

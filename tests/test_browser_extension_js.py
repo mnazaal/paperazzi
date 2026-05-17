@@ -110,7 +110,13 @@ console.log(JSON.stringify({ capture, calls: simplified }));
         tmp_path,
     )
 
-    assert result["capture"] == {"status": "ok", "citekey": "smith2024paper"}
+    assert result["capture"] == {
+        "status": "ok",
+        "citekey": "smith2024paper",
+        "pdf_attach": {
+            "status": "ok",
+        },
+    }
     assert result["calls"][0] == {
         "url": "http://pzi.test/capture",
         "method": "POST",

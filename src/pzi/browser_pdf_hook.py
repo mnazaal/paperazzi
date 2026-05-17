@@ -160,7 +160,7 @@ def _ensure_browser(browser: str = "firefox") -> bool:  # pragma: no cover — s
         from playwright.sync_api import sync_playwright
     except ImportError:
         print(
-            "playwright package not found. Install with: pip install playwright",
+            "playwright package not found. Install with: pip install pzi[browser]",
             file=sys.stderr,
         )
         return False
@@ -256,14 +256,11 @@ def _launch_browser(
 
 
 def _close_browser(session_or_playwright: Any, *args: Any) -> None:
-    """Clean up browser resources (backward-compatible).
-
-    Accepts either a BrowserSession or the old (playwright, browser_ref, page) triple.
-    """
+    """Clean up browser resources."""
     if isinstance(session_or_playwright, BrowserSession):
         session_or_playwright.close()
         return
-    # Backward compat: old triple format  # pragma: no cover — covered by browser integration
+    # Legacy triple-format support
     try:
         playwright = session_or_playwright
         if args:  # pragma: no branch — covered by integration/browser tests
@@ -274,8 +271,8 @@ def _close_browser(session_or_playwright: Any, *args: Any) -> None:
                 browser.close()
             else:
                 browser_ref.close()
-        playwright.stop()  # pragma: no cover — backward-compat path
-    except Exception:  # pragma: no cover — backward-compat path
+        playwright.stop()  # pragma: no cover — legacy path
+    except Exception:  # pragma: no cover — legacy path
         pass
 
 
@@ -284,8 +281,6 @@ def discover_pdf_url(
     *,
     browser: str = "chromium",
     profile_path: str | None = None,
-    _launch=None,
-    _close=None,
     _dismiss=None,
     _click=None,
     _resolve=None,
@@ -293,24 +288,17 @@ def discover_pdf_url(
 ) -> str | None:
     """Discover PDF URL from a page using browser.
 
-    All I/O edges are injectable.  Prefer passing _session over _launch/_close.
+    All I/O edges are injectable via _session for testing.
     """
     close_on_exit = _session is None  # pragma: no branch
     if _session is not None:  # pragma: no branch
         session = _session
     else:  # pragma: no cover
-        launch_fn = _launch or _launch_browser
-        close_fn = _close or _close_browser
-        session = launch_fn(browser, profile_path)
+        session = _launch_browser(browser, profile_path)
 
     dismiss_fn = _dismiss or _dismiss_cookie_banners
     click_fn = _click or _click_downloadish_links
     resolve_fn = _resolve or resolve_pdf_candidate_urls
-
-    try:
-        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
-    except ImportError:  # pragma: no cover — covered by integration/browser tests
-        return None
 
     try:
         session.navigate(page_url)
@@ -344,29 +332,20 @@ def download_pdf(
     *,
     browser: str = "chromium",
     profile_path: str | None = None,
-    _launch=None,
-    _close=None,
     _dismiss=None,
     _session: BrowserSession | None = None,
 ) -> bytes | None:
     """Download PDF bytes using browser, with optional profile reuse.
 
-    All browser I/O edges are injectable.  Prefer _session for test injection.
+    All browser I/O edges are injectable via _session for testing.
     """
     close_on_exit = _session is None  # pragma: no branch
     if _session is not None:  # pragma: no branch
         session = _session
     else:  # pragma: no cover
-        launch_fn = _launch or _launch_browser
-        close_fn = _close or _close_browser
-        session = launch_fn(browser, profile_path)
+        session = _launch_browser(browser, profile_path)
 
     dismiss_fn = _dismiss or _dismiss_cookie_banners
-
-    try:
-        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
-    except ImportError:  # pragma: no cover — covered by integration/browser tests
-        return None
 
     try:
         # 1. Try direct request
@@ -384,8 +363,8 @@ def download_pdf(
         if response is not None:
             content_type = response.headers.get("content-type", "")
             if "application/pdf" in content_type:
-                body = response.body()
-                if body and body.startswith(b"%PDF-"):  # pragma: no branch — covered by integration/browser tests
+                body = response.body()  # pragma: no branch — covered by integration/browser tests
+                if body and body.startswith(b"%PDF-"):  # pragma: no branch
                     return body
 
         # 3. HTML page — look for PDF candidate links
@@ -403,9 +382,9 @@ def download_pdf(
                     resp = session.navigate(candidate, wait_until="domcontentloaded", timeout=30000)
                     if resp is not None:  # pragma: no branch — covered by integration/browser tests
                         ct = resp.headers.get("content-type", "")
-                        if "application/pdf" in ct:  # pragma: no branch — covered by integration/browser tests
+                        if "application/pdf" in ct:  # pragma: no branch
                             body = resp.body()
-                            if body and body.startswith(b"%PDF-"):  # pragma: no branch — covered by integration/browser tests
+                            if body and body.startswith(b"%PDF-"):  # pragma: no branch
                                 return body
                 except Exception:  # pragma: no cover — covered by integration/browser tests
                     continue

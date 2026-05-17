@@ -56,6 +56,10 @@ class FakeRequestHandler:
 class FakeHandler:
     def __init__(self, path: str = "/", headers: dict | None = None, body: bytes = b""):
         self.path = path
+        self.client_address = ("127.0.0.1", 0)
+        from pzi.http_api import _RateLimiter
+
+        self._rate_limiter = _RateLimiter(max_requests=60)
         self._hdrs = headers or {}
         self.rfile = BytesIO(body)
         self.wfile = BytesIO()
@@ -259,7 +263,7 @@ def test_handle_post_body_too_large(tmp_path, monkeypatch) -> None:
 
     captured = {}
 
-    def capture_respond(req, status, data, sec):
+    def capture_respond(req, status, data, sec, **kw):
         captured["status"] = status
         captured["data"] = data
 
@@ -277,7 +281,7 @@ def test_handle_post_body_too_large(tmp_path, monkeypatch) -> None:
 def test_handle_post_not_found_path(tmp_path, monkeypatch) -> None:
     captured = {}
 
-    def capture_respond(req, status, data, sec):
+    def capture_respond(req, status, data, sec, **kw):
         captured["status"] = status
 
     monkeypatch.setattr("pzi.http_api._respond", capture_respond)
@@ -296,7 +300,7 @@ def test_handle_post_not_found_path(tmp_path, monkeypatch) -> None:
 def test_handle_get_not_found(tmp_path, monkeypatch) -> None:
     captured = {}
 
-    def capture_respond(req, status, data, sec):
+    def capture_respond(req, status, data, sec, **kw):
         captured["status"] = status
 
     monkeypatch.setattr("pzi.http_api._respond", capture_respond)
@@ -357,7 +361,7 @@ def test_post_unknown_path() -> None:
 def test_handle_options_blocked_origin(tmp_path, monkeypatch) -> None:
     captured = {}
 
-    def capture_respond(req, status, data, sec):
+    def capture_respond(req, status, data, sec, **kw):
         captured["status"] = status
 
     monkeypatch.setattr("pzi.http_api._respond", capture_respond)

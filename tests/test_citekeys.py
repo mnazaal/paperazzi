@@ -1,4 +1,4 @@
-from pzi.citekeys import (
+from pzi.bibtex import (
     generate_citekey,
     generate_citekey_base,
     resolve_citekey_collision,

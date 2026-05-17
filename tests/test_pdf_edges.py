@@ -177,7 +177,7 @@ def test_fetch_unpaywall_no_pdf(monkeypatch) -> None:
 
 def test_fetch_unpaywall_exception(monkeypatch) -> None:
     def fake_fetch(url: str) -> str:
-        raise RuntimeError("api down")
+        raise OSError("api down")
 
     result = fetch_unpaywall_pdf_url("10.1/test", email="x@x.com", fetch_text=fake_fetch)
     assert result is None

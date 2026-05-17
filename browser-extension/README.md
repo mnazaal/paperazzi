@@ -37,5 +37,6 @@ Outputs:
 
 - The capture endpoint defaults to `http://127.0.0.1:8765/capture`.
 - The popup fetches available bibs from `GET /bibs` and populates the bib dropdown automatically.
+- The extension requests `http://*/*` and `https://*/*` host access so it can fetch visible PDF candidates with your active browser session cookies, then upload the PDF bytes to local pzi.
 - To change the endpoint, open the extension popup devtools and set a value:
   `chrome.storage.local.set({ endpoint: "http://127.0.0.1:9000/capture" })`.

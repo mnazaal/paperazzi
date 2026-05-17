@@ -1,6 +1,6 @@
 import json
 
-from pzi.doaj import fetch_doaj_pdf_url
+from pzi.metadata_sources import fetch_doaj_pdf_url
 
 _DOAJ_RESPONSE = {
     "total": 1,

@@ -10,7 +10,7 @@ from urllib.request import Request, urlopen
 
 from pzi.bibtex import NormalizedRecord
 from pzi.identifiers import normalize_doi, normalize_url
-from pzi.service_common import _extract_year_from_str
+from pzi.identifiers import _extract_year_from_str
 
 TranslationAttachment: TypeAlias = dict[str, Any]
 
@@ -156,8 +156,8 @@ def _post(endpoint: str, payload: object, *, content_type: str = "application/js
         headers={"Content-Type": content_type},
         method="POST",
     )
-    with urlopen(request) as response:
-        return json.loads(response.read().decode("utf-8"))  # pragma: no cover — covered by integration/browser tests
+    with urlopen(request) as response:  # pragma: no cover — covered by integration/browser tests
+        return json.loads(response.read().decode("utf-8"))  # pragma: no cover
 
 
 def _post_text(endpoint: str, payload: object) -> object:
@@ -204,8 +204,8 @@ def _extract_arxiv_id(item: Mapping[str, object]) -> str | None:
     for line in extra.splitlines():
         if ":" not in line:
             continue
-        key, value = line.split(":", 1)
-        if key.strip().lower() == "arxiv":  # pragma: no branch — covered by integration/browser tests
+        key, value = line.split(":", 1)  # pragma: no branch — covered by integration/browser tests
+        if key.strip().lower() == "arxiv":  # pragma: no branch
             candidate = value.strip()
             return candidate or None
     return None

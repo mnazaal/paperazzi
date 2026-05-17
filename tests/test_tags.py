@@ -1,4 +1,4 @@
-from pzi.tags import normalize_tag, normalize_tags, parse_tag_csv
+from pzi.tag_service import normalize_tag, normalize_tags, parse_tag_csv
 
 
 def test_normalize_tag_lowercases_and_slugifies() -> None:

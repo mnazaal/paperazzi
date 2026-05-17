@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import Any, TypeAlias, cast
 
 from pzi.bib_repository import read_bib_file
-from pzi.service_common import load_and_resolve_bib
-from pzi.tags import normalize_tags
+from pzi.config import load_and_resolve_bib
+from pzi.tag_service import normalize_tags
 
 SearchMatch: TypeAlias = dict[str, Any]
 

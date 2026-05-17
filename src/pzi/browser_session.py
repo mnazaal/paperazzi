@@ -125,9 +125,8 @@ class BrowserSession:
         """Wait for network idle, silently swallowing timeout."""
         self._check_open()
         try:
-            from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
             self.page.wait_for_load_state("networkidle", timeout=timeout)
-        except (ImportError, Exception):
+        except Exception:
             pass
 
     # ------------------------------------------------------------------
@@ -181,7 +180,13 @@ class FetchResult:
 
 def _launch_browser(browser: str, profile_path: str | None) -> BrowserSession:
     """Launch a browser and return a BrowserSession."""
-    from playwright.sync_api import sync_playwright
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:  # pragma: no cover — playwright installed in dev/test
+        raise ImportError(
+            "playwright is required for browser PDF features. "
+            "Install with: pip install pzi[browser]"
+        )
 
     playwright = sync_playwright().start()
     options = browser_launch_options(browser)
