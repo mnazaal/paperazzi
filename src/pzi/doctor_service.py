@@ -33,6 +33,7 @@ def doctor_check(
             "translation_server_url": None,
             "translation_server_reachable": False,
             "translation_probe_error": None,
+            "credentials": {},
         }
     config = config_result["config"]
 
@@ -70,7 +71,31 @@ def doctor_check(
         "translation_server_url": translation_server_url,
         "translation_server_reachable": reachable,
         "translation_probe_error": probe_error,
+        "credentials": _credential_status(config),
     }
+
+
+def _credential_status(config: dict[str, Any]) -> dict[str, str]:
+    return {
+        "contact_email": _configured_status(
+            cmd=config.get("contact_email_cmd"), value=config.get("contact_email")
+        ),
+        "unpaywall_email": _configured_status(
+            cmd=config.get("unpaywall_email_cmd"), value=config.get("unpaywall_email")
+        ),
+        "semantic_scholar_api_key": _configured_status(
+            cmd=config.get("semantic_scholar_api_key_cmd"),
+            value=config.get("semantic_scholar_api_key"),
+        ),
+    }
+
+
+def _configured_status(*, cmd: object, value: object) -> str:
+    if isinstance(cmd, str) and cmd.strip():
+        return "cmd"
+    if isinstance(value, str) and value.strip():
+        return "plaintext"
+    return "not configured"
 
 
 def _probe_translation_server(url: str, *, timeout: float = 2.0) -> bool:

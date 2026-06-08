@@ -10,8 +10,7 @@ import json
 from html.parser import HTMLParser
 
 from pzi.bibtex import NormalizedRecord
-from pzi.identifiers import normalize_doi
-from pzi.identifiers import _extract_year_from_str
+from pzi.identifiers import _extract_year_from_str, normalize_doi
 
 
 def _parse_embedded_metadata(html: str) -> tuple[dict[str, list[str]], list[object]]:

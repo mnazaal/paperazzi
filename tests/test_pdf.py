@@ -2,16 +2,13 @@ import json
 from pathlib import Path
 
 from pzi.pdf import (
-    _is_pdf_content_type,
     copy_pdf_to_papers_dir,
     fetch_and_store_pdf,
     fetch_and_store_pdf_with_fallbacks,
     fetch_unpaywall_pdf_url,
-    is_pdf_bytes,
-    plan_pdf_path,
     store_pdf_source,
-    write_pdf_bytes,
 )
+from pzi.pdf_planning import is_pdf_bytes, is_pdf_content_type, plan_pdf_path, write_pdf_bytes
 
 
 def test_is_pdf_bytes_detects_pdf_signature() -> None:
@@ -26,13 +23,13 @@ def test_plan_pdf_path_uses_deterministic_citekey_name() -> None:
     )
 
 
-def test_is_pdf_content_type_classifies_explicit_and_ambiguous_values() -> None:
-    assert _is_pdf_content_type("application/pdf; charset=binary") is True
-    assert _is_pdf_content_type("text/html") is False
-    assert _is_pdf_content_type("application/json") is False
-    assert _is_pdf_content_type("text/plain") is False
-    assert _is_pdf_content_type("application/octet-stream") is None
-    assert _is_pdf_content_type(None) is None
+def testis_pdf_content_type_classifies_explicit_and_ambiguous_values() -> None:
+    assert is_pdf_content_type("application/pdf; charset=binary") is True
+    assert is_pdf_content_type("text/html") is False
+    assert is_pdf_content_type("application/json") is False
+    assert is_pdf_content_type("text/plain") is False
+    assert is_pdf_content_type("application/octet-stream") is None
+    assert is_pdf_content_type(None) is None
 
 
 def test_write_pdf_bytes_creates_parent_and_overwrites_atomically(tmp_path: Path) -> None:

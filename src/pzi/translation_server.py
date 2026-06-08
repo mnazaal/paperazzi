@@ -9,8 +9,8 @@ from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
 from pzi.bibtex import NormalizedRecord
-from pzi.identifiers import normalize_doi, normalize_url
-from pzi.identifiers import _extract_year_from_str
+from pzi.fetch_helpers import DEFAULT_MAX_RESPONSE_BYTES, _read_limited
+from pzi.identifiers import _extract_year_from_str, normalize_doi, normalize_url
 
 TranslationAttachment: TypeAlias = dict[str, Any]
 
@@ -99,13 +99,17 @@ def fetch_web_translations(
     *,
     server_url: str,
     post_json: JsonPost | None = None,
+    cookies: str | None = None,
 ) -> list[TranslationResult]:
     """Fetch webpage translations from translation-server /web."""
     base = server_url.rstrip("/") + "/"
     endpoint = urljoin(base, "web")
+    payload: dict[str, object] = {"url": url, "session": "pzi"}
+    if cookies:
+        payload["cookies"] = cookies
     response = _call_translation_server(
         endpoint=endpoint,
-        payload={"url": url, "session": "pzi"},
+        payload=payload,
         post_json=post_json or _post,
     )
     return [normalize_translation_item(item, source_url=url) for item in response]
@@ -144,7 +148,13 @@ def _call_translation_server(
     return normalized_items
 
 
-def _post(endpoint: str, payload: object, *, content_type: str = "application/json") -> object:
+def _post(
+    endpoint: str,
+    payload: object,
+    *,
+    content_type: str = "application/json",
+    max_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
+) -> object:
     data = (
         json.dumps(payload).encode("utf-8")
         if content_type == "application/json"
@@ -156,8 +166,9 @@ def _post(endpoint: str, payload: object, *, content_type: str = "application/js
         headers={"Content-Type": content_type},
         method="POST",
     )
-    with urlopen(request) as response:  # pragma: no cover — covered by integration/browser tests
-        return json.loads(response.read().decode("utf-8"))  # pragma: no cover
+    with urlopen(request, timeout=30) as response:  # pragma: no cover
+        data = _read_limited(response, max_bytes=max_bytes)
+        return json.loads(data.decode("utf-8"))  # pragma: no cover
 
 
 def _post_text(endpoint: str, payload: object) -> object:
@@ -186,6 +197,7 @@ def _normalize_creators(value: object) -> list[str]:
 
 
 def _extract_year(item: Mapping[str, object]) -> int | None:
+    """Extract a 4-digit year from an item's ``date`` field, or None."""
     date_value = _mapping_string(item, "date")
     if date_value is None:
         return None
@@ -212,6 +224,7 @@ def _extract_arxiv_id(item: Mapping[str, object]) -> str | None:
 
 
 def _mapping_string(mapping: Mapping[str, object], key: str) -> str | None:
+    """Return stripped non-empty string value from a mapping, or None."""
     value = mapping.get(key)
     if not isinstance(value, str):
         return None

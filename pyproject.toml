@@ -11,17 +11,23 @@ license = "MIT"
 requires-python = ">=3.11"
 keywords = ["bibtex", "academic", "papers", "pdf", "zotero", "citation"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
-    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Text Processing :: Markup :: LaTeX",
 ]
-dependencies = ["bibtexparser>=1.4.4", "pypdf>=4.0"]
+dependencies = ["bibtexparser>=1.4.4", "playwright>=1.40", "pypdf>=4.0"]
 
 [project.optional-dependencies]
+completions = ["argcomplete>=3"]
 dev = [
     "build>=1",
     "coverage[toml]>=7.6",
@@ -30,8 +36,6 @@ dev = [
     "pytest-cov>=5",
     "ruff>=0.4",
 ]
-containers = ["podman-compose>=1.5"]
-browser = ["playwright>=1.40"]
 
 [project.urls]
 Homepage = "https://github.com/mnazaal/pzi"
@@ -42,7 +46,7 @@ pzi = "pzi.cli:main"
 pzi-browser-hook = "pzi.browser_pdf_hook:main"
 
 [tool.setuptools.package-data]
-pzi = ["config.template.toml"]
+pzi = ["config.template.toml", "py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -78,5 +82,3 @@ include = ["src", "tools"]
 venvPath = "."
 venv = ".venv"
 pythonVersion = "3.11"
-
-

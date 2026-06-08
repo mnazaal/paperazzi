@@ -10,6 +10,7 @@ import json
 from collections.abc import Callable
 from urllib.parse import quote
 
+from pzi.capture_context import metadata_user_agent
 from pzi.bibtex import NormalizedRecord
 from pzi.fetch_helpers import fetch_text as _fetch_text
 from pzi.identifiers import normalize_doi
@@ -23,13 +24,13 @@ FetchText = Callable[[str], str]
 
 
 def fetch_crossref_record(
-    doi: str, *, fetch_text: FetchText | None = None
+    doi: str, *, contact_email: str | None = None, fetch_text: FetchText | None = None
 ) -> NormalizedRecord | None:
     """Return normalized record from Crossref for a DOI, or None on failure."""
     fn = fetch_text or _fetch_text
     try:
         url = f"https://api.crossref.org/works/{quote(doi, safe='')}"
-        data = json.loads(fn(url))
+        data = json.loads(_fetch_text_with_identity(fn, url, contact_email=contact_email))
         work = data.get("message")
         if not isinstance(work, dict):
             return None
@@ -38,14 +39,36 @@ def fetch_crossref_record(
         return None
 
 
+def fetch_crossref_record_by_title(
+    title: str, *, contact_email: str | None = None, fetch_text: FetchText | None = None
+) -> NormalizedRecord | None:
+    """Return first normalized Crossref search result for a title, or None."""
+    if not title.strip():
+        return None
+    fn = fetch_text or _fetch_text
+    try:
+        url = (
+            "https://api.crossref.org/works?"
+            f"query.title={quote(title.strip(), safe='')}&rows=1"
+        )
+        data = json.loads(_fetch_text_with_identity(fn, url, contact_email=contact_email))
+        message = data.get("message")
+        items = message.get("items") if isinstance(message, dict) else None
+        if not isinstance(items, list) or not items or not isinstance(items[0], dict):
+            return None
+        return _crossref_normalize_work(items[0])
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+
+
 def fetch_crossref_pdf_url(
-    doi: str, *, fetch_text: FetchText | None = None
+    doi: str, *, contact_email: str | None = None, fetch_text: FetchText | None = None
 ) -> str | None:
     """Return a direct PDF URL from Crossref link[] field, or None."""
     fn = fetch_text or _fetch_text
     try:
         url = f"https://api.crossref.org/works/{quote(doi, safe='')}"
-        data = json.loads(fn(url))
+        data = json.loads(_fetch_text_with_identity(fn, url, contact_email=contact_email))
         work = data.get("message")
         if not isinstance(work, dict):
             return None
@@ -99,11 +122,36 @@ def _crossref_normalize_work(work: dict[str, object]) -> NormalizedRecord:
         "doi": doi,
     }
 
+    item_type = _crossref_type_to_item_type(work.get("type"))
+    if item_type is not None:
+        record["item_type"] = item_type
+
     pdf_url = _crossref_extract_pdf_url(work)
     if pdf_url:
         record["pdf_url"] = pdf_url
 
     return record
+
+
+_CROSSREF_TYPE_MAP: dict[str, str] = {
+    "journal-article": "journalArticle",
+    "proceedings-article": "conferencePaper",
+    "book": "book",
+    "book-chapter": "bookSection",
+    "dissertation": "thesis",
+    "posted-content": "preprint",
+    "report": "report",
+    "monograph": "book",
+    "reference-entry": "bookSection",
+    "standard": "misc",
+    "dataset": "misc",
+}
+
+
+def _crossref_type_to_item_type(value: object) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return _CROSSREF_TYPE_MAP.get(value.strip().lower())
 
 
 def _crossref_extract_pdf_url(work: dict[str, object]) -> str | None:
@@ -139,16 +187,38 @@ def _crossref_extract_pdf_url(work: dict[str, object]) -> str | None:
 
 
 def fetch_openalex_record(
-    doi: str, *, fetch_text: FetchText | None = None
+    doi: str, *, contact_email: str | None = None, fetch_text: FetchText | None = None
 ) -> NormalizedRecord | None:
     """Return normalized record from OpenAlex for a DOI, or None on failure."""
     fn = fetch_text or _fetch_text
     try:
         url = f"https://api.openalex.org/works/doi:{quote(doi, safe='')}"
+        if contact_email:
+            url = f"{url}?mailto={quote(contact_email, safe='')}"
         data = json.loads(fn(url))
         if "id" not in data:
             return None
         return _openalex_normalize_work(data)
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+
+
+def fetch_openalex_record_by_title(
+    title: str, *, contact_email: str | None = None, fetch_text: FetchText | None = None
+) -> NormalizedRecord | None:
+    """Return first normalized OpenAlex search result for a title, or None."""
+    if not title.strip():
+        return None
+    fn = fetch_text or _fetch_text
+    try:
+        url = f"https://api.openalex.org/works?search={quote(title.strip(), safe='')}&per-page=1"
+        if contact_email:
+            url = f"{url}&mailto={quote(contact_email, safe='')}"
+        data = json.loads(fn(url))
+        results = data.get("results")
+        if not isinstance(results, list) or not results or not isinstance(results[0], dict):
+            return None
+        return _openalex_normalize_work(results[0])
     except (OSError, json.JSONDecodeError, ValueError):
         return None
 
@@ -195,9 +265,31 @@ def _openalex_normalize_work(work: dict[str, object]) -> NormalizedRecord:
         "venue": str(venue) if venue else None,
         "doi": doi,
     }
+
+    item_type = _openalex_type_to_item_type(work.get("type"))
+    if item_type is not None:
+        record["item_type"] = item_type
+
     if pdf_url:
         record["pdf_url"] = pdf_url
     return record
+
+
+_OPENALEX_TYPE_MAP: dict[str, str] = {
+    "article": "journalArticle",
+    "book": "book",
+    "book-chapter": "bookSection",
+    "dissertation": "thesis",
+    "preprint": "preprint",
+    "proceedings-article": "conferencePaper",
+    "report": "report",
+}
+
+
+def _openalex_type_to_item_type(value: object) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return _OPENALEX_TYPE_MAP.get(value.strip().lower())
 
 
 # ============================================================================
@@ -224,6 +316,38 @@ def fetch_semantic_scholar_record(
         if "error" in data or "message" in data:
             return None
         return _s2_normalize_paper(data)
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+
+
+def fetch_semantic_scholar_record_by_title(
+    title: str,
+    *,
+    api_key: str | None = None,
+    fetch_text: FetchText | None = None,
+) -> NormalizedRecord | None:
+    """Return first Semantic Scholar search result for a title, or None."""
+    stripped = title.strip()
+    if not stripped:
+        return None
+    fn = fetch_text or _make_fetch_text(api_key)
+    try:
+        fields = "title,authors,year,venue,externalIds,openAccessPdf"
+        encoded_title = quote(stripped, safe="")
+        url = (
+            "https://api.semanticscholar.org/graph/v1/paper/search?"
+            f"query={encoded_title}&limit=1&fields={fields}"
+        )
+        data = json.loads(fn(url))
+        if "error" in data or "message" in data:
+            return None
+        papers = data.get("data")
+        if not isinstance(papers, list) or not papers:
+            return None
+        paper = papers[0]
+        if not isinstance(paper, dict):
+            return None
+        return _s2_normalize_paper(paper)
     except (OSError, json.JSONDecodeError, ValueError):
         return None
 
@@ -272,6 +396,17 @@ def _s2_normalize_paper(paper: dict[str, object]) -> NormalizedRecord:
 
 def _make_fetch_text(api_key: str | None) -> FetchText:
     return lambda url: _fetch_text(url, api_key=api_key)
+
+
+def _fetch_text_with_identity(
+    fn: FetchText, url: str, *, contact_email: str | None
+) -> str:
+    if contact_email:
+        try:
+            return fn(url, user_agent=metadata_user_agent(contact_email))  # type: ignore[call-arg]
+        except TypeError:
+            return fn(url)
+    return fn(url)
 
 
 # ============================================================================

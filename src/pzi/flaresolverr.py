@@ -7,6 +7,8 @@ from collections.abc import Callable
 from typing import Any, TypeAlias
 from urllib.request import Request, urlopen
 
+from pzi.fetch_helpers import DEFAULT_MAX_RESPONSE_BYTES, _read_limited
+
 FetchText = Callable[[str, object], str]
 
 
@@ -72,6 +74,8 @@ def _download_with_cookies(
     url: str,
     cookies: list[FlareSolverrCookies],
     user_agent: str,
+    *,
+    max_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
 ) -> bytes | None:
     """Download a file using cookies obtained from FlareSolverr."""
     from http.cookiejar import Cookie, CookieJar
@@ -119,13 +123,21 @@ def _download_with_cookies(
     )
 
     with opener.open(request, timeout=90) as response:
-        data = response.read()  # pragma: no cover — covered by integration/browser tests
+        data = _read_limited(
+            response,
+            max_bytes=max_bytes,
+        )  # pragma: no cover — covered by integration/browser tests
         if data.startswith(b"%PDF-"):  # pragma: no cover — covered by integration/browser tests
             return data  # pragma: no cover — covered by integration/browser tests
         return None  # pragma: no cover — covered by integration/browser tests
 
 
-def _post_json(endpoint: str, payload: object) -> str:
+def _post_json(
+    endpoint: str,
+    payload: object,
+    *,
+    max_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
+) -> str:
     request = Request(
         endpoint,
         data=json.dumps(payload).encode("utf-8"),
@@ -134,4 +146,5 @@ def _post_json(endpoint: str, payload: object) -> str:
     )
     with urlopen(request, timeout=90) as response:
 # pragma: no cover — covered by integration/browser tests
-        return response.read().decode("utf-8")  # pragma: no cover
+        data = _read_limited(response, max_bytes=max_bytes)
+        return data.decode("utf-8")  # pragma: no cover

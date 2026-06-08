@@ -2,82 +2,46 @@
 
 from __future__ import annotations
 
-import hmac
 import json
 import time
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
-from typing import Any, TypedDict
-from urllib.parse import urlsplit
+from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
-from pzi.add_service import AddRecordResult, add_input_to_bib
+from pzi.add_service import add_input_to_bib
+from pzi.bib_repository import read_bib_file
 from pzi.bib_service import list_bibs
+from pzi.config import load_and_resolve_bib
 from pzi.doctor_service import doctor_check
-from pzi.pdf_service import attach_pdf_bytes
-
-DEFAULT_ALLOWED_ORIGINS = (
-    "http://127.0.0.1",
-    "http://localhost",
-    "chrome-extension://",
-    "moz-extension://",
+from pzi.http_payloads import (
+    capture_payload,
+    detail_payload,
+    entries_payload,
+    metadata_url_override_error,
+    pdf_url_candidates_from_body,
+    promote_payload,
+    record_overrides_from_capture_body,
+    search_payload,
+    tag_change_payload,
+    tag_list_payload,
+    update_payload,
 )
-DEFAULT_MAX_BODY_BYTES = 64 * 1024 * 1024
-AUTH_HEADER = "X-Pzi-Token"
-
-
-class HttpSecurityConfig(TypedDict):
-    auth_token: str | None
-    allowed_origins: tuple[str, ...]
-    max_body_bytes: int
-    rate_limit_rpm: int
-
-
-class _RateLimiter:
-    """In-memory token-bucket rate limiter keyed by client identifier."""
-
-    def __init__(self, max_requests: int = 60, window_seconds: int = 60) -> None:
-        self._max = max_requests
-        self._window = window_seconds
-        self._buckets: dict[str, tuple[float, int]] = {}
-
-    def check(self, client_id: str) -> tuple[bool, int, int]:
-        """Return (allowed, remaining, reset_seconds)."""
-        now = time.time()
-        window_start, count = self._buckets.get(client_id, (0.0, 0))
-        if now - window_start >= self._window:
-            window_start = now
-            count = 0
-        if count >= self._max:
-            reset = int(window_start + self._window - now) + 1
-            return False, 0, reset
-        count += 1
-        self._buckets[client_id] = (window_start, count)
-        return True, self._max - count, int(window_start + self._window - now)
-
-
-def build_http_security_config(
-    *,
-    auth_token: str | None = None,
-    allowed_origins: tuple[str, ...] | list[str] | None = None,
-    max_body_bytes: int = DEFAULT_MAX_BODY_BYTES,
-    rate_limit_rpm: int = 60,
-) -> HttpSecurityConfig:
-    """Normalize HTTP security knobs without touching request state."""
-    origins = tuple(
-        origin.strip()
-        for origin in (allowed_origins or DEFAULT_ALLOWED_ORIGINS)
-        if isinstance(origin, str) and origin.strip()
-    )
-    normalized_token = (
-        auth_token.strip()
-        if isinstance(auth_token, str) and auth_token.strip()
-        else None
-    )
-    return {
-        "auth_token": normalized_token,
-        "allowed_origins": origins,
-        "max_body_bytes": max(0, int(max_body_bytes)),
-        "rate_limit_rpm": max(1, int(rate_limit_rpm)),
-    }
+from pzi.http_security import (
+    AUTH_HEADER,
+    HttpSecurityConfig,
+    RateLimiter,
+    build_http_security_config,
+    origin_allowed,
+    request_security_error,
+    safe_public_http_url,
+    validated_content_length,
+)
+from pzi.pdf_service import attach_pdf_bytes, attach_pdf_raw_bytes
+from pzi.promote_service import promote_bib
+from pzi.search_service import search_bib
+from pzi.tag_service import add_tags, list_tags, remove_tags
+from pzi.update_service import update_bib
 
 
 def build_handler_class(
@@ -92,7 +56,7 @@ def build_handler_class(
         (BaseHTTPRequestHandler,),
         {
             "server_version": "pzi/0.1",
-            "_rate_limiter": _RateLimiter(max_requests=security_config["rate_limit_rpm"]),
+            "_rate_limiter": RateLimiter(max_requests=security_config["rate_limit_rpm"]),
             "do_OPTIONS": lambda request: _handle_options(request, security_config),
             "do_GET": lambda request: _handle_get(request, config_path, home_dir, security_config),
             "do_POST": lambda request: _handle_post(
@@ -124,13 +88,128 @@ def process_get_request(
 
     Testable without a server socket. Used by _handle_get.
     """
-    if path == "/health":
+    parsed = urlsplit(path)
+    p = parsed.path
+    qs = _parse_query(parsed.query)
+
+    if p == "/health":
         return 200, _health_payload(config_path, home_dir)
-    if path == "/bibs":
+    if p == "/bibs":
         result = list_bibs(config_path=config_path, home_dir=home_dir)
         status = 200 if result["status"] == "ok" else 500
         return status, result
+    if p == "/search":
+        return _handle_search_get(config_path, home_dir, qs)
+    if p == "/entries":
+        return _handle_entries_get(config_path, home_dir, qs)
+    if p.startswith("/detail/"):
+        citekey = p[len("/detail/"):]
+        bib_selector = qs.get("bib")
+        return _handle_detail_get(config_path, home_dir, citekey, bib_selector)
+    if p.startswith("/tags/"):
+        citekey = p[len("/tags/"):]
+        bib_selector = qs.get("bib")
+        return _handle_tags_get(config_path, home_dir, citekey, bib_selector)
     return 404, {"error": "not found"}
+
+
+def _parse_query(query_string: str) -> dict[str, str]:
+    """Parse a URL query string into a flat dict of single-value params."""
+    result: dict[str, str] = {}
+    for key, values in parse_qs(query_string).items():
+        if values:
+            result[key] = values[0]
+    return result
+
+
+def _handle_search_get(
+    config_path: str, home_dir: str, qs: dict[str, str],
+) -> tuple[int, dict[str, Any]]:
+    bib_selector = qs.get("bib") or None
+    query = qs.get("q") or None
+    author = qs.get("author") or None
+    year_raw = qs.get("year")
+    year: int | None = None
+    if year_raw is not None:
+        try:
+            year = int(year_raw)
+        except ValueError:
+            return 400, {"error": "year must be an integer"}
+    tag = qs.get("tag") or None
+
+    result = search_bib(
+        config_path=config_path,
+        home_dir=home_dir,
+        bib_selector=bib_selector,
+        query=query,
+        author=author,
+        year=year,
+        tag=tag,
+    )
+    status = 200 if result["status"] == "ok" else 400
+    return status, search_payload(result)
+
+
+def _handle_entries_get(
+    config_path: str, home_dir: str, qs: dict[str, str],
+) -> tuple[int, dict[str, Any]]:
+    bib_selector = qs.get("bib") or None
+    offset = _parse_int(qs.get("offset"), 0)
+    limit = _parse_int(qs.get("limit"), 50)
+    limit = max(1, min(limit, 500))
+
+    result = search_bib(
+        config_path=config_path,
+        home_dir=home_dir,
+        bib_selector=bib_selector,
+    )
+    status = 200 if result["status"] == "ok" else 400
+    return status, entries_payload(result, offset, limit)
+
+
+def _handle_detail_get(
+    config_path: str, home_dir: str, citekey: str, bib_selector: str | None,
+) -> tuple[int, dict[str, Any]]:
+    if not citekey:
+        return 400, {"error": "citekey required"}
+
+    resolved = load_and_resolve_bib(
+        config_path=config_path, home_dir=home_dir, bib_selector=bib_selector,
+    )
+    if isinstance(resolved, list):
+        return 400, {"status": "error", "errors": resolved}
+    _config, bib = resolved
+
+    read_result = read_bib_file(bib["path"])
+    for record in read_result["records"]:
+        if record.get("citekey") == citekey:
+            return 200, detail_payload(record, bib["name"])
+    return 404, {"error": f"citekey not found: {citekey}"}
+
+
+def _handle_tags_get(
+    config_path: str, home_dir: str, citekey: str, bib_selector: str | None,
+) -> tuple[int, dict[str, Any]]:
+    if not citekey:
+        return 400, {"error": "citekey required"}
+
+    result = list_tags(
+        config_path=config_path,
+        home_dir=home_dir,
+        bib_selector=bib_selector,
+        citekey=citekey,
+    )
+    status = 200 if result["status"] == "ok" else 400
+    return status, tag_list_payload(result)
+
+
+def _parse_int(raw: str | None, default: int) -> int:
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
 
 
 def _handle_get(
@@ -151,6 +230,9 @@ def _handle_get(
         _respond(request, 429, {"error": "rate limit exceeded"}, security,
                  rate_remaining=0, rate_reset=reset)
         return
+    idle_state = getattr(request, "_idle_state", None)
+    if idle_state is not None:
+        idle_state["_last_request"] = time.monotonic()
     status, body = process_get_request(request.path, config_path, home_dir)
     _respond(request, status, body, security,
              rate_remaining=remaining, rate_reset=reset)
@@ -166,45 +248,211 @@ def process_post_request(
 
     Testable without a server socket. Used by _handle_post.
     """
-    if path == "/capture":
-        if not isinstance(body, dict):
-            return 400, {"error": "capture body must be a JSON object"}
-        url = body.get("url")
-        if not isinstance(url, str) or not url.strip():
-            return 400, {"error": "url required"}
-        result = add_input_to_bib(
-            config_path=config_path,
-            home_dir=home_dir,
-            value=url,
-            record_overrides=_record_overrides_from_capture_body(body),
-            bib_selector=body.get("bib") if isinstance(body.get("bib"), str) else None,
-            dry_run=bool(body.get("dry_run", False)),
-            pdf_url_candidates=_pdf_url_candidates_from_body(body),
-        )
-        status = 200 if result["status"] == "ok" else 400
-        return status, _capture_payload(result)
+    parsed = urlsplit(path)
+    p = parsed.path
 
-    if path == "/attach-pdf-bytes":
-        if not isinstance(body, dict):
-            return 400, {"error": "attach body must be a JSON object"}
-        citekey = body.get("citekey")
-        pdf_base64 = body.get("pdf_base64")
-        if not isinstance(citekey, str) or not citekey.strip():
-            return 400, {"error": "citekey required"}
-        if not isinstance(pdf_base64, str) or not pdf_base64.strip():
-            return 400, {"error": "pdf_base64 required"}
-        result = attach_pdf_bytes(
-            config_path=config_path,
-            home_dir=home_dir,
-            bib_selector=body.get("bib") if isinstance(body.get("bib"), str) else None,
-            citekey=citekey,
-            pdf_base64=pdf_base64,
-            source_url=body.get("source_url") if isinstance(body.get("source_url"), str) else None,
-        )
-        status = 200 if result["status"] == "ok" else 400
-        return status, result
+    if p == "/capture":
+        return _handle_capture_post(body, config_path, home_dir)
+
+    if p == "/attach-pdf-bytes":
+        return _handle_attach_pdf_post(body, config_path, home_dir)
+
+    if p == "/attach-pdf-raw":
+        return _handle_attach_pdf_raw_post(body, config_path, home_dir)
+
+    if p == "/tags/add":
+        return _handle_tags_add_post(body, config_path, home_dir)
+
+    if p == "/tags/remove":
+        return _handle_tags_remove_post(body, config_path, home_dir)
+
+    if p == "/update":
+        return _handle_update_post(body, config_path, home_dir)
+
+    if p == "/promote":
+        return _handle_promote_post(body, config_path, home_dir)
 
     return 404, {"error": "not found"}
+
+
+def _handle_capture_post(
+    body: Any, config_path: str, home_dir: str,
+) -> tuple[int, dict[str, Any]]:
+    if not isinstance(body, dict):
+        return 400, {"error": "capture body must be a JSON object"}
+    url = body.get("url")
+    if not isinstance(url, str) or not url.strip():
+        return 400, {"error": "url required"}
+    stripped_url = url.strip()
+    parsed_url = urlsplit(stripped_url)
+    if parsed_url.scheme and not safe_public_http_url(stripped_url):
+        return 400, {"error": "url must be a public http(s) URL for HTTP capture"}
+    override_error = metadata_url_override_error(body, safe_url=safe_public_http_url)
+    if override_error is not None:
+        return 400, {"error": override_error}
+    pdf_candidates = pdf_url_candidates_from_body(
+        body,
+        safe_url=safe_public_http_url,
+    )
+    if pdf_candidates is False:
+        return 400, {
+            "error": (
+                "pdf_url_candidates must be public http(s) URLs; send at most 20 "
+                "candidates and avoid localhost/private hosts, invalid URLs, or slow DNS names"
+            )
+        }
+    safe_pdf_candidates = pdf_candidates if isinstance(pdf_candidates, list) else None
+    browser = body.get("browser") if isinstance(body.get("browser"), str) else None
+    raw_cookies = body.get("cookies")
+    cookies = raw_cookies if isinstance(raw_cookies, str) and raw_cookies.strip() else None
+    result = add_input_to_bib(
+        config_path=config_path,
+        home_dir=home_dir,
+        value=stripped_url,
+        record_overrides=record_overrides_from_capture_body(body),
+        bib_selector=body.get("bib") if isinstance(body.get("bib"), str) else None,
+        dry_run=bool(body.get("dry_run", False)),
+        pdf_url_candidates=safe_pdf_candidates,
+        browser=browser,
+        cookies=cookies,
+    )
+    status = 200 if result["status"] == "ok" else 400
+    return status, capture_payload(
+        result, include_diagnostics=bool(body.get("verbose", False))
+    )
+
+
+def _handle_attach_pdf_post(
+    body: Any, config_path: str, home_dir: str,
+) -> tuple[int, dict[str, Any]]:
+    if not isinstance(body, dict):
+        return 400, {"error": "attach body must be a JSON object"}
+    citekey = body.get("citekey")
+    pdf_base64 = body.get("pdf_base64")
+    if not isinstance(citekey, str) or not citekey.strip():
+        return 400, {"error": "citekey required"}
+    if not isinstance(pdf_base64, str) or not pdf_base64.strip():
+        return 400, {"error": "pdf_base64 required"}
+    source_url = body.get("source_url") if isinstance(body.get("source_url"), str) else None
+    if source_url is not None and not safe_public_http_url(source_url):
+        return 400, {"error": "source_url must be a public http(s) URL"}
+    result = attach_pdf_bytes(
+        config_path=config_path,
+        home_dir=home_dir,
+        bib_selector=body.get("bib") if isinstance(body.get("bib"), str) else None,
+        citekey=citekey,
+        pdf_base64=pdf_base64,
+        source_url=source_url,
+    )
+    status = 200 if result["status"] == "ok" else 400
+    return status, result
+
+
+def _handle_attach_pdf_raw_post(
+    body: Any, config_path: str, home_dir: str,
+) -> tuple[int, dict[str, Any]]:
+    if not isinstance(body, dict):
+        return 400, {"error": "attach body must be a JSON object"}
+    citekey = body.get("citekey")
+    pdf_bytes = body.get("pdf_bytes")
+    if not isinstance(citekey, str) or not citekey.strip():
+        return 400, {"error": "citekey required"}
+    if not isinstance(pdf_bytes, bytes) or not pdf_bytes.startswith(b"%PDF-"):
+        return 400, {"error": "pdf_bytes must start with %PDF-"}
+    source_url = body.get("source_url") if isinstance(body.get("source_url"), str) else None
+    if source_url is not None and not safe_public_http_url(source_url):
+        return 400, {"error": "source_url must be a public http(s) URL"}
+    result = attach_pdf_raw_bytes(
+        config_path=config_path,
+        home_dir=home_dir,
+        bib_selector=body.get("bib") if isinstance(body.get("bib"), str) else None,
+        citekey=citekey,
+        pdf_bytes=pdf_bytes,
+        source_url=source_url,
+    )
+    status = 200 if result["status"] == "ok" else 400
+    return status, result
+
+
+def _handle_tags_add_post(
+    body: Any, config_path: str, home_dir: str,
+) -> tuple[int, dict[str, Any]]:
+    if not isinstance(body, dict):
+        return 400, {"error": "tags body must be a JSON object"}
+    citekey = body.get("citekey")
+    tags = body.get("tags")
+    if not isinstance(citekey, str) or not citekey.strip():
+        return 400, {"error": "citekey required"}
+    if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
+        return 400, {"error": "tags must be a list of strings"}
+    result = add_tags(
+        config_path=config_path,
+        home_dir=home_dir,
+        bib_selector=body.get("bib") if isinstance(body.get("bib"), str) else None,
+        citekey=citekey,
+        tags=tags,
+        dry_run=bool(body.get("dry_run", False)),
+    )
+    status = 200 if result["status"] == "ok" else 400
+    return status, tag_change_payload(result)
+
+
+def _handle_tags_remove_post(
+    body: Any, config_path: str, home_dir: str,
+) -> tuple[int, dict[str, Any]]:
+    if not isinstance(body, dict):
+        return 400, {"error": "tags body must be a JSON object"}
+    citekey = body.get("citekey")
+    tags = body.get("tags")
+    if not isinstance(citekey, str) or not citekey.strip():
+        return 400, {"error": "citekey required"}
+    if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
+        return 400, {"error": "tags must be a list of strings"}
+    result = remove_tags(
+        config_path=config_path,
+        home_dir=home_dir,
+        bib_selector=body.get("bib") if isinstance(body.get("bib"), str) else None,
+        citekey=citekey,
+        tags=tags,
+        dry_run=bool(body.get("dry_run", False)),
+    )
+    status = 200 if result["status"] == "ok" else 400
+    return status, tag_change_payload(result)
+
+
+def _handle_update_post(
+    body: Any, config_path: str, home_dir: str,
+) -> tuple[int, dict[str, Any]]:
+    if not isinstance(body, dict):
+        return 400, {"error": "update body must be a JSON object"}
+    result = update_bib(
+        config_path=config_path,
+        home_dir=home_dir,
+        bib_selector=body.get("bib") if isinstance(body.get("bib"), str) else None,
+        dry_run=bool(body.get("dry_run", True)),
+    )
+    status = 200 if result["status"] == "ok" else 400
+    return status, update_payload(
+        result, include_diagnostics=bool(body.get("verbose", False))
+    )
+
+
+def _handle_promote_post(
+    body: Any, config_path: str, home_dir: str,
+) -> tuple[int, dict[str, Any]]:
+    if not isinstance(body, dict):
+        return 400, {"error": "promote body must be a JSON object"}
+    result = promote_bib(
+        config_path=config_path,
+        home_dir=home_dir,
+        bib_selector=body.get("bib") if isinstance(body.get("bib"), str) else None,
+        keep_preprint=not bool(body.get("replace", False)),
+        dry_run=bool(body.get("dry_run", True)),
+    )
+    status = 200 if result["status"] == "ok" else 400
+    return status, promote_payload(
+        result, include_diagnostics=bool(body.get("verbose", False))
+    )
 
 
 def _handle_post(
@@ -213,6 +461,10 @@ def _handle_post(
     home_dir: str,
     security: HttpSecurityConfig,
 ) -> None:
+    idle_state = getattr(request, "_idle_state", None)
+    if idle_state is not None:
+        idle_state["_last_request"] = time.monotonic()
+
     error = request_security_error(
         method="POST", headers=dict(request.headers.items()), security=security
     )
@@ -233,6 +485,21 @@ def _handle_post(
         return
     length = length_result
     raw = request.rfile.read(length) if length > 0 else b""
+    parsed_path = urlsplit(request.path)
+    if parsed_path.path == "/attach-pdf-raw":
+        query = parse_qs(parsed_path.query)
+        body = {
+            "citekey": query.get("citekey", [None])[0],
+            "bib": query.get("bib", [None])[0],
+            "source_url": query.get("source_url", [None])[0],
+            "pdf_bytes": raw,
+        }
+        status, response_body = process_post_request(
+            parsed_path.path, body, config_path, home_dir
+        )
+        _respond(request, status, response_body, security,
+                 rate_remaining=post_remaining, rate_reset=post_reset)
+        return
     try:
         body: Any = json.loads(raw.decode("utf-8")) if raw else {}
     except (json.JSONDecodeError, UnicodeDecodeError):
@@ -244,100 +511,6 @@ def _handle_post(
     )
     _respond(request, status, response_body, security,
              rate_remaining=post_remaining, rate_reset=post_reset)
-
-
-def _record_overrides_from_capture_body(body: dict[str, Any]) -> dict[str, object]:
-    record_overrides: dict[str, object] = {}
-    raw_tags = body.get("tags")
-    if isinstance(raw_tags, list):
-        record_overrides["tags"] = [tag for tag in raw_tags if isinstance(tag, str) and tag.strip()]
-    for body_key, record_key in [
-        ("page_title", "fallback_title"),
-        ("canonical_url", "fallback_canonical_url"),
-        ("source_url", "fallback_source_url"),
-        ("abstract_url", "fallback_abstract_url"),
-        ("doi", "fallback_doi"),
-    ]:
-        value = body.get(body_key)
-        if isinstance(value, str) and value.strip():
-            record_overrides[record_key] = value.strip()
-    return record_overrides
-
-
-def _pdf_url_candidates_from_body(body: dict[str, Any]) -> list[str] | None:
-    raw_candidates = body.get("pdf_url_candidates")
-    if not isinstance(raw_candidates, list):
-        return None
-    return [
-        candidate
-        for candidate in raw_candidates
-        if isinstance(candidate, str) and candidate.strip()
-    ]
-
-
-def origin_allowed(origin: str | None, allowed_origins: tuple[str, ...]) -> bool:
-    """Return whether Origin is acceptable for local API access."""
-    if origin is None or not origin.strip():
-        return True
-    value = origin.strip().rstrip("/")
-    for allowed in allowed_origins:
-        normalized_allowed = allowed.strip().rstrip("/")
-        if not normalized_allowed:
-            continue
-        if normalized_allowed in {"chrome-extension:", "moz-extension:"}:
-            if value.startswith(normalized_allowed + "//"):
-                return True
-            continue
-        if normalized_allowed in {"chrome-extension://", "moz-extension://"}:
-            if value.startswith(normalized_allowed):
-                return True
-            continue
-        if value == normalized_allowed:
-            return True
-        allowed_parts = urlsplit(normalized_allowed)
-        value_parts = urlsplit(value)
-        if (
-            allowed_parts.scheme in {"chrome-extension", "moz-extension"}
-            and value_parts.scheme == allowed_parts.scheme
-            and value_parts.netloc == allowed_parts.netloc
-        ):
-            return True
-    return False
-
-
-def request_security_error(
-    *, method: str, headers: dict[str, str], security: HttpSecurityConfig
-) -> tuple[int, str] | None:
-    """Pure request gate: origin + optional bearer/header token."""
-    origin = headers.get("Origin") or headers.get("origin")
-    if not origin_allowed(origin, security["allowed_origins"]):
-        return 403, "origin not allowed"
-    if method.upper() == "OPTIONS":
-        return None
-    token = security["auth_token"]
-    if token is None:
-        return None
-    supplied = headers.get(AUTH_HEADER) or headers.get(AUTH_HEADER.lower())
-    auth = headers.get("Authorization") or headers.get("authorization")
-    if auth and auth.startswith("Bearer "):
-        supplied = auth.removeprefix("Bearer ")
-    if supplied is None or not hmac.compare_digest(supplied, token):
-        return 401, "invalid API token"
-    return None
-
-
-def validated_content_length(value: str | None, *, max_body_bytes: int) -> int | tuple[int, str]:
-    if value is None or not value.strip():
-        return 0
-    try:
-        length = int(value)
-    except ValueError:
-        return 400, "invalid Content-Length"
-    if length < 0:
-        return 400, "invalid Content-Length"
-    if length > max_body_bytes:
-        return 413, "request body too large"
-    return length
 
 
 def _send_cors_headers(request: BaseHTTPRequestHandler, security: HttpSecurityConfig) -> None:
@@ -367,21 +540,10 @@ def _respond(
         request.send_header("Retry-After", str(rate_reset or 60))
     _send_cors_headers(request, security)
     request.end_headers()
-    request.wfile.write(body)
-
-
-def _capture_payload(result: AddRecordResult) -> dict[str, Any]:
-    return {
-        "status": result["status"],
-        "bib": result["bib_name"],
-        "citekey": result["citekey"],
-        "action": result["action"],
-        "pdf_path": result["pdf_path"],
-        "dry_run": result["dry_run"],
-        "message": result["message"],
-        "warnings": result["warnings"],
-        "errors": result["errors"],
-    }
+    try:
+        request.wfile.write(body)
+    except (BrokenPipeError, ConnectionResetError):
+        return
 
 
 def _health_payload(config_path: str, home_dir: str) -> dict[str, Any]:
@@ -403,11 +565,45 @@ def run_server(  # pragma: no cover — I/O entry point, covered by integration 
     port: int,
     server_class: type[HTTPServer] = ThreadingHTTPServer,
     security: HttpSecurityConfig | None = None,
+    idle_minutes: int | None = None,
+    on_shutdown: Callable[[], None] | None = None,
 ) -> None:
     handler = build_handler_class(config_path=config_path, home_dir=home_dir, security=security)
+    idle_state: dict[str, float] | None = None
+    if idle_minutes is not None:
+        idle_state = {"_last_request": time.monotonic()}
+        handler._idle_state = idle_state  # type: ignore[attr-defined]
+
     server = server_class((host, port), handler)
     server.socket.settimeout(30)
+
+    if idle_state is not None:
+        assert idle_minutes is not None  # guarded by idle_state is not None
+        _start_idle_monitor(server, idle_state, idle_minutes, on_shutdown)
+
     try:
         server.serve_forever()
     finally:
         server.server_close()
+
+
+def _start_idle_monitor(
+    server: HTTPServer,
+    idle_state: dict[str, float],
+    idle_minutes: int,
+    on_shutdown: Callable[[], None] | None,
+) -> None:
+    import threading
+
+    def _monitor() -> None:
+        while True:
+            time.sleep(30)
+            elapsed = time.monotonic() - idle_state["_last_request"]
+            if elapsed > idle_minutes * 60:
+                server.shutdown()
+                if on_shutdown is not None:
+                    on_shutdown()
+                return
+
+    t = threading.Thread(target=_monitor, daemon=True)
+    t.start()

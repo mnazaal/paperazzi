@@ -9,25 +9,44 @@ Metadata fetching is delegated to _record_fetching.py.
 
 from __future__ import annotations
 
-import shlex
-import subprocess
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any, TypeAlias, cast
 
-from pzi._record_fetching import (
+from pzi import add_planning as _add_planning
+from pzi.add_planning import (
     _fallback_record_for_input,
     _fetch_record_for_input,
     _merge_record_sources,
-    _safe_call,
+    metadata_result_confidence_warnings,
+    metadata_result_diagnostics,
 )
-from pzi.bib_repository import execute_write_plan, plan_bib_write, read_bib_file
-from pzi.bibtex import BibtexEntry, NormalizedRecord, generate_citekey
-from pzi.config import BibConfig, load_config_file, resolve_bib
+from pzi.bib_repository import (
+    execute_write_plan,
+    plan_bib_write,
+    preview_write_plan,
+    read_bib_file,
+)
+from pzi.bibtex import (
+    NormalizedRecord,
+    generate_citekey,
+    resolve_citekey_collision,
+)
+from pzi.capture_context import build_capture_context
+from pzi.capture_local_pdf import (
+    add_local_pdf,
+    attach_pdf_if_available,
+    build_add_record_result,
+    plan_with_applied_record,
+)
+from pzi.config import BibConfig, load_and_resolve_bib
+from pzi.format_templates import format_citekey
 from pzi.identifiers import classify_input
-from pzi.pdf import copy_pdf_to_papers_dir, fetch_and_store_pdf_with_fallbacks
 from pzi.pdf_discovery import DEFAULT_DISCOVERY_STEPS, apply_pdf_discovery
-from pzi.pdf_service import extract_pdf_metadata
-from pzi.similarity import compute_similarity_hint, find_exact_match
+from pzi.pdf_planning import is_pdf_bytes, plan_pdf_path
+from pzi.pdf import remove_new_pdf as _remove_new_pdf
+from pzi.pdf import snapshot_pdf_paths as _snapshot_pdf_paths
+from pzi.similarity import find_exact_match
 from pzi.translation_server import (
     fetch_search_translations,
     fetch_web_translations,
@@ -35,6 +54,11 @@ from pzi.translation_server import (
 
 AddRecordResult: TypeAlias = dict[str, Any]
 CaptureContext: TypeAlias = dict[str, Any]
+
+_error_result = _add_planning.error_result
+_manual_record_from_overrides = _add_planning.manual_record_from_overrides
+_merge_fetched_record_with_overrides = _add_planning.merge_fetched_record_with_overrides
+_pdf_result_fields = _add_planning.pdf_result_fields
 
 
 
@@ -56,6 +80,8 @@ def add_input_to_bib(
     fetch_flaresolverr=None,
     pdf_url_candidates: list[str] | None = None,
     browser_pdf_cmd: str | None = None,
+    browser: str | None = None,
+    cookies: str | None = None,
 ) -> AddRecordResult:
     context, context_error = _resolve_capture_context(
         config_path=config_path,
@@ -63,6 +89,7 @@ def add_input_to_bib(
         bib_selector=bib_selector,
         dry_run=dry_run,
         browser_pdf_cmd_override=browser_pdf_cmd,
+        browser=browser,
     )
     if context_error is not None:
         return context_error
@@ -70,19 +97,65 @@ def add_input_to_bib(
 
     config = context["config"]
     bib = context["bib"]
+    contact_email = context.get("contact_email")
     unpaywall_email = context["unpaywall_email"]
     s2_api_key = context["s2_api_key"]
     effective_browser_pdf_cmd = context["browser_pdf_cmd"]
+    effective_browser = context.get("browser")
+    citekey_format = context["citekey_format"]
+    pdf_filename_format = context["pdf_filename_format"]
+    metadata_confidence_min_score = int(config.get("metadata_confidence_min_score", 0))
 
     classified = classify_input(value)
+    metadata_diagnostics: list[str] = []
+    metadata_warnings: list[str] = []
+    fallback_for_diagnostics = _fallback_record_for_input(
+        kind=cast(str, classified["kind"]),
+        normalized=cast(str | None, classified["normalized"]),
+        raw_value=value,
+    )
+
+    def _fetch_search_with_diagnostics(query: str, *, server_url: str):
+        nonlocal metadata_diagnostics, metadata_warnings
+        results = fetch_search(query, server_url=server_url)
+        metadata_warnings = metadata_result_confidence_warnings(
+            cast(list[Mapping[str, Any]], results),
+            fallback_for_diagnostics,
+            min_score=metadata_confidence_min_score,
+        )
+        if len(results) > 1:
+            metadata_diagnostics = metadata_result_diagnostics(
+                cast(list[Mapping[str, Any]], results), fallback_for_diagnostics
+            )
+        return results
+
+    def _fetch_web_with_diagnostics(url: str, *, server_url: str, cookies: str | None = None):
+        nonlocal metadata_diagnostics, metadata_warnings
+        if cookies is None:
+            results = fetch_web(url, server_url=server_url)
+        else:
+            results = fetch_web(url, server_url=server_url, cookies=cookies)
+        metadata_warnings = metadata_result_confidence_warnings(
+            cast(list[Mapping[str, Any]], results),
+            fallback_for_diagnostics,
+            min_score=metadata_confidence_min_score,
+        )
+        if len(results) > 1:
+            metadata_diagnostics = metadata_result_diagnostics(
+                cast(list[Mapping[str, Any]], results), fallback_for_diagnostics
+            )
+        return results
+
     if classified["kind"] == "local_pdf":
-        return _add_local_pdf(
+        return add_local_pdf(
             bib=bib,
             raw_value=value,
             record_overrides=record_overrides,
             dry_run=dry_run,
             server_url=config["translation_server_url"],
             fetch_search=fetch_search,
+            ensure_citekey=ensure_citekey_for_write,
+            add_record=add_record_with_bib,
             fetch_crossref=fetch_crossref,
             fetch_openalex=fetch_openalex,
             fetch_s2=fetch_s2,
@@ -90,6 +163,10 @@ def add_input_to_bib(
             fetch_web=fetch_web,
             flaresolverr_url=config.get("flaresolverr_url"),
             browser_pdf_cmd=effective_browser_pdf_cmd,
+            browser=effective_browser,
+            browser_hook=config.get("browser_hook", True),
+            citekey_format=citekey_format,
+            pdf_filename_format=pdf_filename_format,
         )
 
     try:
@@ -97,8 +174,9 @@ def add_input_to_bib(
             raw_value=value,
             classified=classified,
             server_url=config["translation_server_url"],
-            fetch_web=fetch_web,
-            fetch_search=fetch_search,
+            fetch_web=_fetch_web_with_diagnostics,
+            fetch_search=_fetch_search_with_diagnostics,
+            contact_email=contact_email,
             unpaywall_email=unpaywall_email,
             s2_api_key=s2_api_key,
             flaresolverr_url=config.get("flaresolverr_url"),
@@ -109,6 +187,7 @@ def add_input_to_bib(
             fetch_flaresolverr=fetch_flaresolverr,
             pdf_url_candidates=pdf_url_candidates,
             browser_pdf_cmd=effective_browser_pdf_cmd,
+            cookies=cookies,
         )
     except Exception as exc:
         manual_record = _manual_record_from_overrides(record_overrides)
@@ -136,7 +215,10 @@ def add_input_to_bib(
             )
             fallback_record = apply_pdf_discovery(
                 fallback_record,
-                DEFAULT_DISCOVERY_STEPS,
+                [
+                    step for step in DEFAULT_DISCOVERY_STEPS
+                    if step.__name__ != "web_attachment_step"
+                ],
                 {
                     "raw_value": value,
                     "server_url": config["translation_server_url"],
@@ -154,14 +236,23 @@ def add_input_to_bib(
                     "translation_attachments": None,
                 },
             )
-            return _add_record_with_bib(
+            result = add_record_with_bib(
                 bib=bib,
                 record=fallback_record,
                 dry_run=dry_run,
                 fetch_binary=fetch_binary,
                 flaresolverr_url=config.get("flaresolverr_url"),
                 browser_pdf_cmd=effective_browser_pdf_cmd,
+                browser=effective_browser,
+                browser_hook=config.get("browser_hook", True),
+                citekey_format=citekey_format,
+                pdf_filename_format=pdf_filename_format,
             )
+            if metadata_diagnostics:
+                result["metadata_diagnostics"] = metadata_diagnostics
+            if metadata_warnings:
+                result["warnings"] = [*result.get("warnings", []), *metadata_warnings]
+            return result
         import urllib.error
         from urllib.parse import urlsplit
 
@@ -174,7 +265,8 @@ def add_input_to_bib(
             host_port = parts.port or 1969
             err_msg = (
                 f"translation server not reachable at {config['translation_server_url']} — "
-                f"start it with: podman run -p {host_port}:1969 translation-server"
+                f"run 'pzi services up' and wait for the container to be ready "
+                f"(expected port {host_port})."
             )
         else:
             err_msg = str(exc)
@@ -186,14 +278,23 @@ def add_input_to_bib(
         )
 
     merged_record = _merge_fetched_record_with_overrides(fetched_record, record_overrides)
-    return _add_record_with_bib(
+    result = add_record_with_bib(
         bib=bib,
         record=merged_record,
         dry_run=dry_run,
         fetch_binary=fetch_binary,
         flaresolverr_url=config.get("flaresolverr_url"),
         browser_pdf_cmd=effective_browser_pdf_cmd,
+        browser=effective_browser,
+        browser_hook=config.get("browser_hook", True),
+        citekey_format=citekey_format,
+        pdf_filename_format=pdf_filename_format,
     )
+    if metadata_diagnostics:
+        result["metadata_diagnostics"] = metadata_diagnostics
+    if metadata_warnings:
+        result["warnings"] = [*result.get("warnings", []), *metadata_warnings]
+    return result
 
 
 def add_record_to_bib(
@@ -204,26 +305,28 @@ def add_record_to_bib(
     bib_selector: str | None,
     dry_run: bool,
 ) -> AddRecordResult:
-    config_result = load_config_file(config_path, home_dir=home_dir)
-    if config_result["config"] is None:
+    resolved = load_and_resolve_bib(
+        config_path=config_path,
+        home_dir=home_dir,
+        bib_selector=bib_selector,
+    )
+    if isinstance(resolved, list):
         return _error_result(
-            message="failed to load config",
-            errors=config_result["errors"],
+            message=_resolve_bib_error_message(resolved),
+            errors=_resolve_bib_errors(resolved, include_selection=True),
             dry_run=dry_run,
             warnings=[],
         )
+    config, bib = resolved
 
-    config = config_result["config"]
-    bib = resolve_bib(config["bibs"], bib_selector)
-    if bib is None:
-        return _error_result(
-            message="could not resolve target bib",
-            errors=["no matching bib found or selection is ambiguous"],
-            dry_run=dry_run,
-            warnings=[],
-        )
-
-    return _add_record_with_bib(bib=bib, record=record, dry_run=dry_run)
+    return add_record_with_bib(
+        bib=bib,
+        record=record,
+        dry_run=dry_run,
+        browser_hook=config.get("browser_hook", True),
+        citekey_format=config.get("citekey_format"),
+        pdf_filename_format=config.get("pdf_filename_format"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -238,81 +341,59 @@ def _resolve_capture_context(
     bib_selector: str | None,
     dry_run: bool,
     browser_pdf_cmd_override: str | None,
+    browser: str | None = None,
 ) -> tuple[CaptureContext | None, AddRecordResult | None]:
     """Load config, select the bib, and resolve runtime-only capture options."""
-    config_result = load_config_file(config_path, home_dir=home_dir)
-    if config_result["config"] is None:
+    resolved = load_and_resolve_bib(
+        config_path=config_path,
+        home_dir=home_dir,
+        bib_selector=bib_selector,
+    )
+    if isinstance(resolved, list):
         return None, _error_result(
-            message="failed to load config",
-            errors=config_result["errors"],
+            message=_resolve_bib_error_message(resolved),
+            errors=_resolve_bib_errors(resolved, include_selection=False),
             dry_run=dry_run,
             warnings=[],
         )
+    config, bib = resolved
 
-    config = config_result["config"]
-    bib = resolve_bib(config["bibs"], bib_selector)
-    if bib is None:
+    try:
+        context = build_capture_context(
+            config=config,
+            bib=bib,
+            browser_pdf_cmd_override=browser_pdf_cmd_override,
+            browser=browser,
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
         return None, _error_result(
-            message="could not resolve target bib",
-            errors=["no matching bib found or selection is ambiguous"],
+            message="failed to resolve capture context",
+            errors=[str(exc)],
             dry_run=dry_run,
             warnings=[],
         )
-
-    return {
-        "config": config,
-        "bib": bib,
-        "unpaywall_email": _resolve_optional_command(
-            config["unpaywall_email_cmd"], config["unpaywall_email"]
-        ),
-        "s2_api_key": _resolve_optional_command(
-            config["semantic_scholar_api_key_cmd"], config["semantic_scholar_api_key"]
-        ),
-        "browser_pdf_cmd": browser_pdf_cmd_override or config.get("browser_pdf_cmd"),
-    }, None
+    return context, None
 
 
-def _resolve_optional_command(command: str | None, fallback: str | None) -> str | None:
-    if not command:
-        return fallback
-    return subprocess.run(
-        shlex.split(command), capture_output=True, text=True
-    ).stdout.strip() or None
+def _resolve_bib_error_message(errors: list[str]) -> str:
+    if _is_ambiguous_bib_error(errors):
+        return "could not resolve target bib"
+    return "failed to load config"
 
 
-def _split_record_overrides(
-    record_overrides: Mapping[str, object],
-) -> tuple[dict[str, object], dict[str, object]]:
-    normal: dict[str, object] = {}
-    fallback: dict[str, object] = {}
-    for key, value in record_overrides.items():
-        if key.startswith("fallback_"):
-            fallback[key.removeprefix("fallback_")] = value
-        else:
-            normal[key] = value
-    return normal, fallback
+def _resolve_bib_errors(errors: list[str], *, include_selection: bool) -> list[str]:
+    if _is_ambiguous_bib_error(errors):
+        if include_selection:
+            return ["no matching bib found or selection is ambiguous"]
+        return ["no matching bib found"]
+    return errors
 
 
-def _merge_fetched_record_with_overrides(
-    fetched_record: Mapping[str, object], record_overrides: Mapping[str, object]
-) -> NormalizedRecord:
-    normal, fallback = _split_record_overrides(record_overrides)
-    merged = dict(fetched_record)
-    for key, value in fallback.items():
-        if value is None:
-            continue
-        current = merged.get(key)
-        if current is None or (isinstance(current, str) and not current.strip()):
-            merged[key] = value
-    return _merge_record_sources(merged, normal)
+def _is_ambiguous_bib_error(errors: list[str]) -> bool:
+    return errors == ["no matching library target found or selection is ambiguous"]
 
 
-def _manual_record_from_overrides(record_overrides: Mapping[str, object]) -> NormalizedRecord:
-    normal, fallback = _split_record_overrides(record_overrides)
-    return _merge_record_sources(fallback, normal)
-
-
-def _add_record_with_bib(
+def add_record_with_bib(
     *,
     bib: BibConfig,
     record: Mapping[str, object],
@@ -320,55 +401,81 @@ def _add_record_with_bib(
     fetch_binary=None,
     flaresolverr_url: str | None = None,
     browser_pdf_cmd: str | None = None,
+    browser: str | None = None,
+    browser_hook: bool = True,
+    citekey_format: str | None = None,
+    pdf_filename_format: str | None = None,
 ) -> AddRecordResult:
     read_result = read_bib_file(bib["path"])
     typed_existing_records = [
         cast(NormalizedRecord, existing) for existing in read_result["records"]
     ]
-    typed_record = _ensure_citekey_for_write(
-        cast(NormalizedRecord, dict(record)), typed_existing_records
+    typed_record = ensure_citekey_for_write(
+        cast(NormalizedRecord, dict(record)),
+        typed_existing_records,
+        citekey_format=citekey_format,
     )
-    record_with_pdf, warnings = _attach_pdf_if_available(
+    typed_record = reuse_existing_pdf_fields_for_exact_match(
+        typed_record,
+        typed_existing_records,
+    )
+    typed_record = reuse_orphan_pdf_for_planned_path(
+        typed_record,
+        papers_dir=bib["papers_dir"],
+        pdf_filename_format=pdf_filename_format,
+    )
+    existing_pdf_paths = _snapshot_pdf_paths(bib["papers_dir"])
+    record_with_pdf, warnings = attach_pdf_if_available(
         record=typed_record,
-        bib=bib,
+        papers_dir=bib["papers_dir"],
         dry_run=dry_run,
         fetch_binary=fetch_binary,
         flaresolverr_url=flaresolverr_url,
         browser_pdf_cmd=browser_pdf_cmd,
+        browser=browser,
+        browser_hook=browser_hook,
+        pdf_filename_format=pdf_filename_format,
     )
-    record_with_hint = _attach_similarity_hint(record_with_pdf, typed_existing_records)
+    record_with_hint = _add_planning.attach_similarity_hint(
+        record_with_pdf, typed_existing_records
+    )
     plan = plan_bib_write(record_with_hint, typed_existing_records)
 
     if not dry_run:
-        execute_write_plan(bib["path"], plan)
+        try:
+            updated_entries = execute_write_plan(bib["path"], plan)
+            plan = plan_with_applied_record(plan, record_with_hint, updated_entries)
+        except Exception:
+            pdf_path_for_cleanup = record_with_hint.get("local_pdf_path")
+            _remove_new_pdf(
+                pdf_path_for_cleanup if isinstance(pdf_path_for_cleanup, str) else None,
+                existing_pdf_paths,
+            )
+            raise
 
-    citekey = plan["record"].get("citekey")
-    pdf_path = plan["record"].get("local_pdf_path")
-    prefix = "would " if dry_run else ""
-    result: AddRecordResult = {
-        "status": "ok",
-        "bib_name": bib["name"],
-        "bib_path": bib["path"],
-        "action": plan["action"],
-        "citekey": citekey if isinstance(citekey, str) else None,
-        "pdf_path": pdf_path if isinstance(pdf_path, str) else None,
-        "changed_fields": plan["changed_fields"],
-        "dry_run": dry_run,
-        "message": f"{prefix}{plan['action']} entry",
-        "warnings": warnings,
-        "errors": [],
-    }
+    result: AddRecordResult = build_add_record_result(
+        bib=bib,
+        plan=plan,
+        warnings=warnings,
+        dry_run=dry_run,
+    )
 
     if dry_run:
-        result["diff"] = _dry_run_diff(
-            plan=plan, existing_entries=read_result["entries"]
-        )
+        result["diff"] = preview_write_plan(bib["path"], plan)["diff"]
 
     return result
 
 
-def _ensure_citekey_for_write(
-    record: NormalizedRecord, existing_records: list[NormalizedRecord]
+# ---------------------------------------------------------------------------
+# Identity and existing-PDF reuse helpers (merged from capture_identity.py)
+# ---------------------------------------------------------------------------
+
+
+def ensure_citekey_for_write(
+    record: NormalizedRecord,
+    existing_records: list[NormalizedRecord],
+    *,
+    citekey_format: str | None = None,
 ) -> NormalizedRecord:
     match_index = find_exact_match(record, existing_records)
     if match_index is not None:
@@ -380,249 +487,89 @@ def _ensure_citekey_for_write(
 
     ck = record.get("citekey")
     if isinstance(ck, str) and bool(ck.strip()):
-        return record
+        existing_keys = existing_citekeys(existing_records)
+        resolved = resolve_citekey_collision(ck.strip(), existing_keys)
+        if resolved == ck.strip():
+            return record
+        updated = dict(record)
+        updated["citekey"] = resolved
+        return cast(NormalizedRecord, updated)
 
     generated = dict(record)
-    existing_keys = {
+    existing_keys = existing_citekeys(existing_records)
+    if citekey_format:
+        generated["citekey"] = format_citekey(citekey_format, record, existing_keys)
+    else:
+        generated["citekey"] = generate_citekey(
+            {
+                "authors": list(record.get("authors") or []),
+                "title": cast(str | None, record.get("title")),
+                "year": cast(int | None, record.get("year")),
+            },
+            existing_keys,
+        )
+    return cast(NormalizedRecord, generated)
+
+
+def existing_citekeys(existing_records: list[NormalizedRecord]) -> set[str]:
+    return {
         citekey
         for existing in existing_records
         for citekey in [existing.get("citekey")]
         if isinstance(citekey, str) and citekey.strip()
     }
-    generated["citekey"] = generate_citekey(
-        {
-            "authors": list(record.get("authors") or []),
-            "title": cast(str | None, record.get("title")),
-            "year": cast(int | None, record.get("year")),
-        },
-        existing_keys,
-    )
-    return cast(NormalizedRecord, generated)
 
 
-_ensure_citekey = _ensure_citekey_for_write
-
-
-def _add_local_pdf(
-    *,
-    bib: BibConfig,
-    raw_value: str,
-    record_overrides: dict[str, object],
-    dry_run: bool,
-    server_url: str,
-    fetch_search,
-    fetch_web=fetch_web_translations,
-    fetch_crossref=None,
-    fetch_openalex=None,
-    fetch_s2=None,
-    s2_api_key: str | None = None,
-    flaresolverr_url: str | None = None,
-    browser_pdf_cmd: str | None = None,
-) -> AddRecordResult:
-    """Ingest a local PDF: extract metadata, resolve, copy PDF, add to bib."""
-    read_result = read_bib_file(bib["path"])
-    existing_records = [
-        cast(NormalizedRecord, r) for r in read_result["records"]
-    ]
-
-    extracted = extract_pdf_metadata(raw_value)
-    base_record: NormalizedRecord
-
-    doi = extracted.get("doi")
-    if isinstance(doi, str) and doi.strip():
-        # Treat as DOI lookup
-        try:
-            base_record = _fetch_record_for_input(
-                raw_value=doi,
-                classified={"kind": "doi", "raw": doi, "normalized": doi},
-                server_url=server_url,
-                fetch_web=fetch_web,
-                fetch_search=fetch_search,
-                fetch_crossref=fetch_crossref,
-                fetch_openalex=fetch_openalex,
-                fetch_s2=fetch_s2,
-                s2_api_key=s2_api_key,
-                flaresolverr_url=flaresolverr_url,
-                browser_pdf_cmd=browser_pdf_cmd,
-            )
-        except (OSError, ValueError):
-            base_record = {"doi": doi, "source_url": raw_value}
-    else:
-        title = extracted.get("title")
-        if isinstance(title, str) and title.strip():
-            try:
-                results = fetch_search(title, server_url=server_url)
-            except (OSError, ValueError):
-                results = []
-            if results:
-                base_record = dict(results[0]["record"])
-            else:
-                base_record = {"title": title.strip(), "source_url": raw_value}
-        else:
-            base_record = {"source_url": raw_value}
-
-    merged = _merge_record_sources(base_record, record_overrides)
-    record_with_ck = _ensure_citekey(merged, existing_records)
-    citekey = record_with_ck.get("citekey")
-
-    warnings: list[str] = []
-
-    if not dry_run and isinstance(citekey, str) and citekey.strip():
-        local_path, error = copy_pdf_to_papers_dir(
-            source_path=raw_value,
-            papers_dir=bib["papers_dir"],
-            citekey=citekey,
-        )
-        if error is not None:
-            warnings.append(error)
-        elif local_path is not None:
-            record_with_ck = dict(record_with_ck)
-            record_with_ck["local_pdf_path"] = local_path
-
-    result = _add_record_with_bib(
-        bib=bib,
-        record=record_with_ck,
-        dry_run=dry_run,
-        flaresolverr_url=flaresolverr_url,
-        browser_pdf_cmd=browser_pdf_cmd,
-    )
-    result["warnings"] = [*warnings, *result["warnings"]]
-    return result
-
-
-def _error_result(
-    *,
-    message: str,
-    errors: list[str],
-    dry_run: bool,
-    warnings: list[str],
-    bib: BibConfig | None = None,
-) -> AddRecordResult:
-    return {
-        "status": "error",
-        "bib_name": bib["name"] if bib is not None else None,
-        "bib_path": bib["path"] if bib is not None else None,
-        "action": None,
-        "citekey": None,
-        "pdf_path": None,
-        "changed_fields": [],
-        "dry_run": dry_run,
-        "message": message,
-        "warnings": warnings,
-        "errors": errors,
-    }
-
-
-def _attach_pdf_if_available(
-    *,
+def reuse_existing_pdf_fields_for_exact_match(
     record: NormalizedRecord,
-    bib: BibConfig,
-    dry_run: bool,
-    fetch_binary,
-    flaresolverr_url: str | None = None,
-    browser_pdf_cmd: str | None = None,
-) -> tuple[NormalizedRecord, list[str]]:
-    pdf_url = record.get("pdf_url")
-    if not isinstance(pdf_url, str) or not pdf_url.strip():
-        return record, []
-
+    existing_records: list[NormalizedRecord],
+) -> NormalizedRecord:
     if record.get("local_pdf_path"):
-        return record, []
+        return record
+    match_index = find_exact_match(record, existing_records)
+    if match_index is None:
+        return record
 
-    if dry_run:
-        return record, []
-
-    citekey = record.get("citekey")
-    if not isinstance(citekey, str) or not citekey.strip():
-        return record, ["cannot attach PDF before citekey generation"]
-
-    local_pdf_path, warning, error = fetch_and_store_pdf_with_fallbacks(
-        url=pdf_url,
-        papers_dir=bib["papers_dir"],
-        citekey=citekey,
-        fetch_binary=fetch_binary,
-        flaresolverr_url=flaresolverr_url,
-        browser_pdf_cmd=browser_pdf_cmd,
-    )
-    if local_pdf_path is None:
-        return record, [error] if error is not None else []
+    existing = existing_records[match_index]
+    local_pdf_path = existing.get("local_pdf_path")
+    if not isinstance(local_pdf_path, str) or not local_pdf_path.strip():
+        return record
 
     updated = dict(record)
     updated["local_pdf_path"] = local_pdf_path
-    warnings: list[str] = []
-    if warning is not None:
-        warnings.append(warning)
-    return cast(NormalizedRecord, updated), warnings
-
-
-def _attach_similarity_hint(
-    record: NormalizedRecord, existing_records: list[NormalizedRecord]
-) -> NormalizedRecord:
-    if find_exact_match(record, existing_records) is not None:
-        return record
-
-    incoming_citekey = record.get("citekey")
-    candidates = [
-        existing
-        for existing in existing_records
-        if existing.get("citekey") != incoming_citekey
-    ]
-    hint_citekey = compute_similarity_hint(record, candidates)
-    if hint_citekey is None:
-        return record
-
-    hint_text = f"Possibly similar to {hint_citekey}"
-    existing_note = record.get("note")
-    if isinstance(existing_note, str) and existing_note.strip():
-        if hint_text in existing_note:
-            return record
-        combined = f"{existing_note.strip()}; {hint_text}"
-    else:
-        combined = hint_text
-
-    updated = dict(record)
-    updated["note"] = combined
+    existing_pdf_url = existing.get("pdf_url")
+    if isinstance(existing_pdf_url, str) and existing_pdf_url.strip():
+        updated["pdf_url"] = existing_pdf_url
     return cast(NormalizedRecord, updated)
 
 
-
-# Re-exports from _record_fetching for test monkeypatching
-_fetch_record_for_input = _fetch_record_for_input
-_merge_record_sources = _merge_record_sources
-_safe_call = _safe_call
-_fallback_record_for_input = _fallback_record_for_input
-
-
-def _dry_run_diff(
+def reuse_orphan_pdf_for_planned_path(
+    record: NormalizedRecord,
     *,
-    plan: dict[str, Any],
-    existing_entries: list[BibtexEntry],
-) -> str:
-    """Return a human-readable diff of what the write plan would change."""
-    from pzi.bib_repository import serialize_bibtex
+    papers_dir: str,
+    pdf_filename_format: str | None = None,
+) -> NormalizedRecord:
+    if record.get("local_pdf_path"):
+        return record
+    if not record.get("pdf_url"):
+        return record
+    citekey = record.get("citekey")
+    if not isinstance(citekey, str) or not citekey.strip():
+        return record
 
-    new_entry = plan["entry"]
-    new_text = serialize_bibtex([new_entry]).rstrip()
-
-    if plan["action"] == "insert":
-        action = "new entry"
-        old_text = "(none — new entry)"
-    else:
-        action = "update entry"
-        index = plan["index"]
-        try:
-            old_entry = existing_entries[index] if index is not None else None
-        except IndexError:
-            old_entry = None
-        if old_entry is None:
-            old_text = "(original entry not available)"
-        else:
-            old_text = serialize_bibtex([old_entry]).rstrip()
-
-    changed = ", ".join(plan["changed_fields"]) if plan["changed_fields"] else "none"
-    return (
-        f"--- {action} (changed: {changed}) ---\n"
-        f"{old_text}\n"
-        f"+++\n"
-        f"{new_text}"
+    planned = plan_pdf_path(
+        papers_dir=papers_dir,
+        citekey=citekey,
+        record=record,
+        filename_format=pdf_filename_format,
     )
+    try:
+        data = Path(planned).read_bytes()
+    except OSError:
+        return record
+    if not is_pdf_bytes(data):
+        return record
+
+    updated = dict(record)
+    updated["local_pdf_path"] = planned
+    return cast(NormalizedRecord, updated)

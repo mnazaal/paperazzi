@@ -36,6 +36,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 from typing import Any
 from urllib.parse import urljoin
 
@@ -160,38 +161,46 @@ def _ensure_browser(browser: str = "firefox") -> bool:  # pragma: no cover — s
         from playwright.sync_api import sync_playwright
     except ImportError:
         print(
-            "playwright package not found. Install with: pip install pzi[browser]",
+            "playwright package not found. Install pzi normally; "
+            "for development use: pip install -e .[dev]",
             file=sys.stderr,
         )
         return False
 
-    # Check if browser binaries are installed by trying to launch
+    # Check if browser binaries are installed by trying to launch.
+    playwright = None
     try:
         playwright = sync_playwright().start()
         if browser == "firefox":
             playwright.firefox.launch(headless=True).close()
         else:
             playwright.chromium.launch(headless=True).close()
-        playwright.stop()
         return True
     except Exception:
         # Browser binaries not installed, try to install them
         print(f"Installing {browser} browser binaries...", file=sys.stderr)
-        try:
-            subprocess.run(
-                [sys.executable, "-m", "playwright", "install", browser],
-                check=True,
-                capture_output=True,
-            )
-            print(f"{browser} browser binaries installed.", file=sys.stderr)
-            return True
-        except subprocess.CalledProcessError:
-            print(
-                f"Failed to install {browser} browser binaries.",
-                file=sys.stderr,
-            )
-            print("Run 'playwright install chromium' manually.", file=sys.stderr)
-            return False
+    finally:
+        if playwright is not None:
+            try:
+                playwright.stop()
+            except Exception:
+                pass
+
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "playwright", "install", browser],
+            check=True,
+            capture_output=True,
+        )
+        print(f"{browser} browser binaries installed.", file=sys.stderr)
+        return True
+    except subprocess.CalledProcessError:
+        print(
+            f"Failed to install {browser} browser binaries.",
+            file=sys.stderr,
+        )
+        print("Run 'playwright install chromium' manually.", file=sys.stderr)
+        return False
 
 
 def main() -> int:  # pragma: no cover — CLI entry point
@@ -208,6 +217,18 @@ def main() -> int:  # pragma: no cover — CLI entry point
         choices=["firefox", "chromium", "chrome"],
         default="chromium",
         help="Browser engine to use (default: chromium)",
+    )
+    parser.add_argument(
+        "--headful",
+        action="store_true",
+        help="open a visible browser window for sites that require human verification",
+    )
+    parser.add_argument(
+        "--challenge-timeout",
+        type=int,
+        default=0,
+        metavar="SECONDS",
+        help="wait up to SECONDS for browser verification before giving up",
     )
     args = parser.parse_args()
 
@@ -233,7 +254,16 @@ def main() -> int:  # pragma: no cover — CLI entry point
             url,
             browser=args.browser,
             profile_path=args.profile,
+            headless=not args.headful,
+            challenge_timeout=args.challenge_timeout,
         )
+        if pdf_bytes is None and args.headful:
+            print(
+                "pzi-browser-hook: visible browser fallback did not obtain a PDF. "
+                "If a verification page appeared, complete it before the timeout; "
+                "otherwise configure browser_pdf_cmd with your regular browser profile.",
+                file=sys.stderr,
+            )
         print(encode_hook_response(pdf_bytes=pdf_bytes))
         return 0
 
@@ -242,17 +272,21 @@ def main() -> int:  # pragma: no cover — CLI entry point
         url,
         browser=args.browser,
         profile_path=args.profile,
+        headless=not args.headful,
     )
     print(encode_hook_response(pdf_url=pdf_url))
     return 0
 
 
 def _launch_browser(
-    browser: str, profile_path: str | None = None
+    browser: str,
+    profile_path: str | None = None,
+    *,
+    headless: bool = True,
 ) -> BrowserSession:
     """Launch a browser and return a BrowserSession (delegates to browser_session module)."""
     from pzi.browser_session import _launch_browser as _impl
-    return _impl(browser, profile_path)
+    return _impl(browser, profile_path, headless=headless)
 
 
 def _close_browser(session_or_playwright: Any, *args: Any) -> None:
@@ -285,6 +319,7 @@ def discover_pdf_url(
     _click=None,
     _resolve=None,
     _session: BrowserSession | None = None,
+    headless: bool = True,
 ) -> str | None:
     """Discover PDF URL from a page using browser.
 
@@ -294,7 +329,7 @@ def discover_pdf_url(
     if _session is not None:  # pragma: no branch
         session = _session
     else:  # pragma: no cover
-        session = _launch_browser(browser, profile_path)
+        session = _launch_browser(browser, profile_path, headless=headless)
 
     dismiss_fn = _dismiss or _dismiss_cookie_banners
     click_fn = _click or _click_downloadish_links
@@ -334,6 +369,8 @@ def download_pdf(
     profile_path: str | None = None,
     _dismiss=None,
     _session: BrowserSession | None = None,
+    headless: bool = True,
+    challenge_timeout: int = 0,
 ) -> bytes | None:
     """Download PDF bytes using browser, with optional profile reuse.
 
@@ -343,7 +380,7 @@ def download_pdf(
     if _session is not None:  # pragma: no branch
         session = _session
     else:  # pragma: no cover
-        session = _launch_browser(browser, profile_path)
+        session = _launch_browser(browser, profile_path, headless=headless)
 
     dismiss_fn = _dismiss or _dismiss_cookie_banners
 
@@ -366,6 +403,11 @@ def download_pdf(
                 body = response.body()  # pragma: no branch — covered by integration/browser tests
                 if body and body.startswith(b"%PDF-"):  # pragma: no branch
                     return body
+
+        if challenge_timeout > 0:
+            pdf_bytes = _wait_for_verified_pdf(session, pdf_url, timeout=challenge_timeout)
+            if pdf_bytes is not None:
+                return pdf_bytes
 
         # 3. HTML page — look for PDF candidate links
         dismiss_fn(session.page)
@@ -397,6 +439,35 @@ def download_pdf(
             _close_browser(session)
 
 
+def _wait_for_verified_pdf(
+    session: BrowserSession,
+    pdf_url: str,
+    *,
+    timeout: int,
+) -> bytes | None:
+    """Poll browser context after a challenge page, allowing cookies to settle."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            session.page.wait_for_timeout(2000)
+        except Exception:
+            time.sleep(2)
+        result = session.fetch_direct(pdf_url)
+        if result.is_pdf():
+            return result.body
+        try:
+            response = session.navigate(pdf_url, wait_until="domcontentloaded", timeout=30000)
+            if response is not None:
+                content_type = response.headers.get("content-type", "")
+                if "application/pdf" in content_type:
+                    body = response.body()
+                    if body and body.startswith(b"%PDF-"):
+                        return body
+        except Exception:
+            pass
+    return None
+
+
 def resolve_pdf_candidate_urls(page_url: str, candidates: Any) -> list[str]:
     if not isinstance(candidates, list):
         return []  # pragma: no cover — covered by integration/browser tests
@@ -422,7 +493,7 @@ def _is_pdf_url(url: str) -> bool:
 def _dismiss_cookie_banners(page: Any) -> None:
     for selector in COOKIE_BANNER_SELECTORS:
         try:
-            page.locator(selector).first.click(timeout=1000)
+            page.locator(selector).first.click(timeout=300)
             return
         except Exception:
             continue
@@ -431,7 +502,7 @@ def _dismiss_cookie_banners(page: Any) -> None:
 def _click_downloadish_links(page: Any) -> bool:
     for selector in DOWNLOADISH_SELECTORS:
         try:
-            page.locator(selector).first.click(timeout=1000)
+            page.locator(selector).first.click(timeout=300)
             return True
         except Exception:
             continue

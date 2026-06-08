@@ -4,20 +4,57 @@
     <meta charset="utf-8" />
     <title>pzi capture</title>
     <style>
-      body { font-family: sans-serif; width: 320px; padding: 12px; }
-      label { display: block; margin-top: 8px; font-size: 12px; }
-      input, button { width: 100%; box-sizing: border-box; padding: 6px; margin-top: 4px; }
-      pre { background: #f4f4f4; padding: 6px; font-size: 11px; max-height: 200px; overflow: auto; }
+      :root { color-scheme: light dark; }
+      body { font-family: system-ui, sans-serif; width: 340px; padding: 14px; margin: 0; }
+      h1 { font-size: 16px; margin: 0 0 4px; }
+      .hint { color: #555; font-size: 12px; margin: 0 0 12px; }
+      label { display: block; margin-top: 10px; font-size: 12px; font-weight: 600; }
+      input, select, button { width: 100%; box-sizing: border-box; padding: 7px; margin-top: 4px; }
+      .row { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 12px; }
+      .row input { width: auto; margin: 0; }
+      button { margin-top: 12px; font-weight: 700; cursor: pointer; }
+      button:disabled { cursor: progress; opacity: 0.7; }
+      #status { margin-top: 12px; padding: 10px; border-radius: 8px; background: #f4f4f4; }
+      #summary { white-space: pre-wrap; font-size: 13px; line-height: 1.4; }
+      details { margin-top: 8px; }
+      summary { cursor: pointer; font-size: 12px; color: #555; }
+      pre { background: rgba(0,0,0,0.06); padding: 8px; font-size: 11px; max-height: 180px; overflow: auto; }
+      @media (prefers-color-scheme: dark) {
+        .hint, summary { color: #bbb; }
+        #status { background: #252525; }
+        pre { background: rgba(255,255,255,0.08); }
+      }
     </style>
   </head>
   <body>
-    <h1 style="font-size: 14px; margin: 0;">pzi capture</h1>
-    <label>tags (comma separated) <input id="tags" /></label>
-    <label>API token <input id="token" type="password" autocomplete="off" /></label>
-    <label>bib <select id="bib"><option value="">default</option></select></label>
-    <label><input id="dry" type="checkbox" /> dry run</label>
-    <button id="go">capture</button>
-    <pre id="out"></pre>
+    <h1>pzi capture</h1>
+    <div id="capture-form">
+      <p class="hint">Save this paper to BibTeX. PDFs use your browser session when possible.</p>
+      <label>Tags (comma separated) <input id="tags" placeholder="ml, systems" /></label>
+      <label>Bib library <select id="bib"><option value="">default</option></select></label>
+      <label>API token <input id="token" type="password" autocomplete="off" placeholder="optional" /></label>
+      <label class="row"><input id="dry" type="checkbox" /> dry run: preview only</label>
+      <button id="go">Capture current page</button>
+    </div>
+    <section id="search-results" style="display:none;" aria-live="polite">
+      <label>Found <span id="result-count">0</span> items on <span id="result-site">this page</span></label>
+      <div id="result-list" style="max-height:260px; overflow:auto; margin:8px 0; font-size:12px;"></div>
+      <div class="row">
+        <button id="capture-selected" disabled>Capture selected</button>
+        <button id="capture-all">Capture all</button>
+      </div>
+      <button id="cancel-search" style="margin-top:6px;">← back</button>
+    </section>
+    <section id="search-progress" style="display:none;">
+      <div id="search-progress-text">Capturing 0/0…</div>
+    </section>
+    <section id="status" aria-live="polite">
+      <div id="summary">Ready.</div>
+      <details id="details">
+        <summary>Show raw response</summary>
+        <pre id="raw"></pre>
+      </details>
+    </section>
     <script src="popup.js" type="module"></script>
   </body>
 </html>

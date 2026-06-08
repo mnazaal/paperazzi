@@ -43,13 +43,17 @@ def normalize_doi(value: str) -> str | None:
 
     doi = match.group(1).strip()
     doi = re.sub(r"\s+", "", doi)
+    doi = doi.rstrip(".,;:)]}")
     return doi.lower()
 
 
 def normalize_url(value: str) -> str | None:
     """Return a normalized HTTP(S) URL, or None if the input is not a supported URL."""
     candidate = value.strip()
-    parts = urlsplit(candidate)
+    try:
+        parts = urlsplit(candidate)
+    except ValueError:
+        return None
     if parts.scheme not in {"http", "https"}:
         return None
     if not parts.netloc:
@@ -60,7 +64,10 @@ def normalize_url(value: str) -> str | None:
     if not hostname:
         return None  # pragma: no cover — covered by integration/browser tests
 
-    port = parts.port
+    try:
+        port = parts.port
+    except ValueError:
+        return None
     has_default_port = (scheme == "http" and port == 80) or (
         scheme == "https" and port == 443
     )
@@ -86,8 +93,9 @@ def classify_input(value: str) -> ClassifiedInput:
 
     normalized_url = normalize_url(value)
     if normalized_url is None:
-        if value.strip().lower().endswith(".pdf"):
-            return {"kind": "local_pdf", "raw": value, "normalized": value.strip()}
+        stripped = value.strip()
+        if stripped.lower().endswith(".pdf") and "://" not in stripped:
+            return {"kind": "local_pdf", "raw": value, "normalized": stripped}
         return {"kind": "unknown", "raw": value, "normalized": None}
 
     url_parts = urlsplit(normalized_url)
@@ -96,6 +104,30 @@ def classify_input(value: str) -> ClassifiedInput:
         embedded_doi = normalize_doi(doi_match.group(1))
         if embedded_doi is not None:  # pragma: no branch — covered by integration/browser tests
             return {"kind": "doi", "raw": value, "normalized": embedded_doi}
+
+    if url_parts.hostname == "arxiv.org":
+        arxiv_id = _extract_arxiv_id_from_url_path(url_parts.path)
+        if arxiv_id is not None:
+            return {
+                "kind": "doi",
+                "raw": value,
+                "normalized": f"10.48550/arxiv.{arxiv_id}",
+            }
+
+    if url_parts.hostname in {"biorxiv.org", "www.biorxiv.org",
+                               "medrxiv.org", "www.medrxiv.org"}:
+        doi = _extract_doi_from_biorxiv_path(url_parts.path)
+        if doi is not None:
+            return {"kind": "doi", "raw": value, "normalized": doi}
+
+    if url_parts.hostname in {"zenodo.org", "www.zenodo.org"}:
+        zenodo_id = _extract_zenodo_id(url_parts.path)
+        if zenodo_id is not None:
+            return {
+                "kind": "doi",
+                "raw": value,
+                "normalized": f"10.5281/zenodo.{zenodo_id}",
+            }
 
     is_pdf = (
         url_parts.path.lower().endswith(".pdf")
@@ -106,6 +138,39 @@ def classify_input(value: str) -> ClassifiedInput:
     )
     kind: InputKind = "pdf_url" if is_pdf else "url"
     return {"kind": kind, "raw": value, "normalized": normalized_url}
+
+
+def _extract_arxiv_id_from_url_path(path: str) -> str | None:
+    """Extract arXiv identifier from an arXiv URL path, or None."""
+    for pattern in (ARXIV_ABS_PATTERN, ARXIV_PDF_PATTERN):
+        match = pattern.match(path)
+        if match is not None:
+            return match.group(1).lower()
+    return None
+
+
+_BIORXIV_DOI_RE = re.compile(
+    r"(?i)^/content/(10\.\d{4,9}/\S+?)(?:v\d+)?(?:\.[a-z]+)*/?$"
+)
+
+
+def _extract_doi_from_biorxiv_path(path: str) -> str | None:
+    """Extract DOI from a bioRxiv/medRxiv URL path, stripping version suffix."""
+    match = _BIORXIV_DOI_RE.match(path)
+    if match is None:
+        return None
+    return normalize_doi(match.group(1))
+
+
+_ZENODO_ID_RE = re.compile(r"(?i)^/(?:records?)/(\d+)/?$")
+
+
+def _extract_zenodo_id(path: str) -> str | None:
+    """Extract Zenodo record ID from path, e.g. /records/1234567 → 1234567."""
+    match = _ZENODO_ID_RE.match(path)
+    if match is None:
+        return None
+    return match.group(1)
 
 
 def _normalize_special_path(*, hostname: str, path: str) -> str:

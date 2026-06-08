@@ -27,7 +27,6 @@ CURRENT_PUBLIC_MODULES = [
     "pzi.pdf",
     "pzi.pdf_discovery",
     "pzi.pdf_service",
-    "pzi.preprint_detector",
     "pzi.promote_service",
     "pzi.search_service",
     "pzi.setup_service",

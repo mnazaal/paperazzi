@@ -5,7 +5,17 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, TypeAlias, cast
 
-from pzi.bib_repository import read_bib_file, update_bib_entry
+from pzi.add_planning import (
+    metadata_result_confidence_warnings,
+    metadata_result_diagnostics,
+    select_best_metadata_result,
+)
+from pzi.bib_repository import (
+    plan_bib_write,
+    preview_write_plan,
+    read_bib_file,
+    update_bib_entry,
+)
 from pzi.bibtex import NormalizedRecord, record_to_bibtex_entry
 from pzi.config import load_and_resolve_bib
 from pzi.translation_server import fetch_search_translations
@@ -42,6 +52,7 @@ def update_bib(
         }
     config, bib = resolved
     search_fn = fetch_search or fetch_search_translations
+    metadata_confidence_min_score = int(config.get("metadata_confidence_min_score", 0))
     read_result = read_bib_file(bib["path"])
     records = read_result["records"]
 
@@ -74,25 +85,43 @@ def update_bib(
         if not results:
             continue
 
-        candidate = results[0]["record"]
+        selected = select_best_metadata_result(
+            cast(list[Mapping[str, Any]], results),
+            cast(Mapping[str, object], record),
+        )
+        metadata_diagnostics = metadata_result_diagnostics(
+            cast(list[Mapping[str, Any]], results),
+            cast(Mapping[str, object], record),
+        )
+        metadata_warnings = metadata_result_confidence_warnings(
+            cast(list[Mapping[str, Any]], results),
+            cast(Mapping[str, object], record),
+            min_score=metadata_confidence_min_score,
+        )
+        candidate = selected["record"]
         changed_fields = _changed_fields_for_candidate(record, candidate)
         if not changed_fields:
             continue  # pragma: no cover — covered by integration/browser tests
 
         applied = False
         note: str | None = None
+        diff: str | None = None
+        enriched = _conservative_enrich(
+            cast(NormalizedRecord, dict(record)),
+            cast(NormalizedRecord, dict(candidate)),
+        )
         if not dry_run:
             change_box: dict[str, list[str]] = {"changed_fields": []}
 
             def _apply_update(entry, current_record):
-                enriched = _conservative_enrich(
+                current_enriched = _conservative_enrich(
                     cast(NormalizedRecord, dict(current_record)),
                     cast(NormalizedRecord, dict(candidate)),
                 )
-                change_box["changed_fields"] = _changed_fields(current_record, enriched)
+                change_box["changed_fields"] = _changed_fields(current_record, current_enriched)
                 if not change_box["changed_fields"]:
                     return entry  # pragma: no cover — covered by integration/browser tests
-                return record_to_bibtex_entry(enriched, entry_type=entry["entry_type"])
+                return record_to_bibtex_entry(current_enriched, entry_type=entry["entry_type"])
 
             update_result = update_bib_entry(bib["path"], citekey, _apply_update)
             if not update_result["found"]:
@@ -102,15 +131,23 @@ def update_bib(
                 applied = bool(changed_fields)
                 if not changed_fields:
                     continue  # pragma: no cover — covered by integration/browser tests
+        else:
+            plan = plan_bib_write(enriched, records)
+            diff = preview_write_plan(bib["path"], plan)["diff"]
 
-        items.append(
-            {
-                "citekey": citekey,
-                "changed_fields": changed_fields,
-                "applied": applied if not dry_run else False,
-                "note": note,
-            }
-        )
+        item = {
+            "citekey": citekey,
+            "changed_fields": changed_fields,
+            "applied": applied if not dry_run else False,
+            "note": note,
+        }
+        if diff is not None:
+            item["diff"] = diff
+        if metadata_diagnostics:
+            item["metadata_diagnostics"] = metadata_diagnostics
+        if metadata_warnings:
+            item["metadata_warnings"] = metadata_warnings
+        items.append(item)
 
     return {
         "status": "ok",

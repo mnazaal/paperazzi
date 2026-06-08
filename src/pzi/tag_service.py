@@ -6,9 +6,14 @@ import re
 import unicodedata
 from typing import Any, Literal, TypeAlias, cast
 
-from pzi.bib_repository import _read_bib_file_raw, read_bib_file, with_bib_lock, write_bib_file
+from pzi.bib_repository import (
+    _find_entry_index,
+    _read_bib_file_raw,
+    read_bib_file,
+    with_bib_lock,
+    write_bib_file,
+)
 from pzi.bibtex import NormalizedRecord, record_to_bibtex_entry
-from pzi.bib_repository import _find_entry_index
 from pzi.config import load_and_resolve_bib
 
 # ---------------------------------------------------------------------------

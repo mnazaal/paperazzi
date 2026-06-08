@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import shutil
 import sys
+import tomllib
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -39,18 +40,28 @@ def _load_base_manifest() -> dict[str, Any]:
         return json.load(f)
 
 
-def _with_pdf_host_permissions(manifest: dict[str, Any]) -> dict[str, Any]:
-    permissions = list(manifest.get("host_permissions") or [])
-    for pattern in ("https://*/*", "http://*/*"):
-        if pattern not in permissions:
-            permissions.append(pattern)
-    updated = dict(manifest)
-    updated["host_permissions"] = permissions
-    return updated
+def _load_project_version(path: Path | None = None) -> str:
+    pyproject_path = PROJECT_ROOT / "pyproject.toml" if path is None else path
+    if not pyproject_path.exists():
+        print(f"error: {pyproject_path} not found", file=sys.stderr)
+        sys.exit(1)
+    with pyproject_path.open("rb") as f:
+        data = tomllib.load(f)
+    version = data.get("project", {}).get("version")
+    if not isinstance(version, str) or not version.strip():
+        print(f"error: {pyproject_path} missing [project].version", file=sys.stderr)
+        sys.exit(1)
+    return version
+
+
+def _manifest_with_version(base: dict[str, Any], version: str) -> dict[str, Any]:
+    manifest = dict(base)
+    manifest["version"] = version
+    return manifest
 
 
 def _build_firefox_manifest(base: dict[str, Any]) -> dict[str, Any]:
-    manifest = _with_pdf_host_permissions(dict(base))
+    manifest = dict(base)
     manifest["background"] = {
         "scripts": ["background.js"],
         "type": "module",
@@ -65,7 +76,7 @@ def _build_firefox_manifest(base: dict[str, Any]) -> dict[str, Any]:
 
 
 def _build_chrome_manifest(base: dict[str, Any]) -> dict[str, Any]:
-    manifest = _with_pdf_host_permissions(dict(base))
+    manifest = dict(base)
     manifest["background"] = {
         "service_worker": "background.js",
         "type": "module",
@@ -102,7 +113,7 @@ def _zip_directory(src: Path, zip_path: Path) -> None:
 
 
 def main() -> int:
-    base = _load_base_manifest()
+    base = _manifest_with_version(_load_base_manifest(), _load_project_version())
 
     firefox_dir = DIST_DIR / "firefox"
     chrome_dir = DIST_DIR / "chrome"

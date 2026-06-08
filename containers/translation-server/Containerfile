@@ -1,4 +1,5 @@
-FROM node:lts-alpine
+# Stage 1: build — git, npm, patching (discarded after build)
+FROM node:22-alpine AS build
 
 RUN apk add --no-cache git
 
@@ -10,7 +11,22 @@ RUN git clone --depth=1 https://github.com/zotero/translation-server.git . && \
     git clone --depth=1 https://github.com/zotero/translate.git modules/translate/ && \
     git clone --depth=1 https://github.com/zotero/zotero-schema.git modules/zotero-schema/
 
-RUN npm install
+COPY apply-cookie-patch.sh /tmp/
+RUN sh /tmp/apply-cookie-patch.sh
 
+RUN npm install --production && \
+    npm cache clean --force && \
+    find modules -name ".git" -type d -exec rm -rf {} + 2>/dev/null || true
+
+# Stage 2: runtime — minimal, no git, no devDeps, no .git dirs
+FROM node:22-alpine
+
+RUN apk add --no-cache netcat-openbsd && \
+    addgroup -S pzi && adduser -S pzi -G pzi
+
+COPY --from=build --chown=pzi:pzi /app /app
+
+WORKDIR /app
+USER pzi
 EXPOSE 1969
 CMD ["npm", "start"]

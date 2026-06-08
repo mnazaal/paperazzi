@@ -108,7 +108,10 @@ def test_retry_pdf_fetch_failed(monkeypatch) -> None:
     )
     assert result["status"] == "error"
     assert result["message"] == "failed to fetch PDF"
-    assert result["errors"] == ["network error"]
+    assert result["errors"] == [
+        "network error",
+        "hint: open the actual PDF tab in your browser and click pzi again",
+    ]
 
 
 def test_retry_pdf_update_not_found(monkeypatch) -> None:
@@ -149,6 +152,50 @@ def test_retry_pdf_update_not_found(monkeypatch) -> None:
     )
     assert result["status"] == "error"
     assert result["message"] == "citekey disappeared"
+
+
+def test_retry_pdf_removes_new_pdf_when_update_disappears(monkeypatch, tmp_path: Path) -> None:
+    papers_dir = tmp_path / "papers"
+    new_pdf = papers_dir / "smith2024.pdf"
+    monkeypatch.setattr(
+        pdf_service, "load_and_resolve_bib",
+        lambda **kw: ({"bibs": []}, {"name": "ml", "path": "/b", "papers_dir": str(papers_dir)}),
+    )
+    monkeypatch.setattr(
+        pdf_service, "read_bib_file",
+        lambda path: {
+            "entries": [{"citekey": "smith2024", "fields": {"note": "PDF: http://x.com/p.pdf"}}],
+            "records": [{"citekey": "smith2024"}],
+        },
+    )
+    monkeypatch.setattr(pdf_service, "extract_note_field", lambda note, label: "http://x.com/p.pdf")
+
+    def fake_fetch(**kwargs):
+        papers_dir.mkdir(parents=True, exist_ok=True)
+        new_pdf.write_bytes(b"%PDF-new")
+        return str(new_pdf), None
+
+    monkeypatch.setattr(pdf_service, "fetch_and_store_pdf", fake_fetch)
+    monkeypatch.setattr(
+        pdf_service,
+        "update_bib_entry",
+        lambda path, citekey, updater: {
+            "found": False,
+            "entries": [],
+            "entry": None,
+            "record": None,
+        },
+    )
+
+    result = pdf_service.retry_pdf(
+        config_path="/f",
+        home_dir="/h",
+        bib_selector=None,
+        citekey="smith2024",
+    )
+
+    assert result["status"] == "error"
+    assert not new_pdf.exists()
 
 
 def test_retry_pdf_success(monkeypatch) -> None:
@@ -249,7 +296,10 @@ def test_attach_pdf_store_failed(monkeypatch) -> None:
     )
     assert result["status"] == "error"
     assert result["message"] == "failed to attach PDF"
-    assert result["errors"] == ["source missing"]
+    assert result["errors"] == [
+        "source missing",
+        "hint: open the actual PDF tab in your browser and click pzi again",
+    ]
 
 
 def test_attach_pdf_update_disappeared(monkeypatch) -> None:
@@ -283,6 +333,51 @@ def test_attach_pdf_update_disappeared(monkeypatch) -> None:
     )
     assert result["status"] == "error"
     assert result["message"] == "citekey disappeared"
+
+
+def test_attach_pdf_removes_new_pdf_when_update_disappears(monkeypatch, tmp_path: Path) -> None:
+    papers_dir = tmp_path / "papers"
+    new_pdf = papers_dir / "smith2024.pdf"
+    monkeypatch.setattr(
+        pdf_service, "load_and_resolve_bib",
+        lambda **kw: ({"bibs": []}, {"name": "ml", "path": "/b", "papers_dir": str(papers_dir)}),
+    )
+    monkeypatch.setattr(
+        pdf_service,
+        "read_bib_file",
+        lambda path: {
+            "entries": [{"citekey": "smith2024", "fields": {}}],
+            "records": [{"citekey": "smith2024"}],
+        },
+    )
+
+    def fake_store(**kwargs):
+        papers_dir.mkdir(parents=True, exist_ok=True)
+        new_pdf.write_bytes(b"%PDF-new")
+        return str(new_pdf), None
+
+    monkeypatch.setattr(pdf_service, "_store_pdf_source", fake_store)
+    monkeypatch.setattr(
+        pdf_service,
+        "update_bib_entry",
+        lambda path, citekey, updater: {
+            "found": False,
+            "entries": [],
+            "entry": None,
+            "record": None,
+        },
+    )
+
+    result = pdf_service.attach_pdf(
+        config_path="/f",
+        home_dir="/h",
+        bib_selector=None,
+        citekey="smith2024",
+        source="/tmp/real.pdf",
+    )
+
+    assert result["status"] == "error"
+    assert not new_pdf.exists()
 
 
 def test_attach_pdf_success_http_source(monkeypatch) -> None:
@@ -492,6 +587,7 @@ def test_attach_pdf_data_update_disappeared(monkeypatch, tmp_path: Path) -> None
     )
     assert result["status"] == "error"
     assert result["message"] == "citekey disappeared"
+    assert not (papers_dir / "smith2024.pdf").exists()
 
 
 def test_attach_pdf_data_success(monkeypatch, tmp_path: Path) -> None:
@@ -628,6 +724,8 @@ def test_entry_with_pdf_fields_no_pdf_url() -> None:
     #       local_pdf_path=local_pdf_path, pdf_url=source if source.startswith(...) else None)
     #
     # When pdf_url is None, it should NOT add pdf_url to the record.
+    entry = {"entry_type": "article", "citekey": "smith2024", "fields": {}}
+    record = {"citekey": "smith2024", "title": "Test"}
     result_entry = pdf_service._entry_with_pdf_fields(
         entry,
         record,
@@ -690,3 +788,128 @@ def test_entry_with_pdf_fields_preserves_existing_note() -> None:
     assert "original note" in note
     assert "PDF: https://example.com/p.pdf" in note
     assert "file" in result_entry["fields"]
+
+# ── from test_pdf_text_metadata.py ──
+
+
+def test_extract_doi_from_text_normalizes_first_match():
+    text = "See DOI: 10.1145/3368089.3409746 for details"
+
+    assert pdf_service.extract_doi_from_text(text) == "10.1145/3368089.3409746"
+
+
+def test_extract_doi_from_text_stops_before_line_break():
+    text = "doi 10.1234/foo.\nbar"
+
+    assert pdf_service.extract_doi_from_text(text) == "10.1234/foo"
+
+
+def test_extract_title_from_text_skips_metadata_lines():
+    text = """
+    DOI: 10.1234/example
+    Abstract
+    Real Paper Title With Enough Words
+    Introduction
+    """
+
+    assert pdf_service.extract_title_from_text(text) == "Real Paper Title With Enough Words"
+
+
+def test_pdf_metadata_from_text_returns_empty_fields_for_blank_text():
+    assert pdf_service.pdf_metadata_from_text("   ") == {
+        "doi": None,
+        "title": None,
+        "text_sample": None,
+    }
+
+
+def test_pdf_metadata_from_text_limits_text_sample():
+    title = "Real Paper Title With Enough Words"
+    text = f"{title}\n" + ("x" * 2500)
+
+    result = pdf_service.pdf_metadata_from_text(text)
+
+    assert result["doi"] is None
+    assert result["title"] == title
+    assert result["text_sample"] == text[:2000]
+
+# ── from test_pdf_metadata.py ──
+
+"""Tests for PDF metadata extraction."""
+def _make_pdf_with_text(tmp_path: Path, text: str) -> Path:
+    """Create a minimal PDF with embedded text using pypdf."""
+    try:
+        from pypdf import PdfWriter
+        from pypdf.generic import DictionaryObject, NameObject
+    except ImportError:
+        pytest.skip("pypdf not installed")
+
+    writer = PdfWriter()
+    page = writer.add_blank_page(width=612, height=792)
+
+    # Add text via content stream (minimal approach)
+    content = f"BT /F1 12 Tf 100 700 Td ({text}) Tj ET".encode()
+    page["/Contents"] = writer._add_object(
+        DictionaryObject({NameObject("/Length"): len(content)})
+    )
+    # Note: this is a simplified mock; real text extraction may fail
+    # We'll use a different approach - create a real PDF with text
+
+    path = tmp_path / "test.pdf"
+    with path.open("wb") as f:
+        writer.write(f)
+    return path
+
+
+def test_extract_pdf_metadata_missing_file(tmp_path: Path) -> None:
+    result = pdf_service.extract_pdf_metadata(str(tmp_path / "nonexistent.pdf"))
+    assert result == {"doi": None, "title": None, "text_sample": None}
+
+
+def test_extract_doi_from_text_finds_first() -> None:
+    text = "Some paper text. DOI: 10.1145/3368089.3409741 More text."
+    assert pdf_service.extract_doi_from_text(text) == "10.1145/3368089.3409741"
+
+
+def test_extract_doi_from_text_no_match() -> None:
+    assert pdf_service.extract_doi_from_text("No doi here") is None
+
+
+def test_extract_doi_from_text_normalizes_whitespace() -> None:
+    # Preprocessing removes spaces from matched candidate
+    text = "DOI: 10.1145/3368089.3409741"
+    assert pdf_service.extract_doi_from_text(text) == "10.1145/3368089.3409741"
+
+
+def test_extract_title_from_text_skips_junk() -> None:
+    text = "DOI: 10.1/foo\nJournal of Testing\n\nReal Paper Title Here\nAbstract..."
+    assert pdf_service.extract_title_from_text(text) == "Real Paper Title Here"
+
+
+def test_extract_title_from_text_too_short_skipped() -> None:
+    text = "DOI: 10.1/foo\nHi\nShort\nActual Title That Is Long Enough"
+    assert pdf_service.extract_title_from_text(text) == "Actual Title That Is Long Enough"
+
+
+def test_extract_title_from_text_none() -> None:
+    assert pdf_service.extract_title_from_text("DOI\nhttp\n© 2024") is None
+
+
+def test_extract_pdf_metadata_real_pdf(tmp_path: Path) -> None:
+    """Test with a real PDF created via pypdf if available."""
+    try:
+        from pypdf import PdfWriter
+    except ImportError:
+        pytest.skip("pypdf not installed")
+
+    writer = PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+
+    path = tmp_path / "real_test.pdf"
+    with path.open("wb") as f:
+        writer.write(f)
+
+    result = pdf_service.extract_pdf_metadata(str(path))
+    # Blank page has no text; just verify it doesn't crash
+    assert result["doi"] is None
+    assert result["title"] is None

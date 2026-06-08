@@ -22,13 +22,18 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: Set up uv
         uses: astral-sh/setup-uv@v5
 
       - name: Install package and dev tools
         run: |
           uv venv .venv
-          uv pip install -e ".[dev,browser]"
+          uv pip install -e ".[dev]"
 
       - name: Install Playwright browsers
         run: .venv/bin/playwright install chromium firefox
@@ -41,6 +46,9 @@ jobs:
 
       - name: Tests with coverage
         run: .venv/bin/pytest --cov=pzi --cov-report=term-missing --cov-report=xml -q
+
+      - name: Build browser extension
+        run: .venv/bin/python tools/build_extension.py
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5

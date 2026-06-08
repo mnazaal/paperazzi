@@ -8,14 +8,16 @@ Also includes PDF candidate extraction helpers.
 
 from __future__ import annotations
 
-import ipaddress
+import re as _re
 from collections.abc import Callable, Mapping
 from typing import Any, TypeAlias
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from pzi.bibtex import NormalizedRecord
+from pzi.url_safety import safe_public_http_url
 
 PdfDiscoveryContext: TypeAlias = dict[str, Any]
+DNS_LOOKUP_TIMEOUT_SECONDS = 0.25
 
 PdfCandidate: TypeAlias = dict[str, Any]
 
@@ -124,28 +126,8 @@ def pdf_url_candidates_step(
     return record
 
 
-def _safe_public_http_url(value: str) -> bool:
-    parts = urlsplit(value)
-    if parts.scheme not in {"http", "https"} or not parts.hostname:
-        return False
-    hostname = parts.hostname.strip().lower()
-    if hostname in {"localhost", "localhost.localdomain"}:
-        return False
-    private_suffixes = (".localhost", ".local", ".internal", ".lan", ".home")
-    if "." not in hostname or hostname.endswith(private_suffixes):
-        return False
-    try:
-        address = ipaddress.ip_address(hostname)
-    except ValueError:
-        return True
-    return not (
-        address.is_private
-        or address.is_loopback
-        or address.is_link_local
-        or address.is_multicast
-        or address.is_reserved
-        or address.is_unspecified
-    )
+def _safe_public_http_url(value: str, *, dns_timeout: float = DNS_LOOKUP_TIMEOUT_SECONDS) -> bool:
+    return safe_public_http_url(value, dns_timeout=dns_timeout)
 
 
 def web_attachment_step(
@@ -156,7 +138,6 @@ def web_attachment_step(
     Also backfills canonical_url / source_url / abstract_url if the translator
     result provides them and the record currently lacks them.
     """
-    from pzi.bibtex import NormalizedRecord
 
     fetch_web = context["fetch_web"]
     candidate_urls = landing_page_urls(base_record=record, raw_value=context["raw_value"])
@@ -219,7 +200,7 @@ def browser_pdf_step(
             page_url=url,
             doi=doi,
         )
-        if pdf_url:  # pragma: no branch — covered by integration/browser tests
+        if pdf_url and _safe_public_http_url(pdf_url):
             updated = dict(record)
             updated["pdf_url"] = pdf_url
             return updated
@@ -235,9 +216,18 @@ def doi_pdf_step(
     if not isinstance(doi, str) or not doi.strip():
         return record
 
-    from pzi.metadata_sources import fetch_crossref_pdf_url, fetch_doaj_pdf_url, fetch_europepmc_pdf_url
+    from pzi.metadata_sources import (
+        fetch_crossref_pdf_url,
+        fetch_doaj_pdf_url,
+        fetch_europepmc_pdf_url,
+    )
 
-    pdf_url = fetch_crossref_pdf_url(doi)
+    contact_email = context.get("contact_email")
+    pdf_url = _call_pdf_resolver(
+        fetch_crossref_pdf_url,
+        doi,
+        contact_email=contact_email if isinstance(contact_email, str) else None,
+    )
     if pdf_url:
         updated = dict(record)
         updated["pdf_url"] = pdf_url
@@ -256,6 +246,15 @@ def doi_pdf_step(
         return updated
 
     return record
+
+
+def _call_pdf_resolver(fn, doi: str, *, contact_email: str | None = None) -> str | None:
+    if contact_email:
+        try:
+            return fn(doi, contact_email=contact_email)
+        except TypeError:
+            return fn(doi)
+    return fn(doi)
 
 
 def unpaywall_step(
@@ -296,13 +295,126 @@ def arxiv_step(
     return updated
 
 
+def preprint_pdf_step(
+    record: NormalizedRecord, context: PdfDiscoveryContext
+) -> NormalizedRecord:
+    """Build PDF URL for known preprint servers from source/canonical URL."""
+    from pzi.promote_service import detect_preprint_source
+
+    landing_url = (
+        record.get("source_url")
+        or record.get("canonical_url")
+        or context.get("raw_value")
+    )
+    if not isinstance(landing_url, str) or not landing_url.strip():
+        return record
+
+    source = detect_preprint_source(record)
+    if source is None:
+        source = detect_preprint_source({"source_url": landing_url})
+    if source is None or source == "arXiv":
+        return record  # arXiv handled by arxiv_step
+
+    pdf_url = _build_preprint_pdf_url(source, landing_url)
+    if pdf_url is None:
+        return record
+
+    updated = dict(record)
+    updated["pdf_url"] = pdf_url
+    return updated
+
+
+def _build_preprint_pdf_url(source: str, landing_url: str) -> str | None:
+    """Build a PDF URL for a known preprint server, or None."""
+    parts = urlsplit(landing_url)
+    path = parts.path.rstrip("/")
+
+    if source in {"bioRxiv", "medRxiv"}:
+        # https://www.biorxiv.org/content/10.1101/2024.01.01.123456v1
+        # → https://www.biorxiv.org/content/10.1101/2024.01.01.123456v1.full.pdf
+        m = _re.search(r"/content/(10\.\d{4,9}/\S+?)(?:v\d+)?$", path)
+        if m:
+            base_path = f"/content/{m.group(1)}"
+            version_match = _re.search(r"(v\d+)$", path)
+            version = version_match.group(1) if version_match else ""
+            return urlunsplit((
+                parts.scheme, parts.hostname or "",
+                f"{base_path}{version}.full.pdf", "", ""
+            ))
+
+    if source in {"PsyArXiv", "SocArXiv", "engrXiv", "EarthArXiv",
+                   "EcoEvoRxiv", "OSF"}:
+        # https://osf.io/preprints/psyarxiv/abc123
+        # → https://osf.io/preprints/psyarxiv/abc123/download
+        return f"{landing_url.rstrip('/')}/download"
+
+    if source == "SSRN":
+        # https://papers.ssrn.com/sol3/papers.cfm?abstract_id=1234567
+        # → https://papers.ssrn.com/sol3/papers.cfm?abstract_id=1234567&download=yes
+        abstract_id = _extract_query_param(parts.query, "abstract_id")
+        if abstract_id:
+            return urlunsplit((
+                parts.scheme, parts.hostname or "",
+                parts.path, f"abstract_id={abstract_id}&download=yes", ""
+            ))
+
+    if source == "HAL":
+        # https://hal.science/hal-01234567
+        # → https://hal.science/hal-01234567/document
+        return f"{landing_url.rstrip('/')}/document"
+
+    if source == "Research Square":
+        # https://www.researchsquare.com/article/rs-1234/v1
+        # → https://www.researchsquare.com/article/rs-1234/v1.pdf
+        return f"{landing_url.rstrip('/')}.pdf"
+
+    if source == "Preprints.org":
+        # https://www.preprints.org/manuscript/202401.1234/v1
+        # → https://www.preprints.org/manuscript/202401.1234/v1/download
+        return f"{landing_url.rstrip('/')}/download"
+
+    if source == "Zenodo":
+        # https://zenodo.org/records/1234567
+        # → https://zenodo.org/records/1234567/files/paper.pdf (varies)
+        # Best effort: the records API returns file URLs, but we can try the record URL
+        return None  # Zenodo needs API call to find file URLs
+
+    if source == "ChemRxiv":
+        # https://chemrxiv.org/engage/chemrxiv/article-details/123
+        # → https://chemrxiv.org/engage/chemrxiv/article-details/123/download
+        # The download link format varies; try common pattern
+        return f"{landing_url.rstrip('/')}/download"
+
+    if source == "Authorea":
+        # https://www.authorea.com/doi/full/10.22541/au.123
+        # → https://www.authorea.com/doi/pdf/10.22541/au.123
+        return landing_url.replace("/full/", "/pdf/")
+
+    if source == "SAGE Advance":
+        # https://advance.sagepub.com/doi/10.31124/123
+        # → https://advance.sagepub.com/doi/pdf/10.31124/123
+        return landing_url.replace("/doi/10.", "/doi/pdf/10.")
+
+    return None
+
+
+def _extract_query_param(query: str, key: str) -> str | None:
+    """Extract a single query parameter value, or None."""
+    from urllib.parse import parse_qs
+    values = parse_qs(query).get(key)
+    if values:
+        return values[0]
+    return None
+
+
 # Canonical fallback chain used by add_service.
 DEFAULT_DISCOVERY_STEPS: list[PdfDiscoveryStep] = [
+    arxiv_step,
+    preprint_pdf_step,
     translation_attachment_step,
     pdf_url_candidates_step,
     web_attachment_step,
     browser_pdf_step,
     doi_pdf_step,
     unpaywall_step,
-    arxiv_step,
 ]

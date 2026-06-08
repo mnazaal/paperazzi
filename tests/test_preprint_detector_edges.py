@@ -1,6 +1,6 @@
 """Edge tests for preprint_detector.py uncovered lines (27, 29, 67-68)."""
 
-from pzi.preprint_detector import detect_preprint_source, is_preprint
+from pzi.promote_service import detect_preprint_source, is_preprint
 
 # ── is_preprint ──────────────────────────────────────────────────
 

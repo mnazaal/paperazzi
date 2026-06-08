@@ -54,7 +54,7 @@ def record_to_bibtex_entry(
     if local_pdf is not None:
         fields["file"] = local_pdf
 
-    abstract = _empty_to_none(record.get("abstract"))
+    abstract = _normalize_abstract_text(record.get("abstract"))
     if abstract is not None:
         fields["abstract"] = abstract
 
@@ -97,6 +97,8 @@ def bibtex_entry_to_record(entry: BibtexEntry) -> NormalizedRecord:
         else None,
         "canonical_url": _empty_to_none(fields.get("url")),
         "source_url": _empty_to_none(fields.get("url")),
+        "pdf_url": extract_note_field(note, "PDF"),
+        "abstract_url": extract_note_field(note, "Abstract"),
         "tags": _parse_keywords(fields.get("keywords")),
         "note": _parse_note_text(note),
         "local_pdf_path": _empty_to_none(fields.get("file")),
@@ -150,6 +152,15 @@ def _parse_note_text(value: str | None) -> str | None:
     if first.startswith("PDF:") or first.startswith("Abstract:"):
         return None
     return first
+
+
+def _normalize_abstract_text(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    abstract = _empty_to_none(value)
+    if abstract is None:
+        return None
+    return re.sub(r"^\s*abstract\s*\n+", "", abstract, count=1, flags=re.IGNORECASE).strip()
 
 
 def _parse_authors(value: str | None) -> list[str]:

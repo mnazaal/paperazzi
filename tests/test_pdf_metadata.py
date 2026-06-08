@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from pzi.pdf_service import _extract_doi_from_text, _extract_title_from_text, extract_pdf_metadata
+from pzi.pdf_service import extract_doi_from_text, extract_pdf_metadata, extract_title_from_text
 
 
 def _make_pdf_with_text(tmp_path: Path, text: str) -> Path:
@@ -37,33 +37,33 @@ def test_extract_pdf_metadata_missing_file(tmp_path: Path) -> None:
     assert result == {"doi": None, "title": None, "text_sample": None}
 
 
-def test_extract_doi_from_text_finds_first() -> None:
+def testextract_doi_from_text_finds_first() -> None:
     text = "Some paper text. DOI: 10.1145/3368089.3409741 More text."
-    assert _extract_doi_from_text(text) == "10.1145/3368089.3409741"
+    assert extract_doi_from_text(text) == "10.1145/3368089.3409741"
 
 
-def test_extract_doi_from_text_no_match() -> None:
-    assert _extract_doi_from_text("No doi here") is None
+def testextract_doi_from_text_no_match() -> None:
+    assert extract_doi_from_text("No doi here") is None
 
 
-def test_extract_doi_from_text_normalizes_whitespace() -> None:
+def testextract_doi_from_text_normalizes_whitespace() -> None:
     # Preprocessing removes spaces from matched candidate
     text = "DOI: 10.1145/3368089.3409741"
-    assert _extract_doi_from_text(text) == "10.1145/3368089.3409741"
+    assert extract_doi_from_text(text) == "10.1145/3368089.3409741"
 
 
-def test_extract_title_from_text_skips_junk() -> None:
+def testextract_title_from_text_skips_junk() -> None:
     text = "DOI: 10.1/foo\nJournal of Testing\n\nReal Paper Title Here\nAbstract..."
-    assert _extract_title_from_text(text) == "Real Paper Title Here"
+    assert extract_title_from_text(text) == "Real Paper Title Here"
 
 
-def test_extract_title_from_text_too_short_skipped() -> None:
+def testextract_title_from_text_too_short_skipped() -> None:
     text = "DOI: 10.1/foo\nHi\nShort\nActual Title That Is Long Enough"
-    assert _extract_title_from_text(text) == "Actual Title That Is Long Enough"
+    assert extract_title_from_text(text) == "Actual Title That Is Long Enough"
 
 
-def test_extract_title_from_text_none() -> None:
-    assert _extract_title_from_text("DOI\nhttp\n© 2024") is None
+def testextract_title_from_text_none() -> None:
+    assert extract_title_from_text("DOI\nhttp\n© 2024") is None
 
 
 def test_extract_pdf_metadata_real_pdf(tmp_path: Path) -> None:
