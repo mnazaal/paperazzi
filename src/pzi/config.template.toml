@@ -15,17 +15,35 @@ api_listen_port = 8765
 # Optional Zotero/Better BibTeX-style naming templates
 # citekey_format = "auth.lower + shorttitle(3,3) + year"
 # pdf_filename_format = "{{ firstCreator suffix=\" - \" }}{{ year suffix=\" - \" }}{{ title truncate=\"100\" }}"
+# PDF file fields default to absolute paths. Set "relative" to write paths relative to the .bib file.
+# pdf_file_path_style = "absolute"  # "absolute" or "relative"
+# Optional external page processor: reads {url, html, metadata} JSON from stdin; writes metadata JSON.
+# page_metadata_cmd = "paper-meta --json"
+# page_metadata_timeout_seconds = 5
 
 # PDF download options (try in order: direct → browser → flaresolverr)
-# Browser hook uses your browser profile for authenticated institutional access
+# Browser hook uses your browser profile for authenticated institutional access.
+# pzi init --setup writes the full command; change the path (or --browser) here.
 # Firefox: ~/.mozilla/firefox/xxx.default-release
 # Chrome:  ~/.config/google-chrome/Default
 # Chromium: ~/.config/chromium
-# browser_pdf_cmd = "pzi-browser-hook --profile ~/.mozilla/firefox/xxx.default-release --browser firefox"
+# browser_pdf_cmd = "... -m pzi.browser_pdf_hook --profile ~/.mozilla/firefox/xxx.default-release --browser firefox"
 # browser_hook = true  # set to false to skip desktop browser PDF fallback in headless/server envs
 
 # FlareSolverr bypasses Cloudflare (gray area — may violate publisher ToS)
 # flaresolverr_url = "http://127.0.0.1:8191"
+
+# pzi_data_home = "~/.local/share/pzi"  # cache dir for Node.js + translation-server
+
+# Persistent browser session (server-mode; used by CLI when server is reachable).
+# browser_profile_path = "~/.config/google-chrome/Default"  # browser profile for auth/session
+# browser_engine = "chromium"  # chromium, chrome, or firefox
+# api_url = "http://127.0.0.1:8765"  # override auto-derived server URL
+# rate_limit_rpm = 60  # max HTTP API requests per minute per client
+# Desktop browser fallback for preprint hosts that block headless browsers.
+# desktop_fallback_hosts = ["biorxiv.org", "medrxiv.org", "researchsquare.com", "ssrn.com", "authorea.com"]
+
+# ezproxy_host = "proxy.lib.university.edu"  # route PDF downloads through institutional EZProxy (bare hostname)
 
 [[bibs]]
 name = "main"

@@ -10,9 +10,8 @@ from pzi.add_planning import _fetch_record_for_input, _merge_record_sources
 from pzi.bib_repository import read_bib_file, serialize_bibtex
 from pzi.bibtex import BibtexEntry, NormalizedRecord, bibtex_entry_to_record
 from pzi.config import BibConfig
-from pzi.pdf import fetch_and_store_pdf_with_fallbacks
+from pzi.pdf import fetch_and_store_pdf_with_fallbacks, remove_new_pdf, snapshot_pdf_paths
 from pzi.pdf_download import copy_pdf_to_papers_dir
-from pzi.pdf import remove_new_pdf, snapshot_pdf_paths
 from pzi.pdf_service import extract_pdf_metadata
 from pzi.similarity import find_exact_match
 from pzi.translation_server import fetch_web_translations
@@ -197,6 +196,10 @@ def attach_pdf_if_available(
     browser: str | None = None,
     browser_hook: bool = True,
     pdf_filename_format: str | None = None,
+    api_url: str | None = None,
+    api_auth_token: str | None = None,
+    desktop_fallback_hosts: set[str] | None = None,
+    ezproxy_host: str | None = None,
 ) -> tuple[NormalizedRecord, list[str]]:
     pdf_url = record.get("pdf_url")
     if not isinstance(pdf_url, str) or not pdf_url.strip():
@@ -206,6 +209,16 @@ def attach_pdf_if_available(
         return record, []
 
     if dry_run:
+        return record, []
+
+    # When the request originated from a browser extension capture, skip
+    # server-side download for non-OA sources.  The browser has an authenticated
+    # session and will fetch the PDF and attach it via /attach-pdf-bytes.
+    # OA sources (arXiv, preprint, DOI services, Unpaywall) are still
+    # downloaded server-side because the URLs are public and reliable.
+    _OA_SOURCES = frozenset({"arxiv", "preprint", "doi", "unpaywall"})
+    pdf_source = record.get("pdf_source") if isinstance(record.get("pdf_source"), str) else ""
+    if browser is not None and pdf_source and pdf_source not in _OA_SOURCES:
         return record, []
 
     citekey = record.get("citekey")
@@ -224,6 +237,10 @@ def attach_pdf_if_available(
         browser_hook=browser_hook,
         record=record,
         filename_format=pdf_filename_format,
+        api_url=api_url,
+        api_auth_token=api_auth_token,
+        desktop_fallback_hosts=desktop_fallback_hosts,
+        ezproxy_host=ezproxy_host,
     )
     if local_pdf_path is None:
         return record, [error] if error is not None else []
@@ -247,6 +264,23 @@ def plan_with_applied_record(
     updated_entries: list[BibtexEntry],
 ) -> dict[str, Any]:
     updated_records = [bibtex_entry_to_record(entry) for entry in updated_entries]
+
+    # When force_new was used, both the old and new entries share the same
+    # DOI — find_exact_match would return the old entry by identity.
+    # Match by citekey instead to preserve the force-generated citekey.
+    if plan.get("force_new"):
+        planned_citekey = plan.get("record", {}).get("citekey")
+        if isinstance(planned_citekey, str) and planned_citekey.strip():
+            for idx, record in enumerate(updated_records):
+                if record.get("citekey") == planned_citekey:
+                    if planned_citekey == plan.get("record", {}).get("citekey"):
+                        return plan
+                    updated_plan = dict(plan)
+                    updated_plan["record"] = record
+                    updated_plan["entry"] = updated_entries[idx]
+                    return updated_plan
+        return plan
+
     match_index = find_exact_match(intended_record, updated_records)
     if match_index is None:
         return plan
@@ -281,6 +315,10 @@ def build_add_record_result(
         else {}
     )
     prefix = "would " if dry_run else ""
+    if plan["action"] == "update" and not plan.get("changed_fields", []):
+        message = f"{prefix}entry unchanged (already captured)"
+    else:
+        message = f"{prefix}{plan['action']} entry"
     return {
         "status": "ok",
         "bib_name": bib["name"],
@@ -291,7 +329,7 @@ def build_add_record_result(
         **pdf_fields,
         "changed_fields": plan["changed_fields"],
         "dry_run": dry_run,
-        "message": f"{prefix}{plan['action']} entry",
+        "message": message,
         "warnings": warnings,
         "errors": [],
     }

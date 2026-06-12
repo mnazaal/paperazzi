@@ -34,6 +34,7 @@
       <label>Bib library <select id="bib"><option value="">default</option></select></label>
       <label>API token <input id="token" type="password" autocomplete="off" placeholder="optional" /></label>
       <label class="row"><input id="dry" type="checkbox" /> dry run: preview only</label>
+      <label class="row"><input id="force" type="checkbox" /> force new entry (citekey-1, citekey-2…)</label>
       <button id="go">Capture current page</button>
     </div>
     <section id="search-results" style="display:none;" aria-live="polite">
@@ -54,6 +55,10 @@
         <summary>Show raw response</summary>
         <pre id="raw"></pre>
       </details>
+    </section>
+    <section id="recent" style="margin-top:12px; border-top: 1px solid #ccc; padding-top:10px;">
+      <div style="font-size:12px; font-weight:600; margin-bottom:6px;">Recent captures</div>
+      <div id="recent-list" style="max-height:180px; overflow:auto; font-size:11px;"></div>
     </section>
     <script src="popup.js" type="module"></script>
   </body>

@@ -15,10 +15,10 @@ from pzi.bibtex import (
     record_to_bibtex_entry,
 )
 from pzi.config import load_and_resolve_bib
-from pzi.pdf import write_pdf_bytes
-from pzi.pdf_download import fetch_and_store_pdf, store_pdf_source
 from pzi.pdf import remove_new_pdf as _remove_new_pdf
 from pzi.pdf import snapshot_pdf_paths as _snapshot_pdf_paths
+from pzi.pdf import write_pdf_bytes
+from pzi.pdf_download import fetch_and_store_pdf, store_pdf_source
 
 PdfRetryResult: TypeAlias = dict[str, Any]
 
@@ -93,6 +93,7 @@ def retry_pdf(
         }
 
     filename_format = config.get("pdf_filename_format")
+    ezproxy_host = config.get("ezproxy_host")
     existing_pdf_paths = _snapshot_pdf_paths(bib["papers_dir"])
     if filename_format:
         local_pdf_path, warning = fetch_and_store_pdf(
@@ -102,6 +103,7 @@ def retry_pdf(
             fetch_binary=fetch_binary,
             record=_record_at(read_result, index),
             filename_format=filename_format,
+            ezproxy_host=ezproxy_host,
         )
     else:
         local_pdf_path, warning = fetch_and_store_pdf(
@@ -109,6 +111,7 @@ def retry_pdf(
             papers_dir=bib["papers_dir"],
             citekey=citekey,
             fetch_binary=fetch_binary,
+            ezproxy_host=ezproxy_host,
         )
     if local_pdf_path is None:
         return {
@@ -130,6 +133,7 @@ def retry_pdf(
             local_pdf_path=local_pdf_path,
             pdf_url=pdf_url,
         ),
+        file_path_style=config.get("pdf_file_path_style", "absolute"),
     )
     if not update_result["found"]:
         _remove_new_pdf(local_pdf_path, existing_pdf_paths)
@@ -151,6 +155,124 @@ def retry_pdf(
         "message": "fetched PDF",
         "warnings": [],
         "errors": [],
+    }
+
+
+def retry_failed_pdfs(
+    *,
+    config_path: str,
+    home_dir: str,
+    bib_selector: str | None,
+) -> PdfRetryResult:
+    """Retry PDF download for all entries that need it (no local PDF, have a PDF URL).
+
+    Returns a summary result with per-entry success/failure details.
+    """
+    resolved = load_and_resolve_bib(
+        config_path=config_path, home_dir=home_dir, bib_selector=bib_selector
+    )
+    if isinstance(resolved, list):
+        return {
+            "status": "error",
+            "bib_name": None,
+            "message": "could not resolve target bib",
+            "errors": resolved,
+        }
+    config, bib = resolved
+
+    read_result = read_bib_file(bib["path"])
+    entries = read_result["entries"]
+    records = read_result.get("records") or []
+    ezproxy_host = config.get("ezproxy_host")
+    filename_format = config.get("pdf_filename_format")
+    existing_pdf_paths = _snapshot_pdf_paths(bib["papers_dir"])
+
+    # Find entries needing retry
+    needs_retry: list[tuple[int, str, str]] = []  # (index, citekey, pdf_url)
+    skipped_already_has_pdf = 0
+    skipped_no_url = 0
+
+    for i, entry in enumerate(entries):
+        citekey = entry.get("citekey", "")
+        if not isinstance(citekey, str) or not citekey:
+            continue
+
+        # Check if entry already has a local PDF
+        record = records[i] if i < len(records) else {}
+        local_pdf = record.get("local_pdf_path") if isinstance(record, dict) else None
+        if local_pdf and isinstance(local_pdf, str) and Path(local_pdf).exists():
+            skipped_already_has_pdf += 1
+            continue
+
+        # Check if entry has a PDF URL in its note field
+        raw_note = entry.get("fields", {}).get("note") if isinstance(entry.get("fields"), dict) else None
+        pdf_url = extract_note_field(raw_note, "PDF") if isinstance(raw_note, str) else None
+        if not pdf_url:
+            skipped_no_url += 1
+            continue
+
+        needs_retry.append((i, citekey, pdf_url))
+
+    if not needs_retry:
+        return {
+            "status": "ok",
+            "bib_name": bib["name"],
+            "total": 0,
+            "succeeded": 0,
+            "skipped_already_has_pdf": skipped_already_has_pdf,
+            "skipped_no_url": skipped_no_url,
+            "failures": [],
+        }
+
+    succeeded = 0
+    failures: list[dict[str, Any]] = []
+
+    for index, citekey, pdf_url in needs_retry:
+        record = records[index] if index < len(records) else None
+        record_dict = _record_at(read_result, index)
+
+        kwargs: dict[str, Any] = {
+            "url": pdf_url,
+            "papers_dir": bib["papers_dir"],
+            "citekey": citekey,
+            "ezproxy_host": ezproxy_host,
+        }
+        if filename_format:
+            kwargs["filename_format"] = filename_format
+            kwargs["record"] = record_dict
+
+        local_pdf_path, warning = fetch_and_store_pdf(**kwargs)
+
+        if local_pdf_path is None:
+            failures.append({"citekey": citekey, "error": warning or "failed to fetch PDF"})
+            continue
+
+        update_result = update_bib_entry(
+            bib["path"],
+            citekey,
+            lambda entry, rec: _entry_with_pdf_fields(
+                entry,
+                cast(NormalizedRecord, dict(rec)),
+                local_pdf_path=local_pdf_path,
+                pdf_url=pdf_url,
+            ),
+            file_path_style=config.get("pdf_file_path_style", "absolute"),
+        )
+        if not update_result["found"]:
+            _remove_new_pdf(local_pdf_path, existing_pdf_paths)
+            failures.append({"citekey": citekey, "error": "citekey disappeared during update"})
+            continue
+
+        succeeded += 1
+
+    return {
+        "status": "ok",
+        "bib_name": bib["name"],
+        "total": len(needs_retry),
+        "succeeded": succeeded,
+        "skipped_already_has_pdf": skipped_already_has_pdf,
+        "skipped_no_url": skipped_no_url,
+        "failures": failures,
     }
 
 
@@ -195,6 +317,7 @@ def attach_pdf(
         }
 
     filename_format = config.get("pdf_filename_format")
+    ezproxy_host = config.get("ezproxy_host")
     existing_pdf_paths = _snapshot_pdf_paths(bib["papers_dir"])
     if filename_format:
         local_pdf_path, error = _store_pdf_source(
@@ -204,6 +327,7 @@ def attach_pdf(
             fetch_binary=fetch_binary,
             record=_record_at(read_result, index),
             filename_format=filename_format,
+            ezproxy_host=ezproxy_host,
         )
     else:
         local_pdf_path, error = _store_pdf_source(
@@ -211,6 +335,7 @@ def attach_pdf(
             papers_dir=bib["papers_dir"],
             citekey=citekey,
             fetch_binary=fetch_binary,
+            ezproxy_host=ezproxy_host,
         )
     if local_pdf_path is None:
         return {
@@ -233,6 +358,7 @@ def attach_pdf(
             local_pdf_path=local_pdf_path,
             pdf_url=source if source.startswith(("http://", "https://")) else None,
         ),
+        file_path_style=config.get("pdf_file_path_style", "absolute"),
     )
     if not update_result["found"]:
         _remove_new_pdf(local_pdf_path, existing_pdf_paths)
@@ -317,6 +443,7 @@ def attach_pdf_bytes(
         data=data,
         source_url=source_url,
         filename_format=config.get("pdf_filename_format"),
+        file_path_style=config.get("pdf_file_path_style", "absolute"),
     )
 
 
@@ -365,6 +492,7 @@ def attach_pdf_raw_bytes(
         data=pdf_bytes,
         source_url=source_url,
         filename_format=config.get("pdf_filename_format"),
+        file_path_style=config.get("pdf_file_path_style", "absolute"),
     )
 
 
@@ -377,6 +505,7 @@ def _attach_pdf_data(
     data: bytes,
     source_url: str | None,
     filename_format: str | None = None,
+    file_path_style: str = "absolute",
 ) -> PdfAttachBytesResult:
     read_result = read_bib_file(bib_path)
     entries = read_result["entries"]
@@ -414,6 +543,7 @@ def _attach_pdf_data(
             local_pdf_path=destination,
             pdf_url=source_url,
         ),
+        file_path_style=file_path_style,
     )
     if not update_result["found"]:
         _remove_new_pdf(destination, existing_pdf_paths)
@@ -469,6 +599,7 @@ def _store_pdf_source(
     fetch_binary=None,
     record: dict[str, object] | None = None,
     filename_format: str | None = None,
+    ezproxy_host: str | None = None,
 ) -> tuple[str | None, str | None]:
     if filename_format:
         return store_pdf_source(
@@ -478,12 +609,14 @@ def _store_pdf_source(
             fetch_binary=fetch_binary,
             record=record,
             filename_format=filename_format,
+            ezproxy_host=ezproxy_host,
         )
     return store_pdf_source(
         source=source,
         papers_dir=papers_dir,
         citekey=citekey,
         fetch_binary=fetch_binary,
+        ezproxy_host=ezproxy_host,
     )
 
 

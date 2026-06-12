@@ -62,7 +62,7 @@ def browser_pdf_cmd_for(browser: str, profiles: Mapping[str, str]) -> str | None
     profile = profiles.get(browser, "").strip()
     if not profile:
         return None
-    return f"pzi-browser-hook --profile {profile} --browser {browser}"
+    return f"{sys.executable} -m pzi.browser_pdf_hook --profile {profile} --browser {browser}"
 
 
 def envrc_guard(repo_root: Path, *, runner: RunFn = subprocess.run) -> str | None:

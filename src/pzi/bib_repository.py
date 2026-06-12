@@ -3,25 +3,31 @@
 from __future__ import annotations
 
 import difflib
-import fcntl
+import portalocker
 import os
-import shutil
 import tempfile
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Literal, TypeAlias, cast
 
-import bibtexparser
-from bibtexparser.bibdatabase import BibDatabase
-from bibtexparser.bparser import BibTexParser
-from bibtexparser.bwriter import BibTexWriter
 
-from pzi.bib_preserve import (
-    append_entry_preserving_source,
-    bibtex_source_errors,
-    patch_entry_fields_preserving_source,
-)
+class ConcurrentEditError(RuntimeError):
+    """Raised when the bib file is modified externally during a write operation."""
+
+
+def _bib_mtime(path: str) -> float | None:
+    """Return mtime of the bib file, or None if it does not exist."""
+    p = Path(path)
+    return p.stat().st_mtime if p.exists() else None
+
+from bibtexparser.entrypoint import parse_string, write_string
+from bibtexparser.library import Library
+from bibtexparser.middlewares import RemoveEnclosingMiddleware
+from bibtexparser.model import Entry as BibtexEntryV2
+from bibtexparser.model import Field
+from bibtexparser.writer import BibtexFormat
+
 from pzi.bibtex import (
     BibtexEntry,
     NormalizedRecord,
@@ -59,20 +65,18 @@ def with_bib_lock(bib_path: str, shared: bool = False) -> Iterator[None]:
     Acquires an exclusive lock by default (for writes/updates).
     Pass shared=True for a shared lock (for reads).
 
-    Uses fcntl.flock, which is reliable on local Linux/macOS filesystems
-    but may not serialize access correctly on NFS or other network
-    filesystems. The BibTeX library should be stored on a local disk.
+    Uses portalocker, which provides cross-platform file locking
+    (fcntl on Unix, LockFileEx on Windows).
     """
     lock_path = Path(bib_path + ".lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
-    lock_type = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
-    try:
-        fcntl.flock(fd, lock_type)
-        yield
-    finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
-        os.close(fd)
+    flags = portalocker.LOCK_SH if shared else portalocker.LOCK_EX
+    with open(str(lock_path), "a") as lock_fh:
+        portalocker.lock(lock_fh, flags)
+        try:
+            yield
+        finally:
+            portalocker.unlock(lock_fh)
 
 
 ReadBibResult: TypeAlias = dict[str, Any]
@@ -84,22 +88,17 @@ UpdateBibEntryResult: TypeAlias = dict[str, Any]
 
 
 def parse_bibtex(text: str) -> list[BibtexEntry]:
-    """Parse BibTeX text into entry dictionaries using bibtexparser."""
-    parser = BibTexParser(common_strings=False)
-    database = bibtexparser.loads(text, parser=parser)
-    return [_database_entry_to_bibtex_entry(entry) for entry in database.entries]
+    """Parse BibTeX text into entry dictionaries using bibtexparser v2."""
+    library = parse_string(text)
+    return [_library_entry_to_bibtex_entry(entry) for entry in library.entries]
 
 
 def serialize_bibtex(entries: list[BibtexEntry]) -> str:
     """Serialize entries in a deterministic formatting style."""
-    database = BibDatabase()
-    database.entries = [_bibtex_entry_to_database_entry(entry) for entry in entries]
-
-    writer = BibTexWriter()
-    writer.indent = "  "
-    cast(Any, writer).order_entries_by = None
-    writer.display_order = []
-    return bibtexparser.dumps(database, writer)
+    library = Library(blocks=[_bibtex_entry_to_library_entry(entry) for entry in entries])
+    fmt = BibtexFormat()
+    fmt.indent = "  "
+    return write_string(library, bibtex_format=fmt)
 
 
 def apply_write_plan(entries: list[BibtexEntry], plan: WritePlan) -> list[BibtexEntry]:
@@ -188,17 +187,23 @@ def _normalize_file_field(entry: BibtexEntry, bib_path: str) -> BibtexEntry:
     return new_entry
 
 
-def write_bib_file(path: str, entries: list[BibtexEntry]) -> None:
+def write_bib_file(
+    path: str,
+    entries: list[BibtexEntry],
+    *,
+    file_path_style: str = "absolute",
+) -> None:
     """Write BibTeX entries to disk atomically.
 
-    Before writing, absolute ``file`` paths are normalised to paths
-    relative to the bib file directory (e.g. ``papers/citekey.pdf``)
-    so that the resulting ``.bib`` file is portable across machines
-    and sync-friendly.
+    ``file_path_style`` controls how absolute ``file`` paths under the bib
+    directory are serialized. Internal records still use absolute paths.
     """
     file_path = Path(path)
     file_path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
-    entries = [_normalize_file_field(entry, path) for entry in entries]
+    if file_path_style not in {"absolute", "relative"}:
+        raise ValueError("file_path_style must be 'absolute' or 'relative'")
+    if file_path_style == "relative":
+        entries = [_normalize_file_field(entry, path) for entry in entries]
     content = serialize_bibtex(entries).encode("utf-8")
     # Atomic write: temp file in same directory, then os.replace.
     # os.replace is atomic on POSIX (rename) and on Windows (MoveFileEx
@@ -231,72 +236,162 @@ def _read_bib_source(path: str) -> str:
     return file_path.read_text(encoding="utf-8")
 
 
-def create_bib_backup(path: str) -> str:
-    """Create a same-directory backup of current BibTeX source."""
-    file_path = Path(path)
-    file_path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
-    fd, backup_path = tempfile.mkstemp(
-        dir=str(file_path.parent),
-        prefix=f"{file_path.name}.",
-        suffix=".bak",
-    )
-    os.close(fd)
-    if file_path.exists():
-        shutil.copyfile(file_path, backup_path)
-    else:
-        Path(backup_path).write_text("", encoding="utf-8")
-    return backup_path
+
+def _parse_bib_library(raw_text: str) -> Library:
+    """Parse BibTeX source text into a v2 Library."""
+    if not raw_text:
+        return Library(blocks=[])
+    return parse_string(raw_text, parse_stack=[RemoveEnclosingMiddleware()])
 
 
-def restore_bib_backup(path: str, backup_path: str) -> None:
-    """Restore a BibTeX file from a backup file."""
-    file_path = Path(path)
-    file_path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
-    shutil.copyfile(backup_path, file_path)
-
-
-def _entry_fields_for_preserve(entry: BibtexEntry, bib_path: str) -> dict[str, str]:
-    normalized = _normalize_file_field(entry, bib_path)
-    return {str(key).lower(): str(value) for key, value in normalized["fields"].items()}
-
-
-def _render_write_plan_preserving_source(path: str, source: str, plan: WritePlan) -> str:
-    entry = _normalize_file_field(plan["entry"], path)
-    if plan["action"] == "insert":
-        rendered = serialize_bibtex([entry])
-        return append_entry_preserving_source(source, rendered)
-    _validate_source_patchable(source)
-    changed = plan.get("changed_fields") or []
-    field_names = {
-        _record_field_to_bibtex_field(str(name).lower())
-        for name in changed
-        if str(name).lower() != "citekey"
-    }
-    fields = _entry_fields_for_preserve(entry, path)
-    patch_fields = {name: fields[name] for name in field_names if name in fields}
-    if not patch_fields:
-        return source
-    return patch_entry_fields_preserving_source(source, entry["citekey"], patch_fields)
-
-
-def _write_plan_preserving_source(path: str, source: str, plan: WritePlan) -> None:
-    new_source = _render_write_plan_preserving_source(path, source, plan)
-    if new_source == source:
+def _validate_library_parseable(library: Library) -> None:
+    """Raise ValueError if the library has unparseable blocks."""
+    if not library.failed_blocks:
         return
-    create_bib_backup(path)
-    _write_bib_text_atomic(path, new_source)
-
-
-def _validate_source_patchable(source: str) -> None:
-    errors = bibtex_source_errors(source)
-    if not errors:
-        return
-    first = errors[0]
+    first = library.failed_blocks[0]
     raise ValueError(
         "malformed BibTeX: refusing to patch existing source; "
-        f"{first.message} at line {first.line}, column {first.column}. "
+        f"parser error at around line {first.start_line}. "
         "Fix the .bib file manually or append a new entry instead."
     )
+
+
+def _library_to_entries_records(
+    library: Library, bib_path: str
+) -> tuple[list[BibtexEntry], list[NormalizedRecord]]:
+    """Extract entries and normalized records from a v2 Library."""
+    entries = [_library_entry_to_bibtex_entry(e) for e in library.entries]
+    records: list[NormalizedRecord] = [bibtex_entry_to_record(e) for e in entries]
+    for record, entry in zip(records, entries):
+        _resolve_file_field(record, entry, bib_path)
+    return entries, records
+
+
+def _serialize_library(library: Library) -> str:
+    """Serialize a v2 Library to BibTeX text."""
+    fmt = BibtexFormat()
+    fmt.indent = "  "
+    return write_string(library, bibtex_format=fmt)
+
+
+def _update_library_blocks(
+    library: Library,
+    entries: list[BibtexEntry],
+    bib_path: str,
+    *,
+    file_path_style: str = "absolute",
+) -> Library:
+    """Replace entry blocks in a Library with updated entries, preserving
+    comments, strings, and preambles.
+    """
+    new_entry_blocks: list[BibtexEntryV2] = [
+        _bibtex_entry_to_library_entry(e, bib_path, file_path_style=file_path_style)
+        for e in entries
+    ]
+    new_blocks: list = []
+    for block in library.blocks:
+        if isinstance(block, BibtexEntryV2):
+            # Replace with the first available new entry that matches by key.
+            # Entries are in order; consume them from the front.
+            if new_entry_blocks:
+                new_blocks.append(new_entry_blocks.pop(0))
+        else:
+            new_blocks.append(block)
+    # Append any remaining new entries (inserts beyond original count).
+    new_blocks.extend(new_entry_blocks)
+    return Library(blocks=new_blocks)
+
+
+def _render_write_plan(
+    path: str,
+    source: str,
+    plan: WritePlan,
+    *,
+    file_path_style: str = "absolute",
+) -> str:
+    """Render the full BibTeX text after applying a write plan."""
+    library = _parse_bib_library(source)
+    if plan["action"] == "update":
+        _validate_library_parseable(library)
+    entries, records = _library_to_entries_records(library, path)
+
+    if plan["action"] == "update":
+        _validate_update_plan_against_current(records, plan)
+    if plan["action"] == "insert":
+        plan = _rebase_insert_plan_against_current(records, plan)
+
+    updated_entries = apply_write_plan(entries, plan)
+    updated_library = _update_library_blocks(
+        library, updated_entries, path, file_path_style=file_path_style
+    )
+    return _serialize_library(updated_library)
+
+
+def execute_write_plan(
+    path: str,
+    plan: WritePlan,
+    *,
+    file_path_style: str = "absolute",
+) -> list[BibtexEntry]:
+    """Read, apply a plan, and write a BibTeX file under an exclusive lock.
+
+    Validates that the resulting BibTeX round-trips through
+    serialize → parse before committing to disk.
+
+    Raises :exc:`ConcurrentEditError` if the bib file is modified
+    externally between snapshot and lock acquisition.
+    """
+    mtime_before = _bib_mtime(path)
+    with with_bib_lock(path):
+        if mtime_before is not None and _bib_mtime(path) != mtime_before:
+            raise ConcurrentEditError(
+                f"bib file {path} was modified externally "
+                f"while acquiring lock; aborting to prevent data loss"
+            )
+        source = _read_bib_source(path)
+        library = _parse_bib_library(source)
+        if plan["action"] == "update":
+            _validate_library_parseable(library)
+        entries, records = _library_to_entries_records(library, path)
+
+        if plan["action"] == "update":
+            _validate_update_plan_against_current(records, plan)
+        if plan["action"] == "insert":
+            plan = _rebase_insert_plan_against_current(records, plan)
+
+        updated_entries = apply_write_plan(entries, plan)
+        _validate_bibtex_roundtrip(updated_entries)
+
+        new_source = _render_write_plan(path, source, plan, file_path_style=file_path_style)
+        if new_source != source:
+            _write_bib_text_atomic(path, new_source)
+        return updated_entries
+
+
+def preview_write_plan(path: str, plan: WritePlan) -> dict[str, Any]:
+    """Preview a write plan without mutating the BibTeX file."""
+    with with_bib_lock(path, shared=True):
+        source = _read_bib_source(path)
+        library = _parse_bib_library(source)
+        if plan["action"] == "update":
+            _validate_library_parseable(library)
+        entries, records = _library_to_entries_records(library, path)
+
+        if plan["action"] == "update":
+            _validate_update_plan_against_current(records, plan)
+        if plan["action"] == "insert":
+            plan = _rebase_insert_plan_against_current(records, plan)
+
+        updated_entries = apply_write_plan(entries, plan)
+        _validate_bibtex_roundtrip(updated_entries)
+
+        new_source = _render_write_plan(path, source, plan)
+        return {
+            "changed": source != new_source,
+            "diff": _source_diff(source, new_source, path),
+            "new_source": new_source,
+            "updated_entries": updated_entries,
+        }
 
 
 def _source_diff(old_source: str, new_source: str, path: str) -> str:
@@ -308,60 +403,6 @@ def _source_diff(old_source: str, new_source: str, path: str) -> str:
             tofile=f"{path} (after)",
         )
     )
-
-
-def _record_field_to_bibtex_field(name: str) -> str:
-    return {
-        "authors": "author",
-        "venue": "journal",
-        "tags": "keywords",
-        "local_pdf_path": "file",
-    }.get(name, name)
-
-
-def execute_write_plan(path: str, plan: WritePlan) -> list[BibtexEntry]:
-    """Read, apply a plan, and write a BibTeX file under an exclusive lock.
-
-    Validates that the resulting BibTeX round-trips through
-    serialize → parse before committing to disk.
-    """
-    with with_bib_lock(path):
-        source = _read_bib_source(path)
-        if plan["action"] == "update":
-            _validate_source_patchable(source)
-        read_result = _read_bib_file_raw(path)
-        current = read_result["entries"]
-        if plan["action"] == "update":
-            _validate_update_plan_against_current(read_result["records"], plan)
-        if plan["action"] == "insert":
-            plan = _rebase_insert_plan_against_current(read_result["records"], plan)
-        updated = apply_write_plan(current, plan)
-        _validate_bibtex_roundtrip(updated)
-        _write_plan_preserving_source(path, source, plan)
-        return updated
-
-
-def preview_write_plan(path: str, plan: WritePlan) -> dict[str, Any]:
-    """Preview a write plan without mutating the BibTeX file."""
-    with with_bib_lock(path, shared=True):
-        source = _read_bib_source(path)
-        if plan["action"] == "update":
-            _validate_source_patchable(source)
-        read_result = _read_bib_file_raw(path)
-        current = read_result["entries"]
-        if plan["action"] == "update":
-            _validate_update_plan_against_current(read_result["records"], plan)
-        if plan["action"] == "insert":
-            plan = _rebase_insert_plan_against_current(read_result["records"], plan)
-        updated = apply_write_plan(current, plan)
-        _validate_bibtex_roundtrip(updated)
-        new_source = _render_write_plan_preserving_source(path, source, plan)
-        return {
-            "changed": source != new_source,
-            "diff": _source_diff(source, new_source, path),
-            "new_source": new_source,
-            "updated_entries": updated,
-        }
 
 
 def _validate_update_plan_against_current(
@@ -442,14 +483,16 @@ def update_bib_entry(
     path: str,
     citekey: str,
     updater: Callable[[BibtexEntry, NormalizedRecord], BibtexEntry],
+    *,
+    file_path_style: str = "absolute",
 ) -> UpdateBibEntryResult:
     """Update one BibTeX entry under lock using a citekey-scoped callback."""
     with with_bib_lock(path):
         source = _read_bib_source(path)
-        _validate_source_patchable(source)
-        read_result = _read_bib_file_raw(path)
-        entries = list(read_result["entries"])
-        records = read_result["records"]
+        library = _parse_bib_library(source)
+        _validate_library_parseable(library)
+        entries, records = _library_to_entries_records(library, path)
+
         index = _find_entry_index(entries, citekey)
         if index is None:
             return {"found": False, "entries": entries, "entry": None, "record": None}
@@ -459,12 +502,7 @@ def update_bib_entry(
         updated_entry = updater(current_entry, current_record)
         if updated_entry != current_entry:
             entries[index] = updated_entry
-            changed_fields = [
-                field
-                for field, value in updated_entry["fields"].items()
-                if current_entry["fields"].get(field) != value
-            ]
-            _write_plan_preserving_source(
+            new_source = _render_write_plan(
                 path,
                 source,
                 {
@@ -472,9 +510,16 @@ def update_bib_entry(
                     "index": index,
                     "record": bibtex_entry_to_record(updated_entry),
                     "entry": updated_entry,
-                    "changed_fields": changed_fields,
+                    "changed_fields": [
+                        field
+                        for field, value in updated_entry["fields"].items()
+                        if current_entry["fields"].get(field) != value
+                    ],
                 },
+                file_path_style=file_path_style,
             )
+            if new_source != source:
+                _write_bib_text_atomic(path, new_source)
         return {
             "found": True,
             "entries": entries,
@@ -483,25 +528,37 @@ def update_bib_entry(
         }
 
 
-def _database_entry_to_bibtex_entry(entry: dict[str, str]) -> BibtexEntry:
-    fields = {
-        key.lower(): value
-        for key, value in entry.items()
-        if key not in {"ENTRYTYPE", "ID"}
-    }
+def _library_entry_to_bibtex_entry(entry: BibtexEntryV2) -> BibtexEntry:
+    """Convert a bibtexparser v2 Entry to the internal BibtexEntry dict."""
     return {
-        "entry_type": entry["ENTRYTYPE"],
-        "citekey": entry["ID"],
-        "fields": dict(sorted(fields.items())),
+        "entry_type": entry.entry_type,
+        "citekey": entry.key,
+        "fields": {f.key: f.value for f in entry.fields},
     }
 
 
-def _bibtex_entry_to_database_entry(entry: BibtexEntry) -> dict[str, str]:
-    return {
-        "ENTRYTYPE": entry["entry_type"],
-        "ID": entry["citekey"],
-        **dict(sorted(entry["fields"].items())),
-    }
+def _bibtex_entry_to_library_entry(
+    entry: BibtexEntry,
+    bib_path: str = "",
+    *,
+    file_path_style: str = "absolute",
+) -> BibtexEntryV2:
+    """Convert an internal BibtexEntry dict to a bibtexparser v2 Entry.
+
+    When requested, absolute ``file`` fields are normalised to relative
+    paths. When *bib_path* is empty, no normalisation is performed (used
+    for round-trip validation).
+    """
+    if bib_path and file_path_style == "relative":
+        entry = _normalize_file_field(entry, bib_path)
+    return BibtexEntryV2(
+        entry_type=entry["entry_type"],
+        key=entry["citekey"],
+        fields=[
+            Field(key=k, value=v)
+            for k, v in sorted(entry["fields"].items())
+        ],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -561,10 +618,21 @@ def plan_bib_write(
     existing_records: list[NormalizedRecord],
     *,
     entry_type: str = "article",
+    force_new: bool = False,
 ) -> WritePlan:
     """Plan an insert or update operation for a normalized record."""
     if entry_type == "article":
         entry_type = _resolve_entry_type(incoming_record)
+
+    if force_new:
+        entry = record_to_bibtex_entry(incoming_record, entry_type=entry_type)
+        return {
+            "action": "insert",
+            "index": None,
+            "record": incoming_record,
+            "entry": entry,
+            "changed_fields": sorted(incoming_record.keys()),
+        }
 
     match_index = find_exact_match(incoming_record, list(existing_records))
     if match_index is None:

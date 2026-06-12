@@ -4,7 +4,7 @@ Public API:
     add_input_to_bib  — main entry point for CLI / HTTP capture
     add_record_to_bib — capture a pre-built record
 
-Metadata fetching is delegated to _record_fetching.py.
+Metadata fetching is delegated to add_planning.py.
 """
 
 from __future__ import annotations
@@ -18,7 +18,9 @@ from pzi.add_planning import (
     _fallback_record_for_input,
     _fetch_record_for_input,
     _merge_record_sources,
+    has_minimum_metadata,
     metadata_result_confidence_warnings,
+    minimum_metadata_diagnostics,
     metadata_result_diagnostics,
 )
 from pzi.bib_repository import (
@@ -30,6 +32,7 @@ from pzi.bib_repository import (
 from pzi.bibtex import (
     NormalizedRecord,
     generate_citekey,
+    normalize_authors,
     resolve_citekey_collision,
 )
 from pzi.capture_context import build_capture_context
@@ -42,10 +45,10 @@ from pzi.capture_local_pdf import (
 from pzi.config import BibConfig, load_and_resolve_bib
 from pzi.format_templates import format_citekey
 from pzi.identifiers import classify_input
-from pzi.pdf_discovery import DEFAULT_DISCOVERY_STEPS, apply_pdf_discovery
-from pzi.pdf_planning import is_pdf_bytes, plan_pdf_path
 from pzi.pdf import remove_new_pdf as _remove_new_pdf
 from pzi.pdf import snapshot_pdf_paths as _snapshot_pdf_paths
+from pzi.pdf_discovery import DEFAULT_DISCOVERY_STEPS, apply_pdf_discovery
+from pzi.pdf_planning import is_pdf_bytes, plan_pdf_path
 from pzi.similarity import find_exact_match
 from pzi.translation_server import (
     fetch_search_translations,
@@ -82,6 +85,7 @@ def add_input_to_bib(
     browser_pdf_cmd: str | None = None,
     browser: str | None = None,
     cookies: str | None = None,
+    force_new: bool = False,
 ) -> AddRecordResult:
     context, context_error = _resolve_capture_context(
         config_path=config_path,
@@ -104,6 +108,10 @@ def add_input_to_bib(
     effective_browser = context.get("browser")
     citekey_format = context["citekey_format"]
     pdf_filename_format = context["pdf_filename_format"]
+    api_url = context.get("api_url")
+    api_auth_token = context.get("api_auth_token")
+    ezproxy_host = context.get("ezproxy_host")
+    desktop_fallback_hosts = context.get("desktop_fallback_hosts")
     metadata_confidence_min_score = int(config.get("metadata_confidence_min_score", 0))
 
     classified = classify_input(value)
@@ -167,6 +175,7 @@ def add_input_to_bib(
             browser_hook=config.get("browser_hook", True),
             citekey_format=citekey_format,
             pdf_filename_format=pdf_filename_format,
+            file_path_style=config.get("pdf_file_path_style", "absolute"),
         )
 
     try:
@@ -188,23 +197,14 @@ def add_input_to_bib(
             pdf_url_candidates=pdf_url_candidates,
             browser_pdf_cmd=effective_browser_pdf_cmd,
             cookies=cookies,
+            api_url=api_url,
+            api_auth_token=api_auth_token,
+            desktop_fallback_hosts=desktop_fallback_hosts,
+            pdf_discovery_parallel=config.get("pdf_discovery_parallel", False),
         )
     except Exception as exc:
         manual_record = _manual_record_from_overrides(record_overrides)
-        title = manual_record.get("title")
-        doi = manual_record.get("doi")
-        authors = manual_record.get("authors")
-        year = manual_record.get("year")
-        has_min_meta = (
-            isinstance(title, str)
-            and bool(title.strip())
-            and (
-                (isinstance(doi, str) and bool(doi.strip()))
-                or (isinstance(authors, list) and bool(authors))
-                or isinstance(year, int)
-            )
-        )
-        if classified["kind"] in {"doi", "url", "pdf_url"} and has_min_meta:
+        if classified["kind"] in {"doi", "url", "pdf_url"} and has_minimum_metadata(manual_record):
             fallback_record = _merge_record_sources(
                 _fallback_record_for_input(
                     kind=cast(str, classified["kind"]),
@@ -247,6 +247,12 @@ def add_input_to_bib(
                 browser_hook=config.get("browser_hook", True),
                 citekey_format=citekey_format,
                 pdf_filename_format=pdf_filename_format,
+                force_new=force_new,
+                file_path_style=config.get("pdf_file_path_style", "absolute"),
+                api_url=api_url,
+                api_auth_token=api_auth_token,
+                desktop_fallback_hosts=config.get("desktop_fallback_hosts"),
+                ezproxy_host=ezproxy_host,
             )
             if metadata_diagnostics:
                 result["metadata_diagnostics"] = metadata_diagnostics
@@ -270,11 +276,12 @@ def add_input_to_bib(
             )
         else:
             err_msg = str(exc)
+        fallback_warnings = minimum_metadata_diagnostics(manual_record)
         return _error_result(
             message="translation server error",
             errors=[err_msg],
             dry_run=dry_run,
-            warnings=[],
+            warnings=fallback_warnings,
         )
 
     merged_record = _merge_fetched_record_with_overrides(fetched_record, record_overrides)
@@ -289,6 +296,12 @@ def add_input_to_bib(
         browser_hook=config.get("browser_hook", True),
         citekey_format=citekey_format,
         pdf_filename_format=pdf_filename_format,
+        force_new=force_new,
+        file_path_style=config.get("pdf_file_path_style", "absolute"),
+        api_url=api_url,
+        api_auth_token=api_auth_token,
+        desktop_fallback_hosts=config.get("desktop_fallback_hosts"),
+        ezproxy_host=ezproxy_host,
     )
     if metadata_diagnostics:
         result["metadata_diagnostics"] = metadata_diagnostics
@@ -311,9 +324,10 @@ def add_record_to_bib(
         bib_selector=bib_selector,
     )
     if isinstance(resolved, list):
+        ambiguous = resolved == [_AMBIGUOUS_BIB_ERROR]
         return _error_result(
-            message=_resolve_bib_error_message(resolved),
-            errors=_resolve_bib_errors(resolved, include_selection=True),
+            message="could not resolve target bib" if ambiguous else "failed to load config",
+            errors=["no matching bib found or selection is ambiguous"] if ambiguous else resolved,
             dry_run=dry_run,
             warnings=[],
         )
@@ -326,6 +340,7 @@ def add_record_to_bib(
         browser_hook=config.get("browser_hook", True),
         citekey_format=config.get("citekey_format"),
         pdf_filename_format=config.get("pdf_filename_format"),
+        file_path_style=config.get("pdf_file_path_style", "absolute"),
     )
 
 
@@ -350,9 +365,10 @@ def _resolve_capture_context(
         bib_selector=bib_selector,
     )
     if isinstance(resolved, list):
+        ambiguous = resolved == [_AMBIGUOUS_BIB_ERROR]
         return None, _error_result(
-            message=_resolve_bib_error_message(resolved),
-            errors=_resolve_bib_errors(resolved, include_selection=False),
+            message="could not resolve target bib" if ambiguous else "failed to load config",
+            errors=["no matching bib found"] if ambiguous else resolved,
             dry_run=dry_run,
             warnings=[],
         )
@@ -375,22 +391,7 @@ def _resolve_capture_context(
     return context, None
 
 
-def _resolve_bib_error_message(errors: list[str]) -> str:
-    if _is_ambiguous_bib_error(errors):
-        return "could not resolve target bib"
-    return "failed to load config"
-
-
-def _resolve_bib_errors(errors: list[str], *, include_selection: bool) -> list[str]:
-    if _is_ambiguous_bib_error(errors):
-        if include_selection:
-            return ["no matching bib found or selection is ambiguous"]
-        return ["no matching bib found"]
-    return errors
-
-
-def _is_ambiguous_bib_error(errors: list[str]) -> bool:
-    return errors == ["no matching library target found or selection is ambiguous"]
+_AMBIGUOUS_BIB_ERROR = "no matching library target found or selection is ambiguous"
 
 
 def add_record_with_bib(
@@ -405,6 +406,12 @@ def add_record_with_bib(
     browser_hook: bool = True,
     citekey_format: str | None = None,
     pdf_filename_format: str | None = None,
+    force_new: bool = False,
+    api_url: str | None = None,
+    api_auth_token: str | None = None,
+    desktop_fallback_hosts: set[str] | None = None,
+    ezproxy_host: str | None = None,
+    file_path_style: str = "absolute",
 ) -> AddRecordResult:
     read_result = read_bib_file(bib["path"])
     typed_existing_records = [
@@ -414,10 +421,12 @@ def add_record_with_bib(
         cast(NormalizedRecord, dict(record)),
         typed_existing_records,
         citekey_format=citekey_format,
+        force_new=force_new,
     )
     typed_record = reuse_existing_pdf_fields_for_exact_match(
         typed_record,
         typed_existing_records,
+        force_new=force_new,
     )
     typed_record = reuse_orphan_pdf_for_planned_path(
         typed_record,
@@ -435,15 +444,21 @@ def add_record_with_bib(
         browser=browser,
         browser_hook=browser_hook,
         pdf_filename_format=pdf_filename_format,
+        api_url=api_url,
+        api_auth_token=api_auth_token,
+        desktop_fallback_hosts=desktop_fallback_hosts,
+        ezproxy_host=ezproxy_host,
     )
     record_with_hint = _add_planning.attach_similarity_hint(
         record_with_pdf, typed_existing_records
     )
-    plan = plan_bib_write(record_with_hint, typed_existing_records)
+    plan = plan_bib_write(record_with_hint, typed_existing_records, force_new=force_new)
 
     if not dry_run:
         try:
-            updated_entries = execute_write_plan(bib["path"], plan)
+            updated_entries = execute_write_plan(
+                bib["path"], plan, file_path_style=file_path_style
+            )
             plan = plan_with_applied_record(plan, record_with_hint, updated_entries)
         except Exception:
             pdf_path_for_cleanup = record_with_hint.get("local_pdf_path")
@@ -476,14 +491,22 @@ def ensure_citekey_for_write(
     existing_records: list[NormalizedRecord],
     *,
     citekey_format: str | None = None,
+    force_new: bool = False,
 ) -> NormalizedRecord:
     match_index = find_exact_match(record, existing_records)
     if match_index is not None:
         existing_citekey = existing_records[match_index].get("citekey")
         if isinstance(existing_citekey, str) and existing_citekey.strip():
-            matched = dict(record)
-            matched["citekey"] = existing_citekey
-            return cast(NormalizedRecord, matched)
+            if not force_new:
+                matched = dict(record)
+                matched["citekey"] = existing_citekey
+                return cast(NormalizedRecord, matched)
+            # force_new: create duplicate citekey with -1, -2 suffix.
+            existing_keys = existing_citekeys(existing_records)
+            resolved = resolve_citekey_collision(existing_citekey.strip(), existing_keys)
+            updated = dict(record)
+            updated["citekey"] = resolved
+            return cast(NormalizedRecord, updated)
 
     ck = record.get("citekey")
     if isinstance(ck, str) and bool(ck.strip()):
@@ -502,7 +525,7 @@ def ensure_citekey_for_write(
     else:
         generated["citekey"] = generate_citekey(
             {
-                "authors": list(record.get("authors") or []),
+                "authors": normalize_authors(record.get("authors")),
                 "title": cast(str | None, record.get("title")),
                 "year": cast(int | None, record.get("year")),
             },
@@ -523,8 +546,14 @@ def existing_citekeys(existing_records: list[NormalizedRecord]) -> set[str]:
 def reuse_existing_pdf_fields_for_exact_match(
     record: NormalizedRecord,
     existing_records: list[NormalizedRecord],
+    *,
+    force_new: bool = False,
 ) -> NormalizedRecord:
     if record.get("local_pdf_path"):
+        return record
+    # When force_new is set, the new entry should not share the existing
+    # entry's PDF — it needs its own.
+    if force_new:
         return record
     match_index = find_exact_match(record, existing_records)
     if match_index is None:

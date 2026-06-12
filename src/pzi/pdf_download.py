@@ -4,15 +4,31 @@
 from __future__ import annotations
 
 import urllib.error
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from pzi.fetch_helpers import fetch_binary as _fetch_binary
-from pzi.pdf_planning import is_pdf_content_type
-from pzi.pdf_planning import is_pdf_bytes
+from pzi.pdf_planning import is_pdf_bytes, is_pdf_content_type
 
 FetchBinary = Callable[[str], tuple[bytes, str | None]]
-PdfRecord = dict[str, object]
+PdfRecord = Mapping[str, object]
+
+
+def _ezproxy_url(url: str, proxy_host: str) -> str:
+    """Rewrite a URL through an EZProxy host.
+
+    Converts ``https://doi.org/10.1038/...`` to
+    ``https://doi-org.proxy.lib.university.edu/10.1038/...``.
+    """
+    # Strip scheme if user accidentally passes a URL (defense-in-depth).
+    host_part = proxy_host
+    if "://" in host_part:
+        host_part = urlsplit(host_part).hostname or host_part
+    parsed = urlsplit(url)
+    host = parsed.hostname.replace(".", "-") if parsed.hostname else ""
+    base = f"https://{host}.{host_part}{parsed.path}"
+    return f"{base}?{parsed.query}" if parsed.query else base
 
 
 def copy_pdf_to_papers_dir(
@@ -54,6 +70,7 @@ def store_pdf_source(
     fetch_binary: FetchBinary | None = None,
     record: PdfRecord | None = None,
     filename_format: str | None = None,
+    ezproxy_host: str | None = None,
 ) -> tuple[str | None, str | None]:
     """Store a PDF from a URL or local path under the deterministic citekey path."""
     if source.startswith(("http://", "https://")):
@@ -64,6 +81,7 @@ def store_pdf_source(
             fetch_binary=fetch_binary,
             record=record,
             filename_format=filename_format,
+            ezproxy_host=ezproxy_host,
         )
     return copy_pdf_to_papers_dir(
         source_path=source,
@@ -82,8 +100,11 @@ def fetch_and_store_pdf(
     fetch_binary: FetchBinary | None = None,
     record: PdfRecord | None = None,
     filename_format: str | None = None,
+    ezproxy_host: str | None = None,
 ) -> tuple[str | None, str | None]:
     """Download a PDF candidate, validate it, and store it atomically."""
+    if ezproxy_host:
+        url = _ezproxy_url(url, ezproxy_host)
     downloader = fetch_binary or _fetch_binary
     try:
         data, content_type = downloader(url)
@@ -91,7 +112,8 @@ def fetch_and_store_pdf(
         if exc.code in {401, 403}:
             return None, (
                 f"PDF download blocked (HTTP {exc.code}) from {url}; "
-                "use the browser extension or configure browser_pdf_cmd"
+                "use the browser extension, configure browser_pdf_cmd, "
+                "or set ezproxy_host for institutional access"
             )
         return None, f"failed to download PDF from {url}: HTTP {exc.code} {exc.reason}"
     except (OSError, ValueError) as exc:

@@ -2,11 +2,31 @@
   "manifest_version": 3,
   "name": "pzi capture",
   "description": "Send the current tab URL to the local pzi capture service.",
-  "permissions": ["activeTab", "storage", "scripting"],
-  "optional_permissions": ["cookies", "webRequest"],
-  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "version": "0.1.0",
+  "icons": {
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
+  "permissions": ["activeTab", "storage", "scripting", "cookies", "contextMenus", "webRequest"],
+  "optional_permissions": [],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*",
+    "https://ieeexplore.ieee.org/*",
+    "https://dl.acm.org/*",
+    "https://www.sciencedirect.com/*",
+    "https://pdf.sciencedirectassets.com/*",
+    "https://onlinelibrary.wiley.com/*",
+    "https://www.tandfonline.com/*",
+    "https://journals.sagepub.com/*",
+    "https://academic.oup.com/*",
+    "https://www.nature.com/*",
+    "https://www.ncbi.nlm.nih.gov/*",
+    "https://pmc.ncbi.nlm.nih.gov/*"
+  ],
   "optional_host_permissions": ["https://*/*", "http://*/*"],
   "action": {
+    "default_icon": "icon48.png",
     "default_popup": "popup.html",
     "default_title": "pzi capture"
   }

@@ -44,8 +44,9 @@ def test_write_pdf_bytes_creates_parent_and_overwrites_atomically(tmp_path: Path
         citekey="smith2024graph",
     )
 
-    assert path == path_again
-    assert Path(path).read_bytes() == b"%PDF-second"
+    assert path != path_again  # different content gets a new path
+    assert Path(path).read_bytes() == b"%PDF-first"
+    assert Path(path_again).read_bytes() == b"%PDF-second"
 
 
 def test_copy_pdf_to_papers_dir_copies_valid_pdf(tmp_path: Path) -> None:
@@ -214,7 +215,8 @@ def test_fetch_and_store_pdf_rejects_html_content(tmp_path: Path) -> None:
 
     assert path is None
     assert (
-        warning == "downloaded content from https://example.com/snapshot is not a PDF"
+        "downloaded content from https://example.com/snapshot is HTML, not a PDF"
+        in warning
     )
     assert list(tmp_path.iterdir()) == []
 

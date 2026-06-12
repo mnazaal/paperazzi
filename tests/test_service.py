@@ -1,6 +1,16 @@
 from pathlib import Path
 
-from pzi.add_service import add_input_to_bib, add_record_to_bib
+from pzi.add_service import (
+    add_input_to_bib,
+    add_record_to_bib,
+    ensure_citekey_for_write,
+    existing_citekeys,
+    reuse_existing_pdf_fields_for_exact_match,
+    reuse_orphan_pdf_for_planned_path,
+)
+from pzi.bib_repository import plan_bib_write
+from pzi.bibtex import record_to_bibtex_entry
+from pzi.capture_local_pdf import build_add_record_result, dry_run_diff, plan_with_applied_record
 
 
 def test_add_record_to_bib_inserts_new_entry(tmp_path: Path) -> None:
@@ -321,8 +331,45 @@ default = true
     )
 
     assert result["status"] == "ok"
-    assert result["citekey"] == "smith2024graph2"
+    assert result["citekey"] == "smith2024graph-2"
     assert result["changed_fields"] == ["authors", "citekey", "title", "year"]
+
+
+def test_add_record_to_bib_writes_relative_file_field_when_configured(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.toml"
+    bib_path = tmp_path / "library.bib"
+    pdf_path = tmp_path / "papers" / "smith2024.pdf"
+    pdf_path.parent.mkdir()
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    config_path.write_text(
+        f"""
+pdf_file_path_style = "relative"
+
+[[bibs]]
+name = "ml"
+path = "{bib_path}"
+default = true
+""".strip()
+    )
+
+    result = add_record_to_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        record={
+            "title": "Graph Parsers",
+            "authors": ["Smith, Jane"],
+            "year": 2024,
+            "local_pdf_path": str(pdf_path),
+        },
+        bib_selector=None,
+        dry_run=False,
+    )
+
+    assert result["status"] == "ok"
+    assert "file = {papers/smith2024.pdf}" in bib_path.read_text()
+    assert str(pdf_path) not in bib_path.read_text()  # absolute path must NOT appear
 
 
 def test_add_input_to_bib_uses_translation_server_metadata(tmp_path: Path) -> None:
@@ -929,9 +976,10 @@ default = true
     )
 
     assert result["status"] == "ok"
-    assert result["warnings"] == [
-        "all download methods failed for https://example.com/paper.pdf"
-    ]
+    assert any(
+        "all download methods failed for https://example.com/paper.pdf" in w
+        for w in result["warnings"]
+    )
     assert "file = {" not in bib_path.read_text()
 
 
@@ -1132,3 +1180,106 @@ default = true
     assert result["status"] == "ok"
     bib_text = bib_path.read_text()
     assert "Attention Is All You Need" in bib_text
+
+
+def test_ensure_citekey_reuses_exact_match_key() -> None:
+    record = {"doi": "10.1234/a", "title": "Paper"}
+    existing = [{"doi": "10.1234/a", "citekey": "smith2024paper"}]
+
+    result = ensure_citekey_for_write(record, existing)  # type: ignore[arg-type]
+
+    assert result["citekey"] == "smith2024paper"
+
+
+def test_ensure_citekey_suffixes_collision() -> None:
+    record = {"citekey": "smith2024paper", "doi": "10.1234/b"}
+    existing = [{"citekey": "smith2024paper", "doi": "10.1234/a"}]
+
+    result = ensure_citekey_for_write(record, existing)  # type: ignore[arg-type]
+
+    assert result["citekey"] == "smith2024paper-2"
+
+
+def test_existing_citekeys_ignores_blank_values() -> None:
+    assert existing_citekeys(
+        [{"citekey": "smith2024paper"}, {"citekey": " "}, {}]  # type: ignore[list-item]
+    ) == {"smith2024paper"}
+
+
+def test_reuse_existing_pdf_fields_for_exact_match() -> None:
+    record = {"doi": "10.1234/a", "title": "Paper"}
+    existing = [
+        {
+            "doi": "10.1234/a",
+            "local_pdf_path": "/tmp/a.pdf",
+            "pdf_url": "https://example.com/a.pdf",
+        }
+    ]
+
+    result = reuse_existing_pdf_fields_for_exact_match(
+        record, existing  # type: ignore[arg-type]
+    )
+
+    assert result["local_pdf_path"] == "/tmp/a.pdf"
+    assert result["pdf_url"] == "https://example.com/a.pdf"
+
+
+def test_reuse_orphan_pdf_for_planned_path(tmp_path: Path) -> None:
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    planned = papers / "smith2024paper.pdf"
+    planned.write_bytes(b"%PDF-existing")
+    record = {"citekey": "smith2024paper", "pdf_url": "https://example.com/a.pdf"}
+
+    result = reuse_orphan_pdf_for_planned_path(
+        record,  # type: ignore[arg-type]
+        papers_dir=str(papers),
+    )
+
+    assert result["local_pdf_path"] == str(planned)
+
+
+def test_plan_with_applied_record_rebases_citekey() -> None:
+    plan = {"record": {"citekey": "old", "doi": "10.1234/a"}, "action": "insert"}
+    updated_entry = record_to_bibtex_entry(
+        {"citekey": "new", "doi": "10.1234/a", "title": "Paper"}
+    )
+
+    result = plan_with_applied_record(
+        plan,
+        {"doi": "10.1234/a"},  # type: ignore[arg-type]
+        [updated_entry],
+    )
+
+    assert result["record"]["citekey"] == "new"
+    assert result["entry"] is updated_entry
+
+
+def test_build_add_record_result_shapes_dry_run_message() -> None:
+    plan = plan_bib_write(
+        {"citekey": "smith2024paper", "title": "Paper"},
+        [],
+    )
+
+    result = build_add_record_result(
+        bib={"name": "ml", "path": "/tmp/ml.bib"},
+        plan=plan,
+        warnings=[],
+        dry_run=True,
+    )
+
+    assert result["status"] == "ok"
+    assert result["message"] == "would insert entry"
+    assert result["citekey"] == "smith2024paper"
+
+
+def test_dry_run_diff_mentions_new_entry() -> None:
+    plan = plan_bib_write(
+        {"citekey": "smith2024paper", "title": "Paper"},
+        [],
+    )
+
+    diff = dry_run_diff(plan=plan, existing_entries=[])
+
+    assert "new entry" in diff
+    assert "smith2024paper" in diff

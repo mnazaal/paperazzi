@@ -86,7 +86,7 @@ def test_main_discovers_pdf_url(monkeypatch, capsys) -> None:
     monkeypatch.setattr(
         hook,
         "discover_pdf_url",
-        lambda page_url, *, browser, profile_path: f"{page_url}/paper.pdf"
+        lambda page_url, *, browser, profile_path, headless=True: f"{page_url}/paper.pdf"
         if browser == "firefox" and profile_path == "prof"
         else None,
     )
@@ -108,7 +108,7 @@ def test_main_downloads_pdf(monkeypatch, capsys) -> None:
     monkeypatch.setattr(
         hook,
         "download_pdf",
-        lambda pdf_url, *, browser, profile_path: b"%PDF-test",
+        lambda pdf_url, *, browser, profile_path, headless=True, challenge_timeout=0: b"%PDF-test",
     )
 
     assert hook.main() == 0
@@ -333,7 +333,7 @@ def test_ensure_browser_installs_missing_browser_binaries(monkeypatch) -> None:
     )
 
     assert hook._ensure_browser("chromium") is True
-    assert events == ["install:chromium"]
+    assert events == ["stop", "install:chromium"]
 
 
 def test_ensure_browser_reports_install_failure(monkeypatch) -> None:

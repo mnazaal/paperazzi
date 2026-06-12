@@ -4,6 +4,7 @@ from pzi.pdf_discovery import (
     DEFAULT_DISCOVERY_STEPS,
     PdfDiscoveryContext,
     apply_pdf_discovery,
+    apply_pdf_discovery_parallel,
     arxiv_step,
     browser_pdf_step,
     doi_pdf_step,
@@ -296,11 +297,96 @@ def test_doi_pdf_step_no_doi() -> None:
 def test_default_steps_list_has_all_steps() -> None:
     names = [step.__name__ for step in DEFAULT_DISCOVERY_STEPS]
     assert names == [
+        "arxiv_step",
+        "preprint_pdf_step",
         "translation_attachment_step",
-        "pdf_url_candidates_step",
         "web_attachment_step",
-        "browser_pdf_step",
         "doi_pdf_step",
         "unpaywall_step",
-        "arxiv_step",
+        "pdf_url_candidates_step",
+        "browser_pdf_step",
     ]
+
+
+# --- Parallel discovery tests ---
+
+
+def test_parallel_stops_when_pure_step_finds_pdf() -> None:
+    """Phase 1 pure step finds a PDF → parallel variant returns immediately."""
+    record: dict[str, object] = {"title": "Paper"}
+    context: PdfDiscoveryContext = {}
+
+    def arxiv_like(r, c):
+        arxiv_like.__name__ = "arxiv_step"
+        updated = dict(r)
+        updated["pdf_url"] = "https://arxiv.org/pdf/1234.pdf"
+        return updated
+
+    result = apply_pdf_discovery_parallel(record, [arxiv_like], context)
+    assert result["pdf_url"] == "https://arxiv.org/pdf/1234.pdf"
+
+
+def test_parallel_falls_back_to_browser() -> None:
+    """HTTP steps find nothing → browser step runs as final fallback."""
+    record: dict[str, object] = {"title": "Paper"}
+    context: PdfDiscoveryContext = {}
+
+    def http_step(r, c):
+        http_step.__name__ = "web_attachment_step"
+        return r  # no-op
+
+    def browser_like(r, c):
+        browser_like.__name__ = "browser_pdf_step"
+        updated = dict(r)
+        updated["pdf_url"] = "https://example.com/browser.pdf"
+        return updated
+
+    result = apply_pdf_discovery_parallel(record, [http_step, browser_like], context)
+    assert result["pdf_url"] == "https://example.com/browser.pdf"
+
+
+def test_parallel_returns_first_http_result() -> None:
+    """Multiple HTTP steps run in parallel; first success wins."""
+    import time
+
+    record: dict[str, object] = {"title": "Paper"}
+    context: PdfDiscoveryContext = {}
+
+    def slow_http(r, c):
+        slow_http.__name__ = "web_attachment_step"
+        time.sleep(0.2)
+        updated = dict(r)
+        updated["pdf_url"] = "https://slow.example.com/pdf"
+        return updated
+
+    def fast_http(r, c):
+        fast_http.__name__ = "doi_pdf_step"
+        updated = dict(r)
+        updated["pdf_url"] = "https://fast.example.com/pdf"
+        return updated
+
+    result = apply_pdf_discovery_parallel(
+        record, [fast_http, slow_http], context, max_workers=2,
+    )
+    assert result["pdf_url"] == "https://fast.example.com/pdf"
+
+
+def test_parallel_handles_http_step_exceptions() -> None:
+    """An HTTP step that raises does not crash the pipeline."""
+    record: dict[str, object] = {"title": "Paper"}
+    context: PdfDiscoveryContext = {}
+
+    def failing_http(r, c):
+        failing_http.__name__ = "web_attachment_step"
+        raise RuntimeError("network error")
+
+    def working_browser(r, c):
+        working_browser.__name__ = "browser_pdf_step"
+        updated = dict(r)
+        updated["pdf_url"] = "https://example.com/browser.pdf"
+        return updated
+
+    result = apply_pdf_discovery_parallel(
+        record, [failing_http, working_browser], context,
+    )
+    assert result["pdf_url"] == "https://example.com/browser.pdf"

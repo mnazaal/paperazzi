@@ -6,3 +6,15 @@ __pycache__
 .ruff_cache
 dist/
 *.egg-info
+
+# Dev-only — not needed in container build context
+tests/
+tools/
+browser-extension/
+context.md
+.github/
+.coverage
+coverage.xml
+htmlcov/
+.mypy_cache/
+.pyright/

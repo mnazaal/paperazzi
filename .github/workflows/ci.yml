@@ -45,6 +45,8 @@ jobs:
         run: .venv/bin/pyright
 
       - name: Tests with coverage
+        env:
+          PZI_SKIP_AUTO_START: "1"
         run: .venv/bin/pytest --cov=pzi --cov-report=term-missing --cov-report=xml -q
 
       - name: Build browser extension

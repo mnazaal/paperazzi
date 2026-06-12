@@ -77,6 +77,12 @@ def build_capture_context(
     unpaywall_email = resolver(
         config["unpaywall_email_cmd"], config["unpaywall_email"]
     ) or contact_email
+    # Derive api_url from configured host/port.
+    api_url = config.get("api_url")
+    if not api_url:
+        api_host = config.get("api_listen_host", "127.0.0.1")
+        api_port = config.get("api_listen_port", 8765)
+        api_url = f"http://{api_host}:{api_port}"
     return {
         "config": config,
         "bib": bib,
@@ -90,6 +96,11 @@ def build_capture_context(
         "browser": browser,
         "citekey_format": config.get("citekey_format"),
         "pdf_filename_format": config.get("pdf_filename_format"),
+        "api_url": api_url,
+        "api_auth_token": config.get("api_auth_token"),
+        "desktop_fallback_hosts": set(config.get("desktop_fallback_hosts", [])),
+        "pdf_discovery_parallel": config.get("pdf_discovery_parallel", False),
+        "ezproxy_host": config.get("ezproxy_host"),
     }
 
 

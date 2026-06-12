@@ -1,4 +1,4 @@
-from pzi.http_payloads import (
+from pzi.http_api import (
     capture_payload,
     metadata_url_override_error,
     pdf_url_candidates_from_body,
@@ -194,3 +194,80 @@ def test_record_overrides_jsonld_og_overwrites_empty_citation_fallback() -> None
 
     assert result["fallback_authors"] == "Eve Ellis"
     assert result["fallback_title"] == "OG Title"
+
+
+# ---------------------------------------------------------------------------
+# trusted fields promotion
+# ---------------------------------------------------------------------------
+
+
+def test_trusted_fields_promotes_doi_to_normal_override() -> None:
+    """When trusted_fields contains 'doi', store as 'doi' not 'fallback_doi'."""
+    result = record_overrides_from_capture_body({
+        "doi": "10.1109/TEST.2022.12345",
+        "trusted_fields": ["doi"],
+    })
+
+    assert result["doi"] == "10.1109/TEST.2022.12345"
+    assert "fallback_doi" not in result
+
+
+def test_trusted_fields_promotes_multiple_fields() -> None:
+    result = record_overrides_from_capture_body({
+        "doi": "10.1109/TEST.2022.12345",
+        "embedded_authors": ["Alice Smith"],
+        "embedded_year": "2022",
+        "trusted_fields": ["doi", "authors", "year"],
+    })
+
+    assert result["doi"] == "10.1109/TEST.2022.12345"
+    # Authors promoted as list, not " and "-joined string
+    assert result["authors"] == ["Alice Smith"]
+    assert result["year"] == "2022"
+    assert "fallback_doi" not in result
+    assert "fallback_authors" not in result
+    assert "fallback_year" not in result
+
+
+def test_trusted_fields_ignored_when_not_list() -> None:
+    result = record_overrides_from_capture_body({
+        "doi": "10.1109/TEST.2022.12345",
+        "trusted_fields": "not-a-list",
+    })
+
+    assert "fallback_doi" in result
+    assert "doi" not in result
+
+
+def test_trusted_fields_absent_preserves_fallback_behavior() -> None:
+    result = record_overrides_from_capture_body({
+        "doi": "10.1109/TEST.2022.12345",
+    })
+
+    assert result["fallback_doi"] == "10.1109/TEST.2022.12345"
+    assert "doi" not in result
+
+
+def test_trusted_fields_unknown_field_silently_ignored() -> None:
+    result = record_overrides_from_capture_body({
+        "doi": "10.1109/TEST.2022.12345",
+        "trusted_fields": ["nonexistent"],
+    })
+
+    assert result["fallback_doi"] == "10.1109/TEST.2022.12345"
+
+
+def test_trusted_fields_prefers_embedded_over_page_title_for_title() -> None:
+    """When 'title' is trusted, embedded_jsonld or embedded_og prevails.
+    page_title maps to fallback_title, NOT affected by trusted_fields."""
+    result = record_overrides_from_capture_body({
+        "page_title": "Generic Page",
+        "embedded_jsonld_title": "Real Title",
+        "trusted_fields": ["title"],
+    })
+
+    # JSON-LD title wins because it overwrites fallback_title.
+    # But trusted_fields promotes fallback_title → title.
+    # So 'title' should be set from whatever fallback_title was.
+    assert "title" in result
+    assert "fallback_title" not in result

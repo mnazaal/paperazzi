@@ -24,12 +24,12 @@ def validate_bib_config(
     """Validate one bib config and derive computed defaults."""
     errors: list[str] = []
 
-    raw_name = raw.get("name")
-    if not isinstance(raw_name, str) or not raw_name.strip():
+    name = _opt_str_from_raw(raw, "name")
+    if name is None:
         errors.append("bib.name must be a non-empty string")
 
-    raw_path = raw.get("path")
-    if not isinstance(raw_path, str) or not raw_path.strip():
+    raw_path_val = _opt_str_from_raw(raw, "path")
+    if raw_path_val is None:
         errors.append("bib.path must be a non-empty string")
 
     raw_papers_dir = raw.get("papers_dir")
@@ -43,11 +43,8 @@ def validate_bib_config(
     if errors:
         return None, errors
 
-    assert isinstance(raw_name, str)
-    assert isinstance(raw_path, str)
-    assert isinstance(raw_default, bool)
-
-    path = _normalize_path(raw_path, home_dir=home_dir)
+    assert raw_path_val is not None, "already validated"
+    path = _normalize_path(raw_path_val, home_dir=home_dir)
     papers_dir = (
         _normalize_path(raw_papers_dir, home_dir=home_dir)
         if isinstance(raw_papers_dir, str)
@@ -55,7 +52,7 @@ def validate_bib_config(
     )
 
     config: BibConfig = {
-        "name": raw_name.strip(),
+        "name": name,
         "path": path,
         "papers_dir": papers_dir,
         "default": raw_default,
@@ -139,12 +136,28 @@ def _normalize_app_config(raw: Mapping[str, object], validated_bibs: list[BibCon
     raw_metadata_confidence_min_score = raw.get("metadata_confidence_min_score", 0)
     raw_promote_confidence_threshold = raw.get("promote_confidence_threshold", 3)
     raw_browser_hook = raw.get("browser_hook", True)
+    raw_pzi_data_home = raw.get("pzi_data_home", "~/.local/share/pzi")
+    raw_browser_profile_path = raw.get("browser_profile_path")
+    raw_browser_engine = raw.get("browser_engine", "chromium")
+    raw_rate_limit_rpm = raw.get("rate_limit_rpm", 60)
+    raw_pdf_discovery_parallel = raw.get("pdf_discovery_parallel", False)
+    raw_pdf_file_path_style = raw.get("pdf_file_path_style", "absolute")
+    raw_page_metadata_timeout_seconds = raw.get("page_metadata_timeout_seconds", 5)
+    raw_desktop_fallback_hosts = raw.get(
+        "desktop_fallback_hosts", DEFAULT_DESKTOP_FALLBACK_HOSTS
+    )
+
+    api_url = opt("api_url")
+    if not api_url:
+        api_listen_host = str(raw_api_listen_host).strip()
+        api_listen_port = int(raw_api_listen_port)  # type: ignore[arg-type]
+        api_url = f"http://{api_listen_host}:{api_listen_port}"
 
     return {
         "translation_server_url": str(raw_translation_server_url),
         "bibs": validated_bibs,
-        "api_listen_host": str(raw_api_listen_host).strip(),
-        "api_listen_port": int(raw_api_listen_port),  # type: ignore[arg-type]
+        "api_listen_host": api_listen_host,
+        "api_listen_port": api_listen_port,
         "api_auth_token": opt("api_auth_token"),
         "api_allowed_origins": normalized_api_allowed_origins,
         "api_max_body_bytes": int(raw_api_max_body_bytes),  # type: ignore[arg-type]
@@ -158,9 +171,26 @@ def _normalize_app_config(raw: Mapping[str, object], validated_bibs: list[BibCon
         "browser_pdf_cmd": opt("browser_pdf_cmd"),
         "citekey_format": opt("citekey_format"),
         "pdf_filename_format": opt("pdf_filename_format"),
+        "pdf_file_path_style": str(raw_pdf_file_path_style).strip() or "absolute",
+        "page_metadata_cmd": opt("page_metadata_cmd"),
+        "page_metadata_timeout_seconds": max(
+            1, int(raw_page_metadata_timeout_seconds)  # type: ignore[arg-type]
+        ),
         "metadata_confidence_min_score": int(raw_metadata_confidence_min_score),  # type: ignore[arg-type]
         "promote_confidence_threshold": int(raw_promote_confidence_threshold),  # type: ignore[arg-type]
         "browser_hook": bool(raw_browser_hook),
+        "pzi_data_home": os.path.expanduser(str(raw_pzi_data_home)),
+        "api_url": api_url,
+        "browser_profile_path": opt("browser_profile_path"),
+        "browser_engine": str(raw_browser_engine).strip() or "chromium",
+        "rate_limit_rpm": max(1, int(raw_rate_limit_rpm)),  # type: ignore[arg-type]
+        "pdf_discovery_parallel": bool(raw_pdf_discovery_parallel),
+        "desktop_fallback_hosts": (
+            _normalize_host_list(raw_desktop_fallback_hosts)
+            if isinstance(raw_desktop_fallback_hosts, list)
+            else DEFAULT_DESKTOP_FALLBACK_HOSTS
+        ),
+        "ezproxy_host": opt("ezproxy_host"),
     }
 
 
@@ -223,6 +253,22 @@ def validate_app_config(
     ):
         errors.append("promote_confidence_threshold must be a non-negative integer")
 
+    raw_pdf_file_path_style = raw.get("pdf_file_path_style", "absolute")
+    if raw_pdf_file_path_style not in {"absolute", "relative"}:
+        errors.append("pdf_file_path_style must be 'absolute' or 'relative'")
+
+    raw_page_metadata_cmd = raw.get("page_metadata_cmd")
+    if raw_page_metadata_cmd is not None and not isinstance(raw_page_metadata_cmd, str):
+        errors.append("page_metadata_cmd must be a string when provided")
+
+    raw_page_metadata_timeout_seconds = raw.get("page_metadata_timeout_seconds", 5)
+    if (
+        not isinstance(raw_page_metadata_timeout_seconds, int)
+        or isinstance(raw_page_metadata_timeout_seconds, bool)
+        or raw_page_metadata_timeout_seconds < 1
+    ):
+        errors.append("page_metadata_timeout_seconds must be a positive integer")
+
     raw_bibs = raw.get("bibs")
     if not isinstance(raw_bibs, list) or not raw_bibs:
         errors.append("bibs must be a non-empty list")
@@ -270,11 +316,22 @@ def validate_app_config(
     if raw_pdf_filename_format is not None and not isinstance(raw_pdf_filename_format, str):
         errors.append("pdf_filename_format must be a string when provided")
 
+    raw_ezproxy_host = raw.get("ezproxy_host")
+    if raw_ezproxy_host is not None and (
+        not isinstance(raw_ezproxy_host, str) or not _is_bare_hostname(raw_ezproxy_host)
+    ):
+        errors.append("ezproxy_host must be a bare hostname (e.g. proxy.lib.university.edu) when provided")
+
     raw_browser_hook = raw.get("browser_hook", True)
     if not isinstance(raw_browser_hook, bool):
         errors.append("browser_hook must be a boolean")
 
     if errors:
+        return None, errors
+
+    raw_pzi_data_home = raw.get("pzi_data_home", "~/.local/share/pzi")
+    if not isinstance(raw_pzi_data_home, str) or not raw_pzi_data_home.strip():
+        errors.append("pzi_data_home must be a non-empty string")
         return None, errors
 
     return _normalize_app_config(raw, validated_bibs), []
@@ -344,9 +401,37 @@ def _is_http_url(value: str) -> bool:
     return parts.scheme in {"http", "https"} and bool(parts.netloc)
 
 
+def _is_bare_hostname(value: str) -> bool:
+    """Accept bare hostname like proxy.lib.university.edu (dots, no scheme)."""
+    if urlsplit(value).scheme:  # rejects anything with scheme
+        return False
+    # Must contain at least one dot, no slashes, no spaces
+    return "." in value and "/" not in value and " " not in value
+
+
+def _normalize_host_list(raw: list[object]) -> list[str]:
+    """Convert a raw config list to a deduplicated sorted hostname list."""
+    hosts: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        host = str(item).strip().lower() if isinstance(item, str) else None
+        if host and host not in seen:
+            hosts.append(host)
+            seen.add(host)
+    return hosts if hosts else DEFAULT_DESKTOP_FALLBACK_HOSTS
+
+
 # ---------------------------------------------------------------------------
 # TOML file loading
 # ---------------------------------------------------------------------------
+
+DEFAULT_DESKTOP_FALLBACK_HOSTS = [
+    "biorxiv.org",
+    "medrxiv.org",
+    "researchsquare.com",
+    "ssrn.com",
+    "authorea.com",
+]
 
 DEFAULT_CONFIG_RELATIVE_PATH = ".config/pzi/config.toml"
 
@@ -483,6 +568,22 @@ def dump_app_config(config: AppConfig) -> str:
     lines.extend(_optional_string("browser_pdf_cmd", config.get("browser_pdf_cmd")))
     lines.extend(_optional_string("citekey_format", config.get("citekey_format")))
     lines.extend(_optional_string("pdf_filename_format", config.get("pdf_filename_format")))
+    lines.extend(_optional_string("api_url", config.get("api_url")))
+    lines.extend(_optional_string("browser_profile_path", config.get("browser_profile_path")))
+    browser_engine = config.get("browser_engine")
+    if browser_engine and browser_engine != "chromium":
+        lines.append(f'browser_engine = "{_escape(browser_engine)}"')
+
+    rate_limit_rpm = config.get("rate_limit_rpm", 60)
+    if rate_limit_rpm != 60:
+        lines.append(f"rate_limit_rpm = {rate_limit_rpm}")
+
+    desktop_hosts = config.get("desktop_fallback_hosts", [])
+    default_hosts = ["biorxiv.org", "medrxiv.org"]
+    if desktop_hosts and desktop_hosts != default_hosts:
+        lines.append(
+            f"desktop_fallback_hosts = [{', '.join('\"' + _escape(h) + '\"' for h in desktop_hosts)}]"
+        )
 
     for bib in config["bibs"]:
         lines.append("")

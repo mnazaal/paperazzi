@@ -102,6 +102,8 @@ def test_bibtex_entry_to_record_maps_fields_back() -> None:
         "arxiv_id": "2401.12345",
         "canonical_url": "https://example.com/paper",
         "source_url": "https://example.com/paper",
+        "pdf_url": "https://example.com/paper.pdf",
+        "abstract_url": None,
         "tags": ["graphs", "ml"],
         "note": "Possibly similar to smith2023graph",
         "local_pdf_path": "papers/smith2024graph.pdf",

@@ -80,6 +80,64 @@ def apply_pdf_discovery(
     return record
 
 
+def apply_pdf_discovery_parallel(
+    record: NormalizedRecord,
+    steps: list[PdfDiscoveryStep],
+    context: PdfDiscoveryContext,
+    *,
+    max_workers: int = 4,
+) -> NormalizedRecord:
+    """Run PDF discovery with HTTP steps (web_attachment, doi_pdf, unpaywall)
+    executed in parallel. Pure steps run sequentially first, browser step
+    runs last as fallback.
+
+    ``max_workers`` controls the thread pool size for parallel HTTP steps.
+    """
+    # Phase 1: run pure/fast steps sequentially
+    pure_step_names = {
+        "arxiv_step", "preprint_pdf_step", "translation_attachment_step",
+        "pdf_url_candidates_step",
+    }
+    for step in steps:
+        if record.get("pdf_url"):
+            return record
+        if step.__name__ in pure_step_names:
+            record = step(record, context)
+
+    if record.get("pdf_url"):
+        return record
+
+    # Phase 2: run HTTP steps in parallel
+    http_steps = [
+        step for step in steps
+        if step.__name__ not in pure_step_names and step.__name__ != "browser_pdf_step"
+    ]
+    if http_steps:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        with ThreadPoolExecutor(max_workers=min(max_workers, len(http_steps))) as pool:
+            futures = {
+                pool.submit(step, record, context): step for step in http_steps
+            }
+            for future in as_completed(futures):
+                try:
+                    result = future.result()
+                except Exception:
+                    continue
+                if result.get("pdf_url"):
+                    record = result
+                    return record
+
+    # Phase 3: browser fallback
+    for step in steps:
+        if record.get("pdf_url"):
+            return record
+        if step.__name__ == "browser_pdf_step":
+            record = step(record, context)
+
+    return record
+
+
 def translation_attachment_step(
     record: NormalizedRecord, context: PdfDiscoveryContext
 ) -> NormalizedRecord:
@@ -101,6 +159,7 @@ def translation_attachment_step(
 
         updated = dict(record)
         updated["pdf_url"] = normalized
+        updated["pdf_source"] = "translation_attachment"
         return updated
 
     return record
@@ -121,6 +180,7 @@ def pdf_url_candidates_step(
                 continue
             updated = dict(record)
             updated["pdf_url"] = normalized
+            updated["pdf_source"] = "pdf_url_candidates"
             return updated
 
     return record
@@ -166,6 +226,7 @@ def web_attachment_step(
 
                 updated = dict(record)
                 updated["pdf_url"] = normalized_pdf_url
+                updated["pdf_source"] = "web_attachment"
 
                 result_record = result.get("record")
                 if isinstance(result_record, Mapping):  # pragma: no branch
@@ -186,23 +247,38 @@ def web_attachment_step(
 def browser_pdf_step(
     record: NormalizedRecord, context: PdfDiscoveryContext
 ) -> NormalizedRecord:
-    """Discover PDF URL using external browser hook command."""
+    """Discover PDF URL using external browser hook command or server API."""
+    api_url = context.get("api_url")
     browser_pdf_cmd = context.get("browser_pdf_cmd")
-    if browser_pdf_cmd is None:
+    if api_url is None and browser_pdf_cmd is None:
         return record
 
-    from pzi.browser_pdf import discover_pdf_url_with_browser
-
     doi = record.get("doi") if isinstance(record.get("doi"), str) else None
+
     for url in landing_page_urls(base_record=record, raw_value=context["raw_value"]):
-        pdf_url = discover_pdf_url_with_browser(
-            command=browser_pdf_cmd,
-            page_url=url,
-            doi=doi,
-        )
+        pdf_url: str | None = None
+
+        # Prefer server-side persistent browser when available.
+        if api_url is not None:
+            from pzi.server_browser import discover_via_server_api
+            pdf_url = discover_via_server_api(
+                api_url, url, doi=doi,
+                auth_token=context.get("api_auth_token"),
+            )
+
+        # Fall back to subprocess browser hook.
+        if pdf_url is None and browser_pdf_cmd is not None:
+            from pzi.browser_pdf import discover_pdf_url_with_browser
+            pdf_url = discover_pdf_url_with_browser(
+                command=browser_pdf_cmd,
+                page_url=url,
+                doi=doi,
+            )
+
         if pdf_url and _safe_public_http_url(pdf_url):
             updated = dict(record)
             updated["pdf_url"] = pdf_url
+            updated["pdf_source"] = "browser_pdf"
             return updated
 
     return record
@@ -231,18 +307,21 @@ def doi_pdf_step(
     if pdf_url:
         updated = dict(record)
         updated["pdf_url"] = pdf_url
+        updated["pdf_source"] = "doi"
         return updated
 
     pdf_url = fetch_europepmc_pdf_url(doi)
     if pdf_url:
         updated = dict(record)
         updated["pdf_url"] = pdf_url
+        updated["pdf_source"] = "doi"
         return updated
 
     pdf_url = fetch_doaj_pdf_url(doi)
     if pdf_url:
         updated = dict(record)
         updated["pdf_url"] = pdf_url
+        updated["pdf_source"] = "doi"
         return updated
 
     return record
@@ -273,6 +352,7 @@ def unpaywall_step(
     if pdf_url:
         updated = dict(record)
         updated["pdf_url"] = pdf_url
+        updated["pdf_source"] = "unpaywall"
         return updated
 
     return record
@@ -292,6 +372,7 @@ def arxiv_step(
 
     updated = dict(record)
     updated["pdf_url"] = f"https://arxiv.org/pdf/{bare}"
+    updated["pdf_source"] = "arxiv"
     return updated
 
 
@@ -321,6 +402,7 @@ def preprint_pdf_step(
 
     updated = dict(record)
     updated["pdf_url"] = pdf_url
+    updated["pdf_source"] = "preprint"
     return updated
 
 
@@ -409,12 +491,12 @@ def _extract_query_param(query: str, key: str) -> str | None:
 
 # Canonical fallback chain used by add_service.
 DEFAULT_DISCOVERY_STEPS: list[PdfDiscoveryStep] = [
-    arxiv_step,
-    preprint_pdf_step,
-    translation_attachment_step,
-    pdf_url_candidates_step,
-    web_attachment_step,
-    browser_pdf_step,
-    doi_pdf_step,
-    unpaywall_step,
+    arxiv_step,                      # 1 — arXiv ID → PDF URL
+    preprint_pdf_step,               # 2 — preprint server → PDF URL
+    translation_attachment_step,     # 3 — Zotero translator attachments
+    web_attachment_step,             # 4 — re-fetch via translation-server /web
+    doi_pdf_step,                    # 5 — Crossref / Europe PMC / DOAJ
+    unpaywall_step,                  # 6 — Unpaywall OA lookup
+    pdf_url_candidates_step,         # 7 — extension-supplied fallback candidates
+    browser_pdf_step,                # 8 — Playwright headless browser hook
 ]

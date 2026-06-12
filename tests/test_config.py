@@ -1,3 +1,5 @@
+import os
+
 from pzi.config import (
     derive_papers_dir,
     resolve_bib,
@@ -95,13 +97,31 @@ def test_validate_app_config_applies_defaults() -> None:
         "api_auth_token": None,
         "api_allowed_origins": None,
         "api_max_body_bytes": 67108864,
+        "contact_email": None,
+        "contact_email_cmd": None,
         "unpaywall_email": None,
         "unpaywall_email_cmd": None,
         "semantic_scholar_api_key": None,
         "semantic_scholar_api_key_cmd": None,
         "flaresolverr_url": None,
         "browser_pdf_cmd": None,
-    }
+        "citekey_format": None,
+        "pdf_filename_format": None,
+        "pdf_file_path_style": "absolute",
+        "page_metadata_cmd": None,
+        "page_metadata_timeout_seconds": 5,
+        "metadata_confidence_min_score": 0,
+        "promote_confidence_threshold": 3,
+        "browser_hook": True,
+        "pzi_data_home": os.path.expanduser("~/.local/share/pzi"),
+        "api_url": "http://127.0.0.1:8765",
+        "browser_profile_path": None,
+        "browser_engine": "chromium",
+        "rate_limit_rpm": 60,
+        "pdf_discovery_parallel": False,
+            "desktop_fallback_hosts": ["biorxiv.org", "medrxiv.org", "researchsquare.com", "ssrn.com", "authorea.com"],
+            "ezproxy_host": None,
+        }
 
 
 def test_validate_app_config_accepts_browser_pdf_cmd() -> None:
@@ -116,6 +136,36 @@ def test_validate_app_config_accepts_browser_pdf_cmd() -> None:
     assert errors == []
     assert config is not None
     assert config["browser_pdf_cmd"] == "python /tmp/browser_hook.py"
+
+
+def test_validate_app_config_accepts_relative_pdf_file_path_style() -> None:
+    config, errors = validate_app_config(
+        {
+            "pdf_file_path_style": "relative",
+            "bibs": [{"name": "ml", "path": "~/ml.bib"}],
+        },
+        home_dir=HOME,
+    )
+
+    assert errors == []
+    assert config is not None
+    assert config["pdf_file_path_style"] == "relative"
+
+
+def test_validate_app_config_accepts_page_metadata_cmd() -> None:
+    config, errors = validate_app_config(
+        {
+            "page_metadata_cmd": "paper-metadata --json",
+            "page_metadata_timeout_seconds": 9,
+            "bibs": [{"name": "ml", "path": "~/ml.bib"}],
+        },
+        home_dir=HOME,
+    )
+
+    assert errors == []
+    assert config is not None
+    assert config["page_metadata_cmd"] == "paper-metadata --json"
+    assert config["page_metadata_timeout_seconds"] == 9
 
 
 def test_validate_app_config_rejects_duplicate_names_and_multiple_defaults() -> None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, TypeAlias, cast
 
 from pzi.bib_repository import read_bib_file
+from pzi.bibtex import normalize_authors
 from pzi.config import load_and_resolve_bib
 from pzi.tag_service import normalize_tags
 
@@ -67,7 +68,7 @@ def search_bib(
                 {
                     "citekey": citekey,
                     "title": cast(str | None, record.get("title")),
-                    "authors": list(record.get("authors") or []),
+                    "authors": normalize_authors(record.get("authors")),
                     "year": cast(int | None, record.get("year")),
                     "tags": list(record.get("tags") or []),
                     "matched_fields": match_result,

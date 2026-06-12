@@ -43,8 +43,8 @@ def test_browser_profile_map_uses_browser_specific_env_vars() -> None:
 def test_browser_pdf_cmd_for_browser_requires_matching_profile() -> None:
     profiles = {"chromium": "/home/me/chromium", "firefox": ""}
 
-    assert publish_smoke.browser_pdf_cmd_for("chromium", profiles) == (
-        "pzi-browser-hook --profile /home/me/chromium --browser chromium"
+    assert publish_smoke.browser_pdf_cmd_for("chromium", profiles).endswith(
+        " -m pzi.browser_pdf_hook --profile /home/me/chromium --browser chromium"
     )
     assert publish_smoke.browser_pdf_cmd_for("firefox", profiles) is None
 

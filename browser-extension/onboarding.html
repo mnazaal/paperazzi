@@ -1,0 +1,65 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>pzi — setup</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body { font-family: system-ui, sans-serif; max-width: 520px; margin: 48px auto; padding: 0 20px; }
+      h1 { font-size: 22px; margin: 0 0 4px; }
+      .sub { color: #666; font-size: 14px; margin: 0 0 24px; }
+      h2 { font-size: 16px; margin: 28px 0 8px; }
+      p, li { font-size: 14px; line-height: 1.5; color: #333; }
+      code { background: rgba(0,0,0,0.06); padding: 2px 5px; border-radius: 4px; font-size: 13px; }
+      pre { background: rgba(0,0,0,0.05); padding: 12px; border-radius: 6px; font-size: 13px; overflow-x: auto; }
+      label { display: block; margin-top: 14px; font-size: 13px; font-weight: 600; }
+      input, select, button { width: 100%; box-sizing: border-box; padding: 8px; margin-top: 4px; font-size: 14px; }
+      button { margin-top: 14px; font-weight: 700; cursor: pointer; }
+      button:disabled { cursor: progress; opacity: 0.7; }
+      #status { margin-top: 14px; padding: 12px; border-radius: 8px; background: #f4f4f4; font-size: 13px; }
+      @media (prefers-color-scheme: dark) {
+        .sub, p, li { color: #bbb; }
+        code { background: rgba(255,255,255,0.08); }
+        pre { background: rgba(255,255,255,0.06); }
+        #status { background: #252525; }
+      }
+    </style>
+  </head>
+  <body>
+    <h1>pzi capture &mdash; setup</h1>
+    <p class="sub">Configure the extension so it can talk to your local pzi server.</p>
+
+    <h2>Before you start</h2>
+    <ol>
+      <li>Install pzi: <code>pip install 'pzi @ git+https://github.com/mnazaal/pzi.git'</code></li>
+      <li>Run: <code>pzi init --setup --bib ~/bibs/main.bib</code> — creates <code>~/.config/pzi/config.toml</code></li>
+      <li>Start services: <code>pzi services up</code></li>
+    </ol>
+
+    <h2>Extension configuration</h2>
+    <label>Server endpoint <input id="endpoint" value="http://127.0.0.1:8765/capture" placeholder="http://127.0.0.1:8765/capture" /></label>
+    <label>API token <input id="token" type="password" autocomplete="off" placeholder="from ~/.config/pzi/config.toml" /></label>
+    <label>Bib library <select id="bib"><option value="">default</option></select></label>
+
+    <button id="save">Save settings</button>
+    <button id="test" style="background:none; border:1px solid #999; color:inherit;">Test connection</button>
+
+    <div id="status"></div>
+
+    <h2>Next steps</h2>
+    <ol>
+      <li>Navigate to a paper page (e.g. arXiv abstract, publisher page)</li>
+      <li>Click the pzi toolbar icon → <strong>Capture current page</strong></li>
+      <li>Or right-click any paper link → <strong>Save to pzi</strong></li>
+    </ol>
+
+    <h2>If capture fails</h2>
+    <ul>
+      <li>Is the server running? <code>pzi services status</code></li>
+      <li>Is the token correct? Check <code>token</code> in <code>~/.config/pzi/config.toml</code></li>
+      <li>Firewall? pzi listens on 127.0.0.1:8765 by default.</li>
+    </ul>
+
+    <script src="onboarding.js" type="module"></script>
+  </body>
+</html>

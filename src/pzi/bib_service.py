@@ -8,10 +8,10 @@ from typing import Any, TypeAlias, cast
 
 from pzi.bib_repository import (
     _find_entry_index,
+    _parse_bib_library,
     _read_bib_file_raw,
     _read_bib_source,
-    _validate_source_patchable,
-    create_bib_backup,
+    _validate_library_parseable,
     serialize_bibtex,
     with_bib_lock,
 )
@@ -132,6 +132,167 @@ def bib_stats(*, bib_path: str, papers_dir: str) -> BibStatsResult:
     }
 
 
+EntriesResult: TypeAlias = dict[str, Any]
+DetailResult: TypeAlias = dict[str, Any]
+
+
+def list_entries(
+    *,
+    config_path: str,
+    home_dir: str,
+    bib_selector: str | None = None,
+    offset: int = 0,
+    limit: int = 50,
+    sort: str = "citekey",
+) -> EntriesResult:
+    """List entries from a BibTeX library with pagination and sorting."""
+    resolved = load_and_resolve_bib(
+        config_path=config_path, home_dir=home_dir, bib_selector=bib_selector,
+    )
+    if isinstance(resolved, list):
+        return {
+            "status": "error",
+            "message": "failed to resolve bib",
+            "errors": resolved,
+        }
+    _config, bib = resolved
+    bib_path = bib["path"]
+    papers_dir = bib["papers_dir"]
+
+    with with_bib_lock(bib_path, shared=True):
+        read_result = _read_bib_file_raw(bib_path)
+
+    records = read_result["records"]
+    total = len(records)
+
+    sort_field: str = sort.lower().strip()
+    valid_sorts = {"citekey", "title", "year", "author"}
+    if sort_field not in valid_sorts:
+        sort_field = "citekey"
+
+    if sort_field == "year":
+        sorted_records = sorted(
+            records,
+            key=lambda r: (
+                r.get("year") if isinstance(r.get("year"), int) else 0
+            ),
+            reverse=True,
+        )
+    elif sort_field == "author":
+        sorted_records = sorted(
+            records,
+            key=lambda r: (
+                (
+                    r.get("authors", [None])[0]["family"]
+                    if isinstance(r.get("authors"), list) and r.get("authors")
+                    else ""
+                )
+            ).lower(),
+        )
+    elif sort_field == "title":
+        sorted_records = sorted(
+            records,
+            key=lambda r: str(r.get("title", "")).lower(),
+        )
+    else:
+        sorted_records = sorted(
+            records,
+            key=lambda r: str(r.get("citekey", "")).lower(),
+        )
+
+    page = sorted_records[offset : offset + limit]
+    items = [
+        {
+            "citekey": str(r.get("citekey", "")),
+            "title": str(r.get("title", "")),
+            "year": r.get("year"),
+            "authors": _author_names(r),
+            "entry_type": str(r.get("entry_type", "unknown")),
+            "has_pdf": bool(r.get("local_pdf_path")),
+            "doi": r.get("doi"),
+        }
+        for r in page
+    ]
+
+    return {
+        "status": "ok",
+        "bib_name": bib["name"],
+        "bib_path": bib_path,
+        "papers_dir": papers_dir,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "sort": sort_field,
+        "items": items,
+        "errors": [],
+    }
+
+
+def entry_detail(
+    *,
+    config_path: str,
+    home_dir: str,
+    citekey: str,
+    bib_selector: str | None = None,
+) -> DetailResult:
+    """Return full record detail for a single BibTeX entry by citekey."""
+    resolved = load_and_resolve_bib(
+        config_path=config_path, home_dir=home_dir, bib_selector=bib_selector,
+    )
+    if isinstance(resolved, list):
+        return {
+            "status": "error",
+            "message": "failed to resolve bib",
+            "errors": resolved,
+            "citekey": citekey,
+        }
+    _config, bib = resolved
+
+    with with_bib_lock(bib["path"], shared=True):
+        read_result = _read_bib_file_raw(bib["path"])
+
+    entries = read_result["entries"]
+    records = read_result["records"]
+    index = _find_entry_index(entries, citekey)
+
+    if index is None:
+        return {
+            "status": "error",
+            "citekey": citekey,
+            "bib_name": bib["name"],
+            "message": f"entry not found: {citekey}",
+            "errors": [f"no entry with citekey {citekey}"],
+        }
+
+    record = records[index] if index < len(records) else {}
+    return {
+        "status": "ok",
+        "citekey": citekey,
+        "bib_name": bib["name"],
+        "bib_path": bib["path"],
+        "record": dict(record),
+        "errors": [],
+    }
+
+
+def _author_names(record: dict[str, Any]) -> str:
+    """Format author list from a record into a comma-separated string."""
+    authors = record.get("authors")
+    if not isinstance(authors, list) or not authors:
+        return ""
+    names = []
+    for a in authors:
+        if not isinstance(a, dict):
+            continue
+        family = a.get("family", "")
+        given = a.get("given", "")
+        if family and given:
+            names.append(f"{family}, {given}")
+        elif family:
+            names.append(family)
+    return "; ".join(names)
+
+
 def delete_entry(
     *,
     bib_path: str,
@@ -141,7 +302,7 @@ def delete_entry(
     """Delete a BibTeX entry by citekey, creating a backup first."""
     with with_bib_lock(bib_path):
         source = _read_bib_source(bib_path)
-        _validate_source_patchable(source)
+        _validate_library_parseable(_parse_bib_library(source))
         read_result = _read_bib_file_raw(bib_path)
         entries = read_result["entries"]
         records = read_result["records"]
@@ -173,7 +334,6 @@ def delete_entry(
             "errors": [],
         }
 
-    backup_path = create_bib_backup(bib_path)
     updated_entries = list(entries)
     del updated_entries[index]
     text = serialize_bibtex(updated_entries)
@@ -189,6 +349,5 @@ def delete_entry(
         "message": f"deleted: {title}",
         "title": title,
         "pdf_path": pdf_path,
-        "backup_path": backup_path,
         "errors": [],
     }

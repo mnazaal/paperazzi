@@ -97,6 +97,78 @@ def pdf_result_fields(
     }
 
 
+def _coerce_year(value: object) -> int | None:
+    """Coerce a year value (str or int) to int.
+
+    Returns ``None`` when the value cannot be coerced to a plausible year
+    (1000–2099 inclusive).
+    """
+    if isinstance(value, int):
+        return value if 1000 <= value <= 2099 else None
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = int(value.strip())
+        except (ValueError, OverflowError):
+            return None
+        if 1000 <= parsed <= 2099:
+            return parsed
+    return None
+
+
+def has_minimum_metadata(record: Mapping[str, object]) -> bool:
+    """Return True when *record* has sufficient metadata for a fallback add.
+
+    Requires a non-empty title plus at least one of: non-empty DOI,
+    non-empty author list, or a plausible numeric year (int or string).
+    """
+    title = record.get("title")
+    doi = record.get("doi")
+    authors = record.get("authors")
+    year = record.get("year")
+
+    if not isinstance(title, str) or not title.strip():
+        return False
+
+    if isinstance(doi, str) and doi.strip():
+        return True
+    if isinstance(authors, list) and bool(authors):
+        return True
+    if _coerce_year(year) is not None:
+        return True
+
+    return False
+
+
+def minimum_metadata_diagnostics(record: Mapping[str, object]) -> list[str]:
+    """Return human-readable lines explaining why metadata is insufficient."""
+    lines: list[str] = []
+
+    title = record.get("title")
+    doi = record.get("doi")
+    authors = record.get("authors")
+    year = record.get("year")
+
+    if not isinstance(title, str) or not title.strip():
+        lines.append("missing title: browser extension did not extract page title")
+    else:
+        contributors: list[str] = []
+        if isinstance(doi, str) and doi.strip():
+            contributors.append(f"doi={doi.strip()}")
+        else:
+            contributors.append("doi not available")
+        if isinstance(authors, list) and bool(authors):
+            contributors.append(f"{len(authors)} author(s)")
+        else:
+            contributors.append("authors not available")
+        if _coerce_year(year) is not None:
+            contributors.append(f"year={_coerce_year(year)}")
+        else:
+            contributors.append("year not available or not numeric")
+        lines.append("title found but insufficient identifiers: " + "; ".join(contributors))
+
+    return lines
+
+
 def error_result(
     *,
     message: str,
@@ -178,6 +250,10 @@ def fetch_record_for_input(
     pdf_url_candidates: list[str] | None = None,
     browser_pdf_cmd: str | None = None,
     cookies: str | None = None,
+    api_url: str | None = None,
+    api_auth_token: str | None = None,
+    desktop_fallback_hosts: set[str] | None = None,
+    pdf_discovery_parallel: bool = False,
 ) -> NormalizedRecord:
     kind = classified["kind"]
     normalized = cast(str | None, classified["normalized"])
@@ -204,6 +280,10 @@ def fetch_record_for_input(
             "fetch_s2": fetch_s2,
             "fetch_flaresolverr": fetch_flaresolverr,
             "translation_attachments": translation_attachments,
+            "api_url": api_url,
+            "api_auth_token": api_auth_token,
+            "desktop_fallback_hosts": desktop_fallback_hosts,
+            "pdf_discovery_parallel": pdf_discovery_parallel,
         }
 
     def _with_pdf_discovery(
@@ -217,6 +297,14 @@ def fetch_record_for_input(
         if isinstance(pdf_url, str) and pdf_url.startswith("https://doi.org/"):
             base_record = dict(base_record)
             base_record.pop("pdf_url", None)
+
+        if pdf_discovery_parallel:
+            from pzi.pdf_discovery import apply_pdf_discovery_parallel as _parallel
+            return _parallel(
+                base_record,
+                DEFAULT_DISCOVERY_STEPS,
+                _discovery_context(translation_attachments=translation_attachments),
+            )
         return apply_pdf_discovery(
             base_record,
             DEFAULT_DISCOVERY_STEPS,

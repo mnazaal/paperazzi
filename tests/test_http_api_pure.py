@@ -2,9 +2,17 @@
 
 from pathlib import Path
 
-import pytest
-
 from pzi import http_api
+from pzi.pdf_attach_session_store import AttachSessionStore
+from pzi.capture_models import AuthHints, CaptureInput, CaptureOptions, PageArtifact, PdfCandidate
+from pzi.http_security import (
+    AUTH_HEADER,
+    RateLimiter,
+    build_http_security_config,
+    origin_allowed,
+    request_security_error,
+    validated_content_length,
+)
 
 # === process_get_request ===
 
@@ -49,34 +57,334 @@ def test_process_get_not_found() -> None:
     assert "not found" in body["error"]
 
 
-# === process_post_request tests skipped until extraction ===
+# === process_post_request (pure dispatch, no network) ===
 
 
-@pytest.mark.skip(reason="process_post_request not yet extracted")
-def test_post_capture_empty_url() -> None:
-    pass
+def test_post_capture_missing_url() -> None:
+    status, body = http_api.process_post_request(
+        "/capture", {"not_url": "x"}, "/tmp/c.toml", "/tmp"
+    )
+    assert status == 400
+    assert "url required" in body["error"]
 
 
-@pytest.mark.skip(reason="process_post_request not yet extracted")
 def test_post_capture_non_dict() -> None:
-    pass
+    status, body = http_api.process_post_request(
+        "/capture", "not a dict", "/tmp/c.toml", "/tmp"
+    )
+    assert status == 400
+    assert "must be a JSON object" in body["error"]
 
 
-@pytest.mark.skip(reason="process_post_request not yet extracted")
+def test_post_capture_private_url_rejected() -> None:
+    status, body = http_api.process_post_request(
+        "/capture", {"url": "http://127.0.0.1/test.pdf"}, "/tmp/c.toml", "/tmp"
+    )
+    assert status == 400
+    assert "public http(s) URL" in body["error"]
+
+
+def test_capture_input_from_http_body_maps_capture_hints() -> None:
+    capture = http_api.capture_input_from_http_body(
+        {
+            "url": " https://example.com/paper ",
+            "bib": "ml",
+            "page_title": "Graph Parsers",
+            "cookies": "sid=123",
+            "page_html": "<html></html>",
+            "pdf_url_candidates": ["https://example.com/a.pdf"],
+        },
+        pdf_candidates=["https://example.com/a.pdf"],
+    )
+
+    assert capture == CaptureInput(
+        value="https://example.com/paper",
+        record_overrides={"fallback_title": "Graph Parsers"},
+        bib_selector="ml",
+        page_artifact=PageArtifact(html="<html></html>", source="http"),
+        pdf_candidates=(PdfCandidate("https://example.com/a.pdf", source="http"),),
+        auth_hints=AuthHints(cookies="sid=123"),
+    )
+
+
+def test_capture_options_from_http_body_uses_config_page_metadata_cmd() -> None:
+    assert http_api.capture_options_from_http_body(
+        {"dry_run": True, "force_new": True},
+        config={
+            "page_metadata_cmd": "config-tool --json",
+            "page_metadata_timeout_seconds": 8,
+        },
+    ) == CaptureOptions(
+        dry_run=True,
+        force_new=True,
+        page_metadata_cmd="config-tool --json",
+        page_metadata_timeout_seconds=8,
+    )
+
+
 def test_post_attach_missing_citekey() -> None:
-    pass
+    status, body = http_api.process_post_request(
+        "/attach-pdf-bytes", {"pdf_base64": "AAAA"}, "/tmp/c.toml", "/tmp"
+    )
+    assert status == 400
+    assert "citekey required" in body["error"]
 
 
-@pytest.mark.skip(reason="process_post_request not yet extracted")
 def test_post_attach_missing_pdf_base64() -> None:
-    pass
+    status, body = http_api.process_post_request(
+        "/attach-pdf-bytes", {"citekey": "smith2024"}, "/tmp/c.toml", "/tmp"
+    )
+    assert status == 400
+    assert "pdf_base64 required" in body["error"]
 
 
-@pytest.mark.skip(reason="process_post_request not yet extracted")
 def test_post_attach_non_dict() -> None:
-    pass
+    status, body = http_api.process_post_request(
+        "/attach-pdf-bytes", [], "/tmp/c.toml", "/tmp"
+    )
+    assert status == 400
+    assert "must be a JSON object" in body["error"]
 
 
-@pytest.mark.skip(reason="process_post_request not yet extracted")
+def test_post_attach_raw_missing_citekey() -> None:
+    # json.loads path — citekey comes from query params in real handler,
+    # but process_post_request on /attach-pdf-raw with dict body falls through
+    # to _handle_attach_pdf_raw_post which requires citekey
+    status, body = http_api.process_post_request(
+        "/attach-pdf-raw",
+        {"pdf_bytes": b"%PDF-1.4 test"},
+        "/tmp/c.toml",
+        "/tmp",
+    )
+    assert status == 400
+    assert "citekey required" in (body.get("error") or "")
+
+
+def test_post_attach_raw_missing_pdf_bytes() -> None:
+    status, body = http_api.process_post_request(
+        "/attach-pdf-raw",
+        {"citekey": "smith2024"},
+        "/tmp/c.toml",
+        "/tmp",
+    )
+    assert status == 400
+    assert "pdf_bytes" in (body.get("error") or "")
+
+
+def test_post_tags_add_missing_args() -> None:
+    status, body = http_api.process_post_request(
+        "/tags/add", {"notags": True}, "/tmp/c.toml", "/tmp"
+    )
+    assert status == 400
+    assert "error" in body
+
+
+def test_post_tags_remove_non_dict() -> None:
+    status, body = http_api.process_post_request(
+        "/tags/remove", "bad", "/tmp/c.toml", "/tmp"
+    )
+    assert status == 400
+    assert "must be a JSON object" in body["error"]
+
+
 def test_post_unknown_path() -> None:
-    pass
+    status, body = http_api.process_post_request(
+        "/nope", {}, "/tmp/c.toml", "/tmp"
+    )
+    assert status == 404
+    assert "not found" in body["error"]
+
+
+def test_build_http_security_config_strips_token_and_origins() -> None:
+    security = build_http_security_config(
+        auth_token="  secret  ",
+        allowed_origins=[" http://localhost/ ", "", "  "],
+        max_body_bytes=-1,
+        rate_limit_rpm=0,
+    )
+
+    assert security == {
+        "auth_token": "secret",
+        "allowed_origins": ("http://localhost/",),
+        "max_body_bytes": 0,
+        "rate_limit_rpm": 1,
+    }
+
+
+def test_origin_allowed_accepts_extension_prefixes() -> None:
+    assert origin_allowed("chrome-extension://abc123", ("chrome-extension://",))
+    assert origin_allowed("moz-extension://abc123", ("moz-extension:",))
+    assert not origin_allowed("http://evil.example", ("http://localhost",))
+
+
+def test_request_security_error_allows_extension_origin_when_no_token_configured() -> None:
+    security = build_http_security_config(auth_token=None)
+
+    assert request_security_error(
+        method="GET",
+        headers={"Origin": "chrome-extension://abc123"},
+        security=security,
+    ) is None
+
+
+def test_request_security_error_accepts_header_or_bearer_token() -> None:
+    security = build_http_security_config(auth_token="secret")
+
+    assert request_security_error(
+        method="POST",
+        headers={AUTH_HEADER: "secret"},
+        security=security,
+    ) is None
+    assert request_security_error(
+        method="POST",
+        headers={"Authorization": "Bearer secret"},
+        security=security,
+    ) is None
+
+
+def test_validated_content_length_bounds_body_size() -> None:
+    assert validated_content_length(None, max_body_bytes=5) == 0
+    assert validated_content_length("5", max_body_bytes=5) == 5
+    assert validated_content_length("6", max_body_bytes=5) == (413, "request body too large")
+    assert validated_content_length("bad", max_body_bytes=5) == (400, "invalid Content-Length")
+
+
+def test_rate_limiter_tracks_remaining_and_reset() -> None:
+    limiter = RateLimiter(max_requests=2, window_seconds=60)
+
+    assert limiter.check("client")[:2] == (True, 1)
+    assert limiter.check("client")[:2] == (True, 0)
+    assert limiter.check("client")[:2] == (False, 0)
+
+
+def test_post_capture_emits_pdf_request_and_stores_attach_session(monkeypatch) -> None:
+    store = AttachSessionStore(clock=lambda: 100.0)
+
+    monkeypatch.setattr(
+        http_api,
+        "load_config_file",
+        lambda config_path, home_dir: {"config": {}},
+    )
+    monkeypatch.setattr(
+        http_api,
+        "capture_to_bib",
+        lambda *args, **kwargs: {
+            "status": "ok",
+            "bib_name": "main",
+            "citekey": "poborchaya2022analysis",
+            "action": "inserted",
+            "pdf_path": None,
+            "pdf_url": "https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=9840963",
+            "pdf_status": "direct_blocked",
+            "pdf_error": None,
+            "pdf_suggestion": None,
+            "dry_run": False,
+            "message": "captured",
+            "warnings": [],
+            "errors": [],
+        },
+    )
+
+    status, body = http_api.process_post_request(
+        "/capture",
+        {
+            "url": "https://ieeexplore.ieee.org/document/9840963",
+            "bib": "main",
+            "browser": "chrome-extension",
+            "pdf_url_candidates": [
+                "https://ieeexplore.ieee.org/document/9840963",
+                "https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=9840963",
+            ],
+        },
+        "/tmp/c.toml",
+        "/tmp",
+        attach_session_store=store,
+        request_id_factory=lambda: "req-1",
+        token_factory=lambda: "tok-1",
+        time_factory=lambda: 100.0,
+    )
+
+    assert status == 200
+    assert body["pdf_request"]["request_id"] == "req-1"
+    assert body["pdf_request"]["attach"]["token"] == "tok-1"
+    assert [c["kind"] for c in body["pdf_request"]["candidates"]] == [
+        "pdf_gateway",
+        "article_page",
+    ]
+    session = store.get("req-1")
+    assert session is not None
+    assert session.citekey == "poborchaya2022analysis"
+    assert session.bib == "main"
+
+
+def test_post_attach_raw_with_request_id_requires_valid_attach_token(monkeypatch) -> None:
+    store = AttachSessionStore(clock=lambda: 200.0)
+    session = http_api.build_attach_session(
+        request_id="req-1",
+        token="tok-1",
+        citekey="smith2024",
+        bib="main",
+        created_at=100.0,
+        ttl_seconds=600,
+        max_bytes=20,
+        allowed_source_urls=["https://example.com/a.pdf"],
+    )
+    store.put(session)
+    called = {}
+
+    def fake_attach_pdf_raw_bytes(**kwargs):
+        called["kwargs"] = kwargs
+        return {
+            "status": "ok",
+            "bib_name": "main",
+            "citekey": "smith2024",
+            "local_pdf_path": "/tmp/smith2024.pdf",
+            "source_url": "https://example.com/a.pdf",
+            "message": "attached PDF",
+            "warnings": [],
+            "errors": [],
+        }
+
+    monkeypatch.setattr(
+        http_api,
+        "attach_pdf_raw_bytes",
+        fake_attach_pdf_raw_bytes,
+    )
+
+    bad_status, bad_body = http_api.process_post_request(
+        "/attach-pdf-raw",
+        {
+            "request_id": "req-1",
+            "attach_token": "wrong",
+            "citekey": "smith2024",
+            "bib": "main",
+            "source_url": "https://example.com/a.pdf",
+            "pdf_bytes": b"%PDF-1.7 test",
+        },
+        "/tmp/c.toml",
+        "/tmp",
+        attach_session_store=store,
+        time_factory=lambda: 200.0,
+    )
+    assert bad_status == 403
+    assert bad_body["error"] == "invalid attach token"
+
+    ok_status, ok_body = http_api.process_post_request(
+        "/attach-pdf-raw",
+        {
+            "request_id": "req-1",
+            "attach_token": "tok-1",
+            "citekey": "smith2024",
+            "bib": "main",
+            "source_url": "https://example.com/a.pdf",
+            "pdf_bytes": b"%PDF-1.7 test",
+        },
+        "/tmp/c.toml",
+        "/tmp",
+        attach_session_store=store,
+        time_factory=lambda: 200.0,
+    )
+    assert ok_status == 200
+    assert ok_body["status"] == "ok"
+    assert called["kwargs"]["citekey"] == "smith2024"
+    assert store.get("req-1") is None

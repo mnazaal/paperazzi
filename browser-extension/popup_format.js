@@ -11,7 +11,14 @@ export function formatCaptureResult(result) {
   const citekey = result.citekey || "entry";
   const bibName = result.bib_name || result.bib;
   const bib = bibName ? ` in ${bibName}` : "";
-  lines.push(`✅ ${action} ${citekey}${bib}`);
+  const isUnchanged = result.action === "update"
+    && Array.isArray(result.changed_fields)
+    && result.changed_fields.length === 0;
+  if (isUnchanged) {
+    lines.push(`✅ Already captured ${citekey}${bib}`);
+  } else {
+    lines.push(`✅ ${action} ${citekey}${bib}`);
+  }
 
   const pdf = pdfStatusLines(result);
   for (const line of pdf) lines.push(line);
@@ -76,6 +83,9 @@ function formatErrorResult(result) {
   for (const error of result.errors || []) {
     if (error) lines.push(`- ${error}`);
   }
+  for (const warning of (result.warnings || [])) {
+    if (warning) lines.push(`⚠️ ${warning}`);
+  }
   return lines.join("\n");
 }
 
@@ -105,9 +115,17 @@ function pdfStatusLines(result) {
   }
 
   // If PDF not saved and we have attempt details, show them
-  const attempts = formattedAttempts(result);
-  if (attempts.length > 0) {
-    return ["⚠️ PDF save attempts:"].concat(attempts.map((a) => `  • ${a}`));
+  const formatted = formattedAttempts(result);
+  const rawAttempts = Array.isArray(result.pdf_attach_attempts) ? result.pdf_attach_attempts : [];
+  const authAttempt = rawAttempts.find(a => a.status === "html_login" || a.status === "html_access_denied");
+  if (authAttempt) {
+    const guidance = authAttempt.status === "html_login"
+      ? "PDF requires login — open the page, sign in, then retry capture"
+      : "PDF access denied — you may need institutional access or subscription";
+    return [`⚠️ ${guidance}`].concat(formatted.map((a) => `  • ${a}`));
+  }
+  if (formatted.length > 0) {
+    return ["⚠️ PDF save attempts:"].concat(formatted.map((a) => `  • ${a}`));
   }
 
   if (attach && attach.status === "error") {

@@ -7,6 +7,8 @@ import unicodedata
 from collections.abc import Sequence
 from typing import Any, Literal, TypeAlias
 
+from pzi.bibtex import normalize_authors
+
 # ---------------------------------------------------------------------------
 # Type aliases
 # ---------------------------------------------------------------------------
@@ -135,7 +137,7 @@ def compute_similarity_hint(
     if not record_tokens:
         return None
 
-    record_authors = list(record.get("authors") or [])
+    record_authors = normalize_authors(record.get("authors"))
     record_year = record.get("year")
 
     best_key: str | None = None

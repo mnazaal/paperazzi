@@ -98,7 +98,7 @@ def test_retry_pdf_fetch_failed(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         pdf_service, "fetch_and_store_pdf",
-        lambda url, papers_dir, citekey, fetch_binary: (None, "network error"),
+        lambda **kw: (None, "network error"),
     )
     result = pdf_service.retry_pdf(
         config_path="/f",
@@ -133,11 +133,11 @@ def test_retry_pdf_update_not_found(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         pdf_service, "fetch_and_store_pdf",
-        lambda url, papers_dir, citekey, fetch_binary: ("/p/smith2024.pdf", None),
+        lambda **kw: ("/p/smith2024.pdf", None),
     )
     monkeypatch.setattr(
         pdf_service, "update_bib_entry",
-        lambda path, citekey, updater: {
+        lambda path, citekey, updater, **kwargs: {
             "found": False,
             "entries": [],
             "entry": None,
@@ -179,7 +179,7 @@ def test_retry_pdf_removes_new_pdf_when_update_disappears(monkeypatch, tmp_path:
     monkeypatch.setattr(
         pdf_service,
         "update_bib_entry",
-        lambda path, citekey, updater: {
+        lambda path, citekey, updater, **kwargs: {
             "found": False,
             "entries": [],
             "entry": None,
@@ -217,11 +217,11 @@ def test_retry_pdf_success(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         pdf_service, "fetch_and_store_pdf",
-        lambda url, papers_dir, citekey, fetch_binary: ("/p/smith2024.pdf", None),
+        lambda **kw: ("/p/smith2024.pdf", None),
     )
     monkeypatch.setattr(
         pdf_service, "update_bib_entry",
-        lambda path, citekey, updater: {
+        lambda path, citekey, updater, **kwargs: {
             "found": True,
             "entries": [],
             "entry": {"entry_type": "article", "citekey": "smith2024", "fields": {}},
@@ -288,7 +288,7 @@ def test_attach_pdf_store_failed(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         pdf_service, "_store_pdf_source",
-        lambda source, papers_dir, citekey, fetch_binary: (None, "source missing"),
+        lambda **kw: (None, "source missing"),
     )
     result = pdf_service.attach_pdf(
         config_path="/f", home_dir="/h", bib_selector=None,
@@ -316,11 +316,11 @@ def test_attach_pdf_update_disappeared(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         pdf_service, "_store_pdf_source",
-        lambda source, papers_dir, citekey, fetch_binary: ("/p/smith2024.pdf", None),
+        lambda **kw: ("/p/smith2024.pdf", None),
     )
     monkeypatch.setattr(
         pdf_service, "update_bib_entry",
-        lambda path, citekey, updater: {
+        lambda path, citekey, updater, **kwargs: {
             "found": False,
             "entries": [],
             "entry": None,
@@ -360,7 +360,7 @@ def test_attach_pdf_removes_new_pdf_when_update_disappears(monkeypatch, tmp_path
     monkeypatch.setattr(
         pdf_service,
         "update_bib_entry",
-        lambda path, citekey, updater: {
+        lambda path, citekey, updater, **kwargs: {
             "found": False,
             "entries": [],
             "entry": None,
@@ -395,11 +395,11 @@ def test_attach_pdf_success_http_source(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         pdf_service, "_store_pdf_source",
-        lambda source, papers_dir, citekey, fetch_binary: ("/p/smith2024.pdf", None),
+        lambda **kw: ("/p/smith2024.pdf", None),
     )
     monkeypatch.setattr(
         pdf_service, "update_bib_entry",
-        lambda path, citekey, updater: {
+        lambda path, citekey, updater, **kwargs: {
             "found": True,
             "entries": [],
             "entry": {"entry_type": "article", "citekey": "smith2024", "fields": {}},
@@ -430,11 +430,11 @@ def test_attach_pdf_success_local_source(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         pdf_service, "_store_pdf_source",
-        lambda source, papers_dir, citekey, fetch_binary: ("/p/smith2024.pdf", None),
+        lambda **kw: ("/p/smith2024.pdf", None),
     )
     monkeypatch.setattr(
         pdf_service, "update_bib_entry",
-        lambda path, citekey, updater: {
+        lambda path, citekey, updater, **kwargs: {
             "found": True,
             "entries": [],
             "entry": {"entry_type": "article", "citekey": "smith2024", "fields": {}},
@@ -537,6 +537,66 @@ def test_attach_pdf_bytes_valid_pdf_calls_attach_data(monkeypatch) -> None:
     assert captured_kwargs["source_url"] == "https://example.com/p.pdf"
 
 
+def test_attach_pdf_bytes_writes_absolute_file_field_by_default(tmp_path) -> None:
+    import base64
+
+    bib_path = tmp_path / "refs.bib"
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f"""
+[[bibs]]
+name = "ml"
+path = "{bib_path}"
+default = true
+""".strip(),
+        encoding="utf-8",
+    )
+    bib_path.write_text("@article{smith2024,\n  title = {T}\n}\n", encoding="utf-8")
+
+    result = pdf_service.attach_pdf_bytes(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        citekey="smith2024",
+        pdf_base64=base64.b64encode(b"%PDF-1.4 data").decode("ascii"),
+        source_url=None,
+    )
+
+    assert result["status"] == "ok"
+    assert f"file = {{{result['local_pdf_path']}}}" in bib_path.read_text(encoding="utf-8")
+
+
+def test_attach_pdf_bytes_writes_relative_file_field_when_configured(tmp_path) -> None:
+    import base64
+
+    bib_path = tmp_path / "refs.bib"
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f"""
+pdf_file_path_style = "relative"
+
+[[bibs]]
+name = "ml"
+path = "{bib_path}"
+default = true
+""".strip(),
+        encoding="utf-8",
+    )
+    bib_path.write_text("@article{smith2024,\n  title = {T}\n}\n", encoding="utf-8")
+
+    result = pdf_service.attach_pdf_bytes(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        citekey="smith2024",
+        pdf_base64=base64.b64encode(b"%PDF-1.4 data").decode("ascii"),
+        source_url=None,
+    )
+
+    assert result["status"] == "ok"
+    assert "file = {papers/smith2024.pdf}" in bib_path.read_text(encoding="utf-8")
+
+
 # ---------------------------------------------------------------------------
 # _attach_pdf_data: citekey not found, update not found, success
 # ---------------------------------------------------------------------------
@@ -570,7 +630,7 @@ def test_attach_pdf_data_update_disappeared(monkeypatch, tmp_path: Path) -> None
     )
     monkeypatch.setattr(
         pdf_service, "update_bib_entry",
-        lambda path, citekey, updater: {
+        lambda path, citekey, updater, **kwargs: {
             "found": False,
             "entries": [],
             "entry": None,
@@ -601,7 +661,7 @@ def test_attach_pdf_data_success(monkeypatch, tmp_path: Path) -> None:
     )
     monkeypatch.setattr(
         pdf_service, "update_bib_entry",
-        lambda path, citekey, updater: {
+        lambda path, citekey, updater, **kwargs: {
             "found": True,
             "entries": [],
             "entry": {"entry_type": "article", "citekey": "smith2024", "fields": {}},
@@ -632,7 +692,7 @@ def test_store_pdf_source_wrapper_delegates_to_shared_pdf_helper(monkeypatch) ->
     """The old private helper stays as a thin compatibility wrapper."""
     seen = {}
 
-    def fake_store_pdf_source(*, source, papers_dir, citekey, fetch_binary):
+    def fake_store_pdf_source(*, source, papers_dir, citekey, fetch_binary, **kwargs):
         seen.update(
             source=source,
             papers_dir=papers_dir,
@@ -913,3 +973,118 @@ def test_extract_pdf_metadata_real_pdf(tmp_path: Path) -> None:
     # Blank page has no text; just verify it doesn't crash
     assert result["doi"] is None
     assert result["title"] is None
+
+
+# ---------------------------------------------------------------------------
+# retry_failed_pdfs
+# ---------------------------------------------------------------------------
+
+
+def test_retry_failed_pdfs_bib_resolved_error(monkeypatch) -> None:
+    monkeypatch.setattr(
+        pdf_service, "load_and_resolve_bib",
+        lambda **kw: ["bib load error"],
+    )
+    result = pdf_service.retry_failed_pdfs(
+        config_path="/f", home_dir="/h", bib_selector=None,
+    )
+    assert result["status"] == "error"
+    assert result["message"] == "could not resolve target bib"
+
+
+def test_retry_failed_pdfs_all_skipped(monkeypatch) -> None:
+    """All entries already have PDF or no URL → skipped."""
+    monkeypatch.setattr(
+        pdf_service, "load_and_resolve_bib",
+        lambda **kw: ({"bibs": []}, {"name": "ml", "path": "/b", "papers_dir": "/p"}),
+    )
+    monkeypatch.setattr(
+        pdf_service, "read_bib_file",
+        lambda path: {
+            "entries": [
+                {"citekey": "smith2024", "fields": {"note": "PDF: http://x.com/p.pdf"}},
+                {"citekey": "jones2024", "fields": {"note": "some note"}},
+            ],
+            "records": [
+                {"citekey": "smith2024", "local_pdf_path": "/p/smith2024.pdf"},
+                {"citekey": "jones2024"},
+            ],
+        },
+    )
+
+    def fake_exists(self):
+        return str(self) == "/p/smith2024.pdf"
+
+    monkeypatch.setattr(pdf_service.Path, "exists", fake_exists)
+
+    result = pdf_service.retry_failed_pdfs(
+        config_path="/f", home_dir="/h", bib_selector=None,
+    )
+    assert result["status"] == "ok"
+    assert result["total"] == 0
+    assert result["skipped_already_has_pdf"] == 1
+    assert result["skipped_no_url"] == 1
+
+
+def test_retry_failed_pdfs_some_retried(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """Entries need retry → fetch and update some succeed, some fail."""
+    papers_dir = tmp_path / "papers"
+    papers_dir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(
+        pdf_service, "load_and_resolve_bib",
+        lambda **kw: (
+            {"bibs": []},
+            {"name": "ml", "path": str(tmp_path / "main.bib"), "papers_dir": str(papers_dir)},
+        ),
+    )
+    monkeypatch.setattr(
+        pdf_service, "read_bib_file",
+        lambda path: {
+            "entries": [
+                {"citekey": "smith2024", "fields": {"note": "PDF: http://x.com/p.pdf"}},
+                {"citekey": "jones2024", "fields": {"note": "PDF: http://y.com/q.pdf"}},
+            ],
+            "records": [
+                {"citekey": "smith2024"},
+                {"citekey": "jones2024"},
+            ],
+        },
+    )
+    monkeypatch.setattr(pdf_service, "extract_note_field", lambda note, label: "http://x.com/p.pdf")
+    monkeypatch.setattr(pdf_service, "_snapshot_pdf_paths", lambda dir: set())
+
+    call_count = {"count": 0}
+
+    def fake_fetch(**kw):
+        call_count["count"] += 1
+        # First call succeeds, second fails
+        if call_count["count"] == 1:
+            pdf = papers_dir / "smith2024.pdf"
+            pdf.write_bytes(b"%PDF-1.4")
+            return str(pdf), None
+        return None, "network error"
+
+    monkeypatch.setattr(pdf_service, "fetch_and_store_pdf", fake_fetch)
+    monkeypatch.setattr(
+        pdf_service, "update_bib_entry",
+        lambda path, citekey, updater, **kwargs: {
+            "found": True,
+            "entries": [],
+            "entry": {"entry_type": "article", "citekey": citekey, "fields": {}},
+            "record": {"citekey": citekey},
+        },
+    )
+
+    result = pdf_service.retry_failed_pdfs(
+        config_path="/f", home_dir="/h", bib_selector=None,
+    )
+    assert result["status"] == "ok"
+    assert result["total"] == 2
+    assert result["succeeded"] == 1
+    assert result["skipped_already_has_pdf"] == 0
+    assert result["skipped_no_url"] == 0
+    assert len(result["failures"]) == 1
+    assert result["failures"][0]["citekey"] == "jones2024"

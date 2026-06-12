@@ -6,7 +6,10 @@ PDF download is blocked, the extension can fetch visible PDF candidates with the
 active browser session (`credentials: "include"`) and upload the PDF bytes to
 the local `/attach-pdf-bytes` endpoint.
 
-> **Store status:** Not yet listed on the Chrome Web Store or Firefox Add-ons. Install as an unpacked/temporary extension. Store submission is planned.
+Install as an unpacked/temporary extension. On first install, an onboarding page
+opens to help set up the API token and test the connection. Once configured, you
+can capture by clicking the toolbar icon or by right-clicking any link → **Save
+to pzi**.
 
 ## Build
 
@@ -28,7 +31,9 @@ Outputs:
 2. Start the service: `pzi server`
 3. Go to `about:debugging` → This Firefox → Load Temporary Add-on
 4. Select `dist/firefox/manifest.json`
-5. Click the extension action, optionally set tags/bib/dry-run, and click **Capture current page**
+5. The onboarding page opens automatically — set your API token and test the connection
+6. Click the extension action, optionally set tags/bib/dry-run, and click **Capture current page**
+7. You can also right-click any link on any page → **Save to pzi**
 
 ## Install (Chrome)
 
@@ -36,7 +41,9 @@ Outputs:
 2. Start the service: `pzi server`
 3. Open `chrome://extensions`, enable developer mode, click "Load unpacked"
 4. Select `dist/chrome/`
-5. Click the extension action and click **Capture current page**
+5. The onboarding page opens automatically — set your API token and test the connection
+6. Click the extension action and click **Capture current page**
+7. You can also right-click any link on any page → **Save to pzi**
 
 ## Configuration
 

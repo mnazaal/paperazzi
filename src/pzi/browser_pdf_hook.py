@@ -5,17 +5,8 @@ Supports Firefox and Chromium-based browsers with profile reuse.
 
 Auto-installs browser binaries on first use if missing.
 
-Usage:
-  # Discover PDF URL from a page
-  echo '{"page_url": "https://..."}' | browser_pdf_hook.py
-
-  # Download PDF bytes using browser profile
-  echo '{"action": "download_pdf", "pdf_url": "https://..."}' \
-    | browser_pdf_hook.py --profile /path/to/profile
-
-  # Download PDF with specific browser type
-  echo '{"action": "download_pdf", "pdf_url": "https://..."}' \
-    | browser_pdf_hook.py --profile /path/to/profile --browser firefox
+Invoked internally by pzi via the browser_pdf_cmd config option.
+Normally run as: python -m pzi.browser_pdf_hook [--profile PATH] [--browser chromium|firefox]
 
 Reads JSON on stdin:
   {"page_url": "...", "doi": "..."}  # discover PDF URL
@@ -259,7 +250,7 @@ def main() -> int:  # pragma: no cover — CLI entry point
         )
         if pdf_bytes is None and args.headful:
             print(
-                "pzi-browser-hook: visible browser fallback did not obtain a PDF. "
+                "browser PDF hook: visible browser fallback did not obtain a PDF. "
                 "If a verification page appeared, complete it before the timeout; "
                 "otherwise configure browser_pdf_cmd with your regular browser profile.",
                 file=sys.stderr,

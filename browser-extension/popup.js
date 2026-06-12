@@ -1,12 +1,14 @@
 import {
-  captureCurrentTab,
   fetchBibs,
   getEndpoint,
   getAuthHeaders,
   detectAndExtractSearchResults,
   cookieHeaderForUrl,
+  captureCurrentTab,
 } from "./background.js";
 import { formatCaptureResult, formatMultiCaptureResult } from "./popup_format.js";
+
+const POPUP_BUILD_MARKER = "2025-06-12-phases-012";
 
 // ── DOM refs ────────────────────────────────────────────────────────────
 const summary = document.getElementById("summary");
@@ -24,6 +26,7 @@ const captureAllBtn = document.getElementById("capture-all");
 const cancelSearchBtn = document.getElementById("cancel-search");
 const searchProgress = document.getElementById("search-progress");
 const searchProgressText = document.getElementById("search-progress-text");
+const recentList = document.getElementById("recent-list");
 
 let _searchItems = [];
 
@@ -48,7 +51,96 @@ async function populateBibs() {
 
 populateBibs();
 
-// ── Search result detection (Tier 4, P1-fixed: URL fast path first) ──────
+// ── Recent captures ──────────────────────────────────────────────────────
+
+const MAX_RECENT = 20;
+
+async function _storeRecent(citekey, title, bib) {
+  const stored = await getStorage().get("pzi:recent");
+  let items = (stored && stored["pzi:recent"]) || [];
+  // Remove duplicates of same citekey
+  items = items.filter((r) => r.citekey !== citekey);
+  items.unshift({ citekey, title: (title || "").slice(0, 80), bib: bib || "main", ts: Date.now() });
+  if (items.length > MAX_RECENT) items = items.slice(0, MAX_RECENT);
+  await getStorage().set({ "pzi:recent": items });
+}
+
+async function _loadRecent() {
+  const stored = await getStorage().get("pzi:recent");
+  return (stored && stored["pzi:recent"]) || [];
+}
+
+function _renderRecent(items) {
+  if (!items.length) {
+    recentList.innerHTML = '<span style="color:#888;">(none yet)</span>';
+    return;
+  }
+  let html = "";
+  for (const item of items) {
+    const short = item.citekey + (item.title ? " — " + item.title : "");
+    html += '<div style="display:flex; align-items:center; margin:3px 0; gap:4px;">'
+      + '<span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + escHtml(short) + '</span>'
+      + '<button data-action="pdf" data-citekey="' + escAttr(item.citekey) + '" data-bib="' + escAttr(item.bib) + '" style="width:auto; padding:1px 5px; margin:0; font-size:10px;">PDF</button>'
+      + '<button data-action="delete" data-citekey="' + escAttr(item.citekey) + '" data-bib="' + escAttr(item.bib) + '" style="width:auto; padding:1px 5px; margin:0; font-size:10px;">✕</button>'
+      + '</div>';
+  }
+  recentList.innerHTML = html;
+  // Wire buttons
+  recentList.querySelectorAll("button[data-action='pdf']").forEach(btn => {
+    btn.addEventListener("click", () => _openPdf(btn.dataset.citekey, btn.dataset.bib));
+  });
+  recentList.querySelectorAll("button[data-action='delete']").forEach(btn => {
+    btn.addEventListener("click", () => _deleteEntry(btn.dataset.citekey, btn.dataset.bib));
+  });
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+function escAttr(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+}
+
+async function _openPdf(citekey, bib) {
+  const endpoint = await getEndpoint();
+  const base = endpoint.replace(/\/$/, "");
+  const url = base + "/pdf/" + encodeURIComponent(citekey) + (bib && bib !== "main" ? "?bib=" + encodeURIComponent(bib) : "");
+  window.open(url, "_blank");
+}
+
+async function _deleteEntry(citekey, bib) {
+  if (!confirm("Delete " + citekey + "?")) return;
+  const endpoint = await getEndpoint();
+  const authHeaders = await getAuthHeaders();
+  try {
+    const resp = await fetch(endpoint.replace(/\/$/, "") + "/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders },
+      body: JSON.stringify({ citekey, bib: bib || null }),
+    });
+    const data = await resp.json().catch(() => null);
+    if (data && data.status === "ok") {
+      summary.textContent = "✅ Deleted " + citekey;
+      // Remove from recent
+      const stored = await getStorage().get("pzi:recent");
+      let items = (stored && stored["pzi:recent"]) || [];
+      items = items.filter(r => r.citekey !== citekey);
+      await getStorage().set({ "pzi:recent": items });
+      _renderRecent(items);
+    } else {
+      summary.textContent = "❌ " + (data?.message || "delete failed");
+    }
+  } catch (err) {
+    summary.textContent = "❌ delete error: " + (err?.message || String(err));
+  }
+}
+
+// ── Populate recent on load ───────────────────────────────────────────────
+async function _initRecent() {
+  const items = await _loadRecent();
+  _renderRecent(items);
+}
+_initRecent();
 
 async function initSearchDetection() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -177,6 +269,9 @@ async function doMultiCapture(all) {
       });
       const data = await response.json().catch(() => null);
       results.push(data || { status: "error", message: "invalid JSON" });
+      if (data && data.citekey) {
+        _storeRecent(data.citekey, data.title || "", data.bib || bib || "");
+      }
     } catch (err) {
       results.push({ status: "error", message: err?.message || String(err), item_url: item.url });
     }
@@ -193,6 +288,7 @@ async function doMultiCapture(all) {
   // Restore UI.
   _resetSearchUI();
   _searchItems = [];
+  _initRecent();
 }
 
 function _resetSearchUI() {
@@ -212,25 +308,149 @@ function cancelSearch() {
 }
 
 
-// ── Single-item capture (existing) ──────────────────────────────────────
+// ── Single-item capture (background-bridged) ────────────────────────────
+
+export async function requestActiveTabOriginPermission(tabUrl) {
+  let origin;
+  try {
+    origin = new URL(tabUrl).origin;
+  } catch (_error) {
+    return { status: "invalid_url", origin: null };
+  }
+  if (!chrome.permissions) return { status: "unavailable", origin };
+  const request = { origins: [`${origin}/*`] };
+  try {
+    if (await chrome.permissions.contains(request)) {
+      return { status: "granted", origin, already_granted: true };
+    }
+  } catch (_error) {
+    // continue to request; popup click still holds user gesture in Firefox.
+  }
+  try {
+    const granted = Boolean(await chrome.permissions.request(request));
+    return { status: granted ? "granted" : "denied", origin };
+  } catch (_error) {
+    return { status: "denied", origin };
+  }
+}
+
+export function stampPopupResult(result) {
+  const out = (result && typeof result === "object") ? { ...result } : { status: "error", errors: ["invalid capture result"] };
+  out.popup_build_marker = POPUP_BUILD_MARKER;
+  return out;
+}
 
 async function doSingleCapture() {
   const tags = document.getElementById("tags").value.split(",").map((s) => s.trim()).filter(Boolean);
   const bib = bibSelect.value || null;
   const dryRun = document.getElementById("dry").checked;
+  const forceNew = document.getElementById("force").checked;
   await getStorage().set({ authToken: tokenInput.value.trim() });
 
   summary.textContent = "Capturing…";
   raw.textContent = "";
   button.disabled = true;
+
+  let tabId = null;
+  let tabUrl = null;
   try {
-    const result = await captureCurrentTab({ tags, bib, dryRun });
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab && tab.id && tab.url) {
+      tabId = tab.id;
+      tabUrl = tab.url;
+    }
+  } catch (_err) {
+    summary.textContent = "❌ Cannot access active tab";
+    button.disabled = false;
+    return;
+  }
+  if (!tabId) {
+    summary.textContent = "❌ No active tab found";
+    button.disabled = false;
+    return;
+  }
+
+  if (!dryRun) {
+    await requestActiveTabOriginPermission(tabUrl);
+  }
+
+  // Run capture in popup context so Firefox keeps optional permission request
+  // tied to the user's click and avoids stale background service workers.
+  await getStorage().remove(["pzi:lastCapture", "pzi:captureInProgress", "pzi:captureStage"]);
+  try {
+    const result = stampPopupResult(await captureCurrentTab({ tags, bib, dryRun, forceNew, tabId, tabUrl }));
     summary.textContent = formatCaptureResult(result);
     raw.textContent = JSON.stringify(result, null, 2);
+    if (result.citekey) {
+      _storeRecent(result.citekey, result.title || "", result.bib || "").then(() => _initRecent());
+    }
   } catch (err) {
-    summary.textContent = "❌ Capture failed: " + (err && err.message ? err.message : String(err));
+    const result = stampPopupResult({ status: "error", errors: [err?.message || String(err)] });
+    summary.textContent = formatCaptureResult(result);
+    raw.textContent = JSON.stringify(result, null, 2);
   } finally {
     button.disabled = false;
+    _clearBadge();
+  }
+}
+
+async function _pollCaptureResult(retries) {
+  const stored = await getStorage().get(["pzi:lastCapture", "pzi:captureInProgress", "pzi:captureStage"]);
+  const result = stored && stored["pzi:lastCapture"];
+  const stage = stored && stored["pzi:captureStage"];
+
+  if (result) {
+    if (!result.extension_version) result.popup_build_marker = POPUP_BUILD_MARKER;
+    summary.textContent = formatCaptureResult(result);
+    raw.textContent = JSON.stringify(result, null, 2);
+    button.disabled = false;
+    // Store in recent captures
+    if (result.citekey) {
+      _storeRecent(result.citekey, result.title || "", result.bib || "").then(() => _initRecent());
+    }
+    await getStorage().remove(["pzi:lastCapture", "pzi:captureInProgress", "pzi:captureStage"]);
+    _clearBadge();
+    return;
+  }
+
+  if (stage) {
+    const stageLabels = {
+      extracting: "Scanning page for metadata…",
+      fetching: "Fetching paper details…",
+      processing: "Processing metadata…",
+      downloading: "Downloading PDF…",
+    };
+    summary.textContent = stageLabels[stage] || stage;
+  }
+
+  if (retries > 0) {
+    setTimeout(() => _pollCaptureResult(retries - 1), 500);
+  } else {
+    summary.textContent += " (still in progress…)";
+    // Keep polling while service worker is alive.
+    setTimeout(() => _pollCaptureResult(120), 500);
+  }
+}
+
+function _clearBadge() {
+  if (typeof chrome !== "undefined" && chrome.action) {
+    chrome.action.setBadgeText({ text: "" }).catch(() => {});
+  }
+}
+
+// ── Check for stored capture from previous popup close ──────────────────
+
+async function _checkStoredCapture() {
+  // Don't interfere if the user already clicked capture.
+  if (button.disabled) return;
+  const stored = await getStorage().get(["pzi:lastCapture", "pzi:captureInProgress", "pzi:captureStage"]);
+  const result = stored && stored["pzi:lastCapture"];
+  if (result) {
+    if (!result.extension_version) result.popup_build_marker = POPUP_BUILD_MARKER;
+    summary.textContent = formatCaptureResult(result);
+    raw.textContent = JSON.stringify(result, null, 2);
+    await getStorage().remove(["pzi:lastCapture", "pzi:captureInProgress", "pzi:captureStage"]);
+    _clearBadge();
   }
 }
 
@@ -242,5 +462,6 @@ captureSelectedBtn.addEventListener("click", () => doMultiCapture(false));
 captureAllBtn.addEventListener("click", () => doMultiCapture(true));
 cancelSearchBtn.addEventListener("click", cancelSearch);
 
-// Auto-detect search results on popup open.
+// Auto-detect search results and check for stored capture on popup open.
 initSearchDetection();
+_checkStoredCapture();

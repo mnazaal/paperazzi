@@ -6,12 +6,13 @@ All follow the same pattern: fetch_text() → JSON → normalize.
 
 from __future__ import annotations
 
+import functools
 import json
 from collections.abc import Callable
 from urllib.parse import quote
 
-from pzi.capture_context import metadata_user_agent
 from pzi.bibtex import NormalizedRecord
+from pzi.capture_context import metadata_user_agent
 from pzi.fetch_helpers import fetch_text as _fetch_text
 from pzi.identifiers import normalize_doi
 
@@ -28,15 +29,14 @@ def fetch_crossref_record(
 ) -> NormalizedRecord | None:
     """Return normalized record from Crossref for a DOI, or None on failure."""
     fn = fetch_text or _fetch_text
-    try:
-        url = f"https://api.crossref.org/works/{quote(doi, safe='')}"
-        data = json.loads(_fetch_text_with_identity(fn, url, contact_email=contact_email))
-        work = data.get("message")
-        if not isinstance(work, dict):
-            return None
-        return _crossref_normalize_work(work)
-    except (OSError, json.JSONDecodeError, ValueError):
+    data = _api_json(f"https://api.crossref.org/works/{quote(doi, safe='')}",
+                     fn=fn, contact_email=contact_email)
+    if not isinstance(data, dict):
         return None
+    work = data.get("message")
+    if not isinstance(work, dict):
+        return None
+    return _crossref_normalize_work(work)
 
 
 def fetch_crossref_record_by_title(
@@ -46,19 +46,16 @@ def fetch_crossref_record_by_title(
     if not title.strip():
         return None
     fn = fetch_text or _fetch_text
-    try:
-        url = (
-            "https://api.crossref.org/works?"
-            f"query.title={quote(title.strip(), safe='')}&rows=1"
-        )
-        data = json.loads(_fetch_text_with_identity(fn, url, contact_email=contact_email))
-        message = data.get("message")
-        items = message.get("items") if isinstance(message, dict) else None
-        if not isinstance(items, list) or not items or not isinstance(items[0], dict):
-            return None
-        return _crossref_normalize_work(items[0])
-    except (OSError, json.JSONDecodeError, ValueError):
+    data = _api_json(
+        f"https://api.crossref.org/works?query.title={quote(title.strip(), safe='')}&rows=1",
+        fn=fn, contact_email=contact_email)
+    if not isinstance(data, dict):
         return None
+    message = data.get("message")
+    items = message.get("items") if isinstance(message, dict) else None
+    if not isinstance(items, list) or not items or not isinstance(items[0], dict):
+        return None
+    return _crossref_normalize_work(items[0])
 
 
 def fetch_crossref_pdf_url(
@@ -66,15 +63,14 @@ def fetch_crossref_pdf_url(
 ) -> str | None:
     """Return a direct PDF URL from Crossref link[] field, or None."""
     fn = fetch_text or _fetch_text
-    try:
-        url = f"https://api.crossref.org/works/{quote(doi, safe='')}"
-        data = json.loads(_fetch_text_with_identity(fn, url, contact_email=contact_email))
-        work = data.get("message")
-        if not isinstance(work, dict):
-            return None
-        return _crossref_extract_pdf_url(work)
-    except (OSError, json.JSONDecodeError, ValueError):
+    data = _api_json(f"https://api.crossref.org/works/{quote(doi, safe='')}",
+                     fn=fn, contact_email=contact_email)
+    if not isinstance(data, dict):
         return None
+    work = data.get("message")
+    if not isinstance(work, dict):
+        return None
+    return _crossref_extract_pdf_url(work)
 
 
 def _crossref_normalize_work(work: dict[str, object]) -> NormalizedRecord:
@@ -191,16 +187,13 @@ def fetch_openalex_record(
 ) -> NormalizedRecord | None:
     """Return normalized record from OpenAlex for a DOI, or None on failure."""
     fn = fetch_text or _fetch_text
-    try:
-        url = f"https://api.openalex.org/works/doi:{quote(doi, safe='')}"
-        if contact_email:
-            url = f"{url}?mailto={quote(contact_email, safe='')}"
-        data = json.loads(fn(url))
-        if "id" not in data:
-            return None
-        return _openalex_normalize_work(data)
-    except (OSError, json.JSONDecodeError, ValueError):
+    url = f"https://api.openalex.org/works/doi:{quote(doi, safe='')}"
+    if contact_email:
+        url = f"{url}?mailto={quote(contact_email, safe='')}"
+    data = _api_json_direct(url, fn)
+    if not isinstance(data, dict) or "id" not in data:
         return None
+    return _openalex_normalize_work(data)
 
 
 def fetch_openalex_record_by_title(
@@ -210,17 +203,16 @@ def fetch_openalex_record_by_title(
     if not title.strip():
         return None
     fn = fetch_text or _fetch_text
-    try:
-        url = f"https://api.openalex.org/works?search={quote(title.strip(), safe='')}&per-page=1"
-        if contact_email:
-            url = f"{url}&mailto={quote(contact_email, safe='')}"
-        data = json.loads(fn(url))
-        results = data.get("results")
-        if not isinstance(results, list) or not results or not isinstance(results[0], dict):
-            return None
-        return _openalex_normalize_work(results[0])
-    except (OSError, json.JSONDecodeError, ValueError):
+    url = f"https://api.openalex.org/works?search={quote(title.strip(), safe='')}&per-page=1"
+    if contact_email:
+        url = f"{url}&mailto={quote(contact_email, safe='')}"
+    data = _api_json_direct(url, fn)
+    if not isinstance(data, dict):
         return None
+    results = data.get("results")
+    if not isinstance(results, list) or not results or not isinstance(results[0], dict):
+        return None
+    return _openalex_normalize_work(results[0])
 
 
 def _openalex_normalize_work(work: dict[str, object]) -> NormalizedRecord:
@@ -305,19 +297,13 @@ def fetch_semantic_scholar_record(
 ) -> NormalizedRecord | None:
     """Return normalized record from Semantic Scholar for a DOI, or None."""
     fn = fetch_text or _make_fetch_text(api_key)
-    try:
-        fields = "title,authors,year,venue,externalIds,openAccessPdf"
-        encoded_doi = quote(doi, safe="")
-        url = (
-            "https://api.semanticscholar.org/graph/v1/paper/"
-            f"DOI:{encoded_doi}?fields={fields}"
-        )
-        data = json.loads(fn(url))
-        if "error" in data or "message" in data:
-            return None
-        return _s2_normalize_paper(data)
-    except (OSError, json.JSONDecodeError, ValueError):
+    fields = "title,authors,year,venue,externalIds,openAccessPdf"
+    base = "https://api.semanticscholar.org/graph/v1/paper"
+    url = f"{base}/DOI:{quote(doi, safe='')}?fields={fields}"
+    data = _api_json_direct(url, fn)
+    if not isinstance(data, dict) or "error" in data or "message" in data:
         return None
+    return _s2_normalize_paper(data)
 
 
 def fetch_semantic_scholar_record_by_title(
@@ -331,25 +317,21 @@ def fetch_semantic_scholar_record_by_title(
     if not stripped:
         return None
     fn = fetch_text or _make_fetch_text(api_key)
-    try:
-        fields = "title,authors,year,venue,externalIds,openAccessPdf"
-        encoded_title = quote(stripped, safe="")
-        url = (
-            "https://api.semanticscholar.org/graph/v1/paper/search?"
-            f"query={encoded_title}&limit=1&fields={fields}"
-        )
-        data = json.loads(fn(url))
-        if "error" in data or "message" in data:
-            return None
-        papers = data.get("data")
-        if not isinstance(papers, list) or not papers:
-            return None
-        paper = papers[0]
-        if not isinstance(paper, dict):
-            return None
-        return _s2_normalize_paper(paper)
-    except (OSError, json.JSONDecodeError, ValueError):
+    fields = "title,authors,year,venue,externalIds,openAccessPdf"
+    url = (
+        "https://api.semanticscholar.org/graph/v1/paper/search?"
+        f"query={quote(stripped, safe='')}&limit=1&fields={fields}"
+    )
+    data = _api_json_direct(url, fn)
+    if not isinstance(data, dict) or "error" in data or "message" in data:
         return None
+    papers = data.get("data")
+    if not isinstance(papers, list) or not papers:
+        return None
+    paper = papers[0]
+    if not isinstance(paper, dict):
+        return None
+    return _s2_normalize_paper(paper)
 
 
 def _s2_normalize_paper(paper: dict[str, object]) -> NormalizedRecord:
@@ -395,7 +377,7 @@ def _s2_normalize_paper(paper: dict[str, object]) -> NormalizedRecord:
 
 
 def _make_fetch_text(api_key: str | None) -> FetchText:
-    return lambda url: _fetch_text(url, api_key=api_key)
+    return functools.partial(_fetch_text, api_key=api_key)
 
 
 def _fetch_text_with_identity(
@@ -409,6 +391,22 @@ def _fetch_text_with_identity(
     return fn(url)
 
 
+def _api_json(url: str, *, fn: FetchText, contact_email: str | None = None) -> object | None:
+    """Fetch JSON from a metadata API, returning None on network or parse errors."""
+    try:
+        return json.loads(_fetch_text_with_identity(fn, url, contact_email=contact_email))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+
+
+def _api_json_direct(url: str, fn: FetchText) -> object | None:
+    """Fetch JSON without identity headers, returning None on network or parse errors."""
+    try:
+        return json.loads(fn(url))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+
+
 # ============================================================================
 # DOAJ
 # ============================================================================
@@ -419,18 +417,13 @@ def fetch_doaj_pdf_url(
 ) -> str | None:
     """Return a PDF URL from DOAJ for a DOI, or None."""
     fn = fetch_text or _fetch_text
-    try:
-        encoded_doi = quote(doi, safe="")
-        url = f"https://doaj.org/api/search/articles/doi:{encoded_doi}"
-        data = json.loads(fn(url))
-        results = data.get("results", [])
-        if not results:
-            return None
-
-        article = results[0]
-        return _doaj_extract_pdf_url(article)
-    except (OSError, json.JSONDecodeError, ValueError):
+    data = _api_json_direct(f"https://doaj.org/api/search/articles/doi:{quote(doi, safe='')}", fn)
+    if not isinstance(data, dict):
         return None
+    results = data.get("results", [])
+    if not results:
+        return None
+    return _doaj_extract_pdf_url(results[0])
 
 
 def _doaj_extract_pdf_url(article: dict[str, object]) -> str | None:
@@ -477,21 +470,17 @@ def fetch_europepmc_pdf_url(
 ) -> str | None:
     """Return an open-access PDF URL from Europe PMC, or None."""
     fn = fetch_text or _fetch_text
-    try:
-        encoded_doi = quote(doi, safe="")
-        url = (
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
-            f"?query=DOI:{encoded_doi}&resultType=core&format=json"
-        )
-        data = json.loads(fn(url))
-        results = data.get("resultList", {}).get("result", [])
-        if not results:
-            return None
-
-        result = results[0]
-        return _epmc_extract_pdf_url(result)
-    except (OSError, json.JSONDecodeError, ValueError):
+    url = (
+        "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+        f"?query=DOI:{quote(doi, safe='')}&resultType=core&format=json"
+    )
+    data = _api_json_direct(url, fn)
+    if not isinstance(data, dict):
         return None
+    results = data.get("resultList", {}).get("result", [])
+    if not results:
+        return None
+    return _epmc_extract_pdf_url(results[0])
 
 
 def _epmc_extract_pdf_url(result: dict[str, object]) -> str | None:
@@ -535,17 +524,3 @@ def _epmc_extract_pdf_url(result: dict[str, object]) -> str | None:
             return pdf_url.strip()
 
     return None
-
-
-# Aliases for test imports
-# ------------------------
-_extract_pdf_url = _epmc_extract_pdf_url
-_doaj_extract_pdf_url_alias = _doaj_extract_pdf_url
-_normalize_work = _openalex_normalize_work
-
-_crossref_normalize_work = _crossref_normalize_work
-_crossref_extract_pdf_url = _crossref_extract_pdf_url
-_openalex_normalize_work = _openalex_normalize_work
-_doaj_extract_pdf_url = _doaj_extract_pdf_url
-_epmc_extract_pdf_url = _epmc_extract_pdf_url
-_s2_normalize_paper = _s2_normalize_paper

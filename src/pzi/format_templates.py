@@ -8,7 +8,7 @@ import unicodedata
 from collections.abc import Mapping
 from typing import Any
 
-from pzi.bibtex import generate_citekey_base, resolve_citekey_collision
+from pzi.bibtex import generate_citekey_base, normalize_authors, resolve_citekey_collision
 
 _TEMPLATE_RE = re.compile(r"{{\s*:?\s*([A-Za-z][A-Za-z0-9_]*)\s*([^{}]*)}}")
 _NON_CITEKEY = re.compile(r"[^a-z0-9]+")
@@ -211,14 +211,17 @@ def _first_creator(record: Mapping[str, Any]) -> str:
 
 
 def _author_family_names(record: Mapping[str, Any]) -> list[str]:
-    authors = record.get("authors")
-    if not isinstance(authors, list):
+    authors = normalize_authors(record.get("authors"))
+    if not authors:
         return []
     families: list[str] = []
+    _bare = re.compile(r"^[A-Z]\.$")  # skip single-initial entries like "N."
     for author in authors:
         if not isinstance(author, str) or not author.strip():
             continue
         text = author.strip()
+        if _bare.match(text):
+            continue
         family = text.split(",", 1)[0] if "," in text else text.split()[-1]
         families.append(family.strip())
     return families
@@ -226,7 +229,7 @@ def _author_family_names(record: Mapping[str, Any]) -> list[str]:
 
 def _citekey_input(record: Mapping[str, Any]) -> dict[str, Any]:
     return {
-        "authors": list(record.get("authors") or []),
+        "authors": normalize_authors(record.get("authors")),
         "title": record.get("title"),
         "year": record.get("year"),
     }

@@ -6,7 +6,6 @@ from collections.abc import Mapping
 from typing import Any, TypeAlias, cast
 from urllib.parse import urlsplit
 
-from pzi.capture_context import resolve_contact_email
 from pzi.bib_repository import (
     execute_write_plan,
     plan_bib_write,
@@ -14,8 +13,8 @@ from pzi.bib_repository import (
     read_bib_file,
     update_bib_entry,
 )
-from pzi.bibtex import NormalizedRecord, generate_citekey, record_to_bibtex_entry
-from pzi.capture_context import resolve_optional_value
+from pzi.bibtex import NormalizedRecord, generate_citekey, normalize_authors, record_to_bibtex_entry
+from pzi.capture_context import resolve_contact_email, resolve_optional_value
 from pzi.config import load_and_resolve_bib
 from pzi.format_templates import format_citekey
 from pzi.metadata_sources import (
@@ -236,29 +235,6 @@ def _empty_summary() -> dict[str, int]:
 # ---------------------------------------------------------------------------
 
 
-def _find_published_candidate(
-    *,
-    record: NormalizedRecord,
-    server_url: str,
-    fetch_search,
-    fetch_crossref,
-    fetch_openalex,
-    fetch_s2,
-    s2_api_key: str | None,
-    contact_email: str | None = None,
-) -> NormalizedRecord | None:
-    return cast(NormalizedRecord | None, _find_published_candidate_with_diagnostics(
-        record=record,
-        server_url=server_url,
-        fetch_search=fetch_search,
-        fetch_crossref=fetch_crossref,
-        fetch_openalex=fetch_openalex,
-        fetch_s2=fetch_s2,
-        s2_api_key=s2_api_key,
-        contact_email=contact_email,
-    )["candidate"])
-
-
 def _find_published_candidate_with_diagnostics(
     *,
     record: NormalizedRecord,
@@ -374,12 +350,6 @@ def _first_with_venue(results: Any) -> NormalizedRecord | None:
         if isinstance(rec, Mapping) and rec.get("venue"):
             return cast(NormalizedRecord, dict(rec))
     return None
-
-
-def _select_best_translation_candidate(
-    preprint: NormalizedRecord, results: Any
-) -> NormalizedRecord | None:
-    return _select_best_published_candidate(preprint, _translation_candidates(results))
 
 
 def _translation_candidates(results: Any) -> list[NormalizedRecord]:
@@ -537,15 +507,32 @@ def _find_duplicate_citekey(
 # ---------------------------------------------------------------------------
 
 
-def _skip_item(preprint_ck: str, note: str, published_ck: str | None = None) -> PromoteItem:
-    return {
-        "preprint_citekey": preprint_ck,
-        "published_citekey": published_ck,
-        "action": "skip",
-        "changed_fields": [],
-        "pdf_attached": False,
+def _promote_item(
+    preprint_citekey: str,
+    published_citekey: str | None,
+    action: str,
+    *,
+    changed_fields: list[str] | None = None,
+    pdf_attached: bool | None = False,
+    note: str | None = None,
+    diff: str | None = None,
+) -> PromoteItem:
+    """Build a PromoteItem dict with all standard fields."""
+    item: PromoteItem = {
+        "preprint_citekey": preprint_citekey,
+        "published_citekey": published_citekey,
+        "action": action,
+        "changed_fields": changed_fields or [],
+        "pdf_attached": pdf_attached,
         "note": note,
     }
+    if diff is not None:
+        item["diff"] = diff
+    return item
+
+
+def _skip_item(preprint_ck: str, note: str, published_ck: str | None = None) -> PromoteItem:
+    return _promote_item(preprint_ck, published_ck, "skip", note=note)
 
 
 def _handle_keep_preprint(
@@ -604,17 +591,12 @@ def _handle_keep_preprint(
             _remove_new_pdf(_local_pdf_path(published), existing_pdf_paths)
             raise
 
-    item = {
-        "preprint_citekey": preprint_ck,
-        "published_citekey": published_ck,
-        "action": "create",
-        "changed_fields": changed_fields,
-        "pdf_attached": pdf_attached,
-        "note": None,
-    }
-    if diff is not None:
-        item["diff"] = diff
-    return item
+    return _promote_item(
+        preprint_ck, published_ck, "create",
+        changed_fields=changed_fields,
+        pdf_attached=pdf_attached,
+        diff=diff,
+    )
 
 
 def _handle_update_in_place(
@@ -660,30 +642,21 @@ def _handle_update_in_place(
         update_result = update_bib_entry(bib_path, preprint_ck, _updater)
         if update_result.get("found") is not True:
             _remove_new_pdf(_local_pdf_path(updated), existing_pdf_paths)
-            return {
-                "preprint_citekey": preprint_ck,
-                "published_citekey": preprint_ck,
-                "action": "error",
-                "changed_fields": [],
-                "pdf_attached": False,
-                "note": "preprint entry disappeared before promotion update could be written",
-            }
+            return _promote_item(
+                preprint_ck, preprint_ck, "error",
+                note="preprint entry disappeared before promotion update could be written",
+            )
 
     changed_fields = sorted(
         key for key in updated if updated.get(key) != preprint_record.get(key)
     )
 
-    item = {
-        "preprint_citekey": preprint_ck,
-        "published_citekey": preprint_ck,
-        "action": "update",
-        "changed_fields": changed_fields,
-        "pdf_attached": pdf_attached if not dry_run else None,
-        "note": None,
-    }
-    if diff is not None:
-        item["diff"] = diff
-    return item
+    return _promote_item(
+        preprint_ck, preprint_ck, "update",
+        changed_fields=changed_fields,
+        pdf_attached=pdf_attached if not dry_run else None,
+        diff=diff,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -767,7 +740,7 @@ def _generate_citekey_for_candidate(
     if citekey_format:
         return format_citekey(citekey_format, record, existing_citekeys)
     return generate_citekey(
-        {"authors": list(record.get("authors") or []),
+        {"authors": normalize_authors(record.get("authors")),
          "title": cast(str | None, record.get("title")),
          "year": cast(int | None, record.get("year"))},
         existing_citekeys,

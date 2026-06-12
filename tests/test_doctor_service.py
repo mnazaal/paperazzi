@@ -27,6 +27,9 @@ def test_probe_translation_server_http_error(monkeypatch) -> None:
         def read(self):
             return b""
 
+        def close(self) -> None:
+            pass
+
     def fake_urlopen(request, *, timeout):
         raise HTTPError("http://localhost:1969", 500, "Error", {}, FakeErrorResponse())
 

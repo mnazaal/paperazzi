@@ -87,7 +87,7 @@ def download_pdf_with_browser(
         )
     except subprocess.TimeoutExpired:
         print(
-            "pzi-browser-hook: timed out while trying browser PDF download",
+            "browser PDF hook timed out while trying to download PDF",
             file=sys.stderr,
         )
         return None

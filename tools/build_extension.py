@@ -72,6 +72,11 @@ def _build_firefox_manifest(base: dict[str, Any]) -> dict[str, Any]:
             "strict_min_version": "109.0",
         }
     }
+    # Firefox-only: webRequestFilterResponse needed for responseHeaders access in MV3
+    permissions = list(manifest.get("permissions", []))
+    if "webRequestFilterResponse" not in permissions:
+        permissions.append("webRequestFilterResponse")
+    manifest["permissions"] = permissions
     return manifest
 
 
@@ -85,9 +90,10 @@ def _build_chrome_manifest(base: dict[str, Any]) -> dict[str, Any]:
 
 
 def _copy_extension_files(dest: Path) -> None:
+    EXCLUDE = frozenset({"manifest.base.json", "README.md"})
     dest.mkdir(parents=True, exist_ok=True)
     for item in SRC_DIR.iterdir():
-        if item.name == "manifest.base.json":
+        if item.name in EXCLUDE:
             continue
         if item.name.startswith("."):
             continue

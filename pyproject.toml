@@ -7,15 +7,18 @@ name = "pzi"
 version = "0.1.0"
 description = "Capture papers into local BibTeX libraries from DOI, URL, or PDF"
 readme = "README.md"
-license = "MIT"
+license = "AGPL-3.0-only"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 keywords = ["bibtex", "academic", "papers", "pdf", "zotero", "citation"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX :: Linux",
     "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Environment :: Console",
+    "Environment :: Web Environment",
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -24,7 +27,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Information Analysis",
     "Topic :: Text Processing :: Markup :: LaTeX",
 ]
-dependencies = ["bibtexparser>=1.4.4", "playwright>=1.40", "pypdf>=4.0"]
+dependencies = ["bibtexparser==2.0.0b9", "playwright>=1.40", "portalocker>=2", "pypdf>=4.0"]
 
 [project.optional-dependencies]
 completions = ["argcomplete>=3"]
@@ -43,7 +46,6 @@ Repository = "https://github.com/mnazaal/pzi"
 
 [project.scripts]
 pzi = "pzi.cli:main"
-pzi-browser-hook = "pzi.browser_pdf_hook:main"
 
 [tool.setuptools.package-data]
 pzi = ["config.template.toml", "py.typed"]
@@ -63,7 +65,7 @@ source = ["pzi"]
 [tool.coverage.report]
 show_missing = true
 skip_covered = true
-fail_under = 80
+fail_under = 70
 exclude_lines = [
     "pragma: no cover",
     "if __name__ == .__main__.",

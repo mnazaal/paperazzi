@@ -149,13 +149,6 @@ def request_security_error(
     return None
 
 
-def _extension_origin(origin: str | None) -> bool:
-    if origin is None:
-        return False
-    value = origin.strip().lower()
-    return value.startswith(("chrome-extension://", "moz-extension://"))
-
-
 def validated_content_length(value: str | None, *, max_body_bytes: int) -> int | tuple[int, str]:
     if value is None or not value.strip():
         return 0

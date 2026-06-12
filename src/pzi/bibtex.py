@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import re
 import unicodedata
 from typing import Any, TypeAlias
 
@@ -28,11 +29,9 @@ def record_to_bibtex_entry(
     if title is not None:
         fields["title"] = title
 
-    authors = record.get("authors")
+    authors = normalize_authors(record.get("authors"))
     if authors:
-        fields["author"] = " and ".join(
-            author.strip() for author in authors if author.strip()
-        )
+        fields["author"] = " and ".join(authors)
 
     year = record.get("year")
     if year is not None:
@@ -190,6 +189,66 @@ def _empty_to_none(value: str | None) -> str | None:
 CitekeyInput: TypeAlias = dict[str, Any]
 
 _NON_ALNUM_CITEKEY = re.compile(r"[^a-z0-9]+")
+# Pattern for bare initials like "N." that Zotero IEEE translator
+# sometimes emits as separate author entries instead of full names.
+# Requires period to avoid matching single characters from strings
+# accidentally fed through list() (e.g. list("N. E. Poborchaya")).
+_BARE_INITIAL = re.compile(r"^[A-Z]\.$")
+
+
+def normalize_authors(value: object) -> list[str]:
+    """Return a list of author strings from various input formats.
+
+    ``None``          → ``[]``
+    ``list[str]``     → kept as-is (already correct)
+    ``str``           → split by ``" and "`` separator
+    """
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(a) for a in value if a]
+    if isinstance(value, str):
+        parts = re.split(r"\s+and\s+", value)
+        if len(parts) > 1:
+            return [p.strip() for p in parts if p.strip()]
+        return [value.strip()] if value.strip() else []
+    return []
+
+
+def repair_split_initials(
+    authors: list[str] | None,
+) -> list[str]:
+    """Rejoin split-initial author entries from translators like Zotero/IEEE.
+
+    ``["N.", "E.", "Poborchaya", "E.", "O.", "Lobova"]``
+    → ``["N. E. Poborchaya", "E. O. Lobova"]``
+
+    Passes through already-correct author lists unchanged.
+    """
+    if not authors:
+        return authors if authors is not None else []
+
+    _bare = re.compile(r"^[A-Z]\.$")
+    repaired: list[str] = []
+    buffer: list[str] = []
+
+    for author in authors:
+        text = str(author).strip()
+        if not text:
+            continue
+        if _bare.match(text):
+            buffer.append(text)
+        else:
+            if buffer:
+                repaired.append(" ".join(buffer + [text]))
+                buffer = []
+            else:
+                repaired.append(text)
+
+    if buffer:
+        repaired.extend(buffer)
+
+    return repaired
 _STOPWORDS = frozenset(
     {
         "a",
@@ -215,14 +274,17 @@ def generate_citekey_base(data: CitekeyInput) -> str:
 
 
 def resolve_citekey_collision(base: str, existing_keys: set[str]) -> str:
-    """Return the first available citekey using a numeric suffix when needed."""
+    """Return the first available citekey using a numeric suffix when needed.
+
+    Suffixes use a hyphen separator: ``smith2024graph-2``, ``smith2024graph-3``.
+    """
     if base not in existing_keys:
         return base
 
     suffix = 2
-    while f"{base}{suffix}" in existing_keys:
+    while f"{base}-{suffix}" in existing_keys:
         suffix += 1
-    return f"{base}{suffix}"
+    return f"{base}-{suffix}"
 
 
 def generate_citekey(data: CitekeyInput, existing_keys: set[str]) -> str:
@@ -232,18 +294,38 @@ def generate_citekey(data: CitekeyInput, existing_keys: set[str]) -> str:
 
 
 def _author_token(authors: list[str]) -> str:
+    """Extract a citekey-author token from the authors list.
+
+    Skips bare-initial entries (e.g. ``"N."``, ``"E"``) that some web
+    translators emit as separate list elements — picks the first
+    entry that looks like a real name.
+    """
     if not authors:
         return "unknown"
 
+    for author_raw in authors:
+        author = author_raw.strip()
+        if not author:
+            continue
+        if _BARE_INITIAL.match(author):
+            continue
+        if "," in author:
+            family_name = author.split(",", 1)[0]
+        else:
+            parts = author.split()
+            family_name = parts[-1] if parts else author
+        token = _slug_token(family_name)
+        if token:
+            return token
+
+    # Fallback: all entries are bare-initials or empty — use first.
     first_author = authors[0].strip()
     if not first_author:
         return "unknown"
-
     if "," in first_author:
         family_name = first_author.split(",", 1)[0]
     else:
         family_name = first_author.split()[-1]
-
     token = _slug_token(family_name)
     return token or "unknown"
 

@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import functools
 import json
 from collections.abc import Callable, Mapping
 from typing import Any, TypeAlias, cast
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
-from pzi.bibtex import NormalizedRecord
+from pzi.bibtex import NormalizedRecord, repair_split_initials
 from pzi.fetch_helpers import DEFAULT_MAX_RESPONSE_BYTES, _read_limited
 from pzi.identifiers import _extract_year_from_str, normalize_doi, normalize_url
 
@@ -140,12 +141,9 @@ def _call_translation_server(
     if not isinstance(raw_response, list):
         raise ValueError("translation-server response must be a list")
 
-    normalized_items: list[Mapping[str, object]] = []
-    for item in raw_response:
-        if not isinstance(item, Mapping):
-            raise ValueError("translation-server items must be objects")
-        normalized_items.append(cast(Mapping[str, object], item))
-    return normalized_items
+    if not all(isinstance(item, Mapping) for item in raw_response):
+        raise ValueError("translation-server items must be objects")
+    return [cast(Mapping[str, object], item) for item in raw_response]
 
 
 def _post(
@@ -171,9 +169,7 @@ def _post(
         return json.loads(data.decode("utf-8"))  # pragma: no cover
 
 
-def _post_text(endpoint: str, payload: object) -> object:
-    return _post(endpoint, payload, content_type="text/plain")
-
+_post_text = functools.partial(_post, content_type="text/plain")
 
 def _normalize_creators(value: object) -> list[str]:
     if not isinstance(value, list):
@@ -193,7 +189,7 @@ def _normalize_creators(value: object) -> list[str]:
             authors.append(f"{last_name}, {first_name}")
         elif last_name:  # pragma: no branch — covered by integration/browser tests
             authors.append(last_name)
-    return authors
+    return repair_split_initials(authors)
 
 
 def _extract_year(item: Mapping[str, object]) -> int | None:

@@ -1,17 +1,17 @@
-from pzi.cli_render import (
-    error_lines,
-    render_add_success,
-    render_bib_list,
-    render_bib_promote_items,
-    render_bib_update_items,
-    render_pdf_success,
-    render_search_matches,
-    render_tag_mutation_success,
+from pzi.cli import (
+    _error_lines,
+    _render_add_success,
+    _render_bib_list,
+    _render_bib_promote_items,
+    _render_bib_update_items,
+    _render_pdf_success,
+    _render_search_matches,
+    _render_tag_mutation_success,
 )
 
 
 def test_error_lines_prefixes_each_error() -> None:
-    assert error_lines("failed", ["first", "second"]) == [
+    assert _error_lines("failed", ["first", "second"]) == [
         "failed",
         "- first",
         "- second",
@@ -20,7 +20,7 @@ def test_error_lines_prefixes_each_error() -> None:
 
 def test_render_add_success_includes_dry_run_prefix() -> None:
     assert (
-        render_add_success(
+        _render_add_success(
             {
                 "action": "insert",
                 "citekey": "smith2024graph",
@@ -34,7 +34,7 @@ def test_render_add_success_includes_dry_run_prefix() -> None:
 
 def test_render_pdf_success_formats_action_path() -> None:
     assert (
-        render_pdf_success(
+        _render_pdf_success(
             "attached",
             {"citekey": "smith2024graph", "local_pdf_path": "/tmp/paper.pdf"},
         )
@@ -44,7 +44,7 @@ def test_render_pdf_success_formats_action_path() -> None:
 
 def test_render_tag_mutation_success_uses_none_for_empty_tags() -> None:
     assert (
-        render_tag_mutation_success(
+        _render_tag_mutation_success(
             {
                 "message": "removed tags",
                 "citekey": "smith2024graph",
@@ -57,8 +57,8 @@ def test_render_tag_mutation_success_uses_none_for_empty_tags() -> None:
 
 
 def test_render_search_matches_formats_matches_and_empty_result() -> None:
-    assert render_search_matches({"matches": []}) == ["no matches"]
-    assert render_search_matches(
+    assert _render_search_matches({"matches": []}) == ["no matches"]
+    assert _render_search_matches(
         {
             "matches": [
                 {
@@ -73,7 +73,7 @@ def test_render_search_matches_formats_matches_and_empty_result() -> None:
 
 
 def test_render_bib_list_marks_default() -> None:
-    assert render_bib_list(
+    assert _render_bib_list(
         {
             "bibs": [
                 {"name": "ml", "path": "/tmp/ml.bib", "default": True},
@@ -84,10 +84,10 @@ def test_render_bib_list_marks_default() -> None:
 
 
 def test_render_bib_update_items_handles_noop_and_empty() -> None:
-    assert render_bib_update_items({"dry_run": True, "items": []}) == [
+    assert _render_bib_update_items({"dry_run": True, "items": []}) == [
         "DRY RUN: no updates"
     ]
-    assert render_bib_update_items(
+    assert _render_bib_update_items(
         {
             "dry_run": False,
             "items": [
@@ -98,10 +98,10 @@ def test_render_bib_update_items_handles_noop_and_empty() -> None:
 
 
 def test_render_bib_promote_items_includes_pdf_and_published_key() -> None:
-    assert render_bib_promote_items({"dry_run": False, "items": []}) == [
+    assert _render_bib_promote_items({"dry_run": False, "items": []}) == [
         "no preprints to promote"
     ]
-    assert render_bib_promote_items(
+    assert _render_bib_promote_items(
         {
             "dry_run": True,
             "items": [
@@ -118,7 +118,7 @@ def test_render_bib_promote_items_includes_pdf_and_published_key() -> None:
 
 
 def test_render_bib_promote_items_describes_create_and_update_actions() -> None:
-    assert render_bib_promote_items(
+    assert _render_bib_promote_items(
         {
             "dry_run": False,
             "items": [
@@ -147,7 +147,7 @@ def test_render_bib_promote_items_describes_create_and_update_actions() -> None:
 
 
 def test_render_bib_promote_items_includes_summary_footer() -> None:
-    assert render_bib_promote_items(
+    assert _render_bib_promote_items(
         {
             "dry_run": True,
             "items": [],

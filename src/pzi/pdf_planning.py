@@ -63,9 +63,12 @@ def normalized_hostname(url: str) -> str | None:
     return hostname
 
 
-def needs_desktop_browser_fallback(url: str) -> bool:
+def needs_desktop_browser_fallback(url: str, *, hosts: set[str] | None = None) -> bool:
     """Return True for hosts where direct PDF download is often blocked."""
-    return normalized_hostname(url) in {"biorxiv.org", "medrxiv.org"}
+    hostname = normalized_hostname(url)
+    if hostname is None:
+        return False
+    return hostname in (hosts or {"biorxiv.org", "medrxiv.org"})
 
 
 def candidate_matches_requested_pdf_name(

@@ -77,6 +77,7 @@ def test_promote_dry_run_does_not_write(tmp_path):
         home_dir=str(tmp_path),
         bib_selector=None,
         dry_run=True,
+        keep_preprint=False,
         fetch_search=_fake_search_with_venue,
     )
 
@@ -133,7 +134,8 @@ def test_promote_keep_preprint_creates_new_entry(tmp_path):
     assert item["published_citekey"] != "smith2024graph"
 
     text = bib_path.read_text()
-    assert text.count("@article{") == 2
+    assert "@article{" in text
+    assert "@unpublished{" in text
     assert "journal = {Journal of Parsing}" in text
     assert "Published version:" in text
     assert "Preprint version:" in text
@@ -325,6 +327,7 @@ def test_promote_uses_s2_api_key(tmp_path):
         home_dir=str(tmp_path),
         bib_selector=None,
         dry_run=False,
+        keep_preprint=False,
         fetch_search=lambda q, **kw: [],
         fetch_crossref=lambda t: None,
         fetch_openalex=lambda t: None,
@@ -388,6 +391,7 @@ def test_promote_different_author_year_scoring(tmp_path):
         home_dir=str(tmp_path),
         bib_selector=None,
         dry_run=False,
+        keep_preprint=False,
         fetch_search=fake_search,
         confidence_threshold=2,
     )
