@@ -380,6 +380,74 @@ def _make_fetch_text(api_key: str | None) -> FetchText:
     return functools.partial(_fetch_text, api_key=api_key)
 
 
+def _s2_error_message(data: object) -> str | None:
+    """Extract error string from an S2 API JSON response, or None."""
+    if isinstance(data, dict):
+        err = data.get("error")
+        if isinstance(err, str):
+            return err
+    return None
+
+
+def fetch_semantic_scholar_record_by_title_with_error(
+    title: str,
+    *,
+    api_key: str | None = None,
+    fetch_text: FetchText | None = None,
+) -> tuple[NormalizedRecord | None, str | None]:
+    """Return (record, error_message) from S2 title search.
+
+    Same semantics as ``fetch_semantic_scholar_record_by_title`` but
+    additionally surfaces S2 data-level errors (quota/auth/rate-limit)
+    as the second tuple element.  On HTTP-level errors, the function
+    re-raises the original :class:`OSError` — callers must catch those
+    separately.
+    """
+    stripped = title.strip()
+    if not stripped:
+        return None, "empty title"
+    fn = fetch_text or _make_fetch_text(api_key)
+    fields = "title,authors,year,venue,externalIds,openAccessPdf"
+    url = (
+        "https://api.semanticscholar.org/graph/v1/paper/search?"
+        f"query={quote(stripped, safe='')}&limit=1&fields={fields}"
+    )
+    try:
+        data = json.loads(fn(url))
+    except (json.JSONDecodeError, ValueError):
+        return None, None
+    if isinstance(data, dict) and "data" in data:
+        papers = data.get("data")
+        if isinstance(papers, list) and papers and isinstance(papers[0], dict):
+            return _s2_normalize_paper(papers[0]), None
+    if isinstance(data, dict):
+        err = _s2_error_message(data)
+        if err:
+            return None, err
+    return None, None
+
+
+def probe_s2_api(
+    *,
+    api_key: str | None = None,
+    fetch_text: FetchText | None = None,
+) -> bool:
+    """Check if the Semantic Scholar API is reachable.
+
+    Returns ``True`` when S2 returns valid paper data for a known-good DOI.
+    """
+    fn = fetch_text or _make_fetch_text(api_key)
+    url = (
+        "https://api.semanticscholar.org/graph/v1/paper/"
+        "DOI:10.1103/PhysRevLett.116.061102?fields=title"
+    )
+    try:
+        data = _api_json_direct(url, fn)
+        return isinstance(data, dict) and "title" in data and "error" not in data
+    except OSError:
+        return False
+
+
 def _fetch_text_with_identity(
     fn: FetchText, url: str, *, contact_email: str | None
 ) -> str:

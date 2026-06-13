@@ -8,7 +8,6 @@ import json as _json
 from typing import Any, TypeAlias
 
 from pzi.bib_repository import _read_bib_file_raw, serialize_bibtex, with_bib_lock
-from pzi.bibtex import NormalizedRecord
 
 ExportResult: TypeAlias = dict[str, Any]
 

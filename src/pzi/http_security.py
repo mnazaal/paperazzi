@@ -30,17 +30,28 @@ class HttpSecurityConfig(TypedDict):
 
 
 class RateLimiter:
-    """In-memory token-bucket rate limiter keyed by client identifier."""
+    """In-memory token-bucket rate limiter keyed by client identifier.
+
+    Buckets are cleaned up lazily during ``check()`` calls to prevent
+    unbounded growth under sustained traffic.
+    """
+
+    _CLEANUP_INTERVAL = 200  # sweep expired entries every N check() calls
 
     def __init__(self, max_requests: int = 60, window_seconds: int = 60) -> None:
         self._max = max_requests
         self._window = window_seconds
         self._buckets: dict[str, tuple[float, int]] = {}
         self._lock = threading.Lock()
+        self._call_count = 0
 
     def check(self, client_id: str) -> tuple[bool, int, int]:
         """Return (allowed, remaining, reset_seconds)."""
         with self._lock:
+            self._call_count += 1
+            if self._call_count % self._CLEANUP_INTERVAL == 0:
+                self._sweep_expired()
+
             now = time.time()
             window_start, count = self._buckets.get(client_id, (0.0, 0))
             if now - window_start >= self._window:
@@ -52,6 +63,17 @@ class RateLimiter:
             count += 1
             self._buckets[client_id] = (window_start, count)
             return True, self._max - count, int(window_start + self._window - now)
+
+    def _sweep_expired(self) -> None:
+        """Remove bucket entries whose window has fully expired."""
+        now = time.time()
+        expired = [
+            cid
+            for cid, (ws, _count) in self._buckets.items()
+            if now - ws >= self._window
+        ]
+        for cid in expired:
+            del self._buckets[cid]
 
 
 def build_http_security_config(

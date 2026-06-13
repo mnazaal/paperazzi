@@ -1,0 +1,33 @@
+{
+  "doi": "10.1234/jmlr.2025.00142",
+  "doi_url": "https://doi.org/10.1234/jmlr.2025.00142",
+  "title": "Deep Graph Networks for Citation Context Prediction",
+  "genre": "journal-article",
+  "is_oa": true,
+  "oa_status": "green",
+  "best_oa_location": {
+    "url": "https://arxiv.org/pdf/2503.12345.pdf",
+    "url_for_pdf": "https://arxiv.org/pdf/2503.12345.pdf",
+    "url_for_landing_page": "https://arxiv.org/abs/2503.12345",
+    "evidence": "oa repository (via OAI-PMH doi match)",
+    "host_type": "repository",
+    "is_best": true,
+    "license": "cc-by",
+    "version": "submittedVersion",
+    "pmh_id": "oai:arXiv.org:2503.12345"
+  },
+  "oa_locations": [
+    {
+      "url": "https://arxiv.org/pdf/2503.12345.pdf",
+      "url_for_pdf": "https://arxiv.org/pdf/2503.12345.pdf",
+      "url_for_landing_page": "https://arxiv.org/abs/2503.12345",
+      "evidence": "oa repository (via OAI-PMH doi match)",
+      "host_type": "repository",
+      "is_best": true,
+      "license": "cc-by",
+      "version": "submittedVersion"
+    }
+  ],
+  "updated": "2025-04-01T00:00:00.000000",
+  "oa_date": "2025-03-20"
+}

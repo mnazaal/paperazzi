@@ -755,12 +755,3 @@ Covers: empty venue string, arxiv_id without year, record with year but
 no venue/doi, arxiv_id present with no doi, etc.
 """
 
-from pathlib import Path
-
-from pzi.add_service import add_record_to_bib
-from pzi.update_service import (
-    _changed_fields,
-    _conservative_enrich,
-    _needs_update,
-    update_bib,
-)

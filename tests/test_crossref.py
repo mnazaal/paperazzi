@@ -131,3 +131,18 @@ def test_fetch_crossref_record_includes_pdf_url_when_available() -> None:
     )
     assert result is not None
     assert result.get("pdf_url") == "http://www.nature.com/articles/nature12373.pdf"
+
+
+def test_fetch_crossref_record_by_title_empty() -> None:
+    from pzi.metadata_sources import fetch_crossref_record_by_title
+    result = fetch_crossref_record_by_title("   ", fetch_text=lambda url: "{}")
+    assert result is None
+
+
+def test_fetch_crossref_record_by_title_no_items() -> None:
+    from pzi.metadata_sources import fetch_crossref_record_by_title
+    result = fetch_crossref_record_by_title(
+        "nonexistent",
+        fetch_text=lambda url: json.dumps({"message": {"items": []}}),
+    )
+    assert result is None

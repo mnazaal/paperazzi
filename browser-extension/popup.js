@@ -5,6 +5,7 @@ import {
   detectAndExtractSearchResults,
   cookieHeaderForUrl,
   captureCurrentTab,
+  endpointFor,
 } from "./background.js";
 import { formatCaptureResult, formatMultiCaptureResult } from "./popup_format.js";
 
@@ -81,16 +82,12 @@ function _renderRecent(items) {
     html += '<div style="display:flex; align-items:center; margin:3px 0; gap:4px;">'
       + '<span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + escHtml(short) + '</span>'
       + '<button data-action="pdf" data-citekey="' + escAttr(item.citekey) + '" data-bib="' + escAttr(item.bib) + '" style="width:auto; padding:1px 5px; margin:0; font-size:10px;">PDF</button>'
-      + '<button data-action="delete" data-citekey="' + escAttr(item.citekey) + '" data-bib="' + escAttr(item.bib) + '" style="width:auto; padding:1px 5px; margin:0; font-size:10px;">✕</button>'
       + '</div>';
   }
   recentList.innerHTML = html;
   // Wire buttons
   recentList.querySelectorAll("button[data-action='pdf']").forEach(btn => {
-    btn.addEventListener("click", () => _openPdf(btn.dataset.citekey, btn.dataset.bib));
-  });
-  recentList.querySelectorAll("button[data-action='delete']").forEach(btn => {
-    btn.addEventListener("click", () => _deleteEntry(btn.dataset.citekey, btn.dataset.bib));
+    btn.addEventListener("click", () => openPdf(btn.dataset.citekey, btn.dataset.bib));
   });
 }
 
@@ -101,38 +98,18 @@ function escAttr(s) {
   return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;");
 }
 
-async function _openPdf(citekey, bib) {
+export async function openPdf(citekey, bib) {
   const endpoint = await getEndpoint();
-  const base = endpoint.replace(/\/$/, "");
-  const url = base + "/pdf/" + encodeURIComponent(citekey) + (bib && bib !== "main" ? "?bib=" + encodeURIComponent(bib) : "");
-  window.open(url, "_blank");
-}
-
-async function _deleteEntry(citekey, bib) {
-  if (!confirm("Delete " + citekey + "?")) return;
-  const endpoint = await getEndpoint();
+  const url = endpointFor(endpoint, "/pdf/" + encodeURIComponent(citekey)) + (bib && bib !== "main" ? "?bib=" + encodeURIComponent(bib) : "");
   const authHeaders = await getAuthHeaders();
-  try {
-    const resp = await fetch(endpoint.replace(/\/$/, "") + "/delete", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...authHeaders },
-      body: JSON.stringify({ citekey, bib: bib || null }),
-    });
-    const data = await resp.json().catch(() => null);
-    if (data && data.status === "ok") {
-      summary.textContent = "✅ Deleted " + citekey;
-      // Remove from recent
-      const stored = await getStorage().get("pzi:recent");
-      let items = (stored && stored["pzi:recent"]) || [];
-      items = items.filter(r => r.citekey !== citekey);
-      await getStorage().set({ "pzi:recent": items });
-      _renderRecent(items);
-    } else {
-      summary.textContent = "❌ " + (data?.message || "delete failed");
-    }
-  } catch (err) {
-    summary.textContent = "❌ delete error: " + (err?.message || String(err));
+  const response = await fetch(url, { headers: authHeaders });
+  if (!response.ok) {
+    window.open(url, "_blank");
+    return;
   }
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  window.open(objectUrl, "_blank");
 }
 
 // ── Populate recent on load ───────────────────────────────────────────────
@@ -214,7 +191,7 @@ function updateSelectedButton() {
     ? "Capture " + checked.length : "Capture selected";
 }
 
-// ── Multi-item capture (P2-fixed: cookies + progress) ────────────────────
+// ── Multi-item capture ────────────────────────────────────────────────────
 
 async function doMultiCapture(all) {
   const tags = document.getElementById("tags").value.split(",").map((s) => s.trim()).filter(Boolean);

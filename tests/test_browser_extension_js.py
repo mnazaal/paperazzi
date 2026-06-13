@@ -1,14 +1,37 @@
 import json
+import re
 import subprocess
 from pathlib import Path
 
+# Rewrite relative ESM imports of local ``.js`` modules to ``.mjs`` so Node can
+# resolve the copied test modules. Matches e.g. "./utils.js" and
+# "./background/pdf_fetch.js" but leaves bare specifiers untouched.
+_LOCAL_JS_IMPORT = re.compile(r'"(\./[^"]+?)\.js"')
+
+
+def _rewrite_local_imports(text: str) -> str:
+    return _LOCAL_JS_IMPORT.sub(r'"\1.mjs"', text)
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BACKGROUND_JS = PROJECT_ROOT / "browser-extension" / "background.js"
+BACKGROUND_DIR = PROJECT_ROOT / "browser-extension" / "background"
+POPUP_JS = PROJECT_ROOT / "browser-extension" / "popup.js"
 
 
 def _run_background_module(script: str, tmp_path: Path) -> dict:
     module_path = tmp_path / "background.mjs"
-    module_path.write_text(BACKGROUND_JS.read_text())
+    # Copy background.js to .mjs, rewriting its imports of split modules.
+    module_path.write_text(_rewrite_local_imports(BACKGROUND_JS.read_text()))
+    # Copy background/ subdirectory (split modules) to .mjs files, rewriting
+    # their inter-module imports too.
+    if BACKGROUND_DIR.is_dir():
+        dest_dir = tmp_path / "background"
+        dest_dir.mkdir(exist_ok=True)
+        for f in BACKGROUND_DIR.iterdir():
+            if f.suffix == ".js":
+                (dest_dir / f"{f.stem}.mjs").write_text(
+                    _rewrite_local_imports(f.read_text())
+                )
     runner_path = tmp_path / "runner.mjs"
     runner_path.write_text(script.replace("./background.js", "./background.mjs"))
     result = subprocess.run(
@@ -21,6 +44,24 @@ def _run_background_module(script: str, tmp_path: Path) -> dict:
             f"node runner failed with {result.returncode}\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
         )
     return json.loads(result.stdout)
+
+
+def test_popup_recent_actions_use_endpoint_path_helper() -> None:
+    text = POPUP_JS.read_text()
+
+    assert "endpointFor," in text
+    assert "endpointFor(endpoint, \"/pdf/\" + encodeURIComponent(citekey))" in text
+    assert 'base + "/pdf/"' not in text
+
+
+def test_popup_recent_list_is_a_capture_log_without_delete() -> None:
+    """The recent list is a read-only capture log (open-PDF only); no delete UI."""
+    text = POPUP_JS.read_text()
+
+    assert "data-action=\"pdf\"" in text          # open-PDF affordance kept
+    assert "data-action=\"delete\"" not in text   # delete button removed
+    assert "_deleteEntry" not in text             # delete handler removed
+    assert "endpointFor(endpoint, \"/delete\")" not in text  # no POST /delete from popup
 
 
 def test_browser_extension_fetches_bibs_with_token_and_endpoint(tmp_path: Path) -> None:
@@ -53,6 +94,48 @@ console.log(JSON.stringify({ bibs, calls: globalThis.calls }));
             "options": {"headers": {"X-Pzi-Token": "tok"}},
         }
     ]
+
+
+def test_capture_generic_page_metadata_not_marked_ieee_trusted(tmp_path: Path) -> None:
+    result = _run_background_module(
+        r'''
+globalThis.chrome = {
+  storage: {
+    local: { get: async () => ({ endpoint: "http://pzi.test/capture" }) },
+    session: { get: async () => ({}), set: () => {} },
+  },
+  runtime: { onInstalled: { addListener: () => {} } },
+  tabs: { query: async () => [{ id: 7, url: "https://example.com/paper" }] },
+  scripting: {
+    executeScript: async (opts) => {
+      if (opts.world === "MAIN") {
+        globalThis.location = { hostname: "example.com" };
+        globalThis.window = {};
+        globalThis.document = {
+          title: "Generic Paper",
+          head: { innerHTML: "" },
+          querySelector: () => null,
+          querySelectorAll: () => [],
+        };
+        return [{ result: opts.func(...(opts.args || [])) }];
+      }
+      return [{ result: [] }];
+    },
+  },
+};
+globalThis.fetch = async (_url, _options) => ({
+  ok: true,
+  json: async () => ({ status: "ok", citekey: "generic2024" }),
+});
+const mod = await import("./background.js");
+const result = await mod.captureCurrentTab({ dryRun: true });
+console.log(JSON.stringify({ capture_body: result.capture_body }));
+''',
+        tmp_path,
+    )
+
+    assert result["capture_body"]["metadata_source"] == "generic_dom"
+    assert result["capture_body"]["trusted_fields"] is None
 
 
 def test_bot_bypass_uses_visible_helper_tab_when_hidden_iframe_observes_nothing(tmp_path: Path) -> None:
@@ -343,6 +426,7 @@ globalThis.chrome = {
           canonicalUrl: "https://paper.test/canonical",
           sourceUrl: args[0],
           abstractUrl: "https://paper.test/abstract",
+          headHtml: "<head><meta name=\"citation_title\" content=\"Paper Title\"></head>",
           doi: "10.123/example",
         }}];
       }
@@ -395,6 +479,7 @@ console.log(JSON.stringify({ capture, calls: simplified }));
     assert body["canonical_url"] == "https://paper.test/canonical"
     assert body["source_url"] == "https://paper.test/article"
     assert body["abstract_url"] == "https://paper.test/abstract"
+    assert body["head_html"] == "<head><meta name=\"citation_title\" content=\"Paper Title\"></head>"
     assert body["doi"] == "10.123/example"
     assert result["calls"][0]["credentials"] is None
     # PDF fetch calls — order depends on candidate ranking (active_tab before dom)
@@ -411,6 +496,71 @@ console.log(JSON.stringify({ capture, calls: simplified }));
         assert attach_call["body"]["citekey"] == "smith2024paper"
         assert attach_call["body"]["bib"] == "main"
         assert attach_call["body"]["pdf_base64"] == "JVBERi0x"
+
+
+def test_browser_extension_pdf_bytes_fallback_includes_attach_session(tmp_path: Path) -> None:
+    result = _run_background_module(
+        r'''
+const pdfBytes = new Uint8Array([37, 80, 68, 70, 45, 49]).buffer;
+globalThis.fetchCalls = [];
+globalThis.chrome = {
+  storage: { local: { get: async () => ({ endpoint: "http://pzi.test/capture" }) } },
+  runtime: { onInstalled: { addListener: () => {} } },
+  tabs: { query: async () => [{ id: 7, url: "https://paper.test/article" }] },
+  scripting: {
+    executeScript: async ({ func, args }) => {
+      if (String(func).includes("citation_doi")) return [{ result: { pageTitle: "Paper", sourceUrl: args[0] } }];
+      return [{ result: ["https://paper.test/paper.pdf"] }];
+    }
+  },
+};
+globalThis.fetch = async (url, options = {}) => {
+  globalThis.fetchCalls.push({ url, options });
+  if (url.endsWith("/capture")) {
+    return { ok: true, json: async () => ({
+      status: "ok",
+      citekey: "smith2024paper",
+      pdf_request: {
+        request_id: "req-1",
+        candidates: [{ url: "https://paper.test/paper.pdf" }],
+        attach: {
+          url: "http://pzi.test/attach-pdf-raw?request_id=req-1&citekey=smith2024paper",
+          token: "tok-1"
+        }
+      }
+    }) };
+  }
+  if (url.includes("/attach-pdf-raw")) {
+    return { ok: false, status: 403, json: async () => ({ error: "raw failed" }) };
+  }
+  if (url.includes("/attach-pdf-bytes")) {
+    return { ok: true, json: async () => ({ status: "ok" }) };
+  }
+  if (url.endsWith(".pdf")) {
+    return { ok: true, headers: { get: () => "application/pdf" }, arrayBuffer: async () => pdfBytes };
+  }
+  return { ok: true, json: async () => ({ status: "ok" }) };
+};
+globalThis.btoa = (value) => Buffer.from(value, "binary").toString("base64");
+const mod = await import("./background.js");
+const capture = await mod.captureCurrentTab({ dryRun: false });
+const calls = globalThis.fetchCalls.map((call) => ({
+  url: call.url,
+  method: call.options.method || "GET",
+  headers: call.options.headers || null,
+  body: call.options.body ? (typeof call.options.body === "string" ? JSON.parse(call.options.body) : "<binary>") : null,
+}));
+console.log(JSON.stringify({ capture, calls }));
+''',
+        tmp_path,
+    )
+
+    fallback = next((c for c in result["calls"] if "/attach-pdf-bytes" in c["url"]), None)
+    assert fallback is not None, result
+    assert fallback["body"]["request_id"] == "req-1"
+    assert fallback["body"]["attach_token"] == "tok-1"
+    assert fallback["body"]["citekey"] == "smith2024paper"
+    assert result["capture"]["pdf_attach"]["status"] == "ok"
 
 
 def test_ieee_xplore_metadata_extractor_reads_embedded_xplglobal(tmp_path: Path) -> None:
@@ -529,6 +679,7 @@ console.log(JSON.stringify({ capture, body }));
 
     assert result["capture"]["status"] == "ok"
     body = result["body"]
+    assert body["page_title"] == "Analysis of the Use of the Kalman Filter"
     assert body["doi"] == "10.1109/SYNCHROINFO55067.2022.9840963"
     assert body["embedded_authors"] == ["N. E. Poborchaya", "E. O. Lobova"]
     assert body["embedded_year"] == "2022"
@@ -543,7 +694,7 @@ console.log(JSON.stringify({ capture, body }));
     assert "doi" in body["trusted_fields"]
 
 
-def test_capture_requests_same_origin_permission_before_pdf_fetch(tmp_path: Path) -> None:
+def test_capture_does_not_request_same_origin_permission_before_pdf_fetch(tmp_path: Path) -> None:
     result = _run_background_module(
         r'''
 const pdfBytes = new Uint8Array([37, 80, 68, 70, 45, 49]).buffer;
@@ -604,12 +755,10 @@ console.log(JSON.stringify({ capture, events: globalThis.events }));
     )
 
     events = result["events"]
-    permission_index = next(i for i, e in enumerate(events) if e["type"] == "permission")
     capture_fetch_index = next(i for i, e in enumerate(events) if e["type"] == "fetch" and e["url"].endswith("/capture"))
     stamp_fetch_index = next(i for i, e in enumerate(events) if e["type"] == "fetch" and "/stamp/" in e["url"])
-    assert permission_index < capture_fetch_index
-    assert permission_index < stamp_fetch_index
-    assert events[permission_index]["request"] == {"origins": ["https://ieeexplore.ieee.org/*"]}
+    assert not [e for e in events if e["type"] == "permission"]
+    assert capture_fetch_index < stamp_fetch_index
     assert result["capture"]["pdf_attach"]["status"] == "ok"
 
 
@@ -777,10 +926,11 @@ def _run_popup_js_test(script: str, tmp_path: Path) -> dict:
     mock_path.write_text(
         "export async function fetchBibs() { return []; }\n"
         "export async function getEndpoint() { return 'http://127.0.0.1:8765/capture'; }\n"
-        "export async function getAuthHeaders() { return {}; }\n"
+        "export async function getAuthHeaders() { return globalThis.__authHeaders || {}; }\n"
         "export async function detectAndExtractSearchResults() { return null; }\n"
         "export async function cookieHeaderForUrl() { return ''; }\n"
         "export async function captureCurrentTab() { return { status: 'ok' }; }\n"
+        "export function endpointFor(rawEndpoint, path) { const base = new URL(rawEndpoint); const target = new URL(path, base); target.search = ''; return target.href.replace(/\\/$/, ''); }\n"
     )
     runner_path = tmp_path / "runner.mjs"
     runner_script = script.replace("./popup.js", "./popup_test.mjs")
@@ -931,6 +1081,47 @@ console.log(JSON.stringify(stamped));
 
     assert result["status"] == "error"
     assert result["popup_build_marker"] == "2025-06-12-phases-012"
+
+
+def test_popup_open_pdf_fetches_with_auth_token_and_opens_blob(tmp_path: Path) -> None:
+    result = _run_popup_js_test(
+        r'''
+const element = () => ({
+  value: "", checked: false, disabled: false, textContent: "", innerHTML: "",
+  style: {}, appendChild: () => {}, addEventListener: () => {}, querySelectorAll: () => [],
+});
+globalThis.document = { getElementById: () => element(), createElement: () => element() };
+globalThis.chrome = {
+  storage: {
+    local: { get: async () => ({}), set: async () => ({}), remove: async () => ({}) },
+    session: { get: async () => ({}), set: async () => ({}), remove: async () => ({}) },
+  },
+  tabs: { query: async () => [] },
+  runtime: { sendMessage: () => {} },
+};
+globalThis.__authHeaders = { "X-Pzi-Token": "tok" };
+globalThis.events = [];
+globalThis.fetch = async (url, options = {}) => {
+  globalThis.events.push({ type: "fetch", url, headers: options.headers || {} });
+  return { ok: true, blob: async () => new Blob(["%PDF-1.4"], { type: "application/pdf" }) };
+};
+const NativeURL = URL;
+globalThis.URL = class extends NativeURL {
+  static createObjectURL(blob) { globalThis.events.push({ type: "createObjectURL", blob_type: blob.type }); return "blob:pzi-pdf"; }
+  static revokeObjectURL(url) { globalThis.events.push({ type: "revokeObjectURL", url }); }
+};
+globalThis.window = { open: (url, target) => { globalThis.events.push({ type: "open", url, target }); } };
+const mod = await import("./popup.js");
+await mod.openPdf("smith2024paper", "main");
+console.log(JSON.stringify({ events: globalThis.events }));
+''',
+        tmp_path,
+    )
+
+    fetch_event = next(e for e in result["events"] if e["type"] == "fetch")
+    assert fetch_event["url"] == "http://127.0.0.1:8765/pdf/smith2024paper"
+    assert fetch_event["headers"] == {"X-Pzi-Token": "tok"}
+    assert {"type": "open", "url": "blob:pzi-pdf", "target": "_blank"} in result["events"]
 
 
 def test_discover_from_page_function_exists_in_module(tmp_path: Path) -> None:

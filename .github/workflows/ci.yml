@@ -39,7 +39,7 @@ jobs:
         run: .venv/bin/playwright install chromium firefox
 
       - name: Ruff
-        run: .venv/bin/ruff check src tools
+        run: .venv/bin/ruff check src tools tests
 
       - name: Pyright
         run: .venv/bin/pyright
@@ -60,3 +60,13 @@ jobs:
 
       - name: Build package
         run: .venv/bin/python -m build
+
+      - name: Check package metadata (twine)
+        run: .venv/bin/twine check dist/*
+
+      - name: Smoke-test wheel install
+        run: |
+          python -m venv /tmp/pzi-wheel-smoke
+          /tmp/pzi-wheel-smoke/bin/pip install dist/*.whl
+          /tmp/pzi-wheel-smoke/bin/pzi version
+          /tmp/pzi-wheel-smoke/bin/python -c "import pzi; print(pzi.__version__)"

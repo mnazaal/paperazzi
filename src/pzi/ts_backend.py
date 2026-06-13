@@ -17,8 +17,10 @@ import sys
 import tarfile
 import tempfile
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
-from typing import TextIO
+from typing import TextIO, TypedDict
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -268,7 +270,7 @@ def ensure_node(
         print(file=stderr)
         print(f"Node.js >= {_MIN_NODE_MAJOR} not found on PATH.", file=stderr)
         print(file=stderr)
-        print("  [1] Install Node.js manually, then retry `pzi services up`", file=stderr)
+        print("  [1] Install Node.js manually, then retry `pzi server`", file=stderr)
         print(f"  [2] Let pzi download portable Node.js to {target}/ (~40MB)", file=stderr)
         print(file=stderr)
         try:
@@ -278,7 +280,7 @@ def ensure_node(
             return None
         if choice != "2":
             print(
-                "Install Node.js >=22 manually, then run `pzi services up`.",
+                "Install Node.js >=22 manually, then run `pzi server`.",
                 file=stderr,
             )
             return None
@@ -392,7 +394,7 @@ _SESSION_BLOCK = (
     "                                        for (var _i = 0; _i < _pziCookies.length; _i++) {\n"
     "                                                var _c = _pziCookies[_i].trim();\n"
     "                                                if (_c) {\n"
-    "                                                        this._cookieSandbox.setCookie(_c, url);\n"
+    "                                                        this._cookieSandbox.setCookie(_c, url);\n"  # noqa: E501
     "                                                }\n"
     "                                        }\n"
     "                                }\n"
@@ -566,7 +568,14 @@ def _patch_cookie_bridge(ts_dir: Path) -> bool:
     return ok
 
 
-def _clone_repo(url: str, ref: str, dest: Path, *, max_retries: int = 2, retry_delay: float = 3.0) -> None:
+def _clone_repo(
+    url: str,
+    ref: str,
+    dest: Path,
+    *,
+    max_retries: int = 2,
+    retry_delay: float = 3.0,
+) -> None:
     """Shallow-clone a single repo at the given ref into dest, with retry.
 
     ``ref`` may be a branch name, tag, or commit hash.  For branches and
@@ -739,12 +748,14 @@ def start_ts(
     node_bin: str,
     ts_dir: Path,
     port: int = _TS_DEFAULT_PORT,
-    pid_file: Path | None = None,
     stderr_log: Path | None = None,
 ) -> subprocess.Popen[bytes]:
-    """Start translation-server as a subprocess.
+    """Start translation-server as a bound child subprocess.
 
-    Returns the ``Popen`` object.  Writes the PID to ``pid_file`` if provided.
+    Returns the ``Popen`` handle.  The child runs in its own session/process
+    group (``start_new_session=True``) so the caller can tear down the whole
+    group via :func:`terminate_ts` when the owning process exits.  No PID file
+    is written and the child is never detached to run on its own.
     If ``stderr_log`` is given, stderr is redirected there; otherwise it goes
     to ``DEVNULL``.
     """
@@ -753,59 +764,51 @@ def start_ts(
         stderr_log.parent.mkdir(parents=True, exist_ok=True)
         stderr_dest = stderr_log.open("w")
 
-    proc = subprocess.Popen(
+    return subprocess.Popen(
         [node_bin, str(ts_dir / "src" / "server.js")],
         cwd=str(ts_dir),
         env={**os.environ, "PORT": str(port)},
         stdout=subprocess.DEVNULL,
         stderr=stderr_dest,
+        start_new_session=True,
     )
-    if pid_file is not None:
-        pid_file.write_text(str(proc.pid))
-    return proc
 
 
-def stop_ts(pid_file: Path) -> bool:
-    """Stop the translation-server subprocess identified by ``pid_file``.
+def terminate_ts(proc: subprocess.Popen[bytes], *, grace_seconds: float = 5.0) -> None:
+    """Terminate a held translation-server child (and its process group).
 
-    Sends SIGTERM, waits up to 5s, then SIGKILL if still alive.
-    Removes the PID file on success.
+    Sends SIGTERM to the child's process group, waits up to ``grace_seconds``,
+    then SIGKILL if still alive.  Falls back to signalling the process directly
+    on platforms without process groups.  Operates on the live ``Popen`` handle
+    rather than a PID file, so there is no orphaned-process bookkeeping.
     """
-    if not pid_file.exists():
-        return True  # nothing to stop
+    if proc.poll() is not None:
+        return
 
-    pid_str = pid_file.read_text().strip()
-    try:
-        pid = int(pid_str)
-    except ValueError:
-        pid_file.unlink(missing_ok=True)
-        return True
-
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except OSError:
-        # Process already gone
-        pid_file.unlink(missing_ok=True)
-        return True
-
-    # Wait for graceful shutdown
-    deadline = time.monotonic() + 5.0
-    while time.monotonic() < deadline:
+    def _signal(sig: int) -> None:
+        if hasattr(os, "killpg") and hasattr(os, "getpgid"):
+            try:
+                os.killpg(os.getpgid(proc.pid), sig)
+                return
+            except OSError:
+                pass
         try:
-            os.kill(pid, 0)  # check if alive
+            proc.send_signal(sig)
         except OSError:
-            pid_file.unlink(missing_ok=True)
-            return True
+            pass
+
+    _signal(signal.SIGTERM)
+    deadline = time.monotonic() + grace_seconds
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            return
         time.sleep(0.2)
 
-    # Force kill
+    _signal(signal.SIGKILL)
     try:
-        os.kill(pid, signal.SIGKILL)
-    except OSError:
+        proc.wait(timeout=2)
+    except subprocess.TimeoutExpired:
         pass
-
-    pid_file.unlink(missing_ok=True)
-    return True
 
 
 def is_ts_reachable(url: str, *, timeout: float = 2.0) -> bool:
@@ -861,7 +864,7 @@ def wait_for_ts(
         time.sleep(2)
     print(
         f"translation-server did not become ready within {timeout:.0f}s — "
-        "check `pzi services status` or run `pzi services up` manually",
+        "check `pzi services status`, or run `pzi server` to start it",
         file=stderr,
     )
     return False
@@ -879,7 +882,28 @@ def _ts_url_from_config(config: dict[str, object]) -> str | None:
     return None
 
 
-def auto_start_ts(
+def _port_from_ts_url(ts_url: str) -> int:
+    """Extract the port from a translation-server URL, or the default."""
+    if ts_url and ":" in ts_url.split("//")[-1]:
+        port_str = ts_url.rsplit(":", 1)[-1]
+        try:
+            return int(port_str)
+        except ValueError:
+            pass
+    return _TS_DEFAULT_PORT
+
+
+class BackendHandle(TypedDict):
+    """Result of :func:`backend_session`."""
+
+    url: str | None
+    ready: bool
+    owned: bool
+    proc: subprocess.Popen[bytes] | None
+
+
+@contextmanager
+def backend_session(
     config: dict[str, object],
     config_path: str,
     home_dir: str,
@@ -887,56 +911,50 @@ def auto_start_ts(
     interactive: bool = True,
     stdout: TextIO,
     stderr: TextIO,
-) -> bool:
-    """Full bootstrap: ensure Node.js, install translation-server, start, wait.
+) -> Iterator[BackendHandle]:
+    """Provide a reachable translation-server for the duration of the block.
 
-    Reads ``translation_server_url`` and ``pzi_data_home`` from *config*.
+    Reuses an already-reachable server (``owned=False``) or, when none is
+    running, bootstraps Node.js + translation-server and starts it as a bound
+    child (``owned=True``).  An owned child is terminated when the block exits,
+    so the backend never outlives the foreground process that started it — no
+    PID files, no detached daemon.
+
+    ``config_path`` is accepted for symmetry with the rest of the bootstrap
+    helpers; the server is located purely from ``config``
+    (``translation_server_url`` and ``pzi_data_home``).
     """
     ts_url = _ts_url_from_config(config)
-    if ts_url is None:
-        print("translation_server_url not configured", file=stderr)
-        return False
+
+    # No URL configured, or auto-start disabled: nothing for us to manage.
+    if ts_url is None or os.environ.get("PZI_SKIP_AUTO_START"):
+        yield {"url": ts_url, "ready": True, "owned": False, "proc": None}
+        return
 
     if is_ts_reachable(ts_url):
-        return True
+        yield {"url": ts_url, "ready": True, "owned": False, "proc": None}
+        return
 
     raw_home = config.get("pzi_data_home", home_dir)
     data_home = Path(str(raw_home)).expanduser()
 
     node = ensure_node(data_home, interactive=interactive, stdout=stdout, stderr=stderr)
     if node is None:
-        return False
+        yield {"url": ts_url, "ready": False, "owned": False, "proc": None}
+        return
 
     ts_dir = ensure_translation_server(data_home, node, stdout=stdout, stderr=stderr)
     if ts_dir is None:
-        return False
+        yield {"url": ts_url, "ready": False, "owned": False, "proc": None}
+        return
 
-    # Parse port from URL
-    port = _TS_DEFAULT_PORT
-    if ts_url and ":" in ts_url.split("//")[-1]:
-        port_str = ts_url.rsplit(":", 1)[-1]
-        try:
-            port = int(port_str)
-        except ValueError:
-            pass
-
-    pid_file = data_home / "ts.pid"
-
-    # Kill stale PID if not our process
-    if pid_file.exists():
-        try:
-            stale_pid = int(pid_file.read_text().strip())
-            try:
-                os.kill(stale_pid, 0)
-            except OSError:
-                pid_file.unlink(missing_ok=True)
-        except (ValueError, FileNotFoundError):
-            pid_file.unlink(missing_ok=True)
-
+    port = _port_from_ts_url(ts_url)
     print(f"starting translation-server on port {port} …", file=stdout)
     stdout.flush()
     stderr_log = data_home / "ts-stderr.log"
-    proc = start_ts(node, ts_dir, port=port, pid_file=pid_file,
-                    stderr_log=stderr_log)
-
-    return wait_for_ts(ts_url, stdout=stdout, stderr=stderr, proc=proc)
+    proc = start_ts(node, ts_dir, port=port, stderr_log=stderr_log)
+    try:
+        ready = wait_for_ts(ts_url, stdout=stdout, stderr=stderr, proc=proc)
+        yield {"url": ts_url, "ready": ready, "owned": True, "proc": proc}
+    finally:
+        terminate_ts(proc)

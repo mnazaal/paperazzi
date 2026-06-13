@@ -149,6 +149,11 @@ def wait_for_health(
     raise RuntimeError("pzi server did not become healthy")
 
 
+def _pzi_cmd(*args: str) -> list[str]:
+    """Return pzi command prefix using the same Python executable."""
+    return [sys.executable, "-m", "pzi", *args]
+
+
 def run_local_smoke(repo_root: Path) -> list[SmokeResult]:
     rows: list[SmokeResult] = []
     with tempfile.TemporaryDirectory(prefix="pzi-smoke-") as tmp:
@@ -156,12 +161,12 @@ def run_local_smoke(repo_root: Path) -> list[SmokeResult]:
         config = tmp_path / "config.toml"
         bib = tmp_path / "main.bib"
         token = "local-smoke-token"
-        run_cmd(["pzi", "init", "--setup", "--bib", str(bib), "--config", str(config), "--force"])
+        run_cmd(_pzi_cmd("init", "--setup", "--bib", str(bib), "--config", str(config), "--force"))
         config.write_text(config.read_text() + f'api_auth_token = "{token}"\n', encoding="utf-8")
-        run_cmd(["pzi", "doctor", "--config", str(config)])
+        run_cmd(_pzi_cmd("doctor", "--config", str(config)))
 
         server = subprocess.Popen(
-            ["pzi", "server", "--config", str(config), "--port", "8765"],
+            _pzi_cmd("server", "--config", str(config), "--port", "8765"),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             text=True,
@@ -172,8 +177,7 @@ def run_local_smoke(repo_root: Path) -> list[SmokeResult]:
             _expect_http_error("http://127.0.0.1:8765/bibs", expected=401)
             _expect_http_error("http://127.0.0.1:8765/bibs", expected=401, token="bad")
 
-            run_cmd([
-                "pzi",
+            run_cmd(_pzi_cmd(
                 "add",
                 "10.1234/smoke",
                 "--citekey",
@@ -182,7 +186,7 @@ def run_local_smoke(repo_root: Path) -> list[SmokeResult]:
                 "Smoke Test",
                 "--config",
                 str(config),
-            ])
+            ))
             pdf = base64.b64encode(b"%PDF-1.4 smoke").decode("ascii")
             result = http_json(
                 "http://127.0.0.1:8765/attach-pdf-bytes",

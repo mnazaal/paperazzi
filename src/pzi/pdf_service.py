@@ -205,7 +205,11 @@ def retry_failed_pdfs(
             continue
 
         # Check if entry has a PDF URL in its note field
-        raw_note = entry.get("fields", {}).get("note") if isinstance(entry.get("fields"), dict) else None
+        raw_note = (
+            entry.get("fields", {}).get("note")
+            if isinstance(entry.get("fields"), dict)
+            else None
+        )
         pdf_url = extract_note_field(raw_note, "PDF") if isinstance(raw_note, str) else None
         if not pdf_url:
             skipped_no_url += 1
@@ -253,7 +257,7 @@ def retry_failed_pdfs(
             lambda entry, rec: _entry_with_pdf_fields(
                 entry,
                 cast(NormalizedRecord, dict(rec)),
-                local_pdf_path=local_pdf_path,
+                local_pdf_path=cast(str, local_pdf_path),
                 pdf_url=pdf_url,
             ),
             file_path_style=config.get("pdf_file_path_style", "absolute"),

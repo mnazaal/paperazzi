@@ -42,7 +42,7 @@ def _parse_embedded_metadata(html: str) -> tuple[dict[str, list[str]], list[obje
             in_ld_script = False
             try:
                 json_ld.append(json.loads("".join(ld_buf)))
-            except Exception:
+            except json.JSONDecodeError:
                 pass
 
     parser.handle_starttag = handle_starttag  # type: ignore[method-assign]

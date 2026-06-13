@@ -6,6 +6,8 @@ _attach_pdf_data, _store_pdf_source, and _entry_with_pdf_fields.
 
 from pathlib import Path
 
+import pytest
+
 from pzi import pdf_service
 
 # ---------------------------------------------------------------------------

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from pathlib import Path
 from typing import Any, TypeAlias, cast
 
 from pzi import add_planning as _add_planning
@@ -224,6 +225,21 @@ def attach_pdf_if_available(
     citekey = record.get("citekey")
     if not isinstance(citekey, str) or not citekey.strip():
         return record, ["cannot attach PDF before citekey generation"]
+
+    source_path = Path(pdf_url).expanduser()
+    if source_path.is_file():
+        local_pdf_path, error = copy_pdf_to_papers_dir(
+            source_path=str(source_path),
+            papers_dir=papers_dir,
+            citekey=citekey,
+            record=record,
+            filename_format=pdf_filename_format,
+        )
+        if local_pdf_path is None:
+            return record, [error] if error is not None else []
+        updated = dict(record)
+        updated["local_pdf_path"] = local_pdf_path
+        return cast(NormalizedRecord, updated), []
 
     fetch_pdf_fn = fetch_and_store_pdf_with_fallbacks if fetch_pdf is None else fetch_pdf
     local_pdf_path, warning, error = fetch_pdf_fn(

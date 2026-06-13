@@ -7,7 +7,7 @@ import unicodedata
 from collections.abc import Sequence
 from typing import Any, Literal, TypeAlias
 
-from pzi.bibtex import normalize_authors
+from pzi.bibtex import NormalizedRecord, normalize_authors
 
 # ---------------------------------------------------------------------------
 # Type aliases
@@ -19,7 +19,7 @@ IdentityKind = Literal["doi", "arxiv", "url"]
 
 Identity: TypeAlias = dict[str, Any]
 
-MatchableRecord: TypeAlias = dict[str, Any]
+MatchableRecord = NormalizedRecord
 
 # ---------------------------------------------------------------------------
 # Exact-identity matching

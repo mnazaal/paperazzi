@@ -11,12 +11,10 @@ from typing import Any, TypeAlias
 from pzi.bib_repository import (
     _read_bib_file_raw,
     _validate_library_parseable,
-    parse_bibtex,
-    serialize_bibtex,
     with_bib_lock,
+    write_bib_file,
 )
 from pzi.bibtex import BibtexEntry
-
 
 CleanResult: TypeAlias = dict[str, Any]
 
@@ -54,7 +52,7 @@ def validate_library(
         }
 
     try:
-        from bibtexparser import parse_string as _parse
+        from bibtexparser.entrypoint import parse_string as _parse
         text = Path(bib_path).read_text(encoding="utf-8")
         library = _parse(text)
         _validate_library_parseable(library)
@@ -149,7 +147,7 @@ def clean_library(
         for pdf_path_str in validation["orphan_pdfs"]:
             src = Path(pdf_path_str)
             dst = orphan_dir / src.name
-            action = {
+            action: dict[str, Any] = {
                 "type": "move_orphan",
                 "source": str(src),
                 "destination": str(dst),
@@ -173,10 +171,8 @@ def clean_library(
             sorted_entries = sorted(entries, key=lambda e: e["citekey"].lower())
             action = {"type": "sort_entries", "count": len(entries)}
             if not dry_run:
-                text = serialize_bibtex(sorted_entries)
-                bib_file = Path(bib_path)
-                bib_file.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
-                bib_file.write_text(text, encoding="utf-8")
+                with with_bib_lock(bib_path):
+                    write_bib_file(bib_path, sorted_entries)
                 action["done"] = True
             actions.append(action)
 

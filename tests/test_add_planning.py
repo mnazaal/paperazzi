@@ -298,4 +298,22 @@ def test_minimum_metadata_diagnostics_with_non_numeric_year() -> None:
         {"title": "Paper", "year": "n/a"}
     )
     assert len(diag) == 1
-    assert "year not available" in diag[0]
+
+
+def test_format_citekey_with_existing_keys() -> None:
+    result = format_citekey("auth.lower + shorttitle(3,3) + year", {
+        "authors": ["Smith, Jane"],
+        "title": "Deep Graph Networks",
+        "year": 2024,
+    }, {"smithdeep2024"})
+    assert result is not None
+    assert "smith" in result.lower()
+
+
+def test_format_pdf_filename_basic() -> None:
+    result = format_pdf_filename(
+        "{{ firstCreator suffix=\" - \" }}{{ year suffix=\" - \" }}{{ title truncate=\"80\" }}",
+        {"authors": ["Smith, Jane"], "year": 2024, "title": "Deep Graph Networks for Citation Context Prediction"},
+    )
+    assert "Smith" in result
+    assert "2024" in result

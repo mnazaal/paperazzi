@@ -273,6 +273,7 @@ def fetch_record_for_input(
             "flaresolverr_url": flaresolverr_url,
             "browser_pdf_cmd": browser_pdf_cmd,
             "pdf_url_candidates": pdf_url_candidates,
+            "cookies": cookies,
             "fetch_web": fetch_web,
             "fetch_unpaywall": fetch_unpaywall,
             "fetch_crossref": fetch_crossref,
@@ -295,7 +296,7 @@ def fetch_record_for_input(
         # Let discovery steps find the actual PDF URL.
         pdf_url = base_record.get("pdf_url")
         if isinstance(pdf_url, str) and pdf_url.startswith("https://doi.org/"):
-            base_record = dict(base_record)
+            base_record = cast(NormalizedRecord, dict(base_record))
             base_record.pop("pdf_url", None)
 
         if pdf_discovery_parallel:
@@ -317,7 +318,7 @@ def fetch_record_for_input(
             selected = select_best_metadata_result(results, fallback)
             best = dict(_merge_record_sources(fallback, selected["record"]))
             return _with_pdf_discovery(
-                best, translation_attachments=selected.get("attachments")
+                cast(NormalizedRecord, best), translation_attachments=selected.get("attachments")
             )
 
         meta = _call_metadata_fetcher(
@@ -336,7 +337,7 @@ def fetch_record_for_input(
             meta = s2_fn(normalized)
         if meta is not None:
             best = dict(_merge_record_sources(fallback, meta))
-            return _with_pdf_discovery(best)
+            return _with_pdf_discovery(cast(NormalizedRecord, best))
 
         from urllib.parse import urlsplit as _urlsplit
 
@@ -354,7 +355,8 @@ def fetch_record_for_input(
                     _merge_record_sources(fallback, web_results[0]["record"])
                 )
                 return _with_pdf_discovery(
-                    best, translation_attachments=web_results[0].get("attachments")
+                    cast(NormalizedRecord, best),
+                    translation_attachments=web_results[0].get("attachments"),
                 )
 
             if flaresolverr_url is not None:  # pragma: no branch
@@ -366,7 +368,7 @@ def fetch_record_for_input(
                     meta = extract_metadata_from_html(html)
                     if meta is not None:  # pragma: no branch — covered by integration/browser tests
                         best = dict(_merge_record_sources(meta, fallback))
-                        return _with_pdf_discovery(best)
+                        return _with_pdf_discovery(cast(NormalizedRecord, best))
 
         suffix = (
             " (page may be Cloudflare-protected — configure flaresolverr_url to bypass)"
@@ -385,7 +387,7 @@ def fetch_record_for_input(
             selected = select_best_metadata_result(results, fallback)
             best = dict(selected["record"])
             best = _with_pdf_discovery(
-                best, translation_attachments=selected.get("attachments")
+                cast(NormalizedRecord, best), translation_attachments=selected.get("attachments")
             )
             return _merge_record_sources(fallback, best)
 
@@ -398,7 +400,7 @@ def fetch_record_for_input(
                 meta = extract_metadata_from_html(html)
                 if meta is not None:
                     best = dict(_merge_record_sources(meta, fallback))
-                    return _with_pdf_discovery(best)
+                    return _with_pdf_discovery(cast(NormalizedRecord, best))
 
         raise ValueError(f"translation server returned no results for URL: {normalized}")
 

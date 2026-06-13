@@ -8,10 +8,9 @@ from typing import Any, TypeAlias
 
 from pzi.bib_repository import (
     _read_bib_file_raw,
-    serialize_bibtex,
     with_bib_lock,
+    write_bib_file,
 )
-from pzi.bibtex import bibtex_entry_to_record
 from pzi.format_templates import format_citekey
 from pzi.pdf_planning import plan_pdf_path
 
@@ -105,10 +104,8 @@ def reindex_library(
     # Write back if not dry run
     if changed and not dry_run:
         sorted_entries = sorted(entries, key=lambda e: e["citekey"].lower())
-        text = serialize_bibtex(sorted_entries)
-        bib_file = Path(bib_path)
-        bib_file.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
-        bib_file.write_text(text, encoding="utf-8")
+        with with_bib_lock(bib_path):
+            write_bib_file(bib_path, sorted_entries)
 
     return {
         "status": "ok",

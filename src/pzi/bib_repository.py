@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import difflib
-import portalocker
 import os
 import tempfile
 from collections.abc import Callable, Iterator, Sequence
@@ -11,19 +10,10 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Literal, TypeAlias, cast
 
-
-class ConcurrentEditError(RuntimeError):
-    """Raised when the bib file is modified externally during a write operation."""
-
-
-def _bib_mtime(path: str) -> float | None:
-    """Return mtime of the bib file, or None if it does not exist."""
-    p = Path(path)
-    return p.stat().st_mtime if p.exists() else None
-
+import portalocker
 from bibtexparser.entrypoint import parse_string, write_string
 from bibtexparser.library import Library
-from bibtexparser.middlewares import RemoveEnclosingMiddleware
+from bibtexparser.middlewares.enclosing import RemoveEnclosingMiddleware
 from bibtexparser.model import Entry as BibtexEntryV2
 from bibtexparser.model import Field
 from bibtexparser.writer import BibtexFormat
@@ -36,6 +26,16 @@ from pzi.bibtex import (
     resolve_citekey_collision,
 )
 from pzi.similarity import find_exact_match
+
+
+class ConcurrentEditError(RuntimeError):
+    """Raised when the bib file is modified externally during a write operation."""
+
+
+def _bib_mtime(path: str) -> float | None:
+    """Return mtime of the bib file, or None if it does not exist."""
+    p = Path(path)
+    return p.stat().st_mtime if p.exists() else None
 
 
 def _find_entry_index(entries: Sequence[dict[str, Any]], citekey: str) -> int | None:
@@ -288,13 +288,22 @@ def _update_library_blocks(
         _bibtex_entry_to_library_entry(e, bib_path, file_path_style=file_path_style)
         for e in entries
     ]
+    # ``entries`` comes from ``apply_write_plan``, which only ever replaces an
+    # entry in place or appends one at the end. It is therefore in the same
+    # order as the on-disk entry blocks, with inserts trailing. We replace
+    # positionally (not by citekey) precisely so that an update which *renames*
+    # a citekey still maps to its original block instead of being lost.
     new_blocks: list = []
     for block in library.blocks:
         if isinstance(block, BibtexEntryV2):
-            # Replace with the first available new entry that matches by key.
-            # Entries are in order; consume them from the front.
-            if new_entry_blocks:
-                new_blocks.append(new_entry_blocks.pop(0))
+            # Each existing entry block must have a corresponding updated entry;
+            # a shortfall would mean this path is silently dropping an entry.
+            if not new_entry_blocks:  # pragma: no cover — invariant guard
+                raise ValueError(
+                    "internal error: fewer updated entries than existing blocks "
+                    "while rendering BibTeX write plan"
+                )
+            new_blocks.append(new_entry_blocks.pop(0))
         else:
             new_blocks.append(block)
     # Append any remaining new entries (inserts beyond original count).
@@ -430,7 +439,9 @@ def _rebase_insert_plan_against_current(
     if not isinstance(planned_citekey, str) or not planned_citekey.strip():
         return plan
 
-    match_index = find_exact_match(cast(NormalizedRecord, planned_record), current_records)
+    match_index = None if plan.get("force_new") else find_exact_match(
+        cast(NormalizedRecord, planned_record), current_records
+    )
     if match_index is not None:
         existing_record = current_records[match_index]
         merge_decision = merge_entries(
@@ -493,13 +504,14 @@ def update_bib_entry(
         _validate_library_parseable(library)
         entries, records = _library_to_entries_records(library, path)
 
-        index = _find_entry_index(entries, citekey)
+        index = _find_entry_index(entries, citekey)  # type: ignore[arg-type]
         if index is None:
             return {"found": False, "entries": entries, "entry": None, "record": None}
 
         current_entry = entries[index]
         current_record = records[index]
         updated_entry = updater(current_entry, current_record)
+        updated_record = bibtex_entry_to_record(updated_entry)
         if updated_entry != current_entry:
             entries[index] = updated_entry
             new_source = _render_write_plan(
@@ -508,7 +520,7 @@ def update_bib_entry(
                 {
                     "action": "update",
                     "index": index,
-                    "record": bibtex_entry_to_record(updated_entry),
+                    "record": updated_record,
                     "entry": updated_entry,
                     "changed_fields": [
                         field
@@ -524,7 +536,7 @@ def update_bib_entry(
             "found": True,
             "entries": entries,
             "entry": updated_entry,
-            "record": current_record,
+            "record": updated_record,
         }
 
 
@@ -632,6 +644,7 @@ def plan_bib_write(
             "record": incoming_record,
             "entry": entry,
             "changed_fields": sorted(incoming_record.keys()),
+            "force_new": True,
         }
 
     match_index = find_exact_match(incoming_record, list(existing_records))

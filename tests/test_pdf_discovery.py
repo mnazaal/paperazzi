@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from pzi.pdf_discovery import (
@@ -134,6 +136,16 @@ def test_pdf_url_candidates_step_uses_first_valid() -> None:
     assert result["pdf_url"] == "https://example.com/candidate.pdf"
 
 
+def test_pdf_url_candidates_step_accepts_existing_local_pdf_path(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n%test\n")
+
+    result = pdf_url_candidates_step({}, {"pdf_url_candidates": [str(pdf_path)]})
+
+    assert result["pdf_url"] == str(pdf_path)
+    assert result["pdf_source"] == "pdf_url_candidates"
+
+
 def test_pdf_url_candidates_step_no_candidates() -> None:
     record = {"title": "Paper"}
     context: PdfDiscoveryContext = {"pdf_url_candidates": []}
@@ -163,6 +175,41 @@ def test_web_attachment_step_fetches_and_extracts() -> None:
     result = web_attachment_step(record, context)
     assert result["pdf_url"] == "https://example.com/paper.pdf"
     assert result["source_url"] == "https://example.com/paper"
+
+
+def test_web_attachment_step_passes_cookie_bridge_to_translation_server() -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_fetch_web(
+        url: str, *, server_url: str, cookies: str | None = None
+    ) -> list[dict[str, object]]:
+        calls.append({"url": url, "server_url": server_url, "cookies": cookies})
+        if cookies != "sid=abc123":
+            return []
+        return [
+            {
+                "attachments": [
+                    {
+                        "url": "https://example.com/auth-paper.pdf",
+                        "mime_type": "application/pdf",
+                    }
+                ]
+            }
+        ]
+
+    result = web_attachment_step(
+        {"source_url": "https://example.com/paper"},
+        {
+            "raw_value": "https://example.com/paper",
+            "server_url": "http://localhost:1969",
+            "fetch_web": fake_fetch_web,
+            "cookies": "sid=abc123",
+        },
+    )
+
+    assert calls[0]["cookies"] == "sid=abc123"
+    assert result["pdf_url"] == "https://example.com/auth-paper.pdf"
+    assert result["pdf_source"] == "web_attachment"
 
 
 def test_web_attachment_step_backfills_missing_fields() -> None:
@@ -390,3 +437,43 @@ def test_parallel_handles_http_step_exceptions() -> None:
         record, [failing_http, working_browser], context,
     )
     assert result["pdf_url"] == "https://example.com/browser.pdf"
+
+
+def test_unpaywall_step_skips_without_email() -> None:
+    from pzi.pdf_discovery import unpaywall_step
+    record = {"doi": "10.1234/test"}
+    context = {}
+    result = unpaywall_step(record, context)
+    assert result.get("pdf_url") is None
+
+
+def test_unpaywall_step_uses_injected_fetch() -> None:
+    from pzi.pdf_discovery import unpaywall_step
+    record = {"doi": "10.1234/test"}
+    context = {
+        "unpaywall_email": "test@example.com",
+        "fetch_unpaywall": lambda doi, email=None: "https://oa.example.com/paper.pdf",
+    }
+    result = unpaywall_step(record, context)
+    assert result.get("pdf_url") == "https://oa.example.com/paper.pdf"
+    assert result.get("pdf_source") == "unpaywall"
+
+
+def test_doi_pdf_step_skips_without_doi() -> None:
+    from pzi.pdf_discovery import doi_pdf_step
+    record = {"title": "No DOI"}
+    context = {}
+    result = doi_pdf_step(record, context)
+    assert result.get("pdf_url") is None
+
+
+def test_web_attachment_step_no_attachments2() -> None:
+    from pzi.pdf_discovery import web_attachment_step
+    record = {"title": "Paper"}
+    context = {
+        "server_url": "http://127.0.0.1:1969",
+        "raw_value": "https://example.com",
+        "fetch_web": lambda url, server_url=None, **kw: [],
+    }
+    result = web_attachment_step(record, context)
+    assert result.get("pdf_url") is None

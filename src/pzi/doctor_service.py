@@ -6,7 +6,9 @@ from typing import Any, TypeAlias
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from pzi.capture_context import resolve_optional_value
 from pzi.config import load_config_file
+from pzi.metadata_sources import probe_s2_api
 
 DoctorBibStatus: TypeAlias = dict[str, Any]
 
@@ -21,6 +23,7 @@ def doctor_check(
     config_path: str,
     home_dir: str,
     translation_probe=None,
+    s2_probe=None,
 ) -> DoctorResult:
     config_result = load_config_file(config_path, home_dir=home_dir)
     if config_result["config"] is None:
@@ -34,6 +37,7 @@ def doctor_check(
             "translation_server_reachable": False,
             "translation_probe_error": None,
             "credentials": {},
+            "semantic_scholar": {},
         }
     config = config_result["config"]
 
@@ -62,6 +66,26 @@ def doctor_check(
         probe_error = str(exc)
         reachable = False
 
+    # Semantic Scholar reachability.
+    s2_key = resolve_optional_value(
+        command=config.get("semantic_scholar_api_key_cmd"),
+        fallback=config.get("semantic_scholar_api_key"),
+    )
+    s2_reachable = False
+    s2_key_effective: bool | None = None
+    s2_probe_error: str | None = None
+    probe_s2 = s2_probe or probe_s2_api
+    try:
+        s2_reachable = bool(probe_s2(api_key=s2_key))
+        if s2_reachable:
+            s2_key_effective = True
+        elif s2_key:
+            s2_key_effective = False
+        else:
+            s2_key_effective = None
+    except OSError as exc:
+        s2_probe_error = str(exc)
+
     return {
         "status": "ok",
         "config_path": config_result["path"],
@@ -72,6 +96,15 @@ def doctor_check(
         "translation_server_reachable": reachable,
         "translation_probe_error": probe_error,
         "credentials": _credential_status(config),
+        "semantic_scholar": {
+            "configured": _configured_status(
+                cmd=config.get("semantic_scholar_api_key_cmd"),
+                value=config.get("semantic_scholar_api_key"),
+            ),
+            "reachable": s2_reachable,
+            "key_effective": s2_key_effective,
+            "probe_error": s2_probe_error,
+        },
     }
 
 

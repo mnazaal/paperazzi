@@ -1,13 +1,11 @@
 """Tests for src/pzi/setup_service.py."""
 
-import io
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from pzi.setup_service import (
     _escape_toml_string,
     _find_firefox_profile,
-    install_playwright_browser,
     render_config,
 )
 
@@ -91,63 +89,6 @@ def test_render_config_escapes_special_chars() -> None:
     )
     assert 'name = "test\\"bib"' in result
     assert 'path = "~/path\\\\to\\\\bib"' in result
-
-
-# ── install_playwright_browser ──────────────────────────────────────────────
-
-def test_install_playwright_browser_runs_correct_command() -> None:
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-
-    with patch("pzi.setup_service.subprocess.run") as mock_run:
-        mock_result = MagicMock()
-        mock_result.stdout = "download complete\n"
-        mock_result.stderr = ""
-        mock_result.returncode = 0
-        mock_run.return_value = mock_result
-
-        rc = install_playwright_browser("chromium", stdout=stdout, stderr=stderr)
-
-    assert rc == 0
-    args = mock_run.call_args[0][0]
-    assert "playwright" in args
-    assert "chromium" in args
-    assert stdout.getvalue() == "download complete\n"
-
-
-def test_install_playwright_browser_forwards_stderr() -> None:
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-
-    with patch("pzi.setup_service.subprocess.run") as mock_run:
-        mock_result = MagicMock()
-        mock_result.stdout = ""
-        mock_result.stderr = "error\n"
-        mock_result.returncode = 1
-        mock_run.return_value = mock_result
-
-        rc = install_playwright_browser("firefox", stdout=stdout, stderr=stderr)
-
-    assert rc == 1
-    assert stderr.getvalue() == "error\n"
-
-
-def test_install_playwright_browser_no_output() -> None:
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-
-    with patch("pzi.setup_service.subprocess.run") as mock_run:
-        mock_result = MagicMock()
-        mock_result.stdout = ""
-        mock_result.stderr = ""
-        mock_result.returncode = 0
-        mock_run.return_value = mock_result
-
-        rc = install_playwright_browser("chromium", stdout=stdout, stderr=stderr)
-
-    assert rc == 0
-    assert stdout.getvalue() == ""
-    assert stderr.getvalue() == ""
 
 
 # ── _escape_toml_string ─────────────────────────────────────────────────────

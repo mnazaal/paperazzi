@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, TypeAlias
 
 from pzi.bib_repository import (
     _read_bib_file_raw,
     merge_entries,
-    serialize_bibtex,
     with_bib_lock,
+    write_bib_file,
 )
 from pzi.bibtex import NormalizedRecord, record_to_bibtex_entry
 from pzi.similarity import (
@@ -77,7 +76,7 @@ def find_duplicates(
         if i in seen_positions:
             continue
         hint = compute_similarity_hint(
-            record, records,
+            record, records,  # type: ignore[arg-type]
             title_threshold=title_threshold,
             year_window=year_window,
         )
@@ -209,8 +208,7 @@ def merge_duplicates(
         b_pos = idx_b_fresh if idx_a_fresh > idx_b_fresh else idx_b_fresh - 1
         updated[b_pos] = entry_b_merged
 
-        text = serialize_bibtex(updated)
-        Path(bib_path).write_text(text, encoding="utf-8")
+        write_bib_file(bib_path, updated)
 
     return {
         "status": "ok",

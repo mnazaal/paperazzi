@@ -6,6 +6,7 @@ import os
 import tempfile
 from pathlib import Path
 
+import pzi.clean_service as clean_service
 from pzi.clean_service import clean_library, validate_library
 
 
@@ -120,6 +121,33 @@ def test_clean_library_sort_dry_run() -> None:
         # File should be unchanged (dry run)
         content = Path(bib).read_text()
         assert "zeta2024" in content  # still in original order
+
+
+def test_clean_library_sort_uses_repository_writer(monkeypatch) -> None:
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "sort-real.bib")
+        papers = os.path.join(td, "papers")
+        _write_bib(
+            bib,
+            (
+                '@article{zeta2024, title = {Z}, author = {Z}, year = {2024}}\n'
+                '@article{alpha2023, title = {A}, author = {A}, year = {2023}}'
+            ),
+        )
+        calls = []
+
+        def fake_write_bib_file(path, entries):
+            calls.append((path, [entry["citekey"] for entry in entries]))
+
+        monkeypatch.setattr(clean_service, "write_bib_file", fake_write_bib_file, raising=False)
+
+        result = clean_library(
+            bib_path=bib, papers_dir=papers,
+            dry_run=False, move_orphans=False, sort_entries=True,
+        )
+
+        assert result["status"] == "ok"
+        assert calls == [(bib, ["alpha2023", "zeta2024"])]
 
 
 def test_clean_library_move_orphans_dry_run() -> None:

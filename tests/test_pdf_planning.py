@@ -5,15 +5,14 @@ from pzi.pdf_planning import (
     candidate_matches_requested_pdf_name,
     choose_firefox_profile,
     filename_match_text,
-    is_pdf_bytes,
     is_pdf_content_type,
     needs_desktop_browser_fallback,
     normalized_hostname,
     parse_firefox_default_profile,
-    plan_pdf_path,
     requested_pdf_match_tokens,
     url_basename,
 )
+
 
 def test_is_pdf_content_type_classifies_pdf_html_and_ambiguous_values() -> None:
     assert is_pdf_content_type("application/pdf; charset=binary") is True

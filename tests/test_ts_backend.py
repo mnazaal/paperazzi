@@ -549,33 +549,28 @@ def test_wait_for_ts_polls_when_process_alive() -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# start_ts / stop_ts
+# start_ts / terminate_ts
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def test_start_ts_launches_subprocess(tmp_path: Path) -> None:
-    pid_file = tmp_path / "ts.pid"
     with patch("pzi.ts_backend.subprocess.Popen") as mock_popen:
         mock_proc = MagicMock()
         mock_proc.pid = 12345
         mock_popen.return_value = mock_proc
-        proc = ts_backend.start_ts("/usr/bin/node", tmp_path, pid_file=pid_file)
+        proc = ts_backend.start_ts("/usr/bin/node", tmp_path)
     assert proc is mock_proc
-    assert proc.pid == 12345
-    assert pid_file.read_text() == "12345"
     mock_popen.assert_called_once()
     args = mock_popen.call_args[0][0]
     assert args[0] == "/usr/bin/node"
     assert str(args[1]).endswith("src/server.js")
 
 
-def test_start_ts_no_pid_file(tmp_path: Path) -> None:
+def test_start_ts_uses_new_session(tmp_path: Path) -> None:
+    """The child runs in its own process group so it can be reaped as a group."""
     with patch("pzi.ts_backend.subprocess.Popen") as mock_popen:
-        mock_proc = MagicMock()
-        mock_proc.pid = 9999
-        mock_popen.return_value = mock_proc
-        proc = ts_backend.start_ts("/usr/bin/node", tmp_path)
-    assert proc is mock_proc
-    assert proc.pid == 9999
+        mock_popen.return_value = MagicMock()
+        ts_backend.start_ts("/usr/bin/node", tmp_path)
+    assert mock_popen.call_args[1]["start_new_session"] is True
 
 
 def test_start_ts_stderr_log(tmp_path: Path) -> None:
@@ -607,41 +602,38 @@ def test_start_ts_stderr_devnull_when_no_log(tmp_path: Path) -> None:
     assert kwargs["stderr"] == subprocess.DEVNULL
 
 
-def test_stop_ts_no_pid_file() -> None:
-    assert ts_backend.stop_ts(Path("/nonexistent.pid")) is True
+def test_terminate_ts_noop_when_already_exited() -> None:
+    proc = MagicMock()
+    proc.poll.return_value = 0  # already exited
+    with patch("pzi.ts_backend.os.killpg") as mock_killpg:
+        ts_backend.terminate_ts(proc)
+    mock_killpg.assert_not_called()
 
 
-def test_stop_ts_invalid_pid(tmp_path: Path) -> None:
-    pid_file = tmp_path / "ts.pid"
-    pid_file.write_text("not-a-pid")
-    assert ts_backend.stop_ts(pid_file) is True
-    assert not pid_file.exists()
+def test_terminate_ts_sigterm_then_exits() -> None:
+    proc = MagicMock()
+    # alive at the guard poll, then exits after SIGTERM
+    proc.poll.side_effect = [None, 0]
+    with patch("pzi.ts_backend.os.killpg") as mock_killpg, \
+            patch("pzi.ts_backend.os.getpgid", return_value=4242), \
+            patch("pzi.ts_backend.time.sleep"):
+        ts_backend.terminate_ts(proc)
+    sigs = [c[0][1] for c in mock_killpg.call_args_list]
+    assert signal.SIGTERM in sigs
+    assert signal.SIGKILL not in sigs
 
 
-def test_stop_ts_kills_process(tmp_path: Path) -> None:
-    pid_file = tmp_path / "ts.pid"
-    pid_file.write_text("12345")
-    with patch("pzi.ts_backend.os.kill") as mock_kill:
-        # SIGTERM succeeds, then process is gone
-        mock_kill.side_effect = [None, OSError]
-        result = ts_backend.stop_ts(pid_file)
-    assert result is True
-    assert not pid_file.exists()
-
-
-def test_stop_ts_force_kills_after_timeout(tmp_path: Path) -> None:
-    pid_file = tmp_path / "ts.pid"
-    pid_file.write_text("12345")
-    with patch("pzi.ts_backend.os.kill") as mock_kill:
-        # Process stays alive → force kill
-        mock_kill.return_value = None
-        with patch("pzi.ts_backend.time.monotonic", side_effect=[0, 10]):
-            with patch("pzi.ts_backend.time.sleep"):
-                result = ts_backend.stop_ts(pid_file)
-    assert result is True
-    assert not pid_file.exists()
-    # Should have been called with SIGTERM then SIGKILL
-    assert signal.SIGKILL in [c[0][1] for c in mock_kill.call_args_list]
+def test_terminate_ts_force_kills_after_timeout() -> None:
+    proc = MagicMock()
+    proc.poll.return_value = None  # never exits on its own
+    with patch("pzi.ts_backend.os.killpg") as mock_killpg, \
+            patch("pzi.ts_backend.os.getpgid", return_value=4242), \
+            patch("pzi.ts_backend.time.monotonic", side_effect=[0, 10]), \
+            patch("pzi.ts_backend.time.sleep"):
+        ts_backend.terminate_ts(proc)
+    sigs = [c[0][1] for c in mock_killpg.call_args_list]
+    assert signal.SIGTERM in sigs
+    assert signal.SIGKILL in sigs
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -668,35 +660,92 @@ def test_ts_url_from_config_not_string() -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# auto_start_ts
+# backend_session
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def test_auto_start_ts_already_reachable() -> None:
+def test_backend_session_reuses_reachable_server() -> None:
     stdout = io.StringIO()
     stderr = io.StringIO()
     with patch("pzi.ts_backend.is_ts_reachable", return_value=True):
-        result = ts_backend.auto_start_ts(
+        with ts_backend.backend_session(
             {"translation_server_url": "http://127.0.0.1:1969"},
-            "/tmp/config.toml",
-            "/home/user",
-            stdout=stdout,
-            stderr=stderr,
-        )
-    assert result is True
+            "/tmp/config.toml", "/home/user",
+            stdout=stdout, stderr=stderr,
+        ) as backend:
+            assert backend["ready"] is True
+            assert backend["owned"] is False
+            assert backend["proc"] is None
 
 
-def test_auto_start_ts_no_url_configured() -> None:
+def test_backend_session_no_url_is_ready_and_unowned() -> None:
     stdout = io.StringIO()
     stderr = io.StringIO()
-    result = ts_backend.auto_start_ts(
-        {},
-        "/tmp/config.toml",
-        "/home/user",
-        stdout=stdout,
-        stderr=stderr,
-    )
-    assert result is False
-    assert "not configured" in stderr.getvalue()
+    with ts_backend.backend_session(
+        {}, "/tmp/config.toml", "/home/user", stdout=stdout, stderr=stderr,
+    ) as backend:
+        assert backend["ready"] is True
+        assert backend["owned"] is False
+
+
+def test_backend_session_skip_auto_start_does_not_probe(monkeypatch) -> None:
+    monkeypatch.setenv("PZI_SKIP_AUTO_START", "1")
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with patch(
+        "pzi.ts_backend.is_ts_reachable",
+        side_effect=AssertionError("should not probe when auto-start is skipped"),
+    ):
+        with ts_backend.backend_session(
+            {"translation_server_url": "http://127.0.0.1:1969"},
+            "/tmp/config.toml", "/home/user",
+            stdout=stdout, stderr=stderr,
+        ) as backend:
+            assert backend["ready"] is True
+            assert backend["owned"] is False
+
+
+def test_backend_session_spawns_and_reaps_owned_child(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("PZI_SKIP_AUTO_START", raising=False)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    fake_proc = MagicMock()
+    with patch("pzi.ts_backend.is_ts_reachable", return_value=False), \
+            patch("pzi.ts_backend.ensure_node", return_value="/usr/bin/node"), \
+            patch("pzi.ts_backend.ensure_translation_server", return_value=tmp_path / "ts"), \
+            patch("pzi.ts_backend.start_ts", return_value=fake_proc) as mock_start, \
+            patch("pzi.ts_backend.wait_for_ts", return_value=True), \
+            patch("pzi.ts_backend.terminate_ts") as mock_terminate:
+        with ts_backend.backend_session(
+            {"translation_server_url": "http://127.0.0.1:1969",
+             "pzi_data_home": str(tmp_path)},
+            "/tmp/config.toml", str(tmp_path),
+            stdout=stdout, stderr=stderr,
+        ) as backend:
+            assert backend["owned"] is True
+            assert backend["ready"] is True
+            assert backend["proc"] is fake_proc
+            mock_terminate.assert_not_called()  # still inside the block
+        # child is reaped on block exit
+        mock_terminate.assert_called_once_with(fake_proc)
+    mock_start.assert_called_once()
+
+
+def test_backend_session_node_bootstrap_failure_is_not_ready(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("PZI_SKIP_AUTO_START", raising=False)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with patch("pzi.ts_backend.is_ts_reachable", return_value=False), \
+            patch("pzi.ts_backend.ensure_node", return_value=None):
+        with ts_backend.backend_session(
+            {"translation_server_url": "http://127.0.0.1:1969",
+             "pzi_data_home": str(tmp_path)},
+            "/tmp/config.toml", str(tmp_path),
+            stdout=stdout, stderr=stderr,
+        ) as backend:
+            assert backend["ready"] is False
+            assert backend["owned"] is False
 
 
 def test_clone_repo_uses_branch_for_non_hash_ref(tmp_path: Path) -> None:

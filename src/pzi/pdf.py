@@ -260,7 +260,12 @@ def fetch_and_store_pdf_with_fallbacks(
             )
             return local_path, warning, None
 
-    if _needs_desktop_browser_fallback(url, desktop_fallback_hosts=desktop_fallback_hosts) and not extension_capture:
+    if (
+        _needs_desktop_browser_fallback(
+            url, desktop_fallback_hosts=desktop_fallback_hosts
+        )
+        and not extension_capture
+    ):
         desktop_path, desktop_warning = fetch_pdf_via_desktop_browser_download(
             url=url,
             papers_dir=papers_dir,

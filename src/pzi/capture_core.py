@@ -18,6 +18,7 @@ from pzi.capture_models import (
 )
 from pzi.html_metadata import extract_metadata_from_html
 from pzi.page_metadata_cmd import run_page_metadata_cmd
+from pzi.url_safety import safe_public_http_url
 
 CaptureResult = Mapping[str, Any]
 
@@ -45,7 +46,11 @@ def capture_to_bib(
         )
     ]
     page_pdf_url = record_overrides.get("fallback_pdf_url")
-    if isinstance(page_pdf_url, str) and page_pdf_url not in pdf_candidates:
+    if (
+        isinstance(page_pdf_url, str)
+        and page_pdf_url not in pdf_candidates
+        and safe_public_http_url(page_pdf_url)
+    ):
         pdf_candidates.append(page_pdf_url)
 
     kwargs: dict[str, Any] = {

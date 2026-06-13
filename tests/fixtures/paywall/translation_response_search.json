@@ -1,0 +1,25 @@
+[
+  {
+    "itemType": "journalArticle",
+    "title": "Deep Graph Networks for Citation Context Prediction",
+    "creators": [
+      {"firstName": "Alice", "lastName": "Chen", "creatorType": "author"},
+      {"firstName": "Bob", "lastName": "Kumar", "creatorType": "author"}
+    ],
+    "date": "2025",
+    "publicationTitle": "Journal of Machine Learning Research",
+    "DOI": "10.1234/jmlr.2025.00142",
+    "url": "https://jmlr.org/papers/v26/25-0142.html"
+  },
+  {
+    "itemType": "conferencePaper",
+    "title": "Efficient Graph Neural Networks for Document Classification",
+    "creators": [
+      {"firstName": "David", "lastName": "Park", "creatorType": "author"}
+    ],
+    "date": "2024",
+    "publicationTitle": "Proceedings of ICML 2024",
+    "DOI": "10.1234/icml.2024.789",
+    "url": "https://proceedings.mlr.press/v235/park24a.html"
+  }
+]

@@ -6,9 +6,8 @@ from pathlib import Path
 from typing import Any, TypeAlias
 
 from pzi.add_service import add_record_to_bib
-from pzi.bib_repository import _read_bib_file_raw, parse_bibtex, with_bib_lock
+from pzi.bib_repository import parse_bibtex
 from pzi.bibtex import bibtex_entry_to_record
-
 
 ImportResult: TypeAlias = dict[str, Any]
 
@@ -83,8 +82,8 @@ def import_from_bibtex(
             continue
         seen_citekeys.add(citekey)
         record = bibtex_entry_to_record(entry)
-        record["entry_type"] = entry.get("entry_type", "article")
-        records.append(record)
+        record["entry_type"] = entry.get("entry_type", "article")  # type: ignore[typeddict-unknown-key]
+        records.append(record)  # type: ignore[arg-type]
 
     # Pre-dedupe: read target bib once to check for existing matches
     # We don't have direct access to the target bib path here, but
@@ -105,6 +104,7 @@ def import_from_bibtex(
                 record=record,
                 bib_selector=bib_selector,
                 dry_run=dry_run,
+                force_new=force_new,
             )
         except Exception as exc:
             citekey = record.get("citekey", "?")
@@ -121,7 +121,6 @@ def import_from_bibtex(
         status = result.get("status", "unknown")
 
         if status == "ok":
-            action = result.get("action", "imported")
             is_dry = result.get("dry_run", False)
             if is_dry or dry_run:
                 results.append({
@@ -130,7 +129,10 @@ def import_from_bibtex(
                     "action": "insert",
                     "message": result.get("message", ""),
                 })
-            elif "duplicate" in str(result.get("message", "")).lower() or "already" in str(result.get("warnings", [])):
+            elif (
+                "duplicate" in str(result.get("message", "")).lower()
+                or "already" in str(result.get("warnings", []))
+            ):
                 skipped_dupes += 1
                 results.append({
                     "citekey": citekey,

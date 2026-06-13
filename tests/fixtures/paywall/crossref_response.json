@@ -1,0 +1,28 @@
+{
+  "status": "ok",
+  "message-type": "work",
+  "message-version": "1.0.0",
+  "message": {
+    "DOI": "10.1234/jmlr.2025.00142",
+    "type": "journal-article",
+    "title": ["Deep Graph Networks for Citation Context Prediction"],
+    "author": [
+      {"given": "Alice", "family": "Chen", "sequence": "first", "affiliation": []},
+      {"given": "Bob", "family": "Kumar", "sequence": "additional", "affiliation": []},
+      {"given": "Carol", "family": "Martinez", "sequence": "additional", "affiliation": []}
+    ],
+    "container-title": ["Journal of Machine Learning Research"],
+    "published-print": {"date-parts": [[2025, 3, 15]]},
+    "volume": "26",
+    "issue": "142",
+    "page": "1-35",
+    "link": [
+      {
+        "URL": "https://jmlr.org/papers/v26/25-0142.pdf",
+        "content-type": "application/pdf",
+        "content-version": "vor",
+        "intended-application": "text-mining"
+      }
+    ]
+  }
+}

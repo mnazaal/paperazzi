@@ -166,7 +166,7 @@ def test_add_dedupe_by_doi() -> None:
         assert r1["citekey"] == "first2024"
 
         # Second add — same DOI, should merge
-        r2 = add_record_to_bib(
+        _r2 = add_record_to_bib(
             config_path=config_path, home_dir=td,
             record=_make_record("second2024", "Second Version", 2024,
                                 doi="10.1234/dup.001"),

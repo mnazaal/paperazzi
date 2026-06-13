@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Literal, TypeAlias
+from typing import Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+from pzi.bibtex import ClassifiedInput
 
 _YEAR_PATTERN = re.compile(r"(19|20)\d{2}")
 
@@ -29,8 +31,6 @@ ARXIV_PDF_PATTERN = re.compile(
     r"(?i)^/pdf/([a-z\-]+/\d{7}|\d{4}\.\d{4,5})(v\d+)?(?:\.pdf)?/?$"
 )
 
-
-ClassifiedInput: TypeAlias = dict[str, Any]
 
 
 

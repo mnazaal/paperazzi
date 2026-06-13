@@ -1,0 +1,32 @@
+[
+  {
+    "itemType": "journalArticle",
+    "title": "Deep Graph Networks for Citation Context Prediction",
+    "creators": [
+      {"firstName": "Alice", "lastName": "Chen", "creatorType": "author"},
+      {"firstName": "Bob", "lastName": "Kumar", "creatorType": "author"},
+      {"firstName": "Carol", "lastName": "Martinez", "creatorType": "author"}
+    ],
+    "date": "2025-03-15",
+    "publicationTitle": "Journal of Machine Learning Research",
+    "DOI": "10.1234/jmlr.2025.00142",
+    "url": "https://jmlr.org/papers/v26/25-0142.html",
+    "extra": "arXiv: 2503.12345\npublisher: JMLR",
+    "abstractNote": "We propose deep graph networks for citation context prediction and demonstrate state-of-the-art results on standard benchmarks.",
+    "volume": "26",
+    "issue": "142",
+    "pages": "1-35",
+    "attachments": [
+      {
+        "title": "Full Text PDF",
+        "url": "https://jmlr.org/papers/v26/25-0142.pdf",
+        "mimeType": "application/pdf"
+      },
+      {
+        "title": "Supplementary Material",
+        "url": "https://jmlr.org/papers/v26/25-0142-supp.pdf",
+        "mimeType": "application/pdf"
+      }
+    ]
+  }
+]

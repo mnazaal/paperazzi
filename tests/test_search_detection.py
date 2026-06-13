@@ -1,16 +1,35 @@
 """Tests for Tier 4: search result detection and multi-item capture."""
 import json
+import re
 import subprocess
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BACKGROUND_JS = PROJECT_ROOT / "browser-extension" / "background.js"
+BACKGROUND_DIR = PROJECT_ROOT / "browser-extension" / "background"
 POPUP_FORMAT_JS = PROJECT_ROOT / "browser-extension" / "popup_format.js"
+
+# Rewrite relative ESM imports of local ``.js`` modules to ``.mjs`` so Node can
+# resolve the copied test modules (matches any "./…/<name>.js").
+_LOCAL_JS_IMPORT = re.compile(r'"(\./[^"]+?)\.js"')
+
+
+def _rewrite_local_imports(text: str) -> str:
+    return _LOCAL_JS_IMPORT.sub(r'"\1.mjs"', text)
 
 
 def _run_background_module(script: str, tmp_path: Path) -> dict:
     module_path = tmp_path / "background.mjs"
-    module_path.write_text(BACKGROUND_JS.read_text())
+    module_path.write_text(_rewrite_local_imports(BACKGROUND_JS.read_text()))
+    # Copy background/ subdirectory with .mjs rewrites
+    if BACKGROUND_DIR.is_dir():
+        dest_dir = tmp_path / "background"
+        dest_dir.mkdir(exist_ok=True)
+        for f in BACKGROUND_DIR.iterdir():
+            if f.suffix == ".js":
+                (dest_dir / f"{f.stem}.mjs").write_text(
+                    _rewrite_local_imports(f.read_text())
+                )
     runner_path = tmp_path / "runner.mjs"
     runner_path.write_text(script.replace("./background.js", "./background.mjs"))
     result = subprocess.run(

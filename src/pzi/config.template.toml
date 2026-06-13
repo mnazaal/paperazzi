@@ -45,6 +45,11 @@ api_listen_port = 8765
 
 # ezproxy_host = "proxy.lib.university.edu"  # route PDF downloads through institutional EZProxy (bare hostname)
 
+# Metadata confidence tuning
+# promote_confidence_threshold = 3   # min score to promote a preprint → published (default 3)
+# metadata_confidence_min_score = 0  # warn when add/update accept a candidate below this score (default 0)
+# pdf_discovery_parallel = false     # run the PDF discovery fallback chain in parallel
+
 [[bibs]]
 name = "main"
 path = "~/bibs/main.bib"

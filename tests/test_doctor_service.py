@@ -83,3 +83,145 @@ def test_doctor_check_config_error(tmp_path) -> None:
     )
     assert result["config_ok"] is False
     assert len(result["config_errors"]) > 0
+
+
+# ---------------------------------------------------------------------------
+# Semantic Scholar reachability
+# ---------------------------------------------------------------------------
+
+
+def test_doctor_s2_configured_and_reachable(tmp_path) -> None:
+    """Key configured + probe passes → key_effective=True."""
+    config_path = tmp_path / "config.toml"
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text("")
+    config_path.write_text(
+        'semantic_scholar_api_key = "my-key"\n'
+        'api_listen_host = "127.0.0.1"\n'
+        'api_listen_port = 8765\n'
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\ndefault = true\n'
+    )
+
+    result = doctor_check(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        s2_probe=lambda **kw: True,
+    )
+    assert result["semantic_scholar"]["configured"] == "plaintext"
+    assert result["semantic_scholar"]["reachable"] is True
+    assert result["semantic_scholar"]["key_effective"] is True
+
+
+def test_doctor_s2_not_configured_and_reachable(tmp_path) -> None:
+    """No key + probe passes → key_effective=True (public tier works)."""
+    config_path = tmp_path / "config.toml"
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text("")
+    config_path.write_text(
+        'api_listen_host = "127.0.0.1"\n'
+        'api_listen_port = 8765\n'
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\ndefault = true\n'
+    )
+
+    result = doctor_check(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        s2_probe=lambda **kw: True,
+    )
+    assert result["semantic_scholar"]["configured"] == "not configured"
+    assert result["semantic_scholar"]["reachable"] is True
+    assert result["semantic_scholar"]["key_effective"] is True
+
+
+def test_doctor_s2_configured_and_unreachable(tmp_path) -> None:
+    """Key configured + probe fails → key_effective=False."""
+    config_path = tmp_path / "config.toml"
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text("")
+    config_path.write_text(
+        'semantic_scholar_api_key_cmd = "echo my-key"\n'
+        'api_listen_host = "127.0.0.1"\n'
+        'api_listen_port = 8765\n'
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\ndefault = true\n'
+    )
+
+    result = doctor_check(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        s2_probe=lambda **kw: False,
+    )
+    assert result["semantic_scholar"]["configured"] == "cmd"
+    assert result["semantic_scholar"]["reachable"] is False
+    assert result["semantic_scholar"]["key_effective"] is False
+
+
+def test_doctor_s2_not_configured_and_unreachable(tmp_path) -> None:
+    """No key + probe fails → key_effective=None (can't tell)."""
+    config_path = tmp_path / "config.toml"
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text("")
+    config_path.write_text(
+        'api_listen_host = "127.0.0.1"\n'
+        'api_listen_port = 8765\n'
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\ndefault = true\n'
+    )
+
+    result = doctor_check(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        s2_probe=lambda **kw: False,
+    )
+    assert result["semantic_scholar"]["configured"] == "not configured"
+    assert result["semantic_scholar"]["reachable"] is False
+    assert result["semantic_scholar"]["key_effective"] is None
+
+
+def test_doctor_s2_probe_error(tmp_path) -> None:
+    """Probe raises OSError → reachable=False, key_effective=None."""
+    config_path = tmp_path / "config.toml"
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text("")
+    config_path.write_text(
+        'api_listen_host = "127.0.0.1"\n'
+        'api_listen_port = 8765\n'
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\ndefault = true\n'
+    )
+
+    def failing_probe(**kw):
+        raise OSError("no route to host")
+
+    result = doctor_check(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        s2_probe=failing_probe,
+    )
+    assert result["semantic_scholar"]["reachable"] is False
+    assert result["semantic_scholar"]["key_effective"] is None
+    assert result["semantic_scholar"]["probe_error"] == "no route to host"
+
+
+def test_doctor_s2_key_cmd_resolution(tmp_path) -> None:
+    """semantic_scholar_api_key_cmd resolves via shell → key is detected."""
+    config_path = tmp_path / "config.toml"
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text("")
+    config_path.write_text(
+        'semantic_scholar_api_key_cmd = "echo test-s2-key"\n'
+        'api_listen_host = "127.0.0.1"\n'
+        'api_listen_port = 8765\n'
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\ndefault = true\n'
+    )
+
+    seen_api_key = []
+    def capturing_probe(*, api_key=None, **kw):
+        seen_api_key.append(api_key)
+        return True
+
+    result = doctor_check(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        s2_probe=capturing_probe,
+    )
+    assert result["semantic_scholar"]["configured"] == "cmd"
+    assert result["semantic_scholar"]["key_effective"] is True
+    assert seen_api_key == ["test-s2-key"]

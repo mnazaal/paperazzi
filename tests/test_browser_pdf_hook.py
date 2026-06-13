@@ -1,9 +1,13 @@
 import base64
 import io
 import json
+import subprocess
 import sys
+import types
 
 from pzi import browser_pdf_hook as hook
+from pzi.browser_session import FetchResult
+from tests.fake_session import FakeBrowserSession, make_pdf_response
 
 
 def test_parse_hook_request_rejects_non_dict() -> None:
@@ -133,10 +137,6 @@ def test_main_returns_error_when_browser_unavailable(monkeypatch, capsys) -> Non
     assert hook.main() == 1
     assert capsys.readouterr().out.strip() == "{}"
 """Tests for browser_pdf_hook using FakeBrowserSession (no Playwright needed)."""
-
-from pzi.browser_session import FetchResult
-from tests.fake_session import FakeBrowserSession, make_pdf_response
-
 # === Pure helper: _is_pdf_url ===
 
 def test_is_pdf_url() -> None:
@@ -211,7 +211,7 @@ def test_download_goto_pdf() -> None:
 
 
 def test_download_candidate_link_found() -> None:
-    html = make_pdf_response(body=b"%PDF-1.4 linked")  # not used directly
+    _html = make_pdf_response(body=b"%PDF-1.4 linked")  # not used directly
     s = FakeBrowserSession(
         fetch_result=(-1, None, b""),
         goto_results=[
@@ -249,9 +249,6 @@ def test_download_outer_exception() -> None:
     s.fetch_direct = lambda url: FetchResult(status=-1, content_type=None, body=b"")
     result = hook.download_pdf("https://example.com/paper.pdf", _session=s)
     assert result is None
-import subprocess
-import types
-
 
 class FakeLocatorFirst:
     def __init__(self, should_click: bool) -> None:

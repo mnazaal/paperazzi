@@ -45,6 +45,31 @@ Outputs:
 6. Click the extension action and click **Capture current page**
 7. You can also right-click any link on any page → **Save to pzi**
 
+## Permissions
+
+The extension requests several permissions to enable browser-session PDF capture
+and authenticated metadata lookup. Every permission is explained in
+[docs/security.md](../docs/security.md#extension-permissions--why-each-exists).
+
+Quick summary:
+
+- **`activeTab`, `scripting`** — extract page metadata and fetch PDFs with your
+  browser session. Only for the tab you click the extension on.
+- **`cookies`** — forward the active tab's cookies to the local
+  translation-server for authenticated metadata resolution. Cookies never leave
+  your machine.
+- **`webRequest`** — observe PDF responses from publisher sites so the extension
+  can discover PDF URLs that appear via JavaScript redirects.
+- **`contextMenus`** — add "Save to pzi" to the right-click menu on links.
+- **`storage`** — save your API token, bib preference, and recent captures.
+- **Publisher host permissions** — needed so the extension can inject content
+  scripts on major publisher sites for authenticated PDF fetch.
+- **Optional `https://*/*`** — requested only when a cross-origin PDF candidate
+  is found. Used for that one fetch, then removed. Denying it still captures
+  metadata.
+
+No PDF data, HTML, or cookies ever leave your machine through pzi.
+
 ## Configuration
 
 - The capture endpoint defaults to `http://127.0.0.1:8765/capture`.

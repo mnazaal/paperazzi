@@ -86,3 +86,14 @@ def test_citation_meta_preferred_over_json_ld():
     result = extract_metadata_from_html(html)
     assert result is not None
     assert result["title"] == "Attention Is All You Need"
+
+
+def test_malformed_json_ld_silently_skipped():
+    """Malformed JSON-LD should be skipped, not crash metadata extraction."""
+    html = (
+        '<html><head>\n'
+        '<script type="application/ld+json">{broken</script>\n'
+        "</head><body></body></html>"
+    )
+    result = extract_metadata_from_html(html)
+    assert result is None  # no usable metadata extracted

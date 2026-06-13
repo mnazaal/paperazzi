@@ -33,7 +33,7 @@
     <ol>
       <li>Install pzi: <code>pip install 'pzi @ git+https://github.com/mnazaal/pzi.git'</code></li>
       <li>Run: <code>pzi init --setup --bib ~/bibs/main.bib</code> — creates <code>~/.config/pzi/config.toml</code></li>
-      <li>Start services: <code>pzi services up</code></li>
+      <li>Start the server: <code>pzi server</code> (it also runs the translation-server)</li>
     </ol>
 
     <h2>Extension configuration</h2>
@@ -55,7 +55,7 @@
 
     <h2>If capture fails</h2>
     <ul>
-      <li>Is the server running? <code>pzi services status</code></li>
+      <li>Is the server running? Start it with <code>pzi server</code></li>
       <li>Is the token correct? Check <code>token</code> in <code>~/.config/pzi/config.toml</code></li>
       <li>Firewall? pzi listens on 127.0.0.1:8765 by default.</li>
     </ul>

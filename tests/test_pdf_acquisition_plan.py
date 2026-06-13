@@ -268,3 +268,18 @@ def test_generic_gateway_has_15s_timeout() -> None:
         page_url="https://some-publisher.example/article/10.1234/foo.bar",
     )
     assert c["timeout_ms"] == 15000
+
+
+# ── Edge cases ──────────────────────────────────────────────────────────
+
+
+def test_malformed_url_skips_gateway_detection() -> None:
+    """A URL that raises ValueError during urlsplit should fall through to
+    article_page, not crash the classifier."""
+    # A URL with invalid brackets triggers ValueError in urlsplit
+    c = classify_pdf_candidate(
+        "http://[::1]:bad]/path",
+        page_url="https://example.com",
+    )
+    assert c["kind"] == "article_page"
+    assert c["method"] == "discover_from_page"

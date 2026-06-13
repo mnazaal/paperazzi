@@ -3,15 +3,71 @@
 from __future__ import annotations
 
 import re
-import re
 import unicodedata
-from typing import Any, TypeAlias
-
-NormalizedRecord: TypeAlias = dict[str, Any]
+from typing import Any, Literal, TypeAlias, TypedDict
 
 
+class NormalizedRecord(TypedDict, total=False):
+    """Internal canonical representation of a bibliographic record.
 
-BibtexEntry: TypeAlias = dict[str, Any]
+    All fields are optional (total=False).  Records may carry additional
+    keys beyond the typed set; callers that add ad-hoc keys should use
+    ``# type: ignore[typeddict-unknown-key]`` or cast() at the insertion side.
+    """
+
+    citekey: str
+    title: str | None
+    authors: list[str]
+    year: int | None
+    venue: str | None
+    doi: str | None
+    arxiv_id: str | None
+    canonical_url: str | None
+    source_url: str | None
+    abstract_url: str | None
+    abstract: str | None
+    local_pdf_path: str | None
+    pdf_url: str | None
+    pdf_source: str
+    tags: list[str]
+    note: str | None
+    item_type: str | None
+
+    # --- Fallback keys from browser page metadata or user overrides ---
+    fallback_title: str | None
+    fallback_canonical_url: str | None
+    fallback_source_url: str | None
+    fallback_abstract_url: str | None
+    fallback_doi: str | None
+    fallback_authors: str
+    fallback_year: str
+    fallback_venue: str | None
+    fallback_abstract: str | None
+    fallback_volume: str
+    fallback_issue: str
+    fallback_pages: str
+    fallback_issn: str
+    fallback_isbn: str
+    fallback_pdf_url: str
+
+    # --- Deduplication hint from fuzzy similarity ---
+    similarity_hint: str | None
+
+
+class BibtexEntry(TypedDict):
+    """A single BibTeX entry shape as consumed / produced by bibtexparser v2."""
+
+    entry_type: str
+    citekey: str
+    fields: dict[str, str]
+
+
+class ClassifiedInput(TypedDict):
+    """Result of classify_input() — what kind of input, plus normalized value."""
+
+    kind: Literal["doi", "url", "pdf_url", "local_pdf", "unknown"]
+    raw: str
+    normalized: str | None
 
 
 

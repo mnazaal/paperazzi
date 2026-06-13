@@ -5,9 +5,7 @@ from __future__ import annotations
 import os
 import secrets
 import shlex
-import subprocess
 import sys
-from typing import TextIO
 
 
 def render_config(
@@ -115,17 +113,6 @@ def _find_firefox_profile() -> str | None:
     # Sort by mtime descending (most recent first), then alphabetically
     candidates.sort(key=lambda x: (-x[1], x[0]))
     return candidates[0][0]
-
-
-def install_playwright_browser(browser: str, *, stdout: TextIO, stderr: TextIO) -> int:
-    """Install Playwright browser binaries for browser PDF fallback."""
-    args = [sys.executable, "-m", "playwright", "install", browser]
-    result = subprocess.run(args, shell=False, text=True, capture_output=True)
-    if result.stdout:
-        print(result.stdout, end="", file=stdout)
-    if result.stderr:
-        print(result.stderr, end="", file=stderr)
-    return result.returncode
 
 
 def _escape_toml_string(value: str) -> str:

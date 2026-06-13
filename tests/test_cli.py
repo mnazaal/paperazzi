@@ -1,13 +1,15 @@
 from io import StringIO
 from pathlib import Path
 
-from pzi import setup_service
+import pytest
+
+import pzi.cli_commands as cli_commands
 from pzi.capture_models import CaptureInput, CaptureOptions, PdfCandidate
-from pzi.cli import (
+from pzi.cli import run_cli
+from pzi.cli_parser import (
     build_capture_input_from_add_args,
     build_capture_options_from_add_args,
     load_add_metadata_json,
-    run_cli,
 )
 
 
@@ -69,6 +71,25 @@ def test_build_capture_input_from_add_args_keeps_cli_capture_hints() -> None:
             PdfCandidate("https://example.com/b.pdf", source="cli"),
         ),
     )
+
+
+def test_build_capture_input_from_add_args_marks_existing_pdf_candidate_path(tmp_path: Path) -> None:
+    parser = __import__("pzi.cli", fromlist=["build_parser"]).build_parser()
+    pdf_path = tmp_path / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n%test\n")
+
+    args = parser.parse_args(
+        [
+            "add",
+            "https://example.com/paper",
+            "--pdf-candidate",
+            str(pdf_path),
+        ]
+    )
+
+    assert build_capture_input_from_add_args(
+        args, bib_selector="ml"
+    ).pdf_candidates == (PdfCandidate(str(pdf_path), source="cli", kind="path"),)
 
 
 def test_build_capture_options_from_add_args_prefers_cli_page_metadata_cmd() -> None:
@@ -380,30 +401,9 @@ default = true
     assert "@article{smith2024graph," in bib_path.read_text()
 
 
-def test_cli_init_setup_writes_config_and_installs_browser(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_cli_init_setup_writes_config_only(tmp_path: Path) -> None:
+    """`init --setup` writes config and performs NO install side effects."""
     config_path = tmp_path / "config.toml"
-    calls: list[str] = []
-
-    def fake_install(browser: str, *, stdout, stderr) -> int:
-        calls.append(browser)
-        print(f"installed {browser}", file=stdout)
-        return 0
-
-    monkeypatch.setattr(setup_service, "install_playwright_browser", fake_install)
-
-    # Patch ts_backend functions to avoid real network/subprocess calls
-    import pzi.ts_backend as tsb
-
-    def fake_ensure_node(data_home, *, interactive, stdout, stderr):
-        return "/usr/bin/node"
-
-    def fake_ensure_translation_server(data_home, node, *, stdout, stderr):
-        return data_home / "ts"
-
-    monkeypatch.setattr(tsb, "ensure_node", fake_ensure_node)
-    monkeypatch.setattr(tsb, "ensure_translation_server", fake_ensure_translation_server)
 
     stdout = StringIO()
     stderr = StringIO()
@@ -422,39 +422,20 @@ def test_cli_init_setup_writes_config_and_installs_browser(
     )
 
     assert exit_code == 0
-    assert calls == ["chromium"]
     assert stderr.getvalue() == ""
     config = config_path.read_text()
     assert '-m pzi.browser_pdf_hook --browser chromium"' in config
     assert 'path = "~/bibs/main.bib"' in config
     assert "flaresolverr_url" not in config
     assert "pzi_data_home" in config
-    assert "installed chromium" in stdout.getvalue()
+    # config-only: guidance points at first-use bootstrap, no install ran
+    out = stdout.getvalue()
+    assert "playwright install" in out
+    assert "pzi server" in out
 
 
-def test_cli_init_setup_with_firefox(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_cli_init_setup_with_firefox(tmp_path: Path) -> None:
     config_path = tmp_path / "config.toml"
-    calls: list[str] = []
-
-    def fake_install(browser: str, *, stdout, stderr) -> int:
-        calls.append(browser)
-        print(f"installed {browser}", file=stdout)
-        return 0
-
-    monkeypatch.setattr(setup_service, "install_playwright_browser", fake_install)
-
-    import pzi.ts_backend as tsb
-
-    def fake_ensure_node(data_home, *, interactive, stdout, stderr):
-        return "/usr/bin/node"
-
-    def fake_ensure_translation_server(data_home, node, *, stdout, stderr):
-        return data_home / "ts"
-
-    monkeypatch.setattr(tsb, "ensure_node", fake_ensure_node)
-    monkeypatch.setattr(tsb, "ensure_translation_server", fake_ensure_translation_server)
 
     stdout = StringIO()
     stderr = StringIO()
@@ -475,10 +456,8 @@ def test_cli_init_setup_with_firefox(
     )
 
     assert exit_code == 0
-    assert calls == ["firefox"]
     config = config_path.read_text()
     assert '--browser firefox' in config
-    assert "installed firefox" in stdout.getvalue()
 
 
 def test_cli_services_handles_missing_config(tmp_path: Path) -> None:
@@ -499,58 +478,238 @@ def test_cli_services_handles_missing_config(tmp_path: Path) -> None:
     assert "failed to load config" in stderr.getvalue()
 
 
-def test_cli_services_up_needs_config(tmp_path: Path, monkeypatch) -> None:
-    bib_path = tmp_path / "library.bib"
-    bib_path.write_text("")
-    stdout = StringIO()
-    stderr = StringIO()
-
+@pytest.mark.parametrize("removed", ["up", "down"])
+def test_cli_services_up_down_removed(tmp_path: Path, removed: str) -> None:
+    """`services up`/`down` are gone — `pzi server` owns the backend lifecycle."""
     config_path = tmp_path / "config.toml"
-    config_path.write_text(
-        f"""
-[[bibs]]
-name = "ml"
-path = "{bib_path}"
-default = true
-translation_server_url = "http://127.0.0.1:19999"
-""".strip()
-    )
-
-    # Mock auto_start_ts to return False without real I/O
-    import pzi.ts_backend as tsb
-    monkeypatch.setattr(tsb, "is_ts_reachable", lambda url, **kw: False)
-    monkeypatch.setattr(tsb, "ensure_node", lambda *a, **kw: None)
+    config_path.write_text("bibs = []\n")
 
     exit_code = run_cli(
-        ["services", "up", "--config", str(config_path)],
+        ["services", removed, "--config", str(config_path)],
+        home_dir=str(tmp_path),
+        stdout=StringIO(),
+        stderr=StringIO(),
+    )
+
+    # argparse rejects the unknown subcommand with exit code 2.
+    assert exit_code == 2
+
+
+def _write_small_library(tmp_path: Path) -> Path:
+    """Write a one-entry bib + config and return the config path."""
+    bib = tmp_path / "main.bib"
+    bib.write_text(
+        "@article{smith2024graph,\n"
+        "  title = {Graph Learning},\n"
+        "  author = {Smith, Jane},\n"
+        "  year = {2024},\n"
+        "  keywords = {ml, graphs}\n"
+        "}\n"
+    )
+    config = tmp_path / "config.toml"
+    config.write_text(f'[[bibs]]\nname = "main"\npath = "{bib}"\ndefault = true\n')
+    return config
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["list"],
+        ["bib-stats"],
+        ["entries"],
+        ["search", "--query", "graph"],
+        ["tag", "list"],
+        ["dedupe"],
+        ["clean"],
+    ],
+)
+def test_cli_read_commands_emit_json(tmp_path: Path, argv: list[str]) -> None:
+    """Every read/query command accepts --json and emits valid JSON to stdout."""
+    import json
+
+    config = _write_small_library(tmp_path)
+    stdout = StringIO()
+    stderr = StringIO()
+    exit_code = run_cli(
+        [*argv, "--json", "--config", str(config)],
         home_dir=str(tmp_path),
         stdout=stdout,
         stderr=stderr,
     )
+    # 0 (ok) or 1 (e.g. dedupe/clean signalling findings) — never 2 (flag rejected).
+    assert exit_code in (0, 1), stderr.getvalue()
+    parsed = json.loads(stdout.getvalue())  # raises if not valid JSON
+    assert parsed is not None
 
-    assert exit_code == 1
+
+def test_cli_uses_default_home_when_home_dir_not_injected(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from pzi.config import default_config_path
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bib = tmp_path / "main.bib"
+    bib.write_text("")
+    cfg = Path(default_config_path(str(tmp_path)))
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text(f'[[bibs]]\nname = "main"\npath = "{bib}"\ndefault = true\n')
+
+    stdout = StringIO()
+    stderr = StringIO()
+
+    # No home_dir injected → run_cli falls back to expanduser("~") == $HOME.
+    exit_code = run_cli(["list"], stdout=stdout, stderr=stderr)
+
+    assert exit_code == 0
+    assert "main" in stdout.getvalue()
+    assert stderr.getvalue() == ""
 
 
-def test_cli_browser_install_delegates_to_playwright(tmp_path: Path, monkeypatch) -> None:
-    calls: list[str] = []
+def test_cli_pdf_attach_dispatches_to_pdf_service(tmp_path: Path, monkeypatch) -> None:
+    calls: list[dict] = []
 
-    def fake_install(browser: str, *, stdout, stderr) -> int:
-        calls.append(browser)
-        print("done", file=stdout)
-        return 0
+    def fake_attach_pdf(**kwargs):
+        calls.append(kwargs)
+        return {
+            "status": "ok",
+            "bib_name": "ml",
+            "citekey": kwargs["citekey"],
+            "local_pdf_path": str(tmp_path / "paper.pdf"),
+            "warnings": [],
+            "errors": [],
+        }
 
-    monkeypatch.setattr(setup_service, "install_playwright_browser", fake_install)
+    monkeypatch.setattr(cli_commands, "attach_pdf", fake_attach_pdf)
     stdout = StringIO()
     stderr = StringIO()
 
     exit_code = run_cli(
-        ["browser", "install", "firefox"],
+        [
+            "pdf",
+            "attach",
+            "smith2024graph",
+            "https://example.com/paper.pdf",
+            "--config",
+            str(tmp_path / "config.toml"),
+        ],
         home_dir=str(tmp_path),
         stdout=stdout,
         stderr=stderr,
     )
 
     assert exit_code == 0
-    assert calls == ["firefox"]
-    assert stdout.getvalue() == "done\n"
+    assert calls == [
+        {
+            "config_path": str(tmp_path / "config.toml"),
+            "home_dir": str(tmp_path),
+            "bib_selector": None,
+            "citekey": "smith2024graph",
+            "source": "https://example.com/paper.pdf",
+        }
+    ]
+    assert "attached" in stdout.getvalue()
     assert stderr.getvalue() == ""
+
+
+def test_cli_pdf_retry_dispatches_to_pdf_service(tmp_path: Path, monkeypatch) -> None:
+    calls: list[dict] = []
+
+    def fake_retry_pdf(**kwargs):
+        calls.append(kwargs)
+        return {
+            "status": "ok",
+            "bib_name": "ml",
+            "citekey": kwargs["citekey"],
+            "local_pdf_path": str(tmp_path / "paper.pdf"),
+            "warnings": [],
+            "errors": [],
+        }
+
+    monkeypatch.setattr(cli_commands, "retry_pdf", fake_retry_pdf)
+    stdout = StringIO()
+    stderr = StringIO()
+
+    exit_code = run_cli(
+        [
+            "pdf",
+            "retry",
+            "smith2024graph",
+            "--config",
+            str(tmp_path / "config.toml"),
+        ],
+        home_dir=str(tmp_path),
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+    assert exit_code == 0
+    assert calls == [
+        {
+            "config_path": str(tmp_path / "config.toml"),
+            "home_dir": str(tmp_path),
+            "bib_selector": None,
+            "citekey": "smith2024graph",
+        }
+    ]
+    assert "fetched" in stdout.getvalue()
+    assert stderr.getvalue() == ""
+
+
+def test_cli_promote_dispatches_to_promote_service(tmp_path: Path, monkeypatch) -> None:
+    calls: list[dict] = []
+
+    def fake_promote_bib(**kwargs):
+        calls.append(kwargs)
+        return {
+            "status": "ok",
+            "bib_name": "ml",
+            "dry_run": kwargs["dry_run"],
+            "items": [],
+            "warnings": [],
+            "errors": [],
+        }
+
+    monkeypatch.setattr(cli_commands, "promote_bib", fake_promote_bib)
+    stdout = StringIO()
+    stderr = StringIO()
+
+    exit_code = run_cli(
+        ["promote", "--replace", "--config", str(tmp_path / "config.toml")],
+        home_dir=str(tmp_path),
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+    assert exit_code == 0
+    assert calls == [
+        {
+            "config_path": str(tmp_path / "config.toml"),
+            "home_dir": str(tmp_path),
+            "bib_selector": None,
+            "dry_run": False,
+            "keep_preprint": False,
+        }
+    ]
+    assert stderr.getvalue() == ""
+
+
+def test_cli_browser_command_removed(tmp_path: Path) -> None:
+    """`pzi browser install` is gone — use `playwright install` directly."""
+    exit_code = run_cli(
+        ["browser", "install", "firefox"],
+        home_dir=str(tmp_path),
+        stdout=StringIO(),
+        stderr=StringIO(),
+    )
+    assert exit_code == 2  # argparse rejects the unknown command
+
+
+def test_cli_watch_command_removed(tmp_path: Path) -> None:
+    """`pzi watch` is gone — use a file watcher like `entr` piped to `pzi import`."""
+    exit_code = run_cli(
+        ["watch", str(tmp_path)],
+        home_dir=str(tmp_path),
+        stdout=StringIO(),
+        stderr=StringIO(),
+    )
+    assert exit_code == 2  # argparse rejects the unknown command

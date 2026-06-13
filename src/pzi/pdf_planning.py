@@ -33,7 +33,11 @@ def plan_pdf_path(
         filename = format_pdf_filename(filename_format, {**record, "citekey": citekey})
     else:
         filename = f"{citekey}.pdf"
-    return str(Path(papers_dir) / filename)
+    # Prevent path traversal: only use the final basename component.
+    safe_name = os.path.basename(filename)
+    if not safe_name or safe_name in (".", ".."):
+        safe_name = f"{citekey}.pdf"
+    return str(Path(papers_dir) / safe_name)
 
 
 def is_pdf_content_type(content_type: str | None) -> bool | None:

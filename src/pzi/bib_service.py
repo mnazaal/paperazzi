@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 from typing import Any, TypeAlias, cast
 
@@ -12,10 +13,10 @@ from pzi.bib_repository import (
     _read_bib_file_raw,
     _read_bib_source,
     _validate_library_parseable,
-    serialize_bibtex,
     with_bib_lock,
+    write_bib_file,
 )
-from pzi.config import AppConfig, BibConfig, dump_app_config, load_config_file
+from pzi.config import AppConfig, BibConfig, dump_app_config, load_and_resolve_bib, load_config_file
 from pzi.promote_service import is_preprint
 
 BibInfo: TypeAlias = dict[str, Any]
@@ -181,13 +182,7 @@ def list_entries(
     elif sort_field == "author":
         sorted_records = sorted(
             records,
-            key=lambda r: (
-                (
-                    r.get("authors", [None])[0]["family"]
-                    if isinstance(r.get("authors"), list) and r.get("authors")
-                    else ""
-                )
-            ).lower(),
+            key=lambda r: _first_author_sort_key(r).lower(),
         )
     elif sort_field == "title":
         sorted_records = sorted(
@@ -282,6 +277,10 @@ def _author_names(record: dict[str, Any]) -> str:
         return ""
     names = []
     for a in authors:
+        if isinstance(a, str):
+            if a.strip():
+                names.append(a.strip())
+            continue
         if not isinstance(a, dict):
             continue
         family = a.get("family", "")
@@ -291,6 +290,39 @@ def _author_names(record: dict[str, Any]) -> str:
         elif family:
             names.append(family)
     return "; ".join(names)
+
+
+def _first_author_sort_key(record: dict[str, Any]) -> str:
+    """Return stable first-author text for parsed BibTeX strings or CSL dicts."""
+    authors = record.get("authors")
+    if not isinstance(authors, list) or not authors:
+        return ""
+    first = authors[0]
+    if isinstance(first, str):
+        return first.strip()
+    if isinstance(first, dict):
+        family = first.get("family")
+        given = first.get("given")
+        if isinstance(family, str) and family.strip():
+            return family.strip()
+        if isinstance(given, str):
+            return given.strip()
+    return ""
+
+
+def _backup_path_for_delete(bib_path: str, citekey: str) -> Path:
+    """Return non-existing backup path beside target bib."""
+    source = Path(bib_path)
+    safe_citekey = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in citekey)
+    base = source.with_name(f"{source.name}.{safe_citekey}.bak")
+    if not base.exists():
+        return base
+    suffix = 2
+    while True:
+        candidate = source.with_name(f"{source.name}.{safe_citekey}.bak{suffix}")
+        if not candidate.exists():
+            return candidate
+        suffix += 1
 
 
 def delete_entry(
@@ -307,39 +339,39 @@ def delete_entry(
         entries = read_result["entries"]
         records = read_result["records"]
 
-    index = _find_entry_index(entries, citekey)
-    if index is None:
-        return {
-            "status": "error",
-            "citekey": citekey,
-            "bib_path": bib_path,
-            "message": f"entry not found: {citekey}",
-            "errors": [f"no entry with citekey {citekey}"],
-        }
+        index = _find_entry_index(entries, citekey)
+        if index is None:
+            return {
+                "status": "error",
+                "citekey": citekey,
+                "bib_path": bib_path,
+                "message": f"entry not found: {citekey}",
+                "errors": [f"no entry with citekey {citekey}"],
+            }
 
-    entry = entries[index]
-    record = records[index] if index < len(records) else {}
-    title = record.get("title") or entry.get("citekey", citekey)
-    pdf_path = record.get("local_pdf_path")
+        entry = entries[index]
+        record = records[index] if index < len(records) else {}
+        title = record.get("title") or entry.get("citekey", citekey)
+        pdf_path = record.get("local_pdf_path")
 
-    if dry_run:
-        return {
-            "status": "ok",
-            "citekey": citekey,
-            "bib_path": bib_path,
-            "dry_run": True,
-            "message": f"would delete: {title}",
-            "title": title,
-            "pdf_path": pdf_path,
-            "errors": [],
-        }
+        if dry_run:
+            return {
+                "status": "ok",
+                "citekey": citekey,
+                "bib_path": bib_path,
+                "dry_run": True,
+                "message": f"would delete: {title}",
+                "title": title,
+                "pdf_path": pdf_path,
+                "errors": [],
+            }
 
-    updated_entries = list(entries)
-    del updated_entries[index]
-    text = serialize_bibtex(updated_entries)
-    bib_file = Path(bib_path)
-    bib_file.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
-    bib_file.write_text(text, encoding="utf-8")
+        updated_entries = list(entries)
+        del updated_entries[index]
+        backup_path = _backup_path_for_delete(bib_path, citekey)
+        backup_path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+        shutil.copy2(bib_path, backup_path)
+        write_bib_file(bib_path, updated_entries)
 
     return {
         "status": "ok",
@@ -349,5 +381,6 @@ def delete_entry(
         "message": f"deleted: {title}",
         "title": title,
         "pdf_path": pdf_path,
+        "backup_path": str(backup_path),
         "errors": [],
     }

@@ -20,8 +20,8 @@ from pzi.add_planning import (
     _merge_record_sources,
     has_minimum_metadata,
     metadata_result_confidence_warnings,
-    minimum_metadata_diagnostics,
     metadata_result_diagnostics,
+    minimum_metadata_diagnostics,
 )
 from pzi.bib_repository import (
     execute_write_plan,
@@ -154,6 +154,33 @@ def add_input_to_bib(
             )
         return results
 
+    def _add(record: Mapping[str, object]) -> AddRecordResult:
+        return add_record_with_bib(
+            bib=bib,
+            record=record,
+            dry_run=dry_run,
+            fetch_binary=fetch_binary,
+            flaresolverr_url=config.get("flaresolverr_url"),
+            browser_pdf_cmd=effective_browser_pdf_cmd,
+            browser=effective_browser,
+            browser_hook=config.get("browser_hook", True),
+            citekey_format=citekey_format,
+            pdf_filename_format=pdf_filename_format,
+            force_new=force_new,
+            file_path_style=config.get("pdf_file_path_style", "absolute"),
+            api_url=api_url,
+            api_auth_token=api_auth_token,
+            desktop_fallback_hosts=config.get("desktop_fallback_hosts"),
+            ezproxy_host=ezproxy_host,
+        )
+
+    def _finalize(result: AddRecordResult) -> AddRecordResult:
+        if metadata_diagnostics:
+            result["metadata_diagnostics"] = metadata_diagnostics
+        if metadata_warnings:
+            result["warnings"] = [*result.get("warnings", []), *metadata_warnings]
+        return result
+
     if classified["kind"] == "local_pdf":
         return add_local_pdf(
             bib=bib,
@@ -175,7 +202,6 @@ def add_input_to_bib(
             browser_hook=config.get("browser_hook", True),
             citekey_format=citekey_format,
             pdf_filename_format=pdf_filename_format,
-            file_path_style=config.get("pdf_file_path_style", "absolute"),
         )
 
     try:
@@ -236,29 +262,7 @@ def add_input_to_bib(
                     "translation_attachments": None,
                 },
             )
-            result = add_record_with_bib(
-                bib=bib,
-                record=fallback_record,
-                dry_run=dry_run,
-                fetch_binary=fetch_binary,
-                flaresolverr_url=config.get("flaresolverr_url"),
-                browser_pdf_cmd=effective_browser_pdf_cmd,
-                browser=effective_browser,
-                browser_hook=config.get("browser_hook", True),
-                citekey_format=citekey_format,
-                pdf_filename_format=pdf_filename_format,
-                force_new=force_new,
-                file_path_style=config.get("pdf_file_path_style", "absolute"),
-                api_url=api_url,
-                api_auth_token=api_auth_token,
-                desktop_fallback_hosts=config.get("desktop_fallback_hosts"),
-                ezproxy_host=ezproxy_host,
-            )
-            if metadata_diagnostics:
-                result["metadata_diagnostics"] = metadata_diagnostics
-            if metadata_warnings:
-                result["warnings"] = [*result.get("warnings", []), *metadata_warnings]
-            return result
+            return _finalize(_add(fallback_record))
         import urllib.error
         from urllib.parse import urlsplit
 
@@ -271,8 +275,8 @@ def add_input_to_bib(
             host_port = parts.port or 1969
             err_msg = (
                 f"translation server not reachable at {config['translation_server_url']} — "
-                f"run 'pzi services up' and wait for the container to be ready "
-                f"(expected port {host_port})."
+                f"run 'pzi server' (it starts the translation-server) and wait for it "
+                f"to be ready (expected port {host_port})."
             )
         else:
             err_msg = str(exc)
@@ -285,29 +289,7 @@ def add_input_to_bib(
         )
 
     merged_record = _merge_fetched_record_with_overrides(fetched_record, record_overrides)
-    result = add_record_with_bib(
-        bib=bib,
-        record=merged_record,
-        dry_run=dry_run,
-        fetch_binary=fetch_binary,
-        flaresolverr_url=config.get("flaresolverr_url"),
-        browser_pdf_cmd=effective_browser_pdf_cmd,
-        browser=effective_browser,
-        browser_hook=config.get("browser_hook", True),
-        citekey_format=citekey_format,
-        pdf_filename_format=pdf_filename_format,
-        force_new=force_new,
-        file_path_style=config.get("pdf_file_path_style", "absolute"),
-        api_url=api_url,
-        api_auth_token=api_auth_token,
-        desktop_fallback_hosts=config.get("desktop_fallback_hosts"),
-        ezproxy_host=ezproxy_host,
-    )
-    if metadata_diagnostics:
-        result["metadata_diagnostics"] = metadata_diagnostics
-    if metadata_warnings:
-        result["warnings"] = [*result.get("warnings", []), *metadata_warnings]
-    return result
+    return _finalize(_add(merged_record))
 
 
 def add_record_to_bib(
@@ -317,6 +299,7 @@ def add_record_to_bib(
     record: dict[str, object],
     bib_selector: str | None,
     dry_run: bool,
+    force_new: bool = False,
 ) -> AddRecordResult:
     resolved = load_and_resolve_bib(
         config_path=config_path,
@@ -340,6 +323,7 @@ def add_record_to_bib(
         browser_hook=config.get("browser_hook", True),
         citekey_format=config.get("citekey_format"),
         pdf_filename_format=config.get("pdf_filename_format"),
+        force_new=force_new,
         file_path_style=config.get("pdf_file_path_style", "absolute"),
     )
 

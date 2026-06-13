@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Iterable
 from urllib.parse import urlencode
 
-
 CandidatePlan = dict[str, object]
 AcquisitionPlan = dict[str, object]
 
@@ -210,7 +209,7 @@ def _gateway_timeout(url: str) -> tuple[int, str | None]:
         parts = urlsplit(url)
         hostname = parts.hostname or ""
         path = parts.path.lower() if parts.path else ""
-    except Exception:
+    except ValueError:
         return (0, None)
 
     import re

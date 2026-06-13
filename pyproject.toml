@@ -16,7 +16,6 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "Operating System :: POSIX :: Linux",
     "Operating System :: MacOS",
-    "Operating System :: Microsoft :: Windows",
     "Environment :: Console",
     "Environment :: Web Environment",
     "Programming Language :: Python :: 3 :: Only",
@@ -38,6 +37,7 @@ dev = [
     "pytest>=8",
     "pytest-cov>=5",
     "ruff>=0.4",
+    "twine>=5",
 ]
 
 [project.urls]
@@ -65,7 +65,7 @@ source = ["pzi"]
 [tool.coverage.report]
 show_missing = true
 skip_covered = true
-fail_under = 70
+fail_under = 71
 exclude_lines = [
     "pragma: no cover",
     "if __name__ == .__main__.",
@@ -84,3 +84,5 @@ include = ["src", "tools"]
 venvPath = "."
 venv = ".venv"
 pythonVersion = "3.11"
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]

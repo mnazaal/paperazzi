@@ -1,8 +1,8 @@
 # pzi
 
-pzi is a local-first paper capture tool that makes a Zotero-style capture workflow easy to use with plain BibTeX. Give it a DOI, URL, or PDF; it writes a BibTeX entry and, when possible, saves the PDF next to your library.
+pzi is a local-first bibliography capture tool that makes a Zotero-style capture workflow easy to use with plain BibTeX. Give it a DOI, URL, or PDF; it writes a BibTeX entry and, when possible, saves the PDF next to your library.
 
-**Status: beta.** pzi is conservative and local-first, but public metadata APIs can rate-limit, promotion is best-effort, browser extension install is still manual, and external `.bib` formatting/comments/macros may not be preserved when entries are rewritten. Report issues at [github.com/mnazaal/pzi/issues](https://github.com/mnazaal/pzi/issues).
+**Status: beta.** APIs can rate-limit, promotion is best-effort, browser extension install is manual, and touched `.bib` entries may be rewritten. Report issues at [github.com/mnazaal/pzi/issues](https://github.com/mnazaal/pzi/issues).
 
 pzi can manage BibTeX libraries, but it does not require ownership of them. You can use pzi as your main bibliography workflow, or point it directly at existing `.bib` files from Zotero, Paperpile, LaTeX projects, or hand-managed libraries.
 
@@ -10,14 +10,14 @@ One source of truth: your `.bib` file + a sibling `papers/` dir. No database.
 
 ## Why pzi?
 
-pzi is for researchers who want:
+pzi is for those who want:
 
 - **Plain BibTeX** as source of truth — your `.bib` file is grep-able, git-trackable, and never locked in a database
 - **Local-first** — all data lives in `.bib` + `papers/` dir; no sync service, no cloud dependency
 - **Zero GUI** — CLI + browser extension is the full interface; no desktop app to install
 - **Zotero's translators without Zotero** — pzi runs Zotero's translation-server locally to leverage 1000+ site translators, then stores results in your BibTeX files
 
-pzi is NOT for researchers who need:
+pzi is NOT for those who need:
 
 - A desktop library browser, PDF reader, or annotation tool → use **Zotero**
 - Sync across machines or group libraries → use **Zotero** or **Paperpile**
@@ -28,28 +28,29 @@ pzi is NOT for researchers who need:
 ### Requirements
 
 - Python 3.11+
-- `uv` or `pipx` for installation
-- `git` if you want `pzi services up` to auto-install Zotero translation-server
+- `pip`, `uv` or `pipx` for installation
+- `git` if you want pzi to auto-install the Zotero translation-server
 - Node.js 22+ (auto-downloaded if missing, requires `git` for cloning)
 
 ### 1. Install
 
 ```sh
-uv tool install 'pzi @ git+https://github.com/mnazaal/pzi.git'
+uv tool install pzi
 # or:
-pipx install 'pzi @ git+https://github.com/mnazaal/pzi.git'
+pipx install pzi
 # or, with plain pip (some systems may need `pip3`):
-pip install --user 'pzi @ git+https://github.com/mnazaal/pzi.git'
+pip install --user pzi
+# or, from GitHub:
+uv tool install 'pzi @ git+https://github.com/mnazaal/pzi.git'
 ```
 
-### 2. Create config and start metadata lookup
+### 2. Create config
 
 ```sh
 pzi init --setup --bib ~/bibs/main.bib
-pzi services up
 ```
 
-This creates `~/.config/pzi/config.toml` and helper service files configured for `~/bibs/main.bib`. The BibTeX file is created or updated when entries are written.
+This creates `~/.config/pzi/config.toml`, configures `~/bibs/main.bib`, and lets pzi launch the translation-server when needed.
 
 ### 3. Capture a paper from the CLI
 
@@ -59,137 +60,83 @@ pzi add 10.1145/1327452.1327492 --tags systems,classic
 pzi add ~/Downloads/paper.pdf
 ```
 
-Expected result:
-
-- BibTeX entries are written to `~/bibs/main.bib`
-- PDFs are saved to `~/bibs/papers/` when pzi can find and directly fetch them
-- If a publisher blocks direct PDF download, pzi keeps the entry, reports `pdf_status = direct_blocked`, and suggests the browser extension or `browser_pdf_cmd`
+Entries are written to `~/bibs/main.bib`; PDFs are saved to `~/bibs/papers/` when fetchable.
 
 ### 4. Optional: capture from the browser
 
-Use this for authenticated publisher pages, pages with PDF links visible only in the browser, or quick one-click capture.
+Use this for authenticated publisher pages, browser-only PDF links, or one-click capture.
 
 ```sh
-# keep this running while using the extension
-# auto-starts translation-server, auto-stops after 30 idle minutes
-pzi server --stop-after 30
-
-# from the repo checkout
 python tools/build_extension.py
+pzi server --stop-after 30
 ```
 
-**Firefox**: go to `about:debugging` → This Firefox → Load Temporary Add-on → select `dist/firefox/manifest.json`
+Load the unpacked extension:
 
-**Chrome**: open `chrome://extensions`, enable developer mode, click "Load unpacked", select `dist/chrome/`
+- **Firefox**: `about:debugging` → This Firefox → Load Temporary Add-on → `dist/firefox/manifest.json`
+- **Chrome**: `chrome://extensions` → Developer mode → Load unpacked → `dist/chrome/`
 
-Install as an unpacked/temporary extension. On first install, an onboarding page opens to help set up the API token and test the connection.
-
-Then open a paper page, click the pzi icon, optionally choose a bib/tags/dry-run, and click **Capture current page**. You can also right-click any link on any page → **Save to pzi** to capture a paper URL without navigating to it.
-
-The extension sends page hints to the local API. If a PDF is visible to your browser, the extension can fetch it with your browser session cookies and attach it to the BibTeX entry. This is the recommended path for authenticated publisher pages and browser-only PDF links.
-
-### 5. Optional: advanced PDF fallback
-
-Prefer the browser extension or `browser_pdf_cmd` for authenticated access. CLI capture is best for metadata and open/direct PDFs; browser capture is best for protected PDFs that need cookies, referrer, JavaScript, or your institutional session. For Cloudflare-gated pages, FlareSolverr can be configured via `flaresolverr_url` in `config.toml`:
-
-```toml
-flaresolverr_url = "http://127.0.0.1:8191"
-```
-
-FlareSolverr may violate publisher terms of service; pzi warns when it is used.
+In onboarding, keep the default endpoint (`http://127.0.0.1:8765/capture`), set the API token only if configured, then test the connection. Keep `pzi server` running while browsing. Open a paper page, click the pzi icon, choose bib/tags/dry-run if needed, then **Capture current page**; or right-click a paper link → **Save to pzi**. Entries go to your configured `.bib`; PDFs go to `papers/` when available.
 
 ---
 
-## `pzi services` vs `pzi server` vs `pzi add`
+## `pzi server` vs `pzi add` vs `pzi services`
 
-| | `pzi services` | `pzi server` | `pzi add` |
+The translation-server is never a detached daemon you manage by hand. It runs as
+a **child** of whichever foreground command needs it, and dies when that command
+exits — so there is nothing to "stop" and no PID files.
+
+| | `pzi server` | `pzi add` | `pzi services` |
 |---|---|---|---|
-| Purpose | Manage translation-server lifecycle | Start pzi HTTP API for browser capture | Single paper capture |
-| For | Explicit process control | Browser extension users | CLI one-shot capture |
-| Starts translation-server? | Yes (explicitly) | **Yes** (auto-starts if not running) | **Yes** (auto-starts if not running) |
-| Underlying tech | Python subprocess | Python `http.server` | Direct service call |
-| Command | `pzi services up` / `down` / `status` | `pzi server [--stop-after N]` | `pzi add <value>` |
+| Purpose | HTTP API for browser capture | Single paper capture | Inspect / reinstall the backend |
+| For | Browser extension users | CLI one-shot capture | Maintenance |
+| Backend lifetime | Runs as a child for the server's lifetime | Reuses a running backend, else a short-lived child | n/a |
+| Command | `pzi server [--stop-after N]` | `pzi add <value>` | `pzi services status` / `update` |
 
-**`--stop-after N`**: auto-stops the translation-server after N idle minutes (no captures in that time). Useful for leaving `pzi server` running while browsing without wasting RAM.
-
-**TL;DR:** `pzi server` for browser extension, `pzi add` for CLI. Both auto-start the translation-server when needed. You rarely need `pzi services` directly.
+Use `pzi server` for the browser extension and `pzi add` for CLI capture; both start the translation-server as needed. `--stop-after N` exits the server after N idle minutes. Stop it with Ctrl-C or `kill`.
 
 ## Reference
 
 ### Config
 
-`pzi init --setup --bib ~/bibs/main.bib` creates `~/.config/pzi/config.toml` and writes managed service files beside it.
-
-Generated config looks like:
-
-```toml
-translation_server_url = "http://127.0.0.1:1969"
-api_listen_host = "127.0.0.1"
-api_listen_port = 8765
-# api_auth_token = "change-me-long-random-token"  # optional but recommended
-# api_allowed_origins = ["http://127.0.0.1", "http://localhost", "chrome-extension://", "moz-extension://"]
-# api_max_body_bytes = 67108864  # allows browser extension PDF byte uploads
-# contact_email_cmd = "pass show research-email"  # preferred: identify to public metadata APIs
-# contact_email = "your@email.com"                # plaintext fallback if you do not use a password manager
-# unpaywall_email = "your@email.com"        # optional - enables open-access PDF lookup
-# unpaywall_email_cmd = "pass show unpaywall-email"  # or resolve via command
-
-# Optional naming templates. PDF names use Zotero 7 file-renaming syntax;
-# citekeys support Zotero-style templates and common Better BibTeX formulas.
-# citekey_format = "auth.lower + shorttitle(3,3) + year"
-# pdf_filename_format = "{{ firstCreator suffix=\" - \" }}{{ year suffix=\" - \" }}{{ title truncate=\"100\" }}"
-# pdf_file_path_style = "absolute"  # default; set "relative" for paths relative to the .bib file
-# page_metadata_cmd = "paper-meta --json"  # optional: reads page JSON on stdin, writes metadata JSON
-# page_metadata_timeout_seconds = 5
-
-[[bibs]]
-name = "ml"
-path = "~/bibs/ml.bib"
-default = true
-
-[[bibs]]
-name = "sys"
-path = "~/bibs/sys.bib"
-```
-
-`papers_dir` defaults to `<bib-dir>/papers/` when omitted. Set it per bib to share one PDF directory across libraries, or use `pzi init --setup --papers-dir ~/papers`. If the target PDF filename already exists, pzi reuses it when bytes match; otherwise it keeps existing files untouched and writes `name-1.pdf`, `name-2.pdf`, etc. Suffixing applies after any `pdf_filename_format` template is rendered. `pdf_file_path_style` controls only the BibTeX `file` field: pzi uses absolute paths internally, writes absolute paths by default, and can write paths relative to the `.bib` file when set to `"relative"`.
-
-`contact_email` identifies you to public metadata APIs. Prefer `contact_email_cmd` if you keep identity/secrets in a password manager; plaintext `contact_email` is also supported. pzi uses this only for metadata APIs (Crossref User-Agent, OpenAlex `mailto`, and Unpaywall fallback), not arbitrary publisher/PDF downloads.
-
-`unpaywall_email` enables [Unpaywall](https://unpaywall.org) lookups - the same service Zotero uses for "Find Available PDF". When set, pzi will try to find an open-access PDF by DOI for any paper where the translation server returns no attachment. If omitted, pzi uses `contact_email` as the Unpaywall email.
-
-Naming templates are optional. `pdf_filename_format` accepts Zotero-style variables such as `{{ firstCreator }}`, `{{ year }}`, and `{{ title truncate="100" }}` with options like `prefix`, `suffix`, `replaceFrom`, `replaceTo`, `regexOpts`, and `case`. `citekey_format` accepts the same `{{ ... }}` style plus common Better BibTeX formulas such as `auth.lower + shorttitle(3,3) + year`. `page_metadata_cmd` is optional: pzi sends `{"url", "html", "metadata"}` JSON on stdin and treats object JSON on stdout as fallback metadata.
+`pzi init --setup --bib ~/bibs/main.bib` writes `~/.config/pzi/config.toml`. Common options: `contact_email`, `unpaywall_email`, `browser_pdf_cmd`, `citekey_format`, `pdf_filename_format`, `papers_dir`, and multiple `[[bibs]]`. See `src/pzi/config.template.toml` for all options and comments. `papers_dir` defaults to `<bib-dir>/papers/`; use `_cmd` variants for secrets.
 
 ### CLI reference
 
+Shared flags: most library commands accept `[--target <name|path>]`; read commands accept `[--json]`.
+
 ```sh
-pzi init [--force]                        # create config from template
-pzi init --setup --bib ~/bibs/main.bib [--papers-dir ~/papers]  # config + services + browser fallback
-pzi services up|down|status                # manage local translation-server process
-pzi browser install [chromium|firefox|chrome]  # install Playwright browser binary
-pzi add <doi-or-url-or-pdf> [--tags t1,t2] [--dry-run]
-pzi add <url> --cookie-file cookies.txt --pdf-candidate <url> --metadata-json meta.json --page-html page.html --page-metadata-cmd <cmd> --json
-pzi add <doi-or-url-or-pdf> --target <bib-or-name> [--tags t1,t2] [--dry-run]
-pzi pdf retry <citekey> [--target <bib-or-name>]
-pzi pdf attach <citekey> <url-or-path> [--target <bib-or-name>]
-pzi tag add|remove <citekey> <tag...> [--target <bib-or-name>]
-pzi tag list [<citekey>] [--target <bib-or-name>]
-pzi search [--target <bib-or-name> [<bib-or-name>...]] [--query <text>] [--author <name>] [--year <int>] [--tag <tag>]
-pzi update [--target <bib-or-name> [<bib-or-name>...]] [--dry-run]       # conservative metadata enrichment; does not promote preprints
-pzi promote [--target <bib-or-name> [<bib-or-name>...]] [--dry-run] [--replace]  # preprint→published promotion
+pzi init [--force] [--setup --bib PATH] [--papers-dir PATH]
+pzi services status|update                 # inspect or reinstall the translation-server
+pzi add <doi|url|pdf> [--tags t1,t2] [--dry-run]
+pzi pdf retry <citekey>
+pzi pdf attach <citekey> <url-or-path>
+pzi tag add|remove <citekey> <tag...>
+pzi tag list [citekey]
+pzi search [--query <text>] [--author <name>] [--year <int>] [--tag <tag>]
+pzi update [--dry-run]
+pzi promote [--dry-run] [--replace]
 pzi list
-pzi set-default <name>
-pzi delete <citekey> [--target <bib-or-name>] [--dry-run] [--force]
+pzi set-default <name|path>
+pzi entries [--offset N] [--limit N] [--sort citekey|title|year|author]
+pzi detail <citekey>
+pzi delete <citekey> [--dry-run] [--force]
 pzi doctor                                # health check (config + translation-server)
-pzi bib-stats [--target <bib-or-name>]    # show entry counts by type for a BibTeX library
+pzi bib-stats
+pzi clean [--dry-run] [--fix]
+pzi dedupe
+pzi merge <citekey_a> <citekey_b> [--dry-run]
+pzi export [--format bibtex|csv|json|ris] [-o <output>]
+pzi import <source.bib> [--dry-run] [--force-new]
+pzi reindex [--dry-run] [--force]
 pzi config validate [--config <path>]     # validate configuration file
 pzi version                               # show installed pzi version
-pzi server [--host H --port P] [--stop-after N]  # HTTP API (auto-starts helpers, auto-stops after idle)
+pzi server [--host H --port P] [--stop-after N]
 ```
 
 Without `--target`, commands operate on the configured default library. `--target` may be a configured library name, configured bib path, or direct `.bib` path. Direct `.bib` targets use `<bib-dir>/papers/` for PDFs. Multiple targets are supported only for `search`, `update`, and `promote` with a single flag: `--target a.bib b.bib`.
 
-`update` only fills missing metadata conservatively. To handle preprints when a published version is found, use `promote`. By default `promote` keeps the preprint and creates a linked published entry. Use `--replace` only when you want to update the preprint entry in place.
+Read/query commands (`search`, `entries`, `bib-stats`, `tag list`, `clean`, `dedupe`, `list`, `detail`) accept `--json` for machine-readable output.
 
 For external `.bib` files managed by Zotero, Paperpile, LaTeX projects, or hand edits, use `--dry-run` first and keep a backup or Git history. pzi rewrites entries it touches; known source-preservation limitations:
 
@@ -215,119 +162,21 @@ Provider failures and rate limits are non-fatal. `promote` reports skip reasons 
 
 ### Citekeys and promotion
 
-pzi treats existing citekeys as stable external handles because they may already appear in LaTeX, Org, Markdown, notes, or collaborator files. Existing citekeys are never renamed automatically.
+pzi treats citekeys as stable external handles and never renames existing keys automatically.
 
-- If a new capture is the same paper as an existing entry, pzi reuses the existing citekey.
-- If a different paper wants an occupied citekey, pzi gives the new entry a numeric suffix: `smith2024graph2`, then `smith2024graph3`, etc.
-- In the default promotion mode, the preprint citekey stays unchanged and the published entry receives its own generated citekey.
-- If the published version already exists, pzi skips creating a duplicate and reports the existing published citekey.
-- With `--replace`, pzi updates the preprint entry in place and keeps its citekey.
+- Same paper as an existing entry → reuse the existing citekey.
+- New paper with an occupied citekey → add a numeric suffix (`smith2024graph2`).
+- Promotion keeps the preprint key by default; `--replace` updates in place.
 
 ### HTTP API
 
-`pzi server` exposes:
+`pzi server` exposes local endpoints for capture, search, listing, detail, export, PDF serving, tags, update, promote, browser PDF discovery/download, and delete. Main extension endpoint: `POST /capture`; health check: `GET /health`.
 
-- `POST /capture` - body: `{url, bib?, tags?, dry_run?, pdf_url_candidates?, page_title?, canonical_url?, source_url?, abstract_url?, doi?}` → insert/update result
-- `POST /attach-pdf-bytes` - body: `{citekey, bib?, source_url?, pdf_base64}` → attach browser-fetched PDF bytes
-- `GET /bibs` - configured bibs (used by extension popup dropdown)
-- `GET /health` - config + translation-server status
-
-Same ingest pipeline as CLI. Capture responses include structured PDF fields: `pdf_url`, `pdf_path`, `pdf_status`, `pdf_error`, and `pdf_suggestion`. `pdf_status` is one of `none`, `found`, `direct_saved`, `direct_blocked`, `browser_saved`, or `failed`. CORS responses reflect only allowed local/extension origins.
-
-Security defaults are local-first:
-
-- bind to `127.0.0.1` unless you explicitly set another host
-- reject non-local/non-extension browser origins
-- cap JSON request bodies with `api_max_body_bytes`
-- if `api_auth_token` is set, require `X-Pzi-Token: <token>` or `Authorization: Bearer <token>` on all non-`OPTIONS` requests
-
-The API token is stored in plain text in `config.toml` and sent over plain HTTP to the loopback interface. This is safe when `api_listen_host` is `127.0.0.1` (the default). Binding to a non-loopback address (e.g., `0.0.0.0`) exposes the token to your local network — including other machines if no firewall is in place. Use a loopback bind and `api_auth_token` together; avoid binding to non-loopback addresses without additional transport encryption.
-
-For browser extension use, set the same token in the popup's **API token** field.
+Security defaults are local-first: bind to `127.0.0.1`, allow local/extension origins, cap body size, and require `X-Pzi-Token` or bearer auth when `api_auth_token` is set. Keep non-loopback binds behind your own network protections.
 
 ## Architecture
 
-## Design philosophy
-
-pzi is local-first and BibTeX-native. Your `.bib` file and `papers/` directory are the source of truth; pzi avoids a database and keeps files grep-able, portable, and easy to inspect.
-
-Risky operations are conservative by default. Promotion preserves scholarly provenance by keeping preprints alongside published versions unless `--replace` is requested. Citekeys are stable handles: pzi does not auto-rename existing keys, and new collisions use the common BibTeX numeric suffix convention.
-
-Internally, pzi keeps pure planning logic separate from side effects. Metadata merging, duplicate detection, PDF discovery planning, and write planning are testable units; filesystem, network, browser, and process operations live at the edges.
-
-Pure functions at core, side effects at edges.
-
-**Component tree**
-
-```
-cli.py / http_api.py              # boundary: argparse + stdlib http.server
-add_service.py                    # add/capture orchestration
-pdf_discovery.py                  # pure functional PDF URL discovery + candidates
-bib_service.py                    # bib list + default selection
-tag_service.py                    # tags, tag filtering support, tag normalization
-pdf_service.py                    # PDF retry / attach + PDF metadata extraction
-doctor_service.py                 # health/config checks
-update_service.py                 # metadata enrichment/update
-promote_service.py                # preprint → published promotion
-translation_server.py             # Zotero translation-server client + HTTP utils
-bib_repository.py                 # filesystem + fcntl lock + write planning + merge
-similarity.py                     # exact-identity + fuzzy dedup
-bibtex.py                         # record ↔ BibTeX mapping + citekey generation
-identifiers.py                    # DOI/URL normalization + classification + year extraction
-config.py                         # TOML types, validation, loading, serialization
-setup_service.py                  # setup command orchestration
-ts_backend.py                     # translation-server bootstrap + process management
-metadata_sources.py               # Crossref, OpenAlex, Semantic Scholar, DOAJ, Europe PMC
-```
-
-**Ingest pipeline**
-
-`classify → fetch → normalize → exact-match → (similarity hint | enrich) → attach PDF → plan → write`.
-
-**Data flow (add/capture)**
-
-CLI/HTTP/Extension → `add_input_to_bib()` → `classify_input()` → metadata fetch (translation-server / Crossref / OpenAlex / Semantic Scholar) → merge + overrides → `apply_pdf_discovery()` (7-step pure fallback: translation attachment → candidate URLs → web attachments → browser hook → Crossref/Europe PMC/DOAJ → Unpaywall → arXiv) → `find_exact_match()` / `plan_bib_write()` → `bib_repository.execute_write_plan()` → `.bib` file + PDF.
-
-**Config & multi-library**
-
-`config.toml` holds a list of bibs. Top-level commands select the single configured bib or the one marked `default = true`. Commands that accept `--target <target>` resolve `<target>` as a configured name, configured path, or direct `.bib` path. Use `pzi list` to inspect configured libraries and `pzi set-default <target>` to change the default.
-
-**Design patterns**
-
-- `TypedDict` everywhere - structural typing, zero boilerplate, immutability by convention.
-- Explicit dependency injection - service functions accept `fetch_web`, `fetch_search`, etc. as keyword args with real defaults; tests pass lambdas.
-- Pure logic, thin I/O - `pdf_discovery.py` is side-effect free; `bib_repository.py` separates deterministic write planning from locking/filesystem writes. Network/filesystem lives in `translation_server.py`, `bib_repository.py`, `cli.py`.
-- Composable pipeline - `PdfDiscoveryStep = (record, context) → record`. Steps are independently testable and reorderable.
-
-**Design decisions**
-
-| Decision | Why |
-|----------|-----|
-| `TypedDict` over `@dataclass` | Structural typing, zero boilerplate, easy serialization |
-| Multi-bib config | One `config.toml` supports multiple research projects |
-| PDF discovery as pure pipeline | Testable, composable, DRY fallback chain |
-| Explicit DI defaults | No mocking framework; tests pass lambdas |
-| No ORM / no DB | BibTeX is source of truth; grep-able, local-first |
-| Translation-server first | Leverages Zotero's 1000+ site translators |
-| Browser hook as fallback | Reuses user's authenticated sessions |
-
-**Extension points**
-
-- New metadata source: create `src/pzi/<source>.py`, implement `fetch_<source>_record()`, wire into `add_service._fetch_record_for_input()`.
-- New PDF backend: add a step to `pdf_discovery.py`, add to `DEFAULT_DISCOVERY_STEPS`.
-- New CLI command: add subparser in `cli_parser.py`, create `src/pzi/<feature>_service.py`, wire dispatcher in `cli.py`.
-- New HTTP endpoint: add route in `http_api.py.PziHandler`, reuse a service function.
-- New extension feature: update `manifest.base.json`, add to `background.js` / `popup.js`, rerun `tools/build_extension.py`.
-
-**Headless-browser fallback**
-
-`pzi init --setup` configures the packaged hook at install time:
-
-```toml
-browser_pdf_cmd = "/path/to/venv/bin/python -m pzi.browser_pdf_hook --browser chromium"
-```
-
-The hook uses Playwright headless Chromium to load the landing page, inspect PDF-like links and meta tags, click obvious "PDF" / "Download PDF" controls, and return the discovered PDF URL to pzi. Browser binaries install automatically on first use, or manually via `playwright install chromium`.
+pzi is local-first and BibTeX-native. Internally, it keeps pure planning logic separate from side effects and uses this ingest pipeline: `classify → fetch → normalize → match → attach PDF → plan → write`.
 
 ## Compatibility
 
@@ -343,14 +192,6 @@ Expected coverage for common sources. ✅ = works out-of-box. ⚠️ = needs con
 | Google Scholar, DBLP, Crossref, OpenAlex | Aggregator | ✅ | ❌ |
 | PubMed Central, Europe PMC, DOAJ | Repository | ✅ | ✅/⚠️ |
 
-**Required config**
-
-- `unpaywall_email` - free sign-up at [unpaywall.org](https://unpaywall.org/products/api), enables OA PDF lookup by DOI
-- `semantic_scholar_api_key` - optional, free at [api.semanticscholar.org](https://api.semanticscholar.org/), higher rate limits
-- `browser_hook` - boolean (default `true`). Set to `false` to skip desktop browser PDF fallback in headless/server environments
-
-For secrets in a password manager, use `_cmd` variants (`unpaywall_email_cmd`, `semantic_scholar_api_key_cmd`) so keys are never written to disk.
-
 ### Environment variables
 
 | Variable | Effect |
@@ -362,207 +203,47 @@ For secrets in a password manager, use `_cmd` variants (`unpaywall_email_cmd`, `
 
 ## PDF download for paywalled papers
 
-Many publisher sites (ACM, IEEE, Springer) require authentication. pzi supports:
+Many publisher sites require authentication. Prefer the browser extension. For CLI fallback, point `browser_pdf_cmd` at an authenticated browser profile:
 
-### Option 1: Browser profile (recommended - legal)
-
-Reuse your browser's authenticated session (institutional login, subscriptions):
-
-Find your browser profile path:
-- **Chromium** (default): `~/.config/chromium`
-- **Chrome**: `~/.config/google-chrome/Default`
-- **Firefox**: `~/.mozilla/firefox/xxx.default-release` (add `--browser firefox`)
-
-Then in config (the Python path is written by `pzi init --setup`; adjust profile paths):
 ```toml
-# Chromium (default)
 browser_pdf_cmd = "... python -m pzi.browser_pdf_hook --profile ~/.config/chromium"
-
-# Firefox (add --browser flag)
-browser_pdf_cmd = "... python -m pzi.browser_pdf_hook --profile ~/.mozilla/firefox/xxx.default-release --browser firefox"
 ```
 
-
-### Option 2: FlareSolverr (gray area)
-
-Bypasses Cloudflare protection. May violate publisher terms of service.
+For Cloudflare-gated pages, optionally configure FlareSolverr:
 
 ```toml
 flaresolverr_url = "http://127.0.0.1:8191"
 ```
 
-⚠️ **Warning**: When FlareSolverr is used, pzi will emit a warning suggesting you switch to browser profile authentication.
-
-### How it works
+FlareSolverr may violate publisher terms of service; pzi warns when it is used.
 
 PDF download tries in order:
 1. **Direct download** - fastest, works for open-access papers
-2. **Browser profile** - uses your authenticated session (legal)
-3. **FlareSolverr** - bypasses Cloudflare (gray area, warns user)
+2. **Browser profile** - uses your authenticated session
+3. **FlareSolverr** - optional Cloudflare fallback
 
 ## Troubleshooting capture flow
 
-Use this map to see which layer is failing.
-
-### 1. Extension cannot talk to pzi
-
-Symptoms:
-
-- popup shows fetch/network error
-- no response after **Capture current page**
-
-Check:
+Fast checks:
 
 ```sh
-pzi server
 curl http://127.0.0.1:8765/health
-# with api_auth_token:
 curl -H 'X-Pzi-Token: <token>' http://127.0.0.1:8765/health
 ```
 
-If this fails, `pzi server` is not running or is on a different host/port.
+Checklist:
 
-### 2. Metadata lookup fails before entry creation
-
-Symptoms:
-
-- popup/CLI shows `translation server error`
-- no `citekey` returned
-- no new BibTeX entry
-
-Check:
-
-```sh
-pzi init --setup
-pzi services up
-pzi doctor
-```
-
-Notes:
-
-- browser capture now sends page title / DOI / canonical URL as fallback metadata
-- if DOI lookup fails but browser metadata is sufficient, pzi should still insert an entry
-- if it still fails, open **Show raw response** and inspect the JSON plus page URL
-
-### 3. Entry created, but no PDF attached
-
-Symptoms:
-
-- `citekey` returned
-- BibTeX entry exists
-- no `file = {...}` field
-
-Check BibTeX entry:
-
-```sh
-grep -n "<citekey>" -A 15 ~/bibs/main.bib
-```
-
-Likely causes:
-
-- translator returned no PDF attachment
-- browser found no PDF candidate URL
-- PDF candidate existed but browser fetch failed
-- headless browser hook found nothing
-
-### 4. Browser has access, but backend direct fetch is blocked
-
-Symptoms:
-
-- page works in browser
-- CLI/direct backend fetch gets 403
-
-This is normal for many publisher pages. pzi now prefers browser-session PDF fetch for extension flow.
-
-Check that extension was reloaded after updates.
-
-### 5. Browser fetch should work, but PDF still not saved
-
-Symptoms:
-
-- page shows PDF in browser
-- capture inserts metadata
-- no file saved locally
-
-Check:
-
-- extension reloaded in Firefox
-- **Show raw response** result
-- `pzi server` terminal output
-- resulting BibTeX entry
-- papers directory contents
-
-```sh
-ls -l ~/bibs/papers
-```
-
-The browser flow is:
-
-1. extension sends `/capture`
-2. pzi creates/updates entry
-3. extension fetches PDF bytes in browser session
-4. extension sends `/attach-pdf-bytes`
-5. pzi stores PDF and patches BibTeX
-
-For cross-origin PDF candidates, the extension requests a narrow optional host permission after your click (for example `https://cdn.publisher.com/*`), uses it only for that candidate fetch, and removes it after the attempt. Denying the prompt keeps metadata capture intact but skips that cross-origin PDF fetch.
-
-If step 3 or 4 fails, metadata may succeed while PDF attach does not.
-
-### 6. CLI works for metadata, but not PDF
-
-Symptoms:
-
-- `pzi add ...` inserts entry
-- no PDF downloaded
-
-CLI uses public fetch paths plus optional `browser_pdf_cmd`. It does not automatically share your logged-in browser session.
-
-Options:
-
-- configure `browser_pdf_cmd`
-- use browser extension flow for authenticated same-origin PDF candidates or when the active tab is the PDF itself
-- use manual fallback:
-
-```sh
-pzi pdf attach <citekey> <url-or-path>
-```
-
-### 7. Fast isolation checklist
-
-Check each layer in order:
-
-1. `pzi server` running on `:8765`
-2. translation-server running on `:1969` (auto-started by `pzi server`)
-3. extension reloaded
-4. browser page actually accessible
-5. BibTeX entry created
-6. `file = {...}` field written
-7. PDF exists in `papers_dir`
-
-If you need to test backend PDF attach path alone:
-
-```sh
-python - <<'PY'
-import base64, json, urllib.request
-pdf = base64.b64encode(b"%PDF-1.4 test").decode("ascii")
-body = json.dumps({
-    "citekey": "YOUR_CITEKEY",
-    "pdf_base64": pdf,
-    "source_url": "https://example.com/test.pdf"
-}).encode()
-req = urllib.request.Request(
-    "http://127.0.0.1:8765/attach-pdf-bytes",
-    data=body,
-    headers={"Content-Type": "application/json"},
-    method="POST",
-)
-print(urllib.request.urlopen(req).read().decode())
-PY
-```
+1. `pzi server` is running on `:8765`.
+2. `pzi doctor` reports a valid config.
+3. Extension was rebuilt and reloaded after source changes.
+4. Browser page or PDF is actually accessible.
+5. Entry appears in the configured `.bib`.
+6. For PDFs, check `file = {...}` in the entry and the configured `papers/` dir.
+7. If direct PDF fetch is blocked, open the PDF tab and capture again, or attach manually with `pzi pdf attach <citekey> <url-or-path>`.
 
 ## Development install
 
-Use dev extras only when hacking on pzi itself:
+Use dev extras for hacking on pzi itself:
 
 ```sh
 git clone https://github.com/mnazaal/pzi
@@ -576,34 +257,9 @@ uv pip install -e ".[dev]"
 ## Tests
 
 ```sh
-.venv/bin/ruff check src tools  # tests are exercised by pytest; legacy tests are not Ruff-clean yet
-.venv/bin/pyright
-.venv/bin/pytest --cov=pzi --cov-report=term-missing -q
+.venv/bin/ruff check src tools tests
+.venv/bin/pyright  # type-checks src + tools (see [tool.pyright] include)
+pytest --cov=pzi --cov-report=term-missing -q
 .venv/bin/python tools/build_extension.py
 .venv/bin/python -m build
 ```
-
-### Publish smoke tests
-
-For local publish checks, keep secrets in an untracked `.envrc` (ignored by this
-repo). Do not commit it.
-
-```sh
-export PZI_LIVE=1
-export PZI_CONTACT_EMAIL="you@example.com"
-export PZI_UNPAYWALL_EMAIL="you@example.com"
-export PZI_S2_API_KEY="..."
-export PZI_CHROMIUM_PROFILE="$HOME/.config/chromium"
-export PZI_FIREFOX_PROFILE="$HOME/.mozilla/firefox/xxxx.default-release"
-```
-
-Then run:
-
-```sh
-.venv/bin/python tools/publish_smoke.py --mode local
-PZI_LIVE=1 .venv/bin/pytest tests/live -q
-.venv/bin/python tools/publish_smoke.py --mode auth
-```
-
-The smoke runner prints only `set`/`unset` for secret-backed env vars and refuses
-to run if `.envrc` is not ignored or is tracked by git.

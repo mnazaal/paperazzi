@@ -6,6 +6,8 @@ import urllib.request
 from http.server import HTTPServer
 from pathlib import Path
 
+import pytest
+
 from pzi.add_service import add_record_to_bib
 from pzi.http_api import (
     build_handler_class,
@@ -14,6 +16,28 @@ from pzi.http_api import (
     request_security_error,
     validated_content_length,
 )
+
+
+@pytest.fixture(autouse=True)
+def _block_external_http(monkeypatch):
+    """Keep these real-server tests hermetic and fast.
+
+    Every metadata/PDF provider routes outbound HTTP through
+    ``pzi.fetch_helpers``; make those calls fail instantly (HTTPError is not
+    retried, so no backoff sleeps) so captures fall back to the page metadata
+    in the request without touching the real internet or blocking under load.
+    The in-process test client uses ``urllib.request`` directly and is
+    unaffected, and the translation-server client targets a dead local port
+    (instant connection refusal).
+    """
+    import pzi.fetch_helpers as fetch_helpers
+
+    def _blocked(*_args, **_kwargs):
+        raise urllib.error.HTTPError(
+            "http://blocked.invalid", 503, "external network blocked in tests", {}, None
+        )
+
+    monkeypatch.setattr(fetch_helpers, "urlopen", _blocked)
 
 
 def _free_port() -> int:
@@ -72,7 +96,7 @@ def test_get_bibs_returns_bib_list(tmp_path: Path) -> None:
     port, _thread, server = _serve_once(config_path, tmp_path)
     try:
         response = urllib.request.urlopen(
-            f"http://127.0.0.1:{port}/bibs", timeout=2
+            f"http://127.0.0.1:{port}/bibs", timeout=10
         )
         payload = json.loads(response.read().decode("utf-8"))
     finally:
@@ -87,7 +111,7 @@ def test_get_health_includes_config_status(tmp_path: Path) -> None:
     port, _thread, server = _serve_once(config_path, tmp_path)
     try:
         response = urllib.request.urlopen(
-            f"http://127.0.0.1:{port}/health", timeout=2
+            f"http://127.0.0.1:{port}/health", timeout=10
         )
         payload = json.loads(response.read().decode("utf-8"))
     finally:
@@ -107,7 +131,7 @@ def test_post_capture_inserts_new_entry_dry_run(tmp_path: Path) -> None:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        response = urllib.request.urlopen(request, timeout=2)
+        response = urllib.request.urlopen(request, timeout=10)
         payload = json.loads(response.read().decode("utf-8"))
     finally:
         server.shutdown()
@@ -128,7 +152,7 @@ def test_post_capture_missing_url_returns_400(tmp_path: Path) -> None:
             method="POST",
         )
         try:
-            urllib.request.urlopen(request, timeout=2)
+            urllib.request.urlopen(request, timeout=10)
             raise AssertionError("expected HTTPError")
         except urllib.error.HTTPError as exc:
             assert exc.code == 400
@@ -143,7 +167,7 @@ def test_unknown_path_returns_404(tmp_path: Path) -> None:
     try:
         try:
             urllib.request.urlopen(
-                f"http://127.0.0.1:{port}/nope", timeout=2
+                f"http://127.0.0.1:{port}/nope", timeout=10
             )
             raise AssertionError("expected HTTPError")
         except urllib.error.HTTPError as exc:
@@ -172,7 +196,7 @@ def test_post_attach_pdf_bytes_updates_entry(tmp_path: Path) -> None:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        response = urllib.request.urlopen(request, timeout=2)
+        response = urllib.request.urlopen(request, timeout=10)
         payload = json.loads(response.read().decode("utf-8"))
     finally:
         server.shutdown()
@@ -191,10 +215,13 @@ def test_options_request_returns_204_with_cors_headers(tmp_path: Path) -> None:
             f"http://127.0.0.1:{port}/capture",
             method="OPTIONS",
         )
-        response = urllib.request.urlopen(request, timeout=2)
+        response = urllib.request.urlopen(request, timeout=10)
         assert response.status == 204
         assert response.headers.get("Access-Control-Allow-Origin") == "http://127.0.0.1"
         assert "POST" in response.headers.get("Access-Control-Allow-Methods", "")
+        assert "X-Pzi-Attach-Token" in response.headers.get(
+            "Access-Control-Allow-Headers", ""
+        )
     finally:
         server.shutdown()
         server.server_close()
@@ -205,9 +232,44 @@ def test_get_bibs_includes_cors_headers(tmp_path: Path) -> None:
     port, _thread, server = _serve_once(config_path, tmp_path)
     try:
         response = urllib.request.urlopen(
-            f"http://127.0.0.1:{port}/bibs", timeout=2
+            f"http://127.0.0.1:{port}/bibs", timeout=10
         )
         assert response.headers.get("Access-Control-Allow-Origin") == "http://127.0.0.1"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_get_pdf_includes_cors_headers(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n%test\n")
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text(
+        f"""
+@article{{smith2024graph,
+  title = {{Graph Parsers}},
+  file = {{{pdf_path}}}
+}}
+""".strip()
+    )
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f"""
+[[bibs]]
+name = "ml"
+path = "{bib_path}"
+default = true
+""".strip()
+    )
+    port, _thread, server = _serve_once(config_path, tmp_path)
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{port}/pdf/smith2024graph",
+            headers={"Origin": "chrome-extension://abc"},
+        )
+        response = urllib.request.urlopen(request, timeout=10)
+        assert response.status == 200
+        assert response.headers.get("Access-Control-Allow-Origin") == "chrome-extension://abc"
     finally:
         server.shutdown()
         server.server_close()
@@ -233,7 +295,7 @@ def test_post_capture_accepts_page_metadata_overrides(tmp_path: Path) -> None:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        response = urllib.request.urlopen(request, timeout=2)
+        response = urllib.request.urlopen(request, timeout=10)
         payload = json.loads(response.read().decode("utf-8"))
     finally:
         server.shutdown()
@@ -282,7 +344,7 @@ def test_get_bibs_requires_configured_token(tmp_path: Path) -> None:
     port, _thread, server = _serve_once(config_path, tmp_path, token="secret")
     try:
         try:
-            urllib.request.urlopen(f"http://127.0.0.1:{port}/bibs", timeout=2)
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/bibs", timeout=10)
             raise AssertionError("expected HTTPError")
         except urllib.error.HTTPError as exc:
             assert exc.code == 401
@@ -291,7 +353,7 @@ def test_get_bibs_requires_configured_token(tmp_path: Path) -> None:
             f"http://127.0.0.1:{port}/bibs",
             headers={"X-Pzi-Token": "secret"},
         )
-        response = urllib.request.urlopen(request, timeout=2)
+        response = urllib.request.urlopen(request, timeout=10)
         assert response.status == 200
     finally:
         server.shutdown()
@@ -310,7 +372,7 @@ def test_post_rejects_oversized_body_before_read(tmp_path: Path) -> None:
             method="POST",
         )
         try:
-            urllib.request.urlopen(request, timeout=2)
+            urllib.request.urlopen(request, timeout=10)
             raise AssertionError("expected HTTPError")
         except urllib.error.HTTPError as exc:
             assert exc.code == 413

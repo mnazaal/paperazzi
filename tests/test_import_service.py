@@ -105,6 +105,29 @@ def test_import_single_entry() -> None:
         assert len(result["results"]) == 1
 
 
+def test_import_force_new_inserts_duplicate_with_suffixed_citekey() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        cp, bp, pd = _setup_config(td)
+        Path(bp).write_text(SIMPLE_BIB)
+        src = os.path.join(td, "source.bib")
+        Path(src).write_text(SIMPLE_BIB)
+
+        result = import_from_bibtex(
+            config_path=cp,
+            home_dir=td,
+            source_path=src,
+            force_new=True,
+        )
+
+        assert result["status"] == "ok"
+        assert result["imported"] == 1
+        assert result["skipped_duplicates"] == 0
+        assert result["results"][0]["citekey"] == "smith2024-2"
+        target_text = Path(bp).read_text()
+        assert "@article{smith2024," in target_text
+        assert "@article{smith2024-2," in target_text
+
+
 def test_import_multiple_entries() -> None:
     with tempfile.TemporaryDirectory() as td:
         cp, bp, pd = _setup_config(td)

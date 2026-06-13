@@ -60,6 +60,20 @@ def validate_bib_config(
     return config, []
 
 
+def _safe_int(value: object, default: int, *, min_value: int = 0) -> int:
+    """Return an int from a trusted-or-unknown raw config value, or *default*."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return max(min_value, value)
+    return default
+
+
+def _safe_bool(value: object, default: bool) -> bool:
+    """Return a bool from a trusted-or-unknown raw config value, or *default*."""
+    if isinstance(value, bool):
+        return value
+    return default
+
+
 def _opt_str_from_raw(raw: Mapping[str, object], key: str) -> str | None:
     """Return stripped non-empty string from a raw config mapping, or None."""
     v = raw.get(key)
@@ -137,7 +151,7 @@ def _normalize_app_config(raw: Mapping[str, object], validated_bibs: list[BibCon
     raw_promote_confidence_threshold = raw.get("promote_confidence_threshold", 3)
     raw_browser_hook = raw.get("browser_hook", True)
     raw_pzi_data_home = raw.get("pzi_data_home", "~/.local/share/pzi")
-    raw_browser_profile_path = raw.get("browser_profile_path")
+    _raw_browser_profile_path = raw.get("browser_profile_path")  # reserved
     raw_browser_engine = raw.get("browser_engine", "chromium")
     raw_rate_limit_rpm = raw.get("rate_limit_rpm", 60)
     raw_pdf_discovery_parallel = raw.get("pdf_discovery_parallel", False)
@@ -148,9 +162,9 @@ def _normalize_app_config(raw: Mapping[str, object], validated_bibs: list[BibCon
     )
 
     api_url = opt("api_url")
+    api_listen_host = str(raw_api_listen_host).strip()
+    api_listen_port = _safe_int(raw_api_listen_port, 8765, min_value=1)
     if not api_url:
-        api_listen_host = str(raw_api_listen_host).strip()
-        api_listen_port = int(raw_api_listen_port)  # type: ignore[arg-type]
         api_url = f"http://{api_listen_host}:{api_listen_port}"
 
     return {
@@ -160,7 +174,7 @@ def _normalize_app_config(raw: Mapping[str, object], validated_bibs: list[BibCon
         "api_listen_port": api_listen_port,
         "api_auth_token": opt("api_auth_token"),
         "api_allowed_origins": normalized_api_allowed_origins,
-        "api_max_body_bytes": int(raw_api_max_body_bytes),  # type: ignore[arg-type]
+        "api_max_body_bytes": _safe_int(raw_api_max_body_bytes, 64 * 1024 * 1024),
         "contact_email": opt("contact_email"),
         "contact_email_cmd": opt("contact_email_cmd"),
         "unpaywall_email": opt("unpaywall_email"),
@@ -174,17 +188,17 @@ def _normalize_app_config(raw: Mapping[str, object], validated_bibs: list[BibCon
         "pdf_file_path_style": str(raw_pdf_file_path_style).strip() or "absolute",
         "page_metadata_cmd": opt("page_metadata_cmd"),
         "page_metadata_timeout_seconds": max(
-            1, int(raw_page_metadata_timeout_seconds)  # type: ignore[arg-type]
+            1, _safe_int(raw_page_metadata_timeout_seconds, 5, min_value=1)
         ),
-        "metadata_confidence_min_score": int(raw_metadata_confidence_min_score),  # type: ignore[arg-type]
-        "promote_confidence_threshold": int(raw_promote_confidence_threshold),  # type: ignore[arg-type]
-        "browser_hook": bool(raw_browser_hook),
+        "metadata_confidence_min_score": _safe_int(raw_metadata_confidence_min_score, 0),
+        "promote_confidence_threshold": _safe_int(raw_promote_confidence_threshold, 3),
+        "browser_hook": _safe_bool(raw_browser_hook, True),
         "pzi_data_home": os.path.expanduser(str(raw_pzi_data_home)),
         "api_url": api_url,
         "browser_profile_path": opt("browser_profile_path"),
         "browser_engine": str(raw_browser_engine).strip() or "chromium",
-        "rate_limit_rpm": max(1, int(raw_rate_limit_rpm)),  # type: ignore[arg-type]
-        "pdf_discovery_parallel": bool(raw_pdf_discovery_parallel),
+        "rate_limit_rpm": max(1, _safe_int(raw_rate_limit_rpm, 60)),
+        "pdf_discovery_parallel": _safe_bool(raw_pdf_discovery_parallel, False),
         "desktop_fallback_hosts": (
             _normalize_host_list(raw_desktop_fallback_hosts)
             if isinstance(raw_desktop_fallback_hosts, list)
@@ -320,11 +334,39 @@ def validate_app_config(
     if raw_ezproxy_host is not None and (
         not isinstance(raw_ezproxy_host, str) or not _is_bare_hostname(raw_ezproxy_host)
     ):
-        errors.append("ezproxy_host must be a bare hostname (e.g. proxy.lib.university.edu) when provided")
+        errors.append(
+            "ezproxy_host must be a bare hostname "
+            "(e.g. proxy.lib.university.edu) when provided"
+        )
 
     raw_browser_hook = raw.get("browser_hook", True)
     if not isinstance(raw_browser_hook, bool):
         errors.append("browser_hook must be a boolean")
+
+    raw_rate_limit_rpm = raw.get("rate_limit_rpm", 60)
+    if (
+        not isinstance(raw_rate_limit_rpm, int)
+        or isinstance(raw_rate_limit_rpm, bool)
+        or raw_rate_limit_rpm < 1
+    ):
+        errors.append("rate_limit_rpm must be a positive integer")
+
+    raw_pdf_discovery_parallel = raw.get("pdf_discovery_parallel", False)
+    if not isinstance(raw_pdf_discovery_parallel, bool):
+        errors.append("pdf_discovery_parallel must be a boolean")
+
+    raw_browser_engine = raw.get("browser_engine", "chromium")
+    if (
+        not isinstance(raw_browser_engine, str)
+        or raw_browser_engine.strip() not in {"chromium", "firefox", "webkit"}
+    ):
+        errors.append("browser_engine must be 'chromium', 'firefox', or 'webkit'")
+
+    raw_desktop_fallback_hosts = raw.get(
+        "desktop_fallback_hosts", DEFAULT_DESKTOP_FALLBACK_HOSTS
+    )
+    if raw_desktop_fallback_hosts is not None and not isinstance(raw_desktop_fallback_hosts, list):
+        errors.append("desktop_fallback_hosts must be a list when provided")
 
     if errors:
         return None, errors
@@ -581,8 +623,9 @@ def dump_app_config(config: AppConfig) -> str:
     desktop_hosts = config.get("desktop_fallback_hosts", [])
     default_hosts = ["biorxiv.org", "medrxiv.org"]
     if desktop_hosts and desktop_hosts != default_hosts:
+        dq = '"'
         lines.append(
-            f"desktop_fallback_hosts = [{', '.join('\"' + _escape(h) + '\"' for h in desktop_hosts)}]"
+            f"desktop_fallback_hosts = [{', '.join(dq + _escape(h) + dq for h in desktop_hosts)}]"
         )
 
     for bib in config["bibs"]:

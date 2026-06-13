@@ -248,6 +248,7 @@ def test_update_bib_entry_updates_matching_entry_under_lock(tmp_path: Path) -> N
         "citekey": "smith2024graph",
         "fields": {"title": "New Title"},
     }
+    assert result["record"]["title"] == "New Title"
     assert path.read_text() == "@article{smith2024graph,\n  title = {New Title}\n}\n"
 
 

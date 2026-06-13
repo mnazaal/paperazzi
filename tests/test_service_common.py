@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pzi.config import AppConfig
-from pzi.config import load_and_resolve_bib
+from pzi.config import AppConfig, load_and_resolve_bib
 
 
 def _dummy_config(tmp_path: Path, default_bib_name: str = "main") -> tuple[str, AppConfig]:

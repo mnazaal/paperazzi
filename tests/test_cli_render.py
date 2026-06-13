@@ -1,4 +1,4 @@
-from pzi.cli import (
+from pzi.cli_render import (
     _error_lines,
     _render_add_success,
     _render_bib_list,
@@ -165,3 +165,26 @@ def test_render_bib_promote_items_includes_summary_footer() -> None:
         "DRY RUN: no preprints to promote",
         "DRY RUN: summary: checked 2; created 1; updated 0; no candidate 1; low confidence 0; existing 0; provider errors 0",
     ]
+
+
+def test_render_bib_promote_items_surfaces_s2_warning() -> None:
+    lines = _render_bib_promote_items(
+        {
+            "dry_run": False,
+            "items": [],
+            "summary": {
+                "checked": 2,
+                "created": 0,
+                "updated": 0,
+                "skipped_no_candidate": 2,
+                "skipped_low_confidence": 0,
+                "skipped_existing": 0,
+                "provider_errors": 2,
+                "s2_warning": (
+                    "2 Semantic Scholar rate-limit failures. "
+                    "Configure semantic_scholar_api_key_cmd in config.toml for higher limits."
+                ),
+            },
+        }
+    )
+    assert any("warning:" in line and "semantic_scholar_api_key_cmd" in line for line in lines)

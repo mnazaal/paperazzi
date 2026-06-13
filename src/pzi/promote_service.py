@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any, TypeAlias, cast
+from urllib.error import HTTPError
 from urllib.parse import urlsplit
 
 from pzi.bib_repository import (
@@ -20,7 +21,7 @@ from pzi.format_templates import format_citekey
 from pzi.metadata_sources import (
     fetch_crossref_record_by_title,
     fetch_openalex_record_by_title,
-    fetch_semantic_scholar_record_by_title,
+    fetch_semantic_scholar_record_by_title_with_error,
 )
 from pzi.pdf import fetch_and_store_pdf_with_fallbacks
 from pzi.pdf import remove_new_pdf as _remove_new_pdf
@@ -207,6 +208,25 @@ def promote_bib(
                 published_record["citekey"] = item["published_citekey"]
                 known_records.append(published_record)
 
+    # Emit a top-level warning when S2 rate-limit failures accumulate.
+    s2_rate_count = sum(
+        1 for item in items
+        if isinstance(item.get("note"), str)
+        and "semantic-scholar (rate" in item["note"]
+    )
+    if s2_rate_count >= 2:
+        key_configured = bool(
+            resolve_optional_value(
+                command=config.get("semantic_scholar_api_key_cmd"),
+                fallback=config.get("semantic_scholar_api_key"),
+            )
+        )
+        if not key_configured:
+            summary["s2_warning"] = (
+                f"{s2_rate_count} Semantic Scholar rate-limit failures. "
+                "Configure semantic_scholar_api_key_cmd in config.toml for higher limits."
+            )
+
     return {
         "status": "ok",
         "bib_name": bib["name"],
@@ -218,7 +238,7 @@ def promote_bib(
     }
 
 
-def _empty_summary() -> dict[str, int]:
+def _empty_summary() -> dict[str, Any]:
     return {
         "checked": 0,
         "created": 0,
@@ -293,16 +313,44 @@ def _find_published_candidate_with_diagnostics(
     if candidate is not None and candidate.get("venue"):
         provider_candidates.append(cast(NormalizedRecord, dict(candidate)))
 
-    s2_fn = fetch_s2 or (
-        lambda t: fetch_semantic_scholar_record_by_title(t, api_key=s2_api_key)
-    )
+    if fetch_s2 is not None:
+        s2_fn = fetch_s2  # override already returns (record, error) tuple
+    else:
+        def s2_fn(t):
+            return fetch_semantic_scholar_record_by_title_with_error(t, api_key=s2_api_key)
     try:
-        candidate = s2_fn(title)
+        s2_candidate, s2_err = s2_fn(title)
+    except HTTPError as exc:
+        if exc.code in (403, 429):
+            msg = "semantic-scholar (rate-limited"
+            if s2_api_key is None:
+                msg += " — configure semantic_scholar_api_key_cmd)"
+            else:
+                msg += " — check API key validity)"
+            provider_errors.append(msg)
+        else:
+            provider_errors.append(f"semantic-scholar (HTTP {exc.code})")
+        s2_candidate = None
+        s2_err = None
     except (OSError, ValueError):
         provider_errors.append("semantic-scholar")
-        candidate = None
-    if candidate is not None and candidate.get("venue"):
-        provider_candidates.append(cast(NormalizedRecord, dict(candidate)))
+        s2_candidate = None
+        s2_err = None
+    if s2_candidate is not None and s2_candidate.get("venue"):
+        provider_candidates.append(cast(NormalizedRecord, dict(s2_candidate)))
+    elif s2_candidate is None and s2_err:
+        err_lower = s2_err.lower()
+        if "rate" in err_lower or "quota" in err_lower:
+            msg = "semantic-scholar (rate-limited"
+        elif "api key" in err_lower or "authorization" in err_lower:
+            msg = "semantic-scholar (auth required"
+        else:
+            msg = f"semantic-scholar ({s2_err})"
+        if s2_api_key is None:
+            msg += " — configure semantic_scholar_api_key_cmd)"
+        else:
+            msg += ")"
+        provider_errors.append(msg)
 
     candidate = _select_best_published_candidate(record, provider_candidates)
     if candidate is not None:
@@ -551,7 +599,7 @@ def _handle_keep_preprint(
     citekey_format: str | None = None,
     browser_hook: bool = True,
 ) -> PromoteItem:
-    preprint_ck = cast(str, preprint_record["citekey"])
+    preprint_ck = cast(str, preprint_record.get("citekey", ""))
 
     published = _merge_published_metadata(preprint_record, candidate)
     published_ck = _generate_citekey_for_candidate(
@@ -612,7 +660,7 @@ def _handle_update_in_place(
     pdf_filename_format: str | None = None,
     browser_hook: bool = True,
 ) -> PromoteItem:
-    preprint_ck = cast(str, preprint_record["citekey"])
+    preprint_ck = cast(str, preprint_record.get("citekey", ""))
 
     updated = _merge_published_metadata(preprint_record, candidate)
     updated["citekey"] = preprint_ck
@@ -726,7 +774,9 @@ def _add_note_to_citekey(bib_path: str, citekey: str, text: str) -> None:
         new_note = f"{note_str}; {text}" if note_str else text
         updated = dict(current_record)
         updated["note"] = new_note
-        return record_to_bibtex_entry(updated, entry_type=entry["entry_type"])
+        return record_to_bibtex_entry(
+            cast(NormalizedRecord, updated), entry_type=entry["entry_type"]
+        )
 
     update_bib_entry(bib_path, citekey, _updater)
 

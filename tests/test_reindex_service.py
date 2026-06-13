@@ -6,6 +6,7 @@ import os
 import tempfile
 from pathlib import Path
 
+import pzi.reindex_service as reindex_service
 from pzi.reindex_service import reindex_library
 
 
@@ -73,6 +74,30 @@ def test_reindex_changes_citekey_real() -> None:
         content = Path(bib).read_text()
         assert "oldkey" not in content
         assert result["changed"][0]["new_citekey"] in content
+
+
+def test_reindex_uses_repository_writer(monkeypatch) -> None:
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "writer.bib")
+        papers = os.path.join(td, "papers")
+        _write_bib(
+            bib,
+            '@article{oldkey, title = {New Test}, author = {Doe, John}, year = {2025}}',
+        )
+        calls = []
+
+        def fake_write_bib_file(path, entries):
+            calls.append((path, [entry["citekey"] for entry in entries]))
+
+        monkeypatch.setattr(reindex_service, "write_bib_file", fake_write_bib_file, raising=False)
+
+        result = reindex_library(bib_path=bib, papers_dir=papers, dry_run=False)
+
+        assert result["status"] == "ok"
+        assert len(calls) == 1
+        assert calls[0][0] == bib
+        assert calls[0][1] == sorted(calls[0][1], key=str.lower)
+        assert "oldkey" not in calls[0][1]
 
 
 def test_reindex_renames_pdf_dry_run() -> None:

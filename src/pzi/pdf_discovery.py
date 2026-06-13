@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import re as _re
 from collections.abc import Callable, Mapping
-from typing import Any, TypeAlias
+from pathlib import Path
+from typing import Any, TypeAlias, cast
 from urllib.parse import urlsplit, urlunsplit
 
 from pzi.bibtex import NormalizedRecord
@@ -160,7 +161,7 @@ def translation_attachment_step(
         updated = dict(record)
         updated["pdf_url"] = normalized
         updated["pdf_source"] = "translation_attachment"
-        return updated
+        return cast(NormalizedRecord, updated)
 
     return record
 
@@ -176,18 +177,23 @@ def pdf_url_candidates_step(
     for candidate in candidates:
         if isinstance(candidate, str) and candidate.strip():
             normalized = candidate.strip()
-            if not _safe_public_http_url(normalized):
+            if not _safe_public_http_url(normalized) and not _existing_pdf_path(normalized):
                 continue
             updated = dict(record)
             updated["pdf_url"] = normalized
             updated["pdf_source"] = "pdf_url_candidates"
-            return updated
+            return cast(NormalizedRecord, updated)
 
     return record
 
 
 def _safe_public_http_url(value: str, *, dns_timeout: float = DNS_LOOKUP_TIMEOUT_SECONDS) -> bool:
     return safe_public_http_url(value, dns_timeout=dns_timeout)
+
+
+def _existing_pdf_path(value: str) -> bool:
+    path = Path(value).expanduser()
+    return path.is_file() and path.suffix.lower() == ".pdf"
 
 
 def web_attachment_step(
@@ -204,7 +210,11 @@ def web_attachment_step(
 
     for url in candidate_urls:
         try:
-            results = fetch_web(url, server_url=context["server_url"])
+            cookies = context.get("cookies")
+            if isinstance(cookies, str) and cookies.strip():
+                results = fetch_web(url, server_url=context["server_url"], cookies=cookies)
+            else:
+                results = fetch_web(url, server_url=context["server_url"])
         except (OSError, ValueError):
             continue
 
@@ -239,7 +249,7 @@ def web_attachment_step(
                         ):
                             updated[key] = value
 
-                return updated
+                return cast(NormalizedRecord, updated)
 
     return record
 
@@ -279,7 +289,7 @@ def browser_pdf_step(
             updated = dict(record)
             updated["pdf_url"] = pdf_url
             updated["pdf_source"] = "browser_pdf"
-            return updated
+            return cast(NormalizedRecord, updated)
 
     return record
 
@@ -308,21 +318,21 @@ def doi_pdf_step(
         updated = dict(record)
         updated["pdf_url"] = pdf_url
         updated["pdf_source"] = "doi"
-        return updated
+        return cast(NormalizedRecord, updated)
 
     pdf_url = fetch_europepmc_pdf_url(doi)
     if pdf_url:
         updated = dict(record)
         updated["pdf_url"] = pdf_url
         updated["pdf_source"] = "doi"
-        return updated
+        return cast(NormalizedRecord, updated)
 
     pdf_url = fetch_doaj_pdf_url(doi)
     if pdf_url:
         updated = dict(record)
         updated["pdf_url"] = pdf_url
         updated["pdf_source"] = "doi"
-        return updated
+        return cast(NormalizedRecord, updated)
 
     return record
 
@@ -353,7 +363,7 @@ def unpaywall_step(
         updated = dict(record)
         updated["pdf_url"] = pdf_url
         updated["pdf_source"] = "unpaywall"
-        return updated
+        return cast(NormalizedRecord, updated)
 
     return record
 
@@ -373,7 +383,7 @@ def arxiv_step(
     updated = dict(record)
     updated["pdf_url"] = f"https://arxiv.org/pdf/{bare}"
     updated["pdf_source"] = "arxiv"
-    return updated
+    return cast(NormalizedRecord, updated)
 
 
 def preprint_pdf_step(
@@ -403,7 +413,7 @@ def preprint_pdf_step(
     updated = dict(record)
     updated["pdf_url"] = pdf_url
     updated["pdf_source"] = "preprint"
-    return updated
+    return cast(NormalizedRecord, updated)
 
 
 def _build_preprint_pdf_url(source: str, landing_url: str) -> str | None:

@@ -6,6 +6,7 @@ import os
 import tempfile
 from pathlib import Path
 
+import pzi.dedupe_service as dedupe_service
 from pzi.dedupe_service import find_duplicates, merge_duplicates
 
 
@@ -146,3 +147,30 @@ def test_merge_duplicates_real() -> None:
         assert "@article{a" not in content  # entry a removed
         assert "@article{b" in content
         assert "Title B" in content  # existing title preserved
+
+
+def test_merge_duplicates_uses_repository_writer(monkeypatch) -> None:
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "merge_writer.bib")
+        _write_bib(
+            bib,
+            (
+                '@article{a, title={Title A}, author={Smith, J}, year={2024},'
+                ' doi={10.1000/merged}}\n'
+                '@article{b, title={Title B}, author={Jones, K}, year={2023},'
+                ' doi={10.1000/merged}}'
+            ),
+        )
+        calls = []
+
+        def fake_write_bib_file(path, entries):
+            calls.append((path, [entry["citekey"] for entry in entries]))
+
+        monkeypatch.setattr(dedupe_service, "write_bib_file", fake_write_bib_file, raising=False)
+
+        result = merge_duplicates(
+            bib_path=bib, citekey_a="a", citekey_b="b", dry_run=False,
+        )
+
+        assert result["status"] == "ok"
+        assert calls == [(bib, ["b"])]
