@@ -74,7 +74,7 @@ def test_run_tag_command_add_flattens_csv_tags_and_renders_success(tmp_path: Pat
             "citekey": kwargs["citekey"],
             "tags": kwargs["tags"],
             "dry_run": kwargs["dry_run"],
-            "message": "would added tags",
+            "message": "would add tags",
             "errors": [],
         }
 
@@ -108,7 +108,7 @@ def test_run_tag_command_add_flattens_csv_tags_and_renders_success(tmp_path: Pat
             "dry_run": True,
         }
     ]
-    assert stdout.getvalue() == "DRY RUN: would added tags for smith2024graph: ml, vision, rl\n"
+    assert stdout.getvalue() == "DRY RUN: would add tags for smith2024graph: ml, vision, rl\n"
     assert stderr.getvalue() == ""
 
 

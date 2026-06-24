@@ -16,9 +16,9 @@ from typing import Any, TypeAlias, cast
 from pzi import add_planning as _add_planning
 from pzi.add_planning import (
     _fallback_record_for_input,
-    _fetch_record_for_input,
-    _merge_record_sources,
+    fetch_record_for_input,
     has_minimum_metadata,
+    merge_record_sources,
     metadata_result_confidence_warnings,
     metadata_result_diagnostics,
     minimum_metadata_diagnostics,
@@ -49,7 +49,7 @@ from pzi.pdf import remove_new_pdf as _remove_new_pdf
 from pzi.pdf import snapshot_pdf_paths as _snapshot_pdf_paths
 from pzi.pdf_discovery import DEFAULT_DISCOVERY_STEPS, apply_pdf_discovery
 from pzi.pdf_planning import is_pdf_bytes, plan_pdf_path
-from pzi.similarity import find_exact_match
+from pzi.similarity import build_identity_index, find_exact_match
 from pzi.translation_server import (
     fetch_search_translations,
     fetch_web_translations,
@@ -205,7 +205,7 @@ def add_input_to_bib(
         )
 
     try:
-        fetched_record = _fetch_record_for_input(
+        fetched_record = fetch_record_for_input(
             raw_value=value,
             classified=classified,
             server_url=config["translation_server_url"],
@@ -231,7 +231,7 @@ def add_input_to_bib(
     except Exception as exc:
         manual_record = _manual_record_from_overrides(record_overrides)
         if classified["kind"] in {"doi", "url", "pdf_url"} and has_minimum_metadata(manual_record):
-            fallback_record = _merge_record_sources(
+            fallback_record = merge_record_sources(
                 _fallback_record_for_input(
                     kind=cast(str, classified["kind"]),
                     normalized=cast(str | None, classified["normalized"]),
@@ -401,16 +401,21 @@ def add_record_with_bib(
     typed_existing_records = [
         cast(NormalizedRecord, existing) for existing in read_result["records"]
     ]
+    # Build the identity index once and reuse it across the several exact-match
+    # lookups this write performs, instead of rebuilding it per call.
+    existing_index = build_identity_index(typed_existing_records)
     typed_record = ensure_citekey_for_write(
         cast(NormalizedRecord, dict(record)),
         typed_existing_records,
         citekey_format=citekey_format,
         force_new=force_new,
+        index=existing_index,
     )
     typed_record = reuse_existing_pdf_fields_for_exact_match(
         typed_record,
         typed_existing_records,
         force_new=force_new,
+        index=existing_index,
     )
     typed_record = reuse_orphan_pdf_for_planned_path(
         typed_record,
@@ -434,9 +439,11 @@ def add_record_with_bib(
         ezproxy_host=ezproxy_host,
     )
     record_with_hint = _add_planning.attach_similarity_hint(
-        record_with_pdf, typed_existing_records
+        record_with_pdf, typed_existing_records, index=existing_index,
     )
-    plan = plan_bib_write(record_with_hint, typed_existing_records, force_new=force_new)
+    plan = plan_bib_write(
+        record_with_hint, typed_existing_records, force_new=force_new, index=existing_index,
+    )
 
     if not dry_run:
         try:
@@ -476,8 +483,9 @@ def ensure_citekey_for_write(
     *,
     citekey_format: str | None = None,
     force_new: bool = False,
+    index: dict | None = None,
 ) -> NormalizedRecord:
-    match_index = find_exact_match(record, existing_records)
+    match_index = find_exact_match(record, existing_records, index=index)
     if match_index is not None:
         existing_citekey = existing_records[match_index].get("citekey")
         if isinstance(existing_citekey, str) and existing_citekey.strip():
@@ -485,7 +493,7 @@ def ensure_citekey_for_write(
                 matched = dict(record)
                 matched["citekey"] = existing_citekey
                 return cast(NormalizedRecord, matched)
-            # force_new: create duplicate citekey with -1, -2 suffix.
+            # force_new: create a duplicate citekey with a numeric suffix (-2, -3, …).
             existing_keys = existing_citekeys(existing_records)
             resolved = resolve_citekey_collision(existing_citekey.strip(), existing_keys)
             updated = dict(record)
@@ -532,6 +540,7 @@ def reuse_existing_pdf_fields_for_exact_match(
     existing_records: list[NormalizedRecord],
     *,
     force_new: bool = False,
+    index: dict | None = None,
 ) -> NormalizedRecord:
     if record.get("local_pdf_path"):
         return record
@@ -539,7 +548,7 @@ def reuse_existing_pdf_fields_for_exact_match(
     # entry's PDF — it needs its own.
     if force_new:
         return record
-    match_index = find_exact_match(record, existing_records)
+    match_index = find_exact_match(record, existing_records, index=index)
     if match_index is None:
         return record
 

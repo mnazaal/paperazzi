@@ -143,6 +143,6 @@ Use this as the extension/backend contract when changing capture behavior.
 - embedded metadata: extension sends citation meta tags, JSON-LD, OpenGraph title, DOI, canonical/source/abstract URLs, and page-discovered PDF candidates.
 - translation-server metadata: backend still resolves with translation-server and public provider fallbacks, then selects the best scored candidate rather than blindly accepting the first result.
 - metadata diagnostics: extension requests verbose capture payloads and popup summary can show metadata warnings plus selected/rejected candidate diagnostics.
-- lossless BibTeX: backend append/update paths preserve comments, strings, unrelated entries, and existing source formatting where patchable.
+- lossless BibTeX: backend append/update/tag/delete paths preserve comments, `@string` macros, unrelated entries, and existing source formatting where patchable.
 - PDF recovery: if direct fetch fails, Open the actual PDF tab and click pzi again; popup/raw response should make this next step visible.
 - Cross-origin PDF: extension requests narrow optional host permission only for the candidate PDF origin and removes temporary permission after the attempt.

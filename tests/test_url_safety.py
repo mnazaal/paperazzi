@@ -23,6 +23,26 @@ def test_safe_public_http_url_rejects_private_dns_result() -> None:
     assert not safe_public_http_url("https://example.com/paper.pdf", resolve_host=resolve)
 
 
+def test_safe_public_http_url_allows_trusted_host_without_dns() -> None:
+    # A configured EZProxy host short-circuits to allowed (no DNS, private OK).
+    def resolve(_host: str, _port: int, *, timeout: float):
+        raise AssertionError("trusted host should not be resolved")
+
+    assert safe_public_http_url(
+        "https://proxy.lib.university.edu/10.1/x",
+        resolve_host=resolve,
+        allow_host="proxy.lib.university.edu",
+    )
+    # The exception does not extend to other hosts.
+    assert not safe_public_http_url(
+        "https://example.com/paper.pdf",
+        resolve_host=lambda _h, port, *, timeout: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.1", port))
+        ],
+        allow_host="proxy.lib.university.edu",
+    )
+
+
 def test_safe_public_http_url_rejects_local_names_without_dns() -> None:
     calls = 0
 

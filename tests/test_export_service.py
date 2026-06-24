@@ -134,6 +134,8 @@ def test_export_ris_records() -> None:
         ris = result["content"]
         assert "TY  - JOUR" in ris
         assert "TI  - Deep Learning" in ris
+        # Title must be emitted exactly once per entry (regression: was duplicated).
+        assert ris.count("TI  - ") == 1
         assert "AU  - Smith, John" in ris
         assert "AU  - Jones, Alice" in ris
         assert "DO  - 10.1000/example" in ris

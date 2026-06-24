@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import Any, TypeAlias, cast
 
-from pzi.bib_repository import _find_entry_index, read_bib_file, update_bib_entry
+from pzi.bib_repository import find_entry_index, read_bib_file, update_bib_entry
 from pzi.bibtex import (
     BibtexEntry,
     NormalizedRecord,
@@ -19,6 +19,7 @@ from pzi.pdf import remove_new_pdf as _remove_new_pdf
 from pzi.pdf import snapshot_pdf_paths as _snapshot_pdf_paths
 from pzi.pdf import write_pdf_bytes
 from pzi.pdf_download import fetch_and_store_pdf, store_pdf_source
+from pzi.pdf_planning import pdf_file_present
 
 PdfRetryResult: TypeAlias = dict[str, Any]
 
@@ -67,7 +68,7 @@ def retry_pdf(
 
     read_result = read_bib_file(bib["path"])
     entries = read_result["entries"]
-    index = _find_entry_index(entries, citekey)
+    index = find_entry_index(entries, citekey)
     if index is None:
         return {
             "status": "error",
@@ -200,7 +201,7 @@ def retry_failed_pdfs(
         # Check if entry already has a local PDF
         record = records[i] if i < len(records) else {}
         local_pdf = record.get("local_pdf_path") if isinstance(record, dict) else None
-        if local_pdf and isinstance(local_pdf, str) and Path(local_pdf).exists():
+        if pdf_file_present(local_pdf):
             skipped_already_has_pdf += 1
             continue
 
@@ -307,7 +308,7 @@ def attach_pdf(
 
     read_result = read_bib_file(bib["path"])
     entries = read_result["entries"]
-    index = _find_entry_index(entries, citekey)
+    index = find_entry_index(entries, citekey)
     if index is None:
         return {
             "status": "error",
@@ -513,7 +514,7 @@ def _attach_pdf_data(
 ) -> PdfAttachBytesResult:
     read_result = read_bib_file(bib_path)
     entries = read_result["entries"]
-    index = _find_entry_index(entries, citekey)
+    index = find_entry_index(entries, citekey)
     if index is None:
         return {
             "status": "error",

@@ -43,7 +43,8 @@ api_listen_port = 8765
 # Desktop browser fallback for preprint hosts that block headless browsers.
 # desktop_fallback_hosts = ["biorxiv.org", "medrxiv.org", "researchsquare.com", "ssrn.com", "authorea.com"]
 
-# ezproxy_host = "proxy.lib.university.edu"  # route PDF downloads through institutional EZProxy (bare hostname)
+# ezproxy_host = "proxy.lib.university.edu"  # route PDF downloads through institutional EZProxy
+# (bare hostname; this host is trusted and may resolve to a private/campus IP — see docs/security.md)
 
 # Metadata confidence tuning
 # promote_confidence_threshold = 3   # min score to promote a preprint → published (default 3)

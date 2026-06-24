@@ -1,0 +1,22 @@
+# The sdist is a build/install artifact, not a dev checkout. Ship the package,
+# its data files, and the metadata needed to build; keep tests, fixtures, and
+# repo-only tooling out so the sdist never contains a half-included, unrunnable
+# test tree. Run the test suite from a git checkout (see README "Tests").
+
+include README.md
+include LICENSE
+include pyproject.toml
+
+recursive-include src/pzi *.toml
+include src/pzi/py.typed
+
+prune tests
+prune docs
+prune browser-extension
+prune dist
+prune tools
+prune .github
+prune .agent-shell
+
+global-exclude *.py[cod]
+global-exclude __pycache__

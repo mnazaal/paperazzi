@@ -1,17 +1,20 @@
-"""Pure GET route handlers for the HTTP API.
+"""GET route boundary for the HTTP API.
 
-All functions in this module are pure: they take request data as arguments
-and return (status_code, response_dict) tuples. No I/O beyond service calls.
-No references to BaseHTTPRequestHandler or server sockets.
+This module keeps socket/server concerns out of request handling: functions take
+plain request data and return ``(status_code, response_dict)`` tuples. Parsing
+helpers are pure; endpoint handlers are thin imperative shells around service
+calls.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from pzi.bib_repository import read_bib_file
-from pzi.bib_service import list_bibs
+from pzi.bib_service import list_bibs, list_entries
 from pzi.config import load_and_resolve_bib
 from pzi.doctor_service import doctor_check
 from pzi.http_payloads import (
@@ -20,8 +23,25 @@ from pzi.http_payloads import (
     search_payload,
     tag_list_payload,
 )
+from pzi.http_status import status_for_service_result
 from pzi.search_service import search_bib
 from pzi.tag_service import list_tags
+
+JsonResponse = tuple[int, dict[str, Any]]
+ExactGetHandler = Callable[[str, str, dict[str, str]], JsonResponse]
+PrefixGetHandler = Callable[[str, str, str, dict[str, str]], JsonResponse]
+
+
+@dataclass(frozen=True)
+class GetRoute:
+    path: str
+    handler: ExactGetHandler
+
+
+@dataclass(frozen=True)
+class GetPrefixRoute:
+    prefix: str
+    handler: PrefixGetHandler
 
 
 def process_get_request(
@@ -29,35 +49,32 @@ def process_get_request(
     config_path: str,
     home_dir: str,
 ) -> tuple[int, dict[str, Any]]:
-    """Pure: process a GET request path, returning (status, body_dict).
-
-    Testable without a server socket. Used by _handle_get.
-    """
+    """Process a GET path without server/socket dependencies."""
     parsed = urlsplit(path)
     p = parsed.path
     qs = _parse_query(parsed.query)
 
-    if p == "/health":
-        return 200, _health_payload(config_path, home_dir)
-    if p == "/bibs":
-        result = list_bibs(config_path=config_path, home_dir=home_dir)
-        status = 200 if result["status"] == "ok" else 500
-        return status, result
-    if p == "/search":
-        return _handle_search_get(config_path, home_dir, qs)
-    if p == "/entries":
-        return _handle_entries_get(config_path, home_dir, qs)
-    if p.startswith("/detail/"):
-        citekey = p[len("/detail/"):]
-        bib_selector = qs.get("bib")
-        return _handle_detail_get(config_path, home_dir, citekey, bib_selector)
-    if p.startswith("/tags/"):
-        citekey = p[len("/tags/"):]
-        bib_selector = qs.get("bib")
-        return _handle_tags_get(config_path, home_dir, citekey, bib_selector)
-    if p == "/export":
-        return _handle_export_get(config_path, home_dir, qs)
+    for route in GET_ROUTES:
+        if p == route.path:
+            return route.handler(config_path, home_dir, qs)
+    for route in GET_PREFIX_ROUTES:
+        if p.startswith(route.prefix):
+            return route.handler(config_path, home_dir, p[len(route.prefix):], qs)
     return 404, {"error": "not found"}
+
+
+def _handle_health_get(
+    config_path: str, home_dir: str, qs: dict[str, str],
+) -> JsonResponse:
+    return 200, _health_payload(config_path, home_dir)
+
+
+def _handle_bibs_get(
+    config_path: str, home_dir: str, qs: dict[str, str],
+) -> JsonResponse:
+    result = list_bibs(config_path=config_path, home_dir=home_dir)
+    status = status_for_service_result(result)
+    return status, result
 
 
 def _parse_query(query_string: str) -> dict[str, str]:
@@ -93,7 +110,7 @@ def _handle_search_get(
         year=year,
         tag=tag,
     )
-    status = 200 if result["status"] == "ok" else 400
+    status = status_for_service_result(result)
     return status, search_payload(result)
 
 
@@ -101,16 +118,20 @@ def _handle_entries_get(
     config_path: str, home_dir: str, qs: dict[str, str],
 ) -> tuple[int, dict[str, Any]]:
     bib_selector = qs.get("bib") or None
-    offset = _parse_int(qs.get("offset"), 0)
+    offset = max(0, _parse_int(qs.get("offset"), 0))
     limit = _parse_int(qs.get("limit"), 50)
     limit = max(1, min(limit, 500))
+    sort = qs.get("sort") or "citekey"
 
-    result = search_bib(
+    result = list_entries(
         config_path=config_path,
         home_dir=home_dir,
         bib_selector=bib_selector,
+        offset=offset,
+        limit=limit,
+        sort=sort,
     )
-    status = 200 if result["status"] == "ok" else 400
+    status = status_for_service_result(result)
     return status, entries_payload(result, offset, limit)
 
 
@@ -135,18 +156,15 @@ def _handle_detail_get(
 
 
 def _handle_tags_get(
-    config_path: str, home_dir: str, citekey: str, bib_selector: str | None,
+    config_path: str, home_dir: str, citekey: str | None, bib_selector: str | None,
 ) -> tuple[int, dict[str, Any]]:
-    if not citekey:
-        return 400, {"error": "citekey required"}
-
     result = list_tags(
         config_path=config_path,
         home_dir=home_dir,
         bib_selector=bib_selector,
         citekey=citekey,
     )
-    status = 200 if result["status"] == "ok" else 400
+    status = status_for_service_result(result)
     return status, tag_list_payload(result)
 
 
@@ -204,3 +222,37 @@ def _health_payload(config_path: str, home_dir: str) -> dict[str, Any]:
         "translation_server_url": result["translation_server_url"],
         "translation_server_reachable": result["translation_server_reachable"],
     }
+
+
+def _handle_detail_prefix_get(
+    config_path: str, home_dir: str, citekey: str, qs: dict[str, str],
+) -> JsonResponse:
+    return _handle_detail_get(config_path, home_dir, citekey, qs.get("bib"))
+
+
+def _handle_tags_prefix_get(
+    config_path: str, home_dir: str, citekey: str, qs: dict[str, str],
+) -> JsonResponse:
+    return _handle_tags_get(config_path, home_dir, citekey, qs.get("bib"))
+
+
+def _handle_tags_exact_get(
+    config_path: str, home_dir: str, qs: dict[str, str],
+) -> JsonResponse:
+    return _handle_tags_get(config_path, home_dir, None, qs.get("bib"))
+
+
+GET_ROUTES: tuple[GetRoute, ...] = (
+    GetRoute("/health", _handle_health_get),
+    GetRoute("/bibs", _handle_bibs_get),
+    GetRoute("/search", _handle_search_get),
+    GetRoute("/entries", _handle_entries_get),
+    GetRoute("/tags", _handle_tags_exact_get),
+    GetRoute("/export", _handle_export_get),
+)
+
+
+GET_PREFIX_ROUTES: tuple[GetPrefixRoute, ...] = (
+    GetPrefixRoute("/detail/", _handle_detail_prefix_get),
+    GetPrefixRoute("/tags/", _handle_tags_prefix_get),
+)

@@ -37,7 +37,7 @@ def _block_external_http(monkeypatch):
             "http://blocked.invalid", 503, "external network blocked in tests", {}, None
         )
 
-    monkeypatch.setattr(fetch_helpers, "urlopen", _blocked)
+    monkeypatch.setattr(fetch_helpers, "safe_urlopen", _blocked)
 
 
 def _free_port() -> int:
@@ -241,7 +241,9 @@ def test_get_bibs_includes_cors_headers(tmp_path: Path) -> None:
 
 
 def test_get_pdf_includes_cors_headers(tmp_path: Path) -> None:
-    pdf_path = tmp_path / "paper.pdf"
+    papers_dir = tmp_path / "papers"
+    papers_dir.mkdir()
+    pdf_path = papers_dir / "paper.pdf"
     pdf_path.write_bytes(b"%PDF-1.4\n%test\n")
     bib_path = tmp_path / "ml.bib"
     bib_path.write_text(
@@ -258,6 +260,7 @@ def test_get_pdf_includes_cors_headers(tmp_path: Path) -> None:
 [[bibs]]
 name = "ml"
 path = "{bib_path}"
+papers_dir = "{papers_dir}"
 default = true
 """.strip()
     )
@@ -273,6 +276,62 @@ default = true
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_get_pdf_rejects_path_outside_papers_dir(tmp_path: Path) -> None:
+    outside_pdf = tmp_path / "secret.pdf"
+    outside_pdf.write_bytes(b"%PDF-1.4\nsecret\n")
+    papers_dir = tmp_path / "papers"
+    papers_dir.mkdir()
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text(
+        f"""
+@article{{smith2024graph,
+  title = {{Graph Parsers}},
+  file = {{{outside_pdf}}}
+}}
+""".strip()
+    )
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f"""
+[[bibs]]
+name = "ml"
+path = "{bib_path}"
+papers_dir = "{papers_dir}"
+default = true
+""".strip()
+    )
+    port, _thread, server = _serve_once(config_path, tmp_path)
+    try:
+        try:
+            urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/pdf/smith2024graph", timeout=10
+            )
+            raise AssertionError("expected HTTPError")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 404
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_get_export_raw_returns_export_content_with_content_type(tmp_path: Path) -> None:
+    config_path, _ = _seed(tmp_path)
+    port, _thread, server = _serve_once(config_path, tmp_path)
+    try:
+        response = urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/export/raw?format=bibtex", timeout=10
+        )
+        body = response.read()
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert response.status == 200
+    assert response.headers.get("Content-Type") == "application/x-bibtex"
+    assert "inline" in response.headers.get("Content-Disposition", "")
+    assert b"smith2024graph" in body
 
 
 def test_post_capture_accepts_page_metadata_overrides(tmp_path: Path) -> None:

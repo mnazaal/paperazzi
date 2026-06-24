@@ -103,11 +103,19 @@ def fetch_and_store_pdf(
     ezproxy_host: str | None = None,
 ) -> tuple[str | None, str | None]:
     """Download a PDF candidate, validate it, and store it atomically."""
+    allow_host: str | None = None
     if ezproxy_host:
         url = _ezproxy_url(url, ezproxy_host)
+        # The rewritten host is an explicitly-configured, trusted proxy; allow
+        # it to resolve to a private/campus IP that the SSRF guard would
+        # otherwise reject.
+        allow_host = urlsplit(url).hostname
     downloader = fetch_binary or _fetch_binary
     try:
-        data, content_type = downloader(url)
+        if allow_host and downloader is _fetch_binary:
+            data, content_type = _fetch_binary(url, allow_host=allow_host)
+        else:
+            data, content_type = downloader(url)
     except urllib.error.HTTPError as exc:
         if exc.code in {401, 403}:
             return None, (

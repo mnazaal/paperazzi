@@ -26,6 +26,7 @@ from pzi.metadata_sources import (
 from pzi.pdf import fetch_and_store_pdf_with_fallbacks
 from pzi.pdf import remove_new_pdf as _remove_new_pdf
 from pzi.pdf import snapshot_pdf_paths as _snapshot_pdf_paths
+from pzi.similarity import author_overlap
 from pzi.translation_server import fetch_search_translations
 
 PromoteItem: TypeAlias = dict[str, Any]
@@ -388,18 +389,6 @@ def _build_query(record: NormalizedRecord) -> str:
     return " ".join(parts)
 
 
-def _first_with_venue(results: Any) -> NormalizedRecord | None:
-    if not isinstance(results, list):
-        return None
-    for result in results:
-        if not isinstance(result, Mapping):
-            continue
-        rec = result.get("record")
-        if isinstance(rec, Mapping) and rec.get("venue"):
-            return cast(NormalizedRecord, dict(rec))
-    return None
-
-
 def _translation_candidates(results: Any) -> list[NormalizedRecord]:
     if not isinstance(results, list):
         return []
@@ -517,9 +506,10 @@ def _score_confidence(preprint: NormalizedRecord, candidate: NormalizedRecord) -
         elif p_title in c_title or c_title in p_title:
             score += _SCORE_TITLE_PARTIAL
 
-    p_authors = {a.lower().strip() for a in (preprint.get("authors") or []) if isinstance(a, str)}
-    c_authors = {a.lower().strip() for a in (candidate.get("authors") or []) if isinstance(a, str)}
-    score += min(len(p_authors & c_authors), _SCORE_AUTHOR_MAX)
+    p_authors = [a for a in (preprint.get("authors") or []) if isinstance(a, str)]
+    c_authors = [a for a in (candidate.get("authors") or []) if isinstance(a, str)]
+    # Family-name normalized overlap so "Smith, John" and "John Smith" match.
+    score += min(author_overlap(p_authors, c_authors), _SCORE_AUTHOR_MAX)
 
     p_year = preprint.get("year")
     c_year = candidate.get("year")

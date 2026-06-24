@@ -7,9 +7,9 @@ from pathlib import Path
 from typing import Any, TypeAlias
 
 from pzi.bib_repository import (
-    _read_bib_file_raw,
+    read_bib_file_raw,
+    rewrite_entries_in_order,
     with_bib_lock,
-    write_bib_file,
 )
 from pzi.format_templates import format_citekey
 from pzi.pdf_planning import plan_pdf_path
@@ -24,6 +24,7 @@ def reindex_library(
     citekey_format: str | None = None,
     pdf_filename_format: str | None = None,
     dry_run: bool = True,
+    file_path_style: str = "absolute",
 ) -> ReindexResult:
     """Regenerate citekeys for all entries and fix file references.
 
@@ -31,7 +32,7 @@ def reindex_library(
     ``{old_citekey, new_citekey, renamed_pdf}``), and ``errors``.
     """
     with with_bib_lock(bib_path, shared=True):
-        raw = _read_bib_file_raw(bib_path)
+        raw = read_bib_file_raw(bib_path)
 
     entries = raw["entries"]
     records = raw["records"]
@@ -91,6 +92,9 @@ def reindex_library(
                 try:
                     Path(new_pdf_path).parent.mkdir(parents=True, exist_ok=True)
                     os.rename(old_pdf_path, new_pdf_path)
+                    # Repoint the entry's file= field at the renamed PDF so the
+                    # reference does not dangle (write honors file_path_style).
+                    entry["fields"]["file"] = new_pdf_path
                     changed[-1]["renamed_pdf"] = True
                 except OSError as exc:
                     errors.append(
@@ -101,11 +105,10 @@ def reindex_library(
                 changed[-1]["old_pdf"] = old_pdf_path
                 changed[-1]["new_pdf"] = new_pdf_path
 
-    # Write back if not dry run
+    # Write back if not dry run. Entries keep their on-disk order so the write
+    # rides the comment/@string/@preamble-preserving positional path.
     if changed and not dry_run:
-        sorted_entries = sorted(entries, key=lambda e: e["citekey"].lower())
-        with with_bib_lock(bib_path):
-            write_bib_file(bib_path, sorted_entries)
+        rewrite_entries_in_order(bib_path, entries, file_path_style=file_path_style)
 
     return {
         "status": "ok",

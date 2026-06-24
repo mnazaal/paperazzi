@@ -9,9 +9,28 @@ from pzi.pdf_planning import (
     needs_desktop_browser_fallback,
     normalized_hostname,
     parse_firefox_default_profile,
+    pdf_file_present,
     requested_pdf_match_tokens,
     url_basename,
 )
+
+
+def test_pdf_file_present_checks_existence_and_expands_home(tmp_path, monkeypatch) -> None:
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    # Absolute path that exists.
+    assert pdf_file_present(str(pdf)) is True
+    # Absolute path that does not exist.
+    assert pdf_file_present(str(tmp_path / "missing.pdf")) is False
+    # Home-relative path resolves via expanduser (regression: tilde was kept raw).
+    monkeypatch.setenv("HOME", str(tmp_path))
+    home_pdf = tmp_path / "home.pdf"
+    home_pdf.write_bytes(b"%PDF-1.4\n")
+    assert pdf_file_present("~/home.pdf") is True
+    # Non-string / empty values are tolerated.
+    assert pdf_file_present(None) is False
+    assert pdf_file_present("") is False
+    assert pdf_file_present("   ") is False
 
 
 def test_is_pdf_content_type_classifies_pdf_html_and_ambiguous_values() -> None:

@@ -4,13 +4,34 @@ from __future__ import annotations
 
 import time
 import urllib.error
-from urllib.request import Request, urlopen
+from urllib.request import Request
+
+from pzi.safe_http import SsrfBlocked, safe_urlopen
 
 DEFAULT_USER_AGENT = "pzi/1.0 (mailto:pzi)"
 DEFAULT_TIMEOUT = 30
 DEFAULT_RETRIES = 2
 DEFAULT_MAX_RESPONSE_BYTES = 64 * 1024 * 1024
 READ_CHUNK_BYTES = 64 * 1024
+
+
+def _is_ssrf_block(exc: BaseException) -> bool:
+    """Detect an SSRF block, even after urllib wraps it in another URLError.
+
+    ``URLError`` subclasses ``OSError``, so ``AbstractHTTPHandler.do_open``
+    re-wraps a :class:`~pzi.safe_http.SsrfBlocked` raised at connect time inside
+    a plain ``URLError(reason=SsrfBlocked)``.  Walk the ``reason`` chain so the
+    block is treated as terminal rather than a retryable network error.
+    """
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    while isinstance(cur, BaseException) and id(cur) not in seen:
+        if isinstance(cur, SsrfBlocked):
+            return True
+        seen.add(id(cur))
+        reason = getattr(cur, "reason", None)
+        cur = reason if isinstance(reason, BaseException) else None
+    return False
 
 
 def _retry_after_delay(exc: urllib.error.HTTPError, attempt: int) -> float:
@@ -63,7 +84,7 @@ def fetch_text(
     for attempt in range(max_retries + 1):
         try:
             request = Request(url, headers=headers, method="GET")
-            with urlopen(request, timeout=timeout) as response:
+            with safe_urlopen(request, timeout=timeout) as response:
                 return _read_limited(response, max_bytes=max_bytes).decode("utf-8")
         except urllib.error.HTTPError as exc:
             if exc.code == 429 and attempt < max_retries:
@@ -72,6 +93,8 @@ def fetch_text(
                 continue
             raise
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            if _is_ssrf_block(exc):
+                raise  # terminal: re-attempting a blocked target is always blocked
             last_error = exc
             if attempt < max_retries:
                 time.sleep(min(2**attempt, 8))  # 0s, 2s, 4s (capped at 8)
@@ -86,12 +109,14 @@ def fetch_binary(
     timeout: int = DEFAULT_TIMEOUT,
     max_retries: int = DEFAULT_RETRIES,
     max_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
+    allow_host: str | None = None,
 ) -> tuple[bytes, str | None]:
     """Fetch a URL and return (raw_bytes, content_type).
 
     Retries on transient network errors with exponential backoff.
     Retries on HTTP 429 using Retry-After header.  Does NOT retry on
-    other HTTPError (4xx/5xx status).
+    other HTTPError (4xx/5xx status).  ``allow_host`` permits a single
+    explicitly-trusted host (configured EZProxy) on a private IP.
     """
     headers = {
         "User-Agent": user_agent,
@@ -101,7 +126,7 @@ def fetch_binary(
     for attempt in range(max_retries + 1):
         try:
             request = Request(url, headers=headers, method="GET")
-            with urlopen(request, timeout=timeout) as response:
+            with safe_urlopen(request, timeout=timeout, allow_host=allow_host) as response:
                 content_type = response.headers.get("Content-Type")
                 return _read_limited(response, max_bytes=max_bytes), content_type
         except urllib.error.HTTPError as exc:
@@ -111,6 +136,8 @@ def fetch_binary(
                 continue
             raise
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            if _is_ssrf_block(exc):
+                raise  # terminal: re-attempting a blocked target is always blocked
             last_error = exc
             if attempt < max_retries:
                 time.sleep(min(2**attempt, 8))  # pragma: no cover

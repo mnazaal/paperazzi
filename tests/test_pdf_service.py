@@ -686,7 +686,7 @@ def test_attach_pdf_data_success(monkeypatch, tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# _store_pdf_source: compatibility wrapper around pzi.pdf.store_pdf_source
+# _store_pdf_source: compatibility wrapper around pzi.pdf_download.store_pdf_source
 # ---------------------------------------------------------------------------
 
 
@@ -1014,10 +1014,10 @@ def test_retry_failed_pdfs_all_skipped(monkeypatch) -> None:
         },
     )
 
-    def fake_exists(self):
-        return str(self) == "/p/smith2024.pdf"
-
-    monkeypatch.setattr(pdf_service.Path, "exists", fake_exists)
+    monkeypatch.setattr(
+        pdf_service, "pdf_file_present",
+        lambda path: path == "/p/smith2024.pdf",
+    )
 
     result = pdf_service.retry_failed_pdfs(
         config_path="/f", home_dir="/h", bib_selector=None,

@@ -14,11 +14,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from pzi.fetch_helpers import fetch_text as _fetch_text
-from pzi.pdf_download import (
-    copy_pdf_to_papers_dir,  # noqa: F401  # re-exported
-    fetch_and_store_pdf,
-    store_pdf_source,  # noqa: F401  # re-exported
-)
+from pzi.pdf_download import fetch_and_store_pdf
 from pzi.pdf_planning import (
     PdfRecord,
     build_browser_pdf_command,
@@ -293,8 +289,10 @@ def _auto_browser_pdf_cmd_for_url(
     desktop_fallback_hosts: set[str] | None = None,
 ) -> str | None:
     """Return built-in browser fallback command for hosts that block direct PDF fetches."""
+    from pzi.config import DEFAULT_DESKTOP_FALLBACK_HOSTS
+
     hostname = normalized_hostname(url)
-    effective_hosts = desktop_fallback_hosts or {"biorxiv.org", "medrxiv.org"}
+    effective_hosts = desktop_fallback_hosts or set(DEFAULT_DESKTOP_FALLBACK_HOSTS)
     if hostname in effective_hosts:
         return _auto_browser_pdf_cmd(browser=browser)
     return None

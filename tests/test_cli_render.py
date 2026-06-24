@@ -1,7 +1,6 @@
 from pzi.cli_render import (
     _error_lines,
     _render_add_success,
-    _render_bib_list,
     _render_bib_promote_items,
     _render_bib_update_items,
     _render_pdf_success,
@@ -70,17 +69,6 @@ def test_render_search_matches_formats_matches_and_empty_result() -> None:
             ]
         }
     ) == ["smith2024graph\t2024\tGraph Parsers\t[title,tags]"]
-
-
-def test_render_bib_list_marks_default() -> None:
-    assert _render_bib_list(
-        {
-            "bibs": [
-                {"name": "ml", "path": "/tmp/ml.bib", "default": True},
-                {"name": "sys", "path": "/tmp/sys.bib", "default": False},
-            ]
-        }
-    ) == ["ml\t/tmp/ml.bib (default)", "sys\t/tmp/sys.bib"]
 
 
 def test_render_bib_update_items_handles_noop_and_empty() -> None:

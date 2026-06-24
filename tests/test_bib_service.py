@@ -13,7 +13,6 @@ from pzi.bib_service import (
     entry_detail,
     list_bibs,
     list_entries,
-    set_default_bib,
 )
 from pzi.config import dump_app_config
 
@@ -51,23 +50,6 @@ def test_list_bibs_errors_on_missing_config(tmp_path: Path) -> None:
     config_path = os.path.join(str(tmp_path), ".config", "pzi", "nonexistent.toml")
     result = list_bibs(config_path=config_path, home_dir=str(tmp_path))
     assert result["status"] == "error"
-
-
-# ── set_default_bib ─────────────────────────────────────────────────────────
-
-
-def test_set_default_bib_succeeds(tmp_path: Path) -> None:
-    config_path = _write_config(str(tmp_path))
-    result = set_default_bib(config_path=config_path, home_dir=str(tmp_path), name="ml")
-    assert result["status"] == "ok"
-    assert "default" in result["message"].lower()
-
-
-def test_set_default_bib_unknown_name(tmp_path: Path) -> None:
-    config_path = _write_config(str(tmp_path))
-    result = set_default_bib(config_path=config_path, home_dir=str(tmp_path), name="nope")
-    assert result["status"] == "error"
-    assert "not found" in result["message"]
 
 
 # ── list_entries ────────────────────────────────────────────────────────────

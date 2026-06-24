@@ -105,6 +105,24 @@ def test_import_single_entry() -> None:
         assert len(result["results"]) == 1
 
 
+def test_import_counts_existing_entry_as_duplicate() -> None:
+    # Re-importing an entry the target already has (same DOI) is a dedup hit:
+    # add returns action="update", which must be counted as a duplicate, not
+    # an import. (Regression: the old code substring-matched the message.)
+    with tempfile.TemporaryDirectory() as td:
+        cp, bp, pd = _setup_config(td)
+        Path(bp).write_text(SIMPLE_BIB)
+        src = os.path.join(td, "source.bib")
+        Path(src).write_text(SIMPLE_BIB)
+
+        result = import_from_bibtex(config_path=cp, home_dir=td, source_path=src)
+
+        assert result["status"] == "ok"
+        assert result["imported"] == 0
+        assert result["skipped_duplicates"] == 1
+        assert result["results"][0]["status"] == "duplicate"
+
+
 def test_import_force_new_inserts_duplicate_with_suffixed_citekey() -> None:
     with tempfile.TemporaryDirectory() as td:
         cp, bp, pd = _setup_config(td)

@@ -39,14 +39,6 @@ def _render_search_matches(result: Mapping[str, Any]) -> list[str]:
     return lines or ["no matches"]
 
 
-def _render_bib_list(result: Mapping[str, Any]) -> list[str]:
-    lines = []
-    for bib in result["bibs"]:
-        marker = " (default)" if bib["default"] else ""
-        lines.append(f"{bib['name']}\t{bib['path']}{marker}")
-    return lines
-
-
 def _render_bib_update_items(result: Mapping[str, Any]) -> list[str]:
     prefix = _dry_run_prefix(result)
     lines = []

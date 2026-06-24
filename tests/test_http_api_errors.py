@@ -9,7 +9,10 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import pytest
+
 from pzi.config import dump_app_config
+from pzi.http_api import run_server, server_exposure_error
 from pzi.http_post_routes import process_post_request
 from pzi.http_security import (
     AUTH_HEADER,
@@ -132,6 +135,39 @@ def test_request_security_passes_when_no_auth_configured() -> None:
         method="POST", headers={}, security=sec,
     )
     assert err is None
+
+
+def test_server_exposure_guard_allows_loopback_without_token() -> None:
+    sec = build_http_security_config(auth_token=None)
+
+    assert server_exposure_error("127.0.0.1", sec) is None
+    assert server_exposure_error("localhost", sec) is None
+
+
+def test_server_exposure_guard_rejects_non_loopback_without_token() -> None:
+    sec = build_http_security_config(auth_token=None)
+
+    assert server_exposure_error("0.0.0.0", sec) == (
+        "refusing to serve unauthenticated API on a non-loopback host; "
+        "set api_auth_token or bind to 127.0.0.1/localhost"
+    )
+
+
+def test_server_exposure_guard_allows_non_loopback_with_token() -> None:
+    sec = build_http_security_config(auth_token="secret")
+
+    assert server_exposure_error("0.0.0.0", sec) is None
+
+
+def test_run_server_rejects_non_loopback_without_token_before_binding(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="refusing to serve unauthenticated API"):
+        run_server(
+            config_path=str(tmp_path / "config.toml"),
+            home_dir=str(tmp_path),
+            host="0.0.0.0",
+            port=0,
+            security=build_http_security_config(auth_token=None),
+        )
 
 
 def test_request_security_rejects_bad_origin() -> None:

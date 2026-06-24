@@ -121,18 +121,19 @@ def import_from_bibtex(
         status = result.get("status", "unknown")
 
         if status == "ok":
-            is_dry = result.get("dry_run", False)
-            if is_dry or dry_run:
+            # A dedup hit against the target library comes back as an "update"
+            # action (the incoming record merged into an existing entry); a new
+            # entry is an "insert".  Decide on the structured action, not on
+            # substring-matching the human message.
+            action = result.get("action", "insert")
+            if result.get("dry_run", False) or dry_run:
                 results.append({
                     "citekey": citekey,
                     "status": "would_import",
-                    "action": "insert",
+                    "action": action,
                     "message": result.get("message", ""),
                 })
-            elif (
-                "duplicate" in str(result.get("message", "")).lower()
-                or "already" in str(result.get("warnings", []))
-            ):
+            elif action == "update":
                 skipped_dupes += 1
                 results.append({
                     "citekey": citekey,
@@ -144,7 +145,7 @@ def import_from_bibtex(
                 results.append({
                     "citekey": citekey,
                     "status": "imported",
-                    "action": result.get("action", "insert"),
+                    "action": action,
                     "message": result.get("message", ""),
                 })
         else:
@@ -165,7 +166,8 @@ def import_from_bibtex(
             f"{', ' + str(skipped_errors) + ' errors' if skipped_errors else ''}"
         ),
         "errors": errors,
-        "total_source": len(records),
+        "total_source": len(source_entries),
+        "skipped_in_source": skipped_in_source,
         "imported": imported,
         "skipped_duplicates": skipped_dupes,
         "skipped_errors": skipped_errors,

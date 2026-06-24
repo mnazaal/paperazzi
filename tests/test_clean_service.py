@@ -6,7 +6,6 @@ import os
 import tempfile
 from pathlib import Path
 
-import pzi.clean_service as clean_service
 from pzi.clean_service import clean_library, validate_library
 
 
@@ -100,54 +99,24 @@ def test_validate_library_orphan_pdf() -> None:
         assert any(i["type"] == "orphan_pdf" for i in result["issues"])
 
 
-def test_clean_library_sort_dry_run() -> None:
-    with tempfile.TemporaryDirectory() as td:
-        bib = os.path.join(td, "sort.bib")
-        papers = os.path.join(td, "papers")
-        _write_bib(
-            bib,
-            (
-                '@article{zeta2024, title = {Z}, author = {Z}, year = {2024}}\n'
-                '@article{alpha2023, title = {A}, author = {A}, year = {2023}}'
-            ),
-        )
-        result = clean_library(
-            bib_path=bib, papers_dir=papers,
-            dry_run=True, move_orphans=False, sort_entries=True,
-        )
-        assert result["status"] == "ok"
-        actions = result.get("actions", [])
-        assert any(a["type"] == "sort_entries" for a in actions)
-        # File should be unchanged (dry run)
-        content = Path(bib).read_text()
-        assert "zeta2024" in content  # still in original order
-
-
-def test_clean_library_sort_uses_repository_writer(monkeypatch) -> None:
+def test_clean_library_does_not_rewrite_bib() -> None:
+    # clean --fix must never touch the .bib file (only relocate orphan PDFs),
+    # so comments/@string/@preamble and source formatting are preserved.
     with tempfile.TemporaryDirectory() as td:
         bib = os.path.join(td, "sort-real.bib")
         papers = os.path.join(td, "papers")
-        _write_bib(
-            bib,
-            (
-                '@article{zeta2024, title = {Z}, author = {Z}, year = {2024}}\n'
-                '@article{alpha2023, title = {A}, author = {A}, year = {2023}}'
-            ),
+        original = (
+            '@article{zeta2024, title = {Z}, author = {Z}, year = {2024}}\n'
+            '@article{alpha2023, title = {A}, author = {A}, year = {2023}}'
         )
-        calls = []
+        _write_bib(bib, original)
 
-        def fake_write_bib_file(path, entries):
-            calls.append((path, [entry["citekey"] for entry in entries]))
-
-        monkeypatch.setattr(clean_service, "write_bib_file", fake_write_bib_file, raising=False)
-
-        result = clean_library(
-            bib_path=bib, papers_dir=papers,
-            dry_run=False, move_orphans=False, sort_entries=True,
-        )
+        result = clean_library(bib_path=bib, papers_dir=papers, dry_run=False)
 
         assert result["status"] == "ok"
-        assert calls == [(bib, ["alpha2023", "zeta2024"])]
+        # No sort action, and the file is byte-for-byte unchanged.
+        assert not any(a["type"] == "sort_entries" for a in result.get("actions", []))
+        assert Path(bib).read_text() == original
 
 
 def test_clean_library_move_orphans_dry_run() -> None:
@@ -163,7 +132,7 @@ def test_clean_library_move_orphans_dry_run() -> None:
         )
         result = clean_library(
             bib_path=bib, papers_dir=papers,
-            dry_run=True, move_orphans=True, sort_entries=False,
+            dry_run=True, move_orphans=True,
         )
         assert result["status"] == "ok"
         actions = result.get("actions", [])
@@ -185,7 +154,7 @@ def test_clean_library_move_orphans_real() -> None:
         )
         result = clean_library(
             bib_path=bib, papers_dir=papers,
-            dry_run=False, move_orphans=True, sort_entries=False,
+            dry_run=False, move_orphans=True,
         )
         assert result["status"] == "ok"
         actions = result.get("actions", [])

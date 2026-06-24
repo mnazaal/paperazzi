@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
-from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
-from pzi.bib_repository import read_bib_file
-from pzi.config import load_and_resolve_bib
+from pzi.http_binary_routes import (
+    ExportBytesResponse,
+    PdfFileResponse,
+    build_export_bytes_response,
+    build_pdf_file_response,
+)
 from pzi.http_get_routes import process_get_request
 from pzi.http_post_routes import process_post_request
 from pzi.http_security import (
@@ -20,6 +22,7 @@ from pzi.http_security import (
     HttpSecurityConfig,
     RateLimiter,
     build_http_security_config,
+    loopback_bind_host,
     origin_allowed,
     request_security_error,
     validated_content_length,
@@ -29,6 +32,16 @@ from pzi.pdf_attach_session_store import AttachSessionStore
 # ---------------------------------------------------------------------------
 # Handler
 # ---------------------------------------------------------------------------
+
+def server_exposure_error(host: str, security: HttpSecurityConfig) -> str | None:
+    """Return refusal reason for unsafe direct server exposure, if any."""
+    if security.get("auth_token") or loopback_bind_host(host):
+        return None
+    return (
+        "refusing to serve unauthenticated API on a non-loopback host; "
+        "set api_auth_token or bind to 127.0.0.1/localhost"
+    )
+
 
 def build_handler_class(
     *,
@@ -87,41 +100,30 @@ def _serve_pdf(
         request.end_headers()
         return
 
-    resolved = load_and_resolve_bib(
-        config_path=config_path, home_dir=home_dir, bib_selector=bib_selector,
+    status, response = build_pdf_file_response(
+        config_path=config_path,
+        home_dir=home_dir,
+        citekey=citekey,
+        bib_selector=bib_selector,
     )
-    if isinstance(resolved, list):
-        request.send_response(400)
-        request.end_headers()
-        return
-
-    _config, bib = resolved
-    read_result = read_bib_file(bib["path"])
-    pdf_path = None
-    for record in read_result["records"]:
-        if record.get("citekey") == citekey:
-            pdf_path = record.get("local_pdf_path")
-            break
-
-    if not pdf_path or not os.path.exists(str(pdf_path)):
-        request.send_response(404)
+    if not isinstance(response, PdfFileResponse):
+        request.send_response(status)
         request.end_headers()
         return
 
     try:
-        pdf_file = Path(str(pdf_path))
-        size = pdf_file.stat().st_size
+        size = response.path.stat().st_size
     except OSError:
         request.send_response(500)
         request.end_headers()
         return
 
     request.send_response(200)
-    request.send_header("Content-Type", "application/pdf")
+    request.send_header("Content-Type", response.content_type)
     request.send_header("Content-Length", str(size))
     request.send_header(
         "Content-Disposition",
-        f'inline; filename="{citekey}.pdf"',
+        f'inline; filename="{response.filename}"',
     )
     _send_cors_headers(request, security)
     if rate_remaining is not None:
@@ -130,10 +132,57 @@ def _serve_pdf(
         request.send_header("X-RateLimit-Reset", str(rate_reset))
     request.end_headers()
     try:
-        with pdf_file.open("rb") as fh:
+        with response.path.open("rb") as fh:
             while chunk := fh.read(1024 * 1024):
                 request.wfile.write(chunk)
     except OSError:
+        return
+
+
+def _serve_export_raw(
+    request: BaseHTTPRequestHandler,
+    config_path: str,
+    home_dir: str,
+    fmt: str,
+    bib_selector: str | None,
+    security: HttpSecurityConfig,
+    *,
+    rate_remaining: int | None = None,
+    rate_reset: int | None = None,
+) -> None:
+    status, response = build_export_bytes_response(
+        config_path=config_path,
+        home_dir=home_dir,
+        fmt=fmt,
+        bib_selector=bib_selector,
+    )
+    if not isinstance(response, ExportBytesResponse):
+        _respond(
+            request,
+            status,
+            response,
+            security,
+            rate_remaining=rate_remaining,
+            rate_reset=rate_reset,
+        )
+        return
+
+    request.send_response(200)
+    request.send_header("Content-Type", response.content_type)
+    request.send_header("Content-Length", str(len(response.content)))
+    request.send_header(
+        "Content-Disposition",
+        f'inline; filename="{response.filename}"',
+    )
+    _send_cors_headers(request, security)
+    if rate_remaining is not None:
+        request.send_header("X-RateLimit-Remaining", str(rate_remaining))
+    if rate_reset is not None:
+        request.send_header("X-RateLimit-Reset", str(rate_reset))
+    request.end_headers()
+    try:
+        request.wfile.write(response.content)
+    except (BrokenPipeError, ConnectionResetError):
         return
 
 
@@ -175,6 +224,21 @@ def _handle_get(
             rate_reset=reset,
         )
         return
+    if p == "/export/raw":
+        qs_raw = parse_qs(urlsplit(request.path).query)
+        fmt = qs_raw.get("format", ["bibtex"])[0] or "bibtex"
+        bib = qs_raw.get("bib", [None])[0] if qs_raw.get("bib") else None
+        _serve_export_raw(
+            request,
+            config_path,
+            home_dir,
+            fmt,
+            bib,
+            security,
+            rate_remaining=remaining,
+            rate_reset=reset,
+        )
+        return
 
     status, body = process_get_request(request.path, config_path, home_dir)
     _respond(request, status, body, security,
@@ -187,10 +251,6 @@ def _handle_post(
     home_dir: str,
     security: HttpSecurityConfig,
 ) -> None:
-    idle_state = getattr(request, "_idle_state", None)
-    if idle_state is not None:
-        idle_state["_last_request"] = time.monotonic()
-
     error = request_security_error(
         method="POST", headers=dict(request.headers.items()), security=security
     )
@@ -203,6 +263,11 @@ def _handle_post(
         _respond(request, 429, {"error": "rate limit exceeded"}, security,
                  rate_remaining=0, rate_reset=post_reset)
         return
+    # Only count an accepted request against the idle-stop timer (mirrors GET),
+    # so a rejected POST can't keep the auto-stop server alive.
+    idle_state = getattr(request, "_idle_state", None)
+    if idle_state is not None:
+        idle_state["_last_request"] = time.monotonic()
     length_result = validated_content_length(
         request.headers.get("Content-Length"), max_body_bytes=security["max_body_bytes"]
     )
@@ -295,6 +360,11 @@ def run_server(  # pragma: no cover — I/O entry point, covered by integration 
     browser_profile_path: str | None = None,
     browser_engine: str = "chromium",
 ) -> None:
+    security_config = security or build_http_security_config()
+    exposure_error = server_exposure_error(host, security_config)
+    if exposure_error is not None:
+        raise ValueError(exposure_error)
+
     # Create persistent browser session manager (lazily launched).
     from pzi.browser_session_manager import BrowserSessionManager
 
@@ -307,7 +377,7 @@ def run_server(  # pragma: no cover — I/O entry point, covered by integration 
     handler = build_handler_class(
         config_path=config_path,
         home_dir=home_dir,
-        security=security,
+        security=security_config,
         browser_manager=browser_manager,
     )
     idle_state: dict[str, float] | None = None

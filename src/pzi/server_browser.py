@@ -14,17 +14,6 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
-def server_is_reachable(api_url: str, *, timeout: float = 0.5) -> bool:
-    """Return True if the pzi HTTP API server responds to /health."""
-    try:
-        url = f"{api_url.rstrip('/')}/health"
-        req = Request(url, method="GET")
-        with urlopen(req, timeout=timeout) as resp:
-            return resp.status == 200
-    except (OSError, HTTPError, URLError, ValueError):
-        return False
-
-
 def discover_via_server_api(
     api_url: str,
     page_url: str,
@@ -40,7 +29,7 @@ def discover_via_server_api(
     }).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     if auth_token:
-        headers["X-Pzi-Auth"] = auth_token
+        headers["X-Pzi-Token"] = auth_token
     try:
         url = f"{api_url.rstrip('/')}/browser/discover"
         req = Request(url, data=body, headers=headers, method="POST")
@@ -66,7 +55,7 @@ def download_via_server_api(
     body = json.dumps({"pdf_url": pdf_url}).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     if auth_token:
-        headers["X-Pzi-Auth"] = auth_token
+        headers["X-Pzi-Token"] = auth_token
     try:
         url = f"{api_url.rstrip('/')}/browser/download"
         req = Request(url, data=body, headers=headers, method="POST")

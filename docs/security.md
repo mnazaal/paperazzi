@@ -103,7 +103,7 @@ names — never PDFs, cookies, or HTML.
 | Rate limiting | 60 req/min per client IP | Adjust `rate_limit_rpm` in config. |
 | Attach session tokens | Random 32-byte URL-safe token, TTL 5 minutes, one-shot consume | Tokens generated per capture request, validated on raw PDF upload. |
 | Content-Length validation | Bodies over `api_max_body_bytes` rejected before reading | Kept. |
-| Recursive DNS safety | `safe_public_http_url` resolves hostnames with 250ms budget, rejects private/local IPs | Kept. |
+| Recursive DNS safety | `safe_public_http_url` resolves hostnames with 250ms budget, rejects private/local IPs | Kept. One scoped exception: a configured `ezproxy_host` (see below). |
 
 ### API token considerations
 
@@ -186,3 +186,11 @@ compromised, the attacker can access any local file regardless of pzi.
   that carries your browser profile. It is a local process but may make
   outbound requests to publisher sites. Your institutional access applies if
   you point it at your real browser profile.
+- **EZProxy SSRF exception.** pzi normally pins each connection to a public IP
+  and re-validates every redirect, rejecting private/loopback/link-local
+  targets (SSRF defense). When you configure `ezproxy_host`, PDF fetches
+  rewritten through *that exact host* are permitted to resolve to a
+  private/campus IP, since institutional proxies often live on internal
+  networks. This is the only place the guard is relaxed, it is opt-in, and it
+  applies solely to the explicitly-configured proxy host — every other URL and
+  redirect target keeps full private-IP rejection.

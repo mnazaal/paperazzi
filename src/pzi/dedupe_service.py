@@ -5,12 +5,12 @@ from __future__ import annotations
 from typing import Any, TypeAlias
 
 from pzi.bib_repository import (
-    _read_bib_file_raw,
+    merge_bib_entries,
     merge_entries,
+    read_bib_file_raw,
     with_bib_lock,
-    write_bib_file,
 )
-from pzi.bibtex import NormalizedRecord, record_to_bibtex_entry
+from pzi.bibtex import NormalizedRecord
 from pzi.similarity import (
     build_identity_index,
     compute_similarity_hint,
@@ -36,7 +36,7 @@ def find_duplicates(
         ``fuzzy_candidates`` (list of citekey + hint dicts), and counts.
     """
     with with_bib_lock(bib_path, shared=True):
-        raw = _read_bib_file_raw(bib_path)
+        raw = read_bib_file_raw(bib_path)
     records: list[NormalizedRecord] = raw["records"]
 
     if not records:
@@ -103,6 +103,7 @@ def merge_duplicates(
     citekey_a: str,
     citekey_b: str,
     dry_run: bool = True,
+    file_path_style: str = "absolute",
 ) -> MergeResult:
     """Merge two entries in a BibTeX library by citekey.
 
@@ -123,7 +124,7 @@ def merge_duplicates(
         }
 
     with with_bib_lock(bib_path, shared=True):
-        raw = _read_bib_file_raw(bib_path)
+        raw = read_bib_file_raw(bib_path)
     entries = raw["entries"]
     records = raw["records"]
 
@@ -170,45 +171,19 @@ def merge_duplicates(
             },
         }
 
-    # Execute: re-read, merge, delete a, update b
-    with with_bib_lock(bib_path):  # exclusive
-        fresh_raw = _read_bib_file_raw(bib_path)
-        fresh_entries = fresh_raw["entries"]
-        fresh_records = fresh_raw["records"]
-
-        idx_a_fresh = next(
-            (i for i, e in enumerate(fresh_entries) if e["citekey"] == citekey_a),
-            None,
-        )
-        idx_b_fresh = next(
-            (i for i, e in enumerate(fresh_entries) if e["citekey"] == citekey_b),
-            None,
-        )
-        if idx_a_fresh is None or idx_b_fresh is None:
-            return {
-                "status": "error", "citekey_a": citekey_a, "citekey_b": citekey_b,
-                "message": "entry disappeared between reads", "dry_run": dry_run,
-            }
-
-        # Merge on fresh records
-        decision = merge_entries(
-            existing=dict(fresh_records[idx_b_fresh]),
-            incoming=dict(fresh_records[idx_a_fresh]),
-        )
-        merged = decision["merged"]
-
-        # Convert merged record to BibTeX entry
-        entry_b_merged = record_to_bibtex_entry(
-            merged,
-            entry_type=fresh_entries[idx_b_fresh].get("entry_type", "article"),
-        )
-
-        # Build new entry list: drop a, replace b with merged
-        updated = [e for i, e in enumerate(fresh_entries) if i != idx_a_fresh]
-        b_pos = idx_b_fresh if idx_a_fresh > idx_b_fresh else idx_b_fresh - 1
-        updated[b_pos] = entry_b_merged
-
-        write_bib_file(bib_path, updated)
+    # Execute: merge A into B atomically under one lock, preserving comments,
+    # @string/@preamble macros, and every other entry's source.
+    merge_result = merge_bib_entries(
+        bib_path,
+        citekey_a=citekey_a,
+        citekey_b=citekey_b,
+        file_path_style=file_path_style,
+    )
+    if not merge_result["found"]:
+        return {
+            "status": "error", "citekey_a": citekey_a, "citekey_b": citekey_b,
+            "message": "entry disappeared between reads", "dry_run": dry_run,
+        }
 
     return {
         "status": "ok",

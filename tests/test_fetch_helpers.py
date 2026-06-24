@@ -21,12 +21,13 @@ class _FakeResponse:
 def test_fetch_binary_sends_browser_friendly_pdf_headers(monkeypatch) -> None:
     seen = {}
 
-    def fake_urlopen(request, *, timeout):
+    def fake_urlopen(request, *, timeout, allow_host=None):
         seen["headers"] = dict(request.header_items())
         seen["timeout"] = timeout
+        seen["allow_host"] = allow_host
         return _FakeResponse()
 
-    monkeypatch.setattr(fetch_helpers, "urlopen", fake_urlopen)
+    monkeypatch.setattr(fetch_helpers, "safe_urlopen", fake_urlopen)
 
     data, content_type = fetch_helpers.fetch_binary("https://example.com/paper.pdf")
 
@@ -52,7 +53,7 @@ class _LargeResponse:
 
 
 def test_fetch_binary_rejects_response_over_max_bytes(monkeypatch) -> None:
-    monkeypatch.setattr(fetch_helpers, "urlopen", lambda *_args, **_kwargs: _LargeResponse())
+    monkeypatch.setattr(fetch_helpers, "safe_urlopen", lambda *_args, **_kwargs: _LargeResponse())
 
     try:
         fetch_helpers.fetch_binary("https://example.com/huge.pdf", max_bytes=10)
@@ -62,7 +63,7 @@ def test_fetch_binary_rejects_response_over_max_bytes(monkeypatch) -> None:
 
 
 def test_fetch_text_rejects_response_over_max_bytes(monkeypatch) -> None:
-    monkeypatch.setattr(fetch_helpers, "urlopen", lambda *_args, **_kwargs: _LargeResponse())
+    monkeypatch.setattr(fetch_helpers, "safe_urlopen", lambda *_args, **_kwargs: _LargeResponse())
 
     try:
         fetch_helpers.fetch_text("https://example.com/huge", max_bytes=10)

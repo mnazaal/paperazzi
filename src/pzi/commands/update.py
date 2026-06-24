@@ -1,11 +1,15 @@
-"""Metadata update CLI command runner."""
+"""Metadata update CLI command runner (with optional preprint promotion)."""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from typing import Any, TextIO
 
-from pzi.cli_render import _error_lines, _render_bib_update_items
+from pzi.cli_render import (
+    _error_lines,
+    _render_bib_promote_items,
+    _render_bib_update_items,
+)
 from pzi.commands.common import (
     print_lines,
     print_metadata_diagnostics,
@@ -13,10 +17,11 @@ from pzi.commands.common import (
     print_result_item_diffs,
     target_list,
 )
+from pzi.promote_service import promote_bib
 from pzi.update_service import update_bib
 
 Result = Mapping[str, Any]
-UpdateService = Callable[..., Result]
+Service = Callable[..., Result]
 
 
 def run_update_command(
@@ -26,19 +31,44 @@ def run_update_command(
     config_path: str,
     stdout: TextIO,
     stderr: TextIO,
-    update_bib_fn: UpdateService = update_bib,
+    update_bib_fn: Service = update_bib,
+    promote_bib_fn: Service = promote_bib,
 ) -> int:
-    """Run `pzi update` using injected service for thin-I/O testing."""
+    """Run `pzi update`, dispatching to promotion when --promote is given.
+
+    Without --promote, conservatively fills missing metadata.  With --promote,
+    replaces preprints with their published versions (keeping both by default,
+    or in place with --replace).
+    """
+    promote = getattr(args, "promote", False)
+    if getattr(args, "replace", False) and not promote:
+        print("error: --replace only applies with --promote", file=stderr)
+        return 2
+
     ok = True
     for target in target_list(args.target):
-        result = update_bib_fn(
-            config_path=config_path,
-            home_dir=home_dir,
-            bib_selector=target,
-            dry_run=args.dry_run,
-        )
+        if promote:
+            result = promote_bib_fn(
+                config_path=config_path,
+                home_dir=home_dir,
+                bib_selector=target,
+                dry_run=args.dry_run,
+                keep_preprint=not args.replace,
+            )
+            render = _render_bib_promote_items
+            failure = "promote failed"
+        else:
+            result = update_bib_fn(
+                config_path=config_path,
+                home_dir=home_dir,
+                bib_selector=target,
+                dry_run=args.dry_run,
+            )
+            render = _render_bib_update_items
+            failure = "update failed"
+
         if result["status"] == "ok":
-            print_lines(_render_bib_update_items(result), stdout)
+            print_lines(render(result), stdout)
             if args.dry_run:
                 print_result_item_diffs(result, stdout)
             print_metadata_warnings(result, stderr)
@@ -46,5 +76,5 @@ def run_update_command(
                 print_metadata_diagnostics(result, stdout)
         else:
             ok = False
-            print_lines(_error_lines("update failed", result["errors"]), stderr)
+            print_lines(_error_lines(failure, result["errors"]), stderr)
     return 0 if ok else 1

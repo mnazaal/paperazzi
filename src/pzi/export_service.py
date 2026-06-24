@@ -7,7 +7,7 @@ import io
 import json as _json
 from typing import Any, TypeAlias
 
-from pzi.bib_repository import _read_bib_file_raw, serialize_bibtex, with_bib_lock
+from pzi.bib_repository import read_bib_file_raw, serialize_bibtex, with_bib_lock
 
 ExportResult: TypeAlias = dict[str, Any]
 
@@ -29,7 +29,7 @@ _BIBTEX_TO_RIS_TYPE: dict[str, str] = {
 # RIS field tag mapping
 _RIS_FIELDS: list[tuple[str, str]] = [
     # (normalized_record_key, ris_tag)
-    ("title", "TI"),
+    # title (TI) is emitted explicitly before this loop, so it is not listed here.
     ("venue", "T2"),  # journal/booktitle → secondary title
     ("doi", "DO"),
     ("canonical_url", "UR"),
@@ -67,7 +67,7 @@ def _normalize_tags(tags: object) -> str:
 def export_bibtex(bib_path: str) -> ExportResult:
     """Export a BibTeX library as formatted BibTeX text string."""
     with with_bib_lock(bib_path, shared=True):
-        raw = _read_bib_file_raw(bib_path)
+        raw = read_bib_file_raw(bib_path)
     entries = raw["entries"]
     bibtex_str = serialize_bibtex(entries)
     return {
@@ -84,7 +84,7 @@ def export_bibtex(bib_path: str) -> ExportResult:
 def export_json(bib_path: str) -> ExportResult:
     """Export a BibTeX library as formatted JSON string."""
     with with_bib_lock(bib_path, shared=True):
-        raw = _read_bib_file_raw(bib_path)
+        raw = read_bib_file_raw(bib_path)
     records = raw["records"]
     # Include entry_type from corresponding entry
     entries = raw["entries"]
@@ -109,7 +109,7 @@ def export_json(bib_path: str) -> ExportResult:
 def export_csv(bib_path: str) -> ExportResult:
     """Export a BibTeX library as CSV string."""
     with with_bib_lock(bib_path, shared=True):
-        raw = _read_bib_file_raw(bib_path)
+        raw = read_bib_file_raw(bib_path)
     records = raw["records"]
     entries = raw["entries"]
 
@@ -150,7 +150,7 @@ def export_csv(bib_path: str) -> ExportResult:
 def export_ris(bib_path: str) -> ExportResult:
     """Export a BibTeX library as RIS formatted text string."""
     with with_bib_lock(bib_path, shared=True):
-        raw = _read_bib_file_raw(bib_path)
+        raw = read_bib_file_raw(bib_path)
     records = raw["records"]
     entries = raw["entries"]
 

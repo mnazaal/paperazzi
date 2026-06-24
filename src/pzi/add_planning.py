@@ -198,8 +198,9 @@ def attach_similarity_hint(
     *,
     exact_match_fn=find_exact_match,
     similarity_hint_fn=compute_similarity_hint,
+    index: dict | None = None,
 ) -> NormalizedRecord:
-    if exact_match_fn(record, existing_records) is not None:
+    if exact_match_fn(record, existing_records, index=index) is not None:
         return record
 
     incoming_citekey = record.get("citekey")
@@ -313,10 +314,10 @@ def fetch_record_for_input(
         )
 
     if kind == "doi" and normalized is not None:
-        results = _safe_call(lambda: fetch_search(normalized, server_url=server_url))
+        results = safe_api_call(lambda: fetch_search(normalized, server_url=server_url))
         if results:
             selected = select_best_metadata_result(results, fallback)
-            best = dict(_merge_record_sources(fallback, selected["record"]))
+            best = dict(merge_record_sources(fallback, selected["record"]))
             return _with_pdf_discovery(
                 cast(NormalizedRecord, best), translation_attachments=selected.get("attachments")
             )
@@ -336,7 +337,7 @@ def fetch_record_for_input(
             s2_fn = fetch_s2 or (lambda d: fetch_semantic_scholar_record(d, api_key=s2_api_key))
             meta = s2_fn(normalized)
         if meta is not None:
-            best = dict(_merge_record_sources(fallback, meta))
+            best = dict(merge_record_sources(fallback, meta))
             return _with_pdf_discovery(cast(NormalizedRecord, best))
 
         from urllib.parse import urlsplit as _urlsplit
@@ -345,14 +346,14 @@ def fetch_record_for_input(
             raw_value if _urlsplit(raw_value).scheme in {"http", "https"} else None
         )
         if raw_as_url:
-            web_results = _safe_call(
+            web_results = safe_api_call(
                 lambda: fetch_web(raw_as_url, server_url=server_url)
                 if cookies is None
                 else fetch_web(raw_as_url, server_url=server_url, cookies=cookies)
             )
             if web_results:
                 best = dict(
-                    _merge_record_sources(fallback, web_results[0]["record"])
+                    merge_record_sources(fallback, web_results[0]["record"])
                 )
                 return _with_pdf_discovery(
                     cast(NormalizedRecord, best),
@@ -367,7 +368,7 @@ def fetch_record_for_input(
                 if html:  # pragma: no branch — covered by integration/browser tests
                     meta = extract_metadata_from_html(html)
                     if meta is not None:  # pragma: no branch — covered by integration/browser tests
-                        best = dict(_merge_record_sources(meta, fallback))
+                        best = dict(merge_record_sources(meta, fallback))
                         return _with_pdf_discovery(cast(NormalizedRecord, best))
 
         suffix = (
@@ -378,7 +379,7 @@ def fetch_record_for_input(
         raise ValueError(f"no metadata found for DOI: {normalized}{suffix}")
 
     if kind in {"url", "pdf_url"} and normalized is not None:
-        results = _safe_call(
+        results = safe_api_call(
             lambda: fetch_web(normalized, server_url=server_url)
             if cookies is None
             else fetch_web(normalized, server_url=server_url, cookies=cookies)
@@ -389,7 +390,7 @@ def fetch_record_for_input(
             best = _with_pdf_discovery(
                 cast(NormalizedRecord, best), translation_attachments=selected.get("attachments")
             )
-            return _merge_record_sources(fallback, best)
+            return merge_record_sources(fallback, best)
 
         if flaresolverr_url is not None:
             fn = fetch_flaresolverr or (
@@ -399,7 +400,7 @@ def fetch_record_for_input(
             if html:
                 meta = extract_metadata_from_html(html)
                 if meta is not None:
-                    best = dict(_merge_record_sources(meta, fallback))
+                    best = dict(merge_record_sources(meta, fallback))
                     return _with_pdf_discovery(cast(NormalizedRecord, best))
 
         raise ValueError(f"translation server returned no results for URL: {normalized}")
@@ -616,8 +617,3 @@ def merge_record_sources(
             merged[key] = value
     return cast(NormalizedRecord, merged)
 
-
-# Re-export aliases for test monkeypatching compatibility
-_safe_call = safe_api_call
-_merge_record_sources = merge_record_sources
-_fetch_record_for_input = fetch_record_for_input

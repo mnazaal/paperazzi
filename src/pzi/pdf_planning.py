@@ -21,6 +21,22 @@ def is_pdf_bytes(data: bytes) -> bool:
     return data.startswith(b"%PDF-")
 
 
+def pdf_file_present(path: object) -> bool:
+    """Return True when a stored ``local_pdf_path`` points at an existing file.
+
+    Expands a leading ``~`` so home-relative ``file`` fields resolve correctly,
+    and tolerates non-string / empty values.  This is the single source of truth
+    for "does this entry actually have its PDF on disk" used by entries, stats,
+    clean, and PDF-serving consumers.
+    """
+    if not isinstance(path, str) or not path.strip():
+        return False
+    try:
+        return Path(path).expanduser().is_file()
+    except OSError:
+        return False
+
+
 def plan_pdf_path(
     *,
     papers_dir: str,
@@ -69,10 +85,12 @@ def normalized_hostname(url: str) -> str | None:
 
 def needs_desktop_browser_fallback(url: str, *, hosts: set[str] | None = None) -> bool:
     """Return True for hosts where direct PDF download is often blocked."""
+    from pzi.config import DEFAULT_DESKTOP_FALLBACK_HOSTS
+
     hostname = normalized_hostname(url)
     if hostname is None:
         return False
-    return hostname in (hosts or {"biorxiv.org", "medrxiv.org"})
+    return hostname in (hosts or set(DEFAULT_DESKTOP_FALLBACK_HOSTS))
 
 
 def candidate_matches_requested_pdf_name(

@@ -2,10 +2,12 @@ import json
 from pathlib import Path
 
 from pzi.pdf import (
-    copy_pdf_to_papers_dir,
-    fetch_and_store_pdf,
     fetch_and_store_pdf_with_fallbacks,
     fetch_unpaywall_pdf_url,
+)
+from pzi.pdf_download import (
+    copy_pdf_to_papers_dir,
+    fetch_and_store_pdf,
     store_pdf_source,
 )
 from pzi.pdf_planning import is_pdf_bytes, is_pdf_content_type, plan_pdf_path, write_pdf_bytes

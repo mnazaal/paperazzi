@@ -1,8 +1,9 @@
-"""Pure POST route handlers for the HTTP API.
+"""POST route boundary for the HTTP API.
 
-All functions in this module are pure: they take request data as arguments
-and return (status_code, response_dict) tuples. No references to
-BaseHTTPRequestHandler or server sockets.
+This module keeps socket/server concerns out of request handling: functions take
+plain request data and return ``(status_code, response_dict)`` tuples. Parsing
+and planning helpers are pure; endpoint handlers are thin imperative shells
+around service calls and injected runtime adapters.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import binascii
 import secrets
 import time
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from typing import Any, cast
 from urllib.parse import urlsplit
 
@@ -22,6 +24,7 @@ from pzi.capture_models import AuthHints, CaptureInput, CaptureOptions, PageArti
 from pzi.config import load_and_resolve_bib, load_config_file
 from pzi.http_payloads import capture_payload, promote_payload, tag_change_payload, update_payload
 from pzi.http_security import DEFAULT_MAX_BODY_BYTES, safe_public_http_url
+from pzi.http_status import status_for_service_result
 from pzi.pdf_acquisition_plan import build_pdf_acquisition_plan
 from pzi.pdf_attach_session import build_attach_session, validate_attach_request
 from pzi.pdf_attach_session_store import AttachSessionStore
@@ -214,6 +217,27 @@ def pdf_url_candidates_from_body(
 # POST route handlers
 # ---------------------------------------------------------------------------
 
+JsonResponse = tuple[int, dict[str, Any]]
+PostHandler = Callable[[Any, "PostContext"], JsonResponse]
+
+
+@dataclass(frozen=True)
+class PostContext:
+    config_path: str
+    home_dir: str
+    browser_manager: object | None
+    attach_session_store: AttachSessionStore | None
+    request_id_factory: Callable[[], str]
+    token_factory: Callable[[], str]
+    now: Callable[[], float]
+    max_browser_pdf_bytes: int
+
+
+@dataclass(frozen=True)
+class PostRoute:
+    path: str
+    handler: PostHandler
+
 
 def process_post_request(
     path: str,
@@ -226,66 +250,108 @@ def process_post_request(
     request_id_factory: Callable[[], str] | None = None,
     token_factory: Callable[[], str] | None = None,
     time_factory: Callable[[], float] | None = None,
+    max_browser_pdf_bytes: int = MAX_BROWSER_PDF_BYTES,
 ) -> tuple[int, dict[str, Any]]:
-    """Pure: process a POST request body, returning (status, body_dict).
+    """Process a POST body without server/socket dependencies.
 
-    Testable without a server socket. Used by _handle_post.
+    Side effects happen only through service calls and injected adapters, making
+    route behavior testable as data in → ``(status, payload)`` out.
     """
+    now = time_factory or time.time
+    context = PostContext(
+        config_path=config_path,
+        home_dir=home_dir,
+        browser_manager=browser_manager,
+        attach_session_store=attach_session_store,
+        request_id_factory=request_id_factory or _new_request_id,
+        token_factory=token_factory or _new_attach_token,
+        now=now,
+        max_browser_pdf_bytes=max_browser_pdf_bytes,
+    )
     parsed = urlsplit(path)
     p = parsed.path
-    now = time_factory or time.time
 
-    if p == "/capture":
-        return _handle_capture_post(
-            body,
-            config_path,
-            home_dir,
-            attach_session_store=attach_session_store,
-            request_id_factory=request_id_factory or _new_request_id,
-            token_factory=token_factory or _new_attach_token,
-            now=now,
-        )
-
-    if p == "/attach-pdf-bytes":
-        return _handle_attach_pdf_post(
-            body,
-            config_path,
-            home_dir,
-            attach_session_store=attach_session_store,
-            now=now,
-        )
-
-    if p == "/attach-pdf-raw":
-        return _handle_attach_pdf_raw_post(
-            body,
-            config_path,
-            home_dir,
-            attach_session_store=attach_session_store,
-            now=now,
-        )
-
-    if p == "/tags/add":
-        return _handle_tags_add_post(body, config_path, home_dir)
-
-    if p == "/tags/remove":
-        return _handle_tags_remove_post(body, config_path, home_dir)
-
-    if p == "/update":
-        return _handle_update_post(body, config_path, home_dir)
-
-    if p == "/promote":
-        return _handle_promote_post(body, config_path, home_dir)
-
-    if p == "/browser/discover":
-        return _handle_browser_discover_post(body, browser_manager)
-
-    if p == "/browser/download":
-        return _handle_browser_download_post(body, browser_manager)
-
-    if p == "/delete":
-        return _handle_delete_post(body, config_path, home_dir)
+    for route in POST_ROUTES:
+        if p == route.path:
+            return route.handler(body, context)
 
     return 404, {"error": "not found"}
+
+
+def _route_capture(body: Any, context: PostContext) -> JsonResponse:
+    return _handle_capture_post(
+        body,
+        context.config_path,
+        context.home_dir,
+        attach_session_store=context.attach_session_store,
+        request_id_factory=context.request_id_factory,
+        token_factory=context.token_factory,
+        now=context.now,
+    )
+
+
+def _route_attach_pdf_bytes(body: Any, context: PostContext) -> JsonResponse:
+    return _handle_attach_pdf_post(
+        body,
+        context.config_path,
+        context.home_dir,
+        attach_session_store=context.attach_session_store,
+        now=context.now,
+    )
+
+
+def _route_attach_pdf_raw(body: Any, context: PostContext) -> JsonResponse:
+    return _handle_attach_pdf_raw_post(
+        body,
+        context.config_path,
+        context.home_dir,
+        attach_session_store=context.attach_session_store,
+        now=context.now,
+    )
+
+
+def _route_tags_add(body: Any, context: PostContext) -> JsonResponse:
+    return _handle_tags_add_post(body, context.config_path, context.home_dir)
+
+
+def _route_tags_remove(body: Any, context: PostContext) -> JsonResponse:
+    return _handle_tags_remove_post(body, context.config_path, context.home_dir)
+
+
+def _route_update(body: Any, context: PostContext) -> JsonResponse:
+    return _handle_update_post(body, context.config_path, context.home_dir)
+
+
+def _route_promote(body: Any, context: PostContext) -> JsonResponse:
+    return _handle_promote_post(body, context.config_path, context.home_dir)
+
+
+def _route_browser_discover(body: Any, context: PostContext) -> JsonResponse:
+    return _handle_browser_discover_post(body, context.browser_manager)
+
+
+def _route_browser_download(body: Any, context: PostContext) -> JsonResponse:
+    return _handle_browser_download_post(
+        body, context.browser_manager, max_pdf_bytes=context.max_browser_pdf_bytes
+    )
+
+
+def _route_delete(body: Any, context: PostContext) -> JsonResponse:
+    return _handle_delete_post(body, context.config_path, context.home_dir)
+
+
+POST_ROUTES: tuple[PostRoute, ...] = (
+    PostRoute("/capture", _route_capture),
+    PostRoute("/attach-pdf-bytes", _route_attach_pdf_bytes),
+    PostRoute("/attach-pdf-raw", _route_attach_pdf_raw),
+    PostRoute("/tags/add", _route_tags_add),
+    PostRoute("/tags/remove", _route_tags_remove),
+    PostRoute("/update", _route_update),
+    PostRoute("/promote", _route_promote),
+    PostRoute("/browser/discover", _route_browser_discover),
+    PostRoute("/browser/download", _route_browser_download),
+    PostRoute("/delete", _route_delete),
+)
 
 
 def _handle_browser_discover_post(
@@ -302,16 +368,17 @@ def _handle_browser_discover_post(
     if not safe_public_http_url(normalized_page_url):
         return 400, {"error": "page_url must be a public http(s) URL"}
     doi = body.get("doi") if isinstance(body.get("doi"), str) else None
-    from pzi.browser_session_manager import BrowserSessionManager
-    assert isinstance(browser_manager, BrowserSessionManager)
-    pdf_url = browser_manager.discover_pdf_url(normalized_page_url, doi=doi)
+    discover = getattr(browser_manager, "discover_pdf_url", None)
+    if not callable(discover):
+        return 503, {"error": "browser session not available"}
+    pdf_url = discover(normalized_page_url, doi=doi)
     if pdf_url:
         return 200, {"pdf_url": pdf_url}
     return 200, {"pdf_url": None}
 
 
 def _handle_browser_download_post(
-    body: Any, browser_manager: object | None,
+    body: Any, browser_manager: object | None, *, max_pdf_bytes: int = MAX_BROWSER_PDF_BYTES,
 ) -> tuple[int, dict[str, Any]]:
     if not isinstance(body, dict):
         return 400, {"error": "body must be a JSON object"}
@@ -323,10 +390,13 @@ def _handle_browser_download_post(
     normalized_pdf_url = pdf_url.strip()
     if not safe_public_http_url(normalized_pdf_url):
         return 400, {"error": "pdf_url must be a public http(s) URL"}
-    from pzi.browser_session_manager import BrowserSessionManager
-    assert isinstance(browser_manager, BrowserSessionManager)
-    pdf_bytes = browser_manager.download_pdf_bytes(normalized_pdf_url)
+    download = getattr(browser_manager, "download_pdf_bytes", None)
+    if not callable(download):
+        return 503, {"error": "browser session not available"}
+    pdf_bytes = cast("bytes | None", download(normalized_pdf_url))
     if pdf_bytes:
+        if len(pdf_bytes) > max(0, max_pdf_bytes):
+            return 413, {"error": "PDF too large"}
         return 200, {"pdf_base64": base64.b64encode(pdf_bytes).decode()}
     return 200, {"pdf_base64": None}
 
@@ -340,7 +410,11 @@ def _handle_delete_post(
     if not isinstance(citekey, str) or not citekey.strip():
         return 400, {"error": "citekey required"}
     bib_selector = body.get("bib") if isinstance(body.get("bib"), str) else None
-    dry_run = bool(body.get("dry_run", False))
+    force = body.get("force") is True
+    raw_dry_run = body.get("dry_run")
+    if raw_dry_run is False and not force:
+        return 400, {"error": "force=true required for destructive delete"}
+    dry_run = False if force else bool(body.get("dry_run", True))
 
     resolved = load_and_resolve_bib(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector,
@@ -354,7 +428,7 @@ def _handle_delete_post(
         citekey=citekey.strip(),
         dry_run=dry_run,
     )
-    status = 200 if result["status"] == "ok" else 404
+    status = status_for_service_result(result)
     return status, result
 
 
@@ -416,7 +490,7 @@ def _handle_capture_post(
             token_factory=token_factory,
             now=now,
         )
-    status = 200 if result["status"] == "ok" else 400
+    status = status_for_service_result(cast(dict[str, Any], result))
     return status, capture_payload(
         cast(dict[str, Any], result), include_diagnostics=bool(body.get("verbose", False))
     )
@@ -531,7 +605,7 @@ def _handle_attach_pdf_post(
         pdf_base64=pdf_base64,
         source_url=source_url,
     )
-    status = 200 if result["status"] == "ok" else 400
+    status = status_for_service_result(result)
     if status == 200 and request_id is not None and attach_session_store is not None:
         attach_session_store.consume(request_id)
     return status, result
@@ -585,7 +659,7 @@ def _handle_attach_pdf_raw_post(
         pdf_bytes=pdf_bytes,
         source_url=source_url,
     )
-    status = 200 if result["status"] == "ok" else 400
+    status = status_for_service_result(result)
     if status == 200 and request_id is not None and attach_session_store is not None:
         attach_session_store.consume(request_id)
     return status, result
@@ -610,7 +684,7 @@ def _handle_tags_add_post(
         tags=tags,
         dry_run=bool(body.get("dry_run", False)),
     )
-    status = 200 if result["status"] == "ok" else 400
+    status = status_for_service_result(result)
     return status, tag_change_payload(result)
 
 
@@ -633,7 +707,7 @@ def _handle_tags_remove_post(
         tags=tags,
         dry_run=bool(body.get("dry_run", False)),
     )
-    status = 200 if result["status"] == "ok" else 400
+    status = status_for_service_result(result)
     return status, tag_change_payload(result)
 
 
@@ -648,7 +722,7 @@ def _handle_update_post(
         bib_selector=body.get("bib") if isinstance(body.get("bib"), str) else None,
         dry_run=bool(body.get("dry_run", True)),
     )
-    status = 200 if result["status"] == "ok" else 400
+    status = status_for_service_result(result)
     return status, update_payload(
         result, include_diagnostics=bool(body.get("verbose", False))
     )
@@ -666,7 +740,7 @@ def _handle_promote_post(
         keep_preprint=not bool(body.get("replace", False)),
         dry_run=bool(body.get("dry_run", True)),
     )
-    status = 200 if result["status"] == "ok" else 400
+    status = status_for_service_result(result)
     return status, promote_payload(
         result, include_diagnostics=bool(body.get("verbose", False))
     )

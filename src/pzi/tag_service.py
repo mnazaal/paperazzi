@@ -7,11 +7,9 @@ import unicodedata
 from typing import Any, Literal, TypeAlias, cast
 
 from pzi.bib_repository import (
-    _find_entry_index,
-    _read_bib_file_raw,
+    find_entry_index,
     read_bib_file,
-    with_bib_lock,
-    write_bib_file,
+    update_bib_entry,
 )
 from pzi.bibtex import NormalizedRecord, record_to_bibtex_entry
 from pzi.config import load_and_resolve_bib
@@ -173,11 +171,11 @@ def _mutate_entry_tags(
             "message": "could not resolve target bib",
             "errors": resolved,
         }
-    _config, bib = resolved
+    config, bib = resolved
     read_result = read_bib_file(bib["path"])
     entries = list(read_result["entries"])
 
-    match_index = _find_entry_index(entries, citekey)
+    match_index = find_entry_index(entries, citekey)
     if match_index is None:
         return {
             "status": "error",
@@ -229,30 +227,32 @@ def _mutate_entry_tags(
 
     updated_record = cast(NormalizedRecord, dict(current_record))
     updated_record["tags"] = merged_sorted
-    new_entry = record_to_bibtex_entry(
-        updated_record, entry_type=entries[match_index]["entry_type"]
-    )
 
     if not dry_run:
-        with with_bib_lock(bib["path"]):
-            current_entries = _read_bib_file_raw(bib["path"])["entries"]
-            current_index = _find_entry_index(current_entries, citekey)
-            if current_index is None:
-                return {  # pragma: no cover — covered by integration/browser tests
-                    "status": "error",
-                    "bib_name": bib["name"],
-                    "citekey": citekey,
-                    "tags": [],
-                    "changed": False,
-                    "dry_run": dry_run,
-                    "message": "citekey not found",
-                    "errors": [f"citekey not found: {citekey}"],
-                }
-            current_entries[current_index] = new_entry
-            write_bib_file(bib["path"], current_entries)
+        file_path_style = config.get("pdf_file_path_style", "absolute")
 
-    verb = "added" if mode == "add" else "removed"
-    prefix = "would " if dry_run else ""
+        def _updater(entry, _record):
+            return record_to_bibtex_entry(updated_record, entry_type=entry["entry_type"])
+
+        update_result = update_bib_entry(
+            bib["path"], citekey, _updater, file_path_style=file_path_style
+        )
+        if not update_result["found"]:
+            return {  # pragma: no cover — covered by integration/browser tests
+                "status": "error",
+                "bib_name": bib["name"],
+                "citekey": citekey,
+                "tags": [],
+                "changed": False,
+                "dry_run": dry_run,
+                "message": "citekey not found",
+                "errors": [f"citekey not found: {citekey}"],
+            }
+
+    if dry_run:
+        message = f"would {'add' if mode == 'add' else 'remove'} tags"
+    else:
+        message = f"{'added' if mode == 'add' else 'removed'} tags"
     return {
         "status": "ok",
         "bib_name": bib["name"],
@@ -260,6 +260,6 @@ def _mutate_entry_tags(
         "tags": merged_sorted,
         "changed": True,
         "dry_run": dry_run,
-        "message": f"{prefix}{verb} tags",
+        "message": message,
         "errors": [],
     }

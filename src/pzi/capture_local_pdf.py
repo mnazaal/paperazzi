@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, TypeAlias, cast
 
 from pzi import add_planning as _add_planning
-from pzi.add_planning import _fetch_record_for_input, _merge_record_sources
+from pzi.add_planning import fetch_record_for_input, merge_record_sources
 from pzi.bib_repository import read_bib_file, serialize_bibtex
 from pzi.bibtex import BibtexEntry, NormalizedRecord, bibtex_entry_to_record
 from pzi.config import BibConfig
@@ -31,7 +31,7 @@ def local_pdf_base_record(
     raw_value: str,
     extracted: Mapping[str, object],
     server_url: str,
-    fetch_record: FetchRecord = _fetch_record_for_input,
+    fetch_record: FetchRecord = fetch_record_for_input,
     fetch_search: FetchSearch,
     fetch_web=fetch_web_translations,
     fetch_crossref=None,
@@ -145,7 +145,7 @@ def add_local_pdf(
         flaresolverr_url=flaresolverr_url,
         browser_pdf_cmd=browser_pdf_cmd,
     )
-    merged = _merge_record_sources(base_record, record_overrides)
+    merged = merge_record_sources(base_record, record_overrides)
     record_with_ck = ensure_citekey(
         merged,
         existing_records,

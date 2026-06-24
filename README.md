@@ -62,6 +62,16 @@ pzi add ~/Downloads/paper.pdf
 
 Entries are written to `~/bibs/main.bib`; PDFs are saved to `~/bibs/papers/` when fetchable.
 
+Capture many at once from a file of DOIs/URLs (one per line, `#` comments allowed):
+
+```sh
+pzi add --from-file urls.txt --tags ml      # or: cat urls.txt | pzi add --from-file -
+```
+
+Bulk capture runs sequentially with a polite delay (`--delay`), reuses one
+translation-server, prints per-item progress, and writes any failures to
+`<input>.failed.txt` so you can re-run just those: `pzi add --from-file urls.failed.txt`.
+
 ### 4. Optional: capture from the browser
 
 Use this for authenticated publisher pages, browser-only PDF links, or one-click capture.
@@ -80,20 +90,20 @@ In onboarding, keep the default endpoint (`http://127.0.0.1:8765/capture`), set 
 
 ---
 
-## `pzi server` vs `pzi add` vs `pzi services`
+## `pzi server` vs `pzi add` vs `pzi doctor`
 
 The translation-server is never a detached daemon you manage by hand. It runs as
 a **child** of whichever foreground command needs it, and dies when that command
 exits — so there is nothing to "stop" and no PID files.
 
-| | `pzi server` | `pzi add` | `pzi services` |
+| | `pzi server` | `pzi add` | `pzi doctor` |
 |---|---|---|---|
 | Purpose | HTTP API for browser capture | Single paper capture | Inspect / reinstall the backend |
 | For | Browser extension users | CLI one-shot capture | Maintenance |
 | Backend lifetime | Runs as a child for the server's lifetime | Reuses a running backend, else a short-lived child | n/a |
-| Command | `pzi server [--stop-after N]` | `pzi add <value>` | `pzi services status` / `update` |
+| Command | `pzi server [--stop-after N]` | `pzi add <value>` | `pzi doctor` / `pzi doctor --reinstall-server` |
 
-Use `pzi server` for the browser extension and `pzi add` for CLI capture; both start the translation-server as needed. `--stop-after N` exits the server after N idle minutes. Stop it with Ctrl-C or `kill`.
+Use `pzi server` for the browser extension and `pzi add` for CLI capture; both start the translation-server as needed. `--stop-after N` exits the server after N idle minutes. Stop it with Ctrl-C or `kill`. `pzi doctor` reports backend health; `pzi doctor --reinstall-server` reinstalls the translation-server.
 
 ## Reference
 
@@ -107,42 +117,40 @@ Shared flags: most library commands accept `[--target <name|path>]`; read comman
 
 ```sh
 pzi init [--force] [--setup --bib PATH] [--papers-dir PATH]
-pzi services status|update                 # inspect or reinstall the translation-server
 pzi add <doi|url|pdf> [--tags t1,t2] [--dry-run]
+pzi add --from-file <file|-> [--tags t1,t2] [--delay S] [--failures-out PATH]  # bulk
 pzi pdf retry <citekey>
 pzi pdf attach <citekey> <url-or-path>
 pzi tag add|remove <citekey> <tag...>
 pzi tag list [citekey]
 pzi search [--query <text>] [--author <name>] [--year <int>] [--tag <tag>]
-pzi update [--dry-run]
-pzi promote [--dry-run] [--replace]
-pzi list
-pzi set-default <name|path>
+pzi update [--dry-run]                        # fill missing metadata
+pzi update --promote [--dry-run] [--replace]  # replace preprints with published versions
 pzi entries [--offset N] [--limit N] [--sort citekey|title|year|author]
-pzi detail <citekey>
+pzi entries <citekey>                         # show the full record for one entry
+pzi entries --stats                           # library statistics
 pzi delete <citekey> [--dry-run] [--force]
-pzi doctor                                # health check (config + translation-server)
-pzi bib-stats
-pzi clean [--dry-run] [--fix]
-pzi dedupe
-pzi merge <citekey_a> <citekey_b> [--dry-run]
+pzi fix clean [--dry-run] [--fix]            # check integrity; --fix relocates orphan PDFs
+pzi fix dedupe
+pzi fix merge <citekey_a> <citekey_b> [--dry-run]
+pzi fix reindex [--rename-citekeys [--dry-run]]  # audit citekeys; rename only on explicit opt-in
 pzi export [--format bibtex|csv|json|ris] [-o <output>]
 pzi import <source.bib> [--dry-run] [--force-new]
-pzi reindex [--dry-run] [--force]
-pzi config validate [--config <path>]     # validate configuration file
-pzi version                               # show installed pzi version
+pzi doctor [--config-only] [--reinstall-server]  # health check; --reinstall-server reinstalls the translation-server
 pzi server [--host H --port P] [--stop-after N]
 ```
 
-Without `--target`, commands operate on the configured default library. `--target` may be a configured library name, configured bib path, or direct `.bib` path. Direct `.bib` targets use `<bib-dir>/papers/` for PDFs. Multiple targets are supported only for `search`, `update`, and `promote` with a single flag: `--target a.bib b.bib`.
+Configured libraries live in your config file (`[[bibs]]` blocks). Choose the default by setting `default = true` on one of them, and inspect them with `pzi doctor`. Use `pzi --version` to print the installed version.
 
-Read/query commands (`search`, `entries`, `bib-stats`, `tag list`, `clean`, `dedupe`, `list`, `detail`) accept `--json` for machine-readable output.
+Without `--target`, commands operate on the configured default library. `--target` may be a configured library name, configured bib path, or direct `.bib` path. Direct `.bib` targets use `<bib-dir>/papers/` for PDFs. Multiple targets are supported only for `search` and `update` (including `update --promote`) with a single flag: `--target a.bib b.bib`.
+
+Read/query commands (`search`, `entries`, `entries <citekey>`, `entries --stats`, `tag list`, `fix clean`, `fix dedupe`) accept `--json` for machine-readable output.
 
 For external `.bib` files managed by Zotero, Paperpile, LaTeX projects, or hand edits, use `--dry-run` first and keep a backup or Git history. pzi rewrites entries it touches; known source-preservation limitations:
 
 - Malformed BibTeX (unbalanced braces, unterminated strings) is rejected and must be fixed manually
-- Entries with non-standard whitespace or unusual field layouts may be re-serialized on update
-- Comments and `@preamble` blocks between entries are preserved on insert/update, but not on delete
+- Entries with non-standard whitespace or unusual field layouts may be re-serialized when touched
+- Comments, `@string` macros, and `@preamble` blocks are preserved across insert, update, tag, delete, merge, and reindex (which keeps entry order); `fix clean --fix` never rewrites the `.bib` (it only relocates orphan PDFs)
 - BibTeX `@string` macros are kept as-is but not expanded or validated
 
 ### External services and rate limits
@@ -158,14 +166,14 @@ For external `.bib` files managed by Zotero, Paperpile, LaTeX projects, or hand 
 | Playwright browser hook | JS/authenticated PDF discovery | no API key; configured by `browser_pdf_cmd` |
 | FlareSolverr | Cloudflare fallback | no key; explicit opt-in via `flaresolverr_url` |
 
-Provider failures and rate limits are non-fatal. `promote` reports skip reasons and summary counters so “nothing promoted” is explainable: no candidate, low confidence, already exists, or provider errors. Use `pzi promote --dry-run` before writing.
+Provider failures and rate limits are non-fatal. `update --promote` reports skip reasons and summary counters so “nothing promoted” is explainable: no candidate, low confidence, already exists, or provider errors. Use `pzi update --promote --dry-run` before writing.
 
 ### Citekeys and promotion
 
 pzi treats citekeys as stable external handles and never renames existing keys automatically.
 
 - Same paper as an existing entry → reuse the existing citekey.
-- New paper with an occupied citekey → add a numeric suffix (`smith2024graph2`).
+- New paper with an occupied citekey → add a numeric suffix (`smith2024graph-2`).
 - Promotion keeps the preprint key by default; `--replace` updates in place.
 
 ### HTTP API

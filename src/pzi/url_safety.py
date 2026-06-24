@@ -22,8 +22,14 @@ def safe_public_http_url(
     *,
     dns_timeout: float = DEFAULT_DNS_LOOKUP_TIMEOUT_SECONDS,
     resolve_host: Callable[..., list[ResolvedAddress] | None] | None = None,
+    allow_host: str | None = None,
 ) -> bool:
-    """Return True for public http(s) URL; reject localhost/private DNS/IPs."""
+    """Return True for public http(s) URL; reject localhost/private DNS/IPs.
+
+    ``allow_host`` names a single explicitly-trusted host (e.g. a configured
+    EZProxy host) whose private/campus IP is permitted.  It still must be an
+    http(s) URL and is never allowed to be a bare localhost name.
+    """
     try:
         parts = urlsplit(value.strip())
     except ValueError:
@@ -34,6 +40,8 @@ def safe_public_http_url(
     host = parts.hostname.strip().lower().rstrip(".")
     if _local_host_name(host):
         return False
+    if allow_host and host == allow_host.strip().lower().rstrip("."):
+        return True
 
     try:
         return public_ip_address(str(ipaddress.ip_address(host)))

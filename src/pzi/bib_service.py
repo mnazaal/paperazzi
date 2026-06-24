@@ -2,30 +2,27 @@
 
 from __future__ import annotations
 
-import os
 import shutil
 from pathlib import Path
-from typing import Any, TypeAlias, cast
+from typing import Any, TypeAlias
 
 from pzi.bib_repository import (
-    _find_entry_index,
-    _parse_bib_library,
-    _read_bib_file_raw,
-    _read_bib_source,
-    _validate_library_parseable,
+    delete_bib_entry,
+    find_entry_index,
+    parse_bib_library,
+    read_bib_file_raw,
+    read_bib_source,
+    validate_library_parseable,
     with_bib_lock,
-    write_bib_file,
 )
-from pzi.config import AppConfig, BibConfig, dump_app_config, load_and_resolve_bib, load_config_file
+from pzi.config import load_and_resolve_bib, load_config_file
+from pzi.pdf_planning import pdf_file_present
 from pzi.promote_service import is_preprint
 
 BibInfo: TypeAlias = dict[str, Any]
 
 
 BibListResult: TypeAlias = dict[str, Any]
-
-
-SetDefaultBibResult: TypeAlias = dict[str, Any]
 
 
 def list_bibs(*, config_path: str, home_dir: str) -> BibListResult:
@@ -48,41 +45,6 @@ def list_bibs(*, config_path: str, home_dir: str) -> BibListResult:
     }
 
 
-def set_default_bib(
-    *, config_path: str, home_dir: str, name: str
-) -> SetDefaultBibResult:
-    config_result = load_config_file(config_path, home_dir=home_dir)
-    if config_result["config"] is None:
-        return {
-            "status": "error",
-            "name": name,
-            "message": "failed to load config",
-            "errors": config_result["errors"],
-        }
-    config = config_result["config"]
-    target = next((bib for bib in config["bibs"] if bib["name"] == name), None)
-    if target is None:
-        return {
-            "status": "error",
-            "name": name,
-            "message": "bib not found",
-            "errors": [f"no bib named {name}"],
-        }
-
-    updated_bibs = cast(
-        list[BibConfig],
-        [{**bib, "default": bib["name"] == name} for bib in config["bibs"]],
-    )
-    new_config = cast(AppConfig, {**dict(config), "bibs": updated_bibs})
-    Path(config_path).write_text(dump_app_config(new_config), encoding="utf-8")
-    return {
-        "status": "ok",
-        "name": name,
-        "message": f"set default bib to {name}",
-        "errors": [],
-    }
-
-
 BibStatsResult: TypeAlias = dict[str, Any]
 
 
@@ -92,7 +54,7 @@ DeleteEntryResult: TypeAlias = dict[str, Any]
 def bib_stats(*, bib_path: str, papers_dir: str) -> BibStatsResult:
     """Return statistics for a BibTeX library."""
     with with_bib_lock(bib_path, shared=True):
-        read_result = _read_bib_file_raw(bib_path)
+        read_result = read_bib_file_raw(bib_path)
     entries = read_result["entries"]
     records = read_result["records"]
 
@@ -108,10 +70,8 @@ def bib_stats(*, bib_path: str, papers_dir: str) -> BibStatsResult:
         type_counts[etype] = type_counts.get(etype, 0) + 1
 
     for record in records:
-        if record.get("local_pdf_path"):
-            pdf_path = str(record["local_pdf_path"])
-            if os.path.exists(pdf_path):
-                with_pdf += 1
+        if pdf_file_present(record.get("local_pdf_path")):
+            with_pdf += 1
         if record.get("doi"):
             with_doi += 1
         if record.get("arxiv_id"):
@@ -161,7 +121,7 @@ def list_entries(
     papers_dir = bib["papers_dir"]
 
     with with_bib_lock(bib_path, shared=True):
-        read_result = _read_bib_file_raw(bib_path)
+        read_result = read_bib_file_raw(bib_path)
 
     records = read_result["records"]
     total = len(records)
@@ -203,7 +163,7 @@ def list_entries(
             "year": r.get("year"),
             "authors": _author_names(r),
             "entry_type": str(r.get("entry_type", "unknown")),
-            "has_pdf": bool(r.get("local_pdf_path")),
+            "has_pdf": pdf_file_present(r.get("local_pdf_path")),
             "doi": r.get("doi"),
         }
         for r in page
@@ -244,11 +204,11 @@ def entry_detail(
     _config, bib = resolved
 
     with with_bib_lock(bib["path"], shared=True):
-        read_result = _read_bib_file_raw(bib["path"])
+        read_result = read_bib_file_raw(bib["path"])
 
     entries = read_result["entries"]
     records = read_result["records"]
-    index = _find_entry_index(entries, citekey)
+    index = find_entry_index(entries, citekey)
 
     if index is None:
         return {
@@ -331,47 +291,57 @@ def delete_entry(
     citekey: str,
     dry_run: bool = False,
 ) -> DeleteEntryResult:
-    """Delete a BibTeX entry by citekey, creating a backup first."""
-    with with_bib_lock(bib_path):
-        source = _read_bib_source(bib_path)
-        _validate_library_parseable(_parse_bib_library(source))
-        read_result = _read_bib_file_raw(bib_path)
-        entries = read_result["entries"]
-        records = read_result["records"]
+    """Delete a BibTeX entry by citekey, creating a backup first.
 
-        index = _find_entry_index(entries, citekey)
-        if index is None:
-            return {
-                "status": "error",
-                "citekey": citekey,
-                "bib_path": bib_path,
-                "message": f"entry not found: {citekey}",
-                "errors": [f"no entry with citekey {citekey}"],
-            }
+    Preserves comments, ``@string`` macros, ``@preamble`` blocks, and every
+    other entry's source via :func:`delete_bib_entry` (block-level removal).
+    """
+    with with_bib_lock(bib_path, shared=True):
+        source = read_bib_source(bib_path)
+        validate_library_parseable(parse_bib_library(source))
+        read_result = read_bib_file_raw(bib_path)
+    entries = read_result["entries"]
+    records = read_result["records"]
 
-        entry = entries[index]
-        record = records[index] if index < len(records) else {}
-        title = record.get("title") or entry.get("citekey", citekey)
-        pdf_path = record.get("local_pdf_path")
+    index = find_entry_index(entries, citekey)
+    if index is None:
+        return {
+            "status": "error",
+            "citekey": citekey,
+            "bib_path": bib_path,
+            "message": f"entry not found: {citekey}",
+            "errors": [f"no entry with citekey {citekey}"],
+        }
 
-        if dry_run:
-            return {
-                "status": "ok",
-                "citekey": citekey,
-                "bib_path": bib_path,
-                "dry_run": True,
-                "message": f"would delete: {title}",
-                "title": title,
-                "pdf_path": pdf_path,
-                "errors": [],
-            }
+    entry = entries[index]
+    record = records[index] if index < len(records) else {}
+    title = record.get("title") or entry.get("citekey", citekey)
+    pdf_path = record.get("local_pdf_path")
 
-        updated_entries = list(entries)
-        del updated_entries[index]
-        backup_path = _backup_path_for_delete(bib_path, citekey)
-        backup_path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
-        shutil.copy2(bib_path, backup_path)
-        write_bib_file(bib_path, updated_entries)
+    if dry_run:
+        return {
+            "status": "ok",
+            "citekey": citekey,
+            "bib_path": bib_path,
+            "dry_run": True,
+            "message": f"would delete: {title}",
+            "title": title,
+            "pdf_path": pdf_path,
+            "errors": [],
+        }
+
+    backup_path = _backup_path_for_delete(bib_path, citekey)
+    backup_path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+    shutil.copy2(bib_path, backup_path)
+    delete_result = delete_bib_entry(bib_path, citekey)
+    if not delete_result["found"]:
+        return {
+            "status": "error",
+            "citekey": citekey,
+            "bib_path": bib_path,
+            "message": f"entry not found: {citekey}",
+            "errors": [f"no entry with citekey {citekey}"],
+        }
 
     return {
         "status": "ok",

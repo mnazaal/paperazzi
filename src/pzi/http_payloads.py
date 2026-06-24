@@ -57,7 +57,18 @@ def search_payload(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def entries_payload(result: dict[str, Any], offset: int, limit: int) -> dict[str, Any]:
-    """Serialize a search_bib result as a paginated entries list."""
+    """Serialize entries from list_entries or legacy search_bib results."""
+    if "items" in result:
+        extra = {
+            "entries": result.get("items", []),
+            "total": result.get("total", 0),
+            "offset": result.get("offset", offset),
+            "limit": result.get("limit", limit),
+        }
+        if "sort" in result:
+            extra["sort"] = result["sort"]
+        return _base_payload(result, **extra)
+
     matches = result.get("matches", [])
     return _base_payload(
         result,
@@ -81,7 +92,7 @@ def detail_payload(record: dict[str, Any], bib_name: str | None) -> dict[str, An
             "authors": normalize_authors(record.get("authors")),
             "year": record.get("year"),
             "doi": record.get("doi"),
-            "url": record.get("url"),
+            "url": record.get("canonical_url") or record.get("source_url"),
             "venue": record.get("venue"),
             "abstract": record.get("abstract"),
             "note": record.get("note"),

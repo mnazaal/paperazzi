@@ -6,7 +6,6 @@ import os
 import tempfile
 from pathlib import Path
 
-import pzi.dedupe_service as dedupe_service
 from pzi.dedupe_service import find_duplicates, merge_duplicates
 
 
@@ -149,28 +148,30 @@ def test_merge_duplicates_real() -> None:
         assert "Title B" in content  # existing title preserved
 
 
-def test_merge_duplicates_uses_repository_writer(monkeypatch) -> None:
+def test_merge_duplicates_drops_a_keeps_b_and_preserves_comments() -> None:
     with tempfile.TemporaryDirectory() as td:
         bib = os.path.join(td, "merge_writer.bib")
         _write_bib(
             bib,
             (
+                '% library comment\n'
+                '@string{acm = {ACM}}\n'
                 '@article{a, title={Title A}, author={Smith, J}, year={2024},'
                 ' doi={10.1000/merged}}\n'
                 '@article{b, title={Title B}, author={Jones, K}, year={2023},'
                 ' doi={10.1000/merged}}'
             ),
         )
-        calls = []
-
-        def fake_write_bib_file(path, entries):
-            calls.append((path, [entry["citekey"] for entry in entries]))
-
-        monkeypatch.setattr(dedupe_service, "write_bib_file", fake_write_bib_file, raising=False)
 
         result = merge_duplicates(
             bib_path=bib, citekey_a="a", citekey_b="b", dry_run=False,
         )
 
         assert result["status"] == "ok"
-        assert calls == [(bib, ["b"])]
+        text = Path(bib).read_text()
+        # A is gone, B (the kept key) remains.
+        assert "@article{a," not in text
+        assert "@article{b," in text
+        # Non-entry blocks survive the merge (comment-preserving write path).
+        assert "% library comment" in text
+        assert "@string{acm" in text

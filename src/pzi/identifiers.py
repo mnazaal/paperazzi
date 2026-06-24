@@ -71,7 +71,14 @@ def normalize_url(value: str) -> str | None:
     has_default_port = (scheme == "http" and port == 80) or (
         scheme == "https" and port == 443
     )
-    netloc = hostname if port is None or has_default_port else f"{hostname}:{port}"
+    # urlsplit strips the brackets from IPv6 literals; restore them so the
+    # rebuilt URL stays valid (e.g. http://[2606:...]/paper).
+    host_for_netloc = f"[{hostname}]" if ":" in hostname else hostname
+    netloc = (
+        host_for_netloc
+        if port is None or has_default_port
+        else f"{host_for_netloc}:{port}"
+    )
 
     path = parts.path or "/"
     query_items = [

@@ -31,6 +31,14 @@ def search_bib(
 
     At least one filter must be provided.  Matches are case-insensitive.
     """
+    if query is None and author is None and year is None and tag is None:
+        return {
+            "status": "error",
+            "bib_name": None,
+            "matches": [],
+            "errors": ["provide at least one of --query, --author, --year, --tag"],
+        }
+
     resolved = load_and_resolve_bib(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector
     )

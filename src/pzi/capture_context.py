@@ -36,7 +36,12 @@ def run_shell_command(command: str) -> str:
     tokens = shlex.split(command)
     if not tokens:
         raise ValueError("empty shell command in config")
-    result = subprocess.run(tokens, capture_output=True, text=True)
+    try:
+        result = subprocess.run(tokens, capture_output=True, text=True, timeout=10)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"secret command timed out after 10s (did it prompt for input?): {command!r}"
+        ) from exc
     if result.returncode != 0:
         raise RuntimeError(
             f"secret command exited with code {result.returncode}: "

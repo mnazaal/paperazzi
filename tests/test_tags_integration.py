@@ -161,6 +161,8 @@ def test_add_tags_dry_run_does_not_write(tmp_path: Path) -> None:
     assert result["status"] == "ok"
     assert result["changed"] is True
     assert result["dry_run"] is True
+    # Regression: dry-run message was ungrammatical ("would added tags").
+    assert result["message"] == "would add tags"
 
     # Verify BibTeX file was NOT updated
     records = read_bib_file(str(tmp_path / "test.bib"))["records"]
@@ -249,6 +251,7 @@ def test_remove_tags_dry_run(tmp_path: Path) -> None:
     assert result["status"] == "ok"
     assert result["changed"] is True
     assert result["dry_run"] is True
+    assert result["message"] == "would remove tags"
 
     # Verify file NOT updated
     records = read_bib_file(str(tmp_path / "test.bib"))["records"]

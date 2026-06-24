@@ -1,8 +1,9 @@
 """Tests for extracted pure HTTP handler functions."""
 
+import base64
 from pathlib import Path
 
-from pzi import http_post_routes
+from pzi import http_binary_routes, http_get_routes, http_post_routes, http_status
 from pzi.capture_models import AuthHints, CaptureInput, CaptureOptions, PageArtifact, PdfCandidate
 from pzi.http_get_routes import process_get_request
 from pzi.http_security import (
@@ -17,6 +18,113 @@ from pzi.pdf_attach_session import build_attach_session
 from pzi.pdf_attach_session_store import AttachSessionStore
 
 # === process_get_request ===
+
+
+def test_pdf_file_response_is_planned_by_binary_route_module(tmp_path: Path) -> None:
+    papers_dir = tmp_path / "papers"
+    papers_dir.mkdir()
+    pdf_path = papers_dir / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text(
+        f"""
+@article{{a2024,
+  title = {{A}},
+  file = {{{pdf_path}}}
+}}
+""".strip()
+    )
+    cpath = tmp_path / "config.toml"
+    cpath.write_text(
+        f'[[bibs]]\nname="ml"\npath="{bib_path}"\npapers_dir="{papers_dir}"\ndefault=true\n'
+    )
+
+    status, response = http_binary_routes.build_pdf_file_response(
+        config_path=str(cpath),
+        home_dir=str(tmp_path),
+        citekey="a2024",
+        bib_selector=None,
+    )
+
+    assert status == 200
+    assert response.path == pdf_path
+    assert response.content_type == "application/pdf"
+    assert response.filename == "a2024.pdf"
+
+
+def test_raw_export_response_is_planned_by_binary_route_module(tmp_path: Path) -> None:
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text("@article{a2024, title = {A}}\n")
+    cpath = tmp_path / "config.toml"
+    cpath.write_text(f'[[bibs]]\nname="ml"\npath="{bib_path}"\ndefault=true\n')
+
+    status, response = http_binary_routes.build_export_bytes_response(
+        config_path=str(cpath),
+        home_dir=str(tmp_path),
+        fmt="bibtex",
+        bib_selector=None,
+    )
+
+    assert status == 200
+    assert response.content_type == "application/x-bibtex"
+    assert response.filename == "ml.bib"
+    assert b"a2024" in response.content
+
+
+def test_raw_export_response_rejects_unsupported_format(tmp_path: Path) -> None:
+    cpath = tmp_path / "config.toml"
+    cpath.write_text("")
+
+    status, response = http_binary_routes.build_export_bytes_response(
+        config_path=str(cpath),
+        home_dir=str(tmp_path),
+        fmt="xlsx",
+        bib_selector=None,
+    )
+
+    assert status == 400
+    assert response["error"] == "unsupported format: xlsx"
+
+
+def test_get_route_tables_cover_declared_json_routes() -> None:
+    exact_paths = {route.path for route in http_get_routes.GET_ROUTES}
+    prefix_paths = {route.prefix for route in http_get_routes.GET_PREFIX_ROUTES}
+
+    assert exact_paths == {"/health", "/bibs", "/search", "/entries", "/tags", "/export"}
+    assert prefix_paths == {"/detail/", "/tags/"}
+
+
+def test_post_route_table_covers_declared_json_routes() -> None:
+    paths = {route.path for route in http_post_routes.POST_ROUTES}
+
+    assert paths == {
+        "/capture",
+        "/attach-pdf-bytes",
+        "/attach-pdf-raw",
+        "/tags/add",
+        "/tags/remove",
+        "/update",
+        "/promote",
+        "/browser/discover",
+        "/browser/download",
+        "/delete",
+    }
+
+
+def test_http_status_maps_service_results_by_contract() -> None:
+    assert http_status.status_for_service_result({"status": "ok"}) == 200
+    assert http_status.status_for_service_result(
+        {"status": "error", "errors": ["config file not found"]}
+    ) == 400
+    assert http_status.status_for_service_result(
+        {"status": "error", "message": "citekey not found: x"}
+    ) == 404
+    assert http_status.status_for_service_result(
+        {"status": "error", "errors": ["browser session not available"]}
+    ) == 503
+    assert http_status.status_for_service_result(
+        {"status": "error", "errors": ["boom"]}, default_error_status=500
+    ) == 500
 
 
 def test_process_get_health(tmp_path: Path) -> None:
@@ -47,8 +155,73 @@ def test_process_get_bibs_error() -> None:
     status, body = process_get_request(
         "/bibs", "/nonexistent/config.toml", "/tmp"
     )
-    assert status == 500
+    assert status == 400
     assert body["status"] == "error"
+
+
+def test_process_get_entries_clamps_negative_offset(tmp_path: Path) -> None:
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text(
+        """
+@article{a2024,
+  title = {A}
+}
+
+@article{b2024,
+  title = {B}
+}
+""".strip()
+    )
+    cpath = tmp_path / "config.toml"
+    cpath.write_text(f'[[bibs]]\nname="ml"\npath="{bib_path}"\ndefault=true\n')
+
+    status, body = process_get_request(
+        "/entries?offset=-1&limit=1", str(cpath), str(tmp_path)
+    )
+
+    assert status == 200
+    assert body["offset"] == 0
+    assert [entry["citekey"] for entry in body["entries"]] == ["a2024"]
+
+
+def test_process_get_entries_uses_listing_service_sort_and_summary_fields(tmp_path: Path) -> None:
+    papers_dir = tmp_path / "papers"
+    papers_dir.mkdir()
+    pdf_path = papers_dir / "a.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text(
+        f"""
+@article{{old2020,
+  title = {{Old}},
+  author = {{Ada Lovelace}},
+  year = {{2020}},
+  doi = {{10.1/old}}
+}}
+
+@inproceedings{{new2024,
+  title = {{New}},
+  author = {{Grace Hopper}},
+  year = {{2024}},
+  file = {{{pdf_path}}}
+}}
+""".strip()
+    )
+    cpath = tmp_path / "config.toml"
+    cpath.write_text(
+        f'[[bibs]]\nname="ml"\npath="{bib_path}"\npapers_dir="{papers_dir}"\ndefault=true\n'
+    )
+
+    status, body = process_get_request(
+        "/entries?sort=year&limit=2", str(cpath), str(tmp_path)
+    )
+
+    assert status == 200
+    assert body["sort"] == "year"
+    assert [entry["citekey"] for entry in body["entries"]] == ["new2024", "old2020"]
+    assert "entry_type" in body["entries"][0]
+    assert body["entries"][0]["has_pdf"] is True
+    assert body["entries"][1]["doi"] == "10.1/old"
 
 
 def test_process_get_not_found() -> None:
@@ -57,6 +230,31 @@ def test_process_get_not_found() -> None:
     )
     assert status == 404
     assert "not found" in body["error"]
+
+
+def test_process_get_tags_without_citekey_lists_all_tags(tmp_path: Path) -> None:
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text(
+        """
+@article{a2024,
+  title = {A},
+  keywords = {ml, graphs}
+}
+
+@article{b2024,
+  title = {B},
+  keywords = {graphs, nlp}
+}
+""".strip()
+    )
+    cpath = tmp_path / "config.toml"
+    cpath.write_text(f'[[bibs]]\nname="ml"\npath="{bib_path}"\ndefault=true\n')
+
+    status, body = process_get_request("/tags", str(cpath), str(tmp_path))
+
+    assert status == 200
+    assert body["citekey"] is None
+    assert body["tags"] == ["graphs", "ml", "nlp"]
 
 
 # === process_post_request (pure dispatch, no network) ===
@@ -221,6 +419,74 @@ def test_post_browser_download_rejects_private_pdf_url() -> None:
 
     assert status == 400
     assert "public http(s) URL" in body["error"]
+
+
+def test_post_browser_download_rejects_large_pdf_before_base64() -> None:
+    class FakeBrowserManager:
+        def download_pdf_bytes(self, _url: str) -> bytes:
+            return b"%PDF-1.4\n" + (b"x" * 1025)
+
+    status, body = http_post_routes.process_post_request(
+        "/browser/download",
+        {"pdf_url": "https://example.com/paper.pdf"},
+        "/tmp/c.toml",
+        "/tmp",
+        browser_manager=FakeBrowserManager(),
+        max_browser_pdf_bytes=1024,
+    )
+
+    assert status == 413
+    assert "PDF too large" in body["error"]
+
+
+def test_post_browser_download_accepts_duck_typed_browser_manager() -> None:
+    class FakeBrowserManager:
+        def download_pdf_bytes(self, _url: str) -> bytes:
+            return b"%PDF-1.4 ok"
+
+    status, body = http_post_routes.process_post_request(
+        "/browser/download",
+        {"pdf_url": "https://example.com/paper.pdf"},
+        "/tmp/c.toml",
+        "/tmp",
+        browser_manager=FakeBrowserManager(),
+    )
+
+    assert status == 200
+    assert base64.b64decode(body["pdf_base64"]) == b"%PDF-1.4 ok"
+
+
+def test_post_delete_defaults_to_dry_run(tmp_path: Path) -> None:
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text("@article{delete2024,\n  title = {Delete Me}\n}\n")
+    cpath = tmp_path / "config.toml"
+    cpath.write_text(f'[[bibs]]\nname="ml"\npath="{bib_path}"\ndefault=true\n')
+
+    status, body = http_post_routes.process_post_request(
+        "/delete", {"citekey": "delete2024"}, str(cpath), str(tmp_path)
+    )
+
+    assert status == 200
+    assert body["dry_run"] is True
+    assert "delete2024" in bib_path.read_text()
+
+
+def test_post_delete_requires_force_for_destructive_delete(tmp_path: Path) -> None:
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text("@article{delete2024,\n  title = {Delete Me}\n}\n")
+    cpath = tmp_path / "config.toml"
+    cpath.write_text(f'[[bibs]]\nname="ml"\npath="{bib_path}"\ndefault=true\n')
+
+    status, body = http_post_routes.process_post_request(
+        "/delete",
+        {"citekey": "delete2024", "dry_run": False},
+        str(cpath),
+        str(tmp_path),
+    )
+
+    assert status == 400
+    assert "force" in body["error"]
+    assert "delete2024" in bib_path.read_text()
 
 
 def test_build_http_security_config_strips_token_and_origins() -> None:

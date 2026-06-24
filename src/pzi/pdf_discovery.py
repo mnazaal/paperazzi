@@ -114,20 +114,24 @@ def apply_pdf_discovery_parallel(
         if step.__name__ not in pure_step_names and step.__name__ != "browser_pdf_step"
     ]
     if http_steps:
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from concurrent.futures import ThreadPoolExecutor
 
+        # Run all HTTP steps concurrently, but select the winner by the step's
+        # position in the fallback chain (its source priority), not by whichever
+        # network call returns first.  This keeps parallel mode's source ranking
+        # identical to the sequential path.
         with ThreadPoolExecutor(max_workers=min(max_workers, len(http_steps))) as pool:
-            futures = {
-                pool.submit(step, record, context): step for step in http_steps
-            }
-            for future in as_completed(futures):
+            futures = {step: pool.submit(step, record, context) for step in http_steps}
+            results: dict[PdfDiscoveryStep, NormalizedRecord | None] = {}
+            for step, future in futures.items():
                 try:
-                    result = future.result()
+                    results[step] = future.result()
                 except Exception:
-                    continue
-                if result.get("pdf_url"):
-                    record = result
-                    return record
+                    results[step] = None
+        for step in http_steps:
+            result = results.get(step)
+            if result is not None and result.get("pdf_url"):
+                return result
 
     # Phase 3: browser fallback
     for step in steps:

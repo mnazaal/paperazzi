@@ -759,12 +759,14 @@ def start_ts(
     If ``stderr_log`` is given, stderr is redirected there; otherwise it goes
     to ``DEVNULL``.
     """
+    stderr_handle: TextIO | None = None
     stderr_dest: int | TextIO = subprocess.DEVNULL
     if stderr_log is not None:
         stderr_log.parent.mkdir(parents=True, exist_ok=True)
-        stderr_dest = stderr_log.open("w")
+        stderr_handle = stderr_log.open("w")
+        stderr_dest = stderr_handle
 
-    return subprocess.Popen(
+    proc = subprocess.Popen(
         [node_bin, str(ts_dir / "src" / "server.js")],
         cwd=str(ts_dir),
         env={**os.environ, "PORT": str(port)},
@@ -772,6 +774,11 @@ def start_ts(
         stderr=stderr_dest,
         start_new_session=True,
     )
+    # The child has dup'd the fd; close our copy so it isn't leaked for the
+    # server's lifetime.
+    if stderr_handle is not None:
+        stderr_handle.close()
+    return proc
 
 
 def terminate_ts(proc: subprocess.Popen[bytes], *, grace_seconds: float = 5.0) -> None:

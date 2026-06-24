@@ -9,12 +9,12 @@ from pathlib import Path
 from typing import Any, TypeAlias
 
 from pzi.bib_repository import (
-    _read_bib_file_raw,
-    _validate_library_parseable,
+    read_bib_file_raw,
+    validate_library_parseable,
     with_bib_lock,
-    write_bib_file,
 )
 from pzi.bibtex import BibtexEntry
+from pzi.pdf_planning import pdf_file_present
 
 CleanResult: TypeAlias = dict[str, Any]
 
@@ -35,7 +35,7 @@ def validate_library(
 
     # --- Parse validation ---
     with with_bib_lock(bib_path, shared=True):
-        raw = _read_bib_file_raw(bib_path)
+        raw = read_bib_file_raw(bib_path)
     entries: list[BibtexEntry] = raw["entries"]
     records = raw["records"]
 
@@ -55,7 +55,7 @@ def validate_library(
         from bibtexparser.entrypoint import parse_string as _parse
         text = Path(bib_path).read_text(encoding="utf-8")
         library = _parse(text)
-        _validate_library_parseable(library)
+        validate_library_parseable(library)
     except ValueError as exc:
         issues.append({
             "severity": "error",
@@ -77,7 +77,7 @@ def validate_library(
     missing_pdfs: list[str] = []
     for record in records:
         pdf_path = record.get("local_pdf_path")
-        if pdf_path and not os.path.exists(str(pdf_path)):
+        if pdf_path and not pdf_file_present(pdf_path):
             citekey = record.get("citekey", "?")
             missing_pdfs.append(str(pdf_path))
             issues.append({
@@ -90,8 +90,8 @@ def validate_library(
     referenced_paths: set[str] = set()
     for record in records:
         pdf = record.get("local_pdf_path")
-        if pdf and os.path.exists(str(pdf)):
-            referenced_paths.add(os.path.realpath(str(pdf)))
+        if pdf and pdf_file_present(pdf):
+            referenced_paths.add(os.path.realpath(str(Path(str(pdf)).expanduser())))
 
     orphan_pdfs: list[str] = []
     papers = Path(papers_dir)
@@ -124,12 +124,14 @@ def clean_library(
     papers_dir: str,
     dry_run: bool = True,
     move_orphans: bool = True,
-    sort_entries: bool = True,
 ) -> CleanResult:
     """Fix integrity issues in a BibTeX library.
 
     - ``move_orphans``: move orphan PDFs to ``papers_dir/.orphans/``
-    - ``sort_entries``: re-serialize entries sorted by citekey
+
+    Only the filesystem is touched (orphan PDFs are relocated); the ``.bib``
+    file itself is never rewritten, so comments, ``@string``/``@preamble``
+    macros, and source formatting are left intact.
 
     Returns the same shape as :func:`validate_library` with an added
     ``actions`` list describing what was (or would be) done.
@@ -160,20 +162,6 @@ def clean_library(
                 except OSError as exc:
                     action["done"] = False
                     action["error"] = str(exc)
-            actions.append(action)
-
-    # --- Sort entries ---
-    if sort_entries:
-        with with_bib_lock(bib_path, shared=True):
-            raw = _read_bib_file_raw(bib_path)
-        entries = raw["entries"]
-        if len(entries) > 1:
-            sorted_entries = sorted(entries, key=lambda e: e["citekey"].lower())
-            action = {"type": "sort_entries", "count": len(entries)}
-            if not dry_run:
-                with with_bib_lock(bib_path):
-                    write_bib_file(bib_path, sorted_entries)
-                action["done"] = True
             actions.append(action)
 
     validation["actions"] = actions

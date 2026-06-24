@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import difflib
+import hashlib
 import os
+import re
 import tempfile
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
@@ -32,10 +34,9 @@ class ConcurrentEditError(RuntimeError):
     """Raised when the bib file is modified externally during a write operation."""
 
 
-def _bib_mtime(path: str) -> float | None:
-    """Return mtime of the bib file, or None if it does not exist."""
-    p = Path(path)
-    return p.stat().st_mtime if p.exists() else None
+def _source_digest(text: str) -> str:
+    """Content hash of bib source, used to detect external edits across the lock."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _find_entry_index(entries: Sequence[dict[str, Any]], citekey: str) -> int | None:
@@ -350,14 +351,17 @@ def execute_write_plan(
     Raises :exc:`ConcurrentEditError` if the bib file is modified
     externally between snapshot and lock acquisition.
     """
-    mtime_before = _bib_mtime(path)
+    # Snapshot content before locking; compare by hash (not mtime) under the
+    # lock so a fast same-second external edit can't slip past a coarse-
+    # resolution mtime.
+    digest_before = _source_digest(_read_bib_source(path))
     with with_bib_lock(path):
-        if mtime_before is not None and _bib_mtime(path) != mtime_before:
+        source = _read_bib_source(path)
+        if _source_digest(source) != digest_before:
             raise ConcurrentEditError(
                 f"bib file {path} was modified externally "
                 f"while acquiring lock; aborting to prevent data loss"
             )
-        source = _read_bib_source(path)
         library = _parse_bib_library(source)
         if plan["action"] == "update":
             _validate_library_parseable(library)
@@ -540,6 +544,149 @@ def update_bib_entry(
         }
 
 
+# ---------------------------------------------------------------------------
+# Whole-entry mutations that preserve non-entry blocks (comments, @string,
+# @preamble) and honor file_path_style.  Used by tag/delete/merge/reindex so
+# every mutation rides the same comment-preserving path as add/update, rather
+# than the lossy full re-serialization in write_bib_file.
+# ---------------------------------------------------------------------------
+
+
+def delete_bib_entry(path: str, citekey: str) -> UpdateBibEntryResult:
+    """Delete the first entry matching *citekey*, preserving all other blocks.
+
+    Drops only the matching ``@entry`` block; comments, ``@string`` macros,
+    ``@preamble`` blocks, and every other entry (including their ``file``
+    paths) are left exactly as written.
+    """
+    with with_bib_lock(path):
+        source = _read_bib_source(path)
+        library = _parse_bib_library(source)
+        _validate_library_parseable(library)
+
+        new_blocks: list = []
+        removed = False
+        for block in library.blocks:
+            if not removed and isinstance(block, BibtexEntryV2) and block.key == citekey:
+                removed = True
+                continue
+            new_blocks.append(block)
+
+        if not removed:
+            return {"found": False, "entries": [], "entry": None, "record": None}
+
+        new_library = Library(blocks=new_blocks)
+        new_source = _serialize_library(new_library)
+        if new_source != source:
+            _write_bib_text_atomic(path, new_source)
+        entries, _records = _library_to_entries_records(new_library, path)
+        return {"found": True, "entries": entries, "entry": None, "record": None}
+
+
+def merge_bib_entries(
+    path: str,
+    *,
+    citekey_a: str,
+    citekey_b: str,
+    file_path_style: str = "absolute",
+) -> dict[str, Any]:
+    """Merge entry A into B (keeping B's citekey) under one exclusive lock.
+
+    Reads fresh records, runs the conservative :func:`merge_entries`, replaces
+    B's block in place and drops A's block, preserving every other block.
+    Returns ``{"found", "merged_record", "changed_fields"}``.
+    """
+    with with_bib_lock(path):
+        source = _read_bib_source(path)
+        library = _parse_bib_library(source)
+        _validate_library_parseable(library)
+        entries, records = _library_to_entries_records(library, path)
+
+        idx_a = _find_entry_index(entries, citekey_a)  # type: ignore[arg-type]
+        idx_b = _find_entry_index(entries, citekey_b)  # type: ignore[arg-type]
+        if idx_a is None or idx_b is None:
+            return {"found": False, "merged_record": None, "changed_fields": []}
+
+        decision = merge_entries(
+            cast(MergeableEntry, dict(records[idx_b])),
+            cast(MergeableEntry, dict(records[idx_a])),
+        )
+        merged_record = decision["merged"]
+        entry_type = entries[idx_b].get("entry_type", "article")
+        merged_entry = record_to_bibtex_entry(
+            cast(NormalizedRecord, merged_record), entry_type=entry_type
+        )
+        _validate_bibtex_roundtrip([merged_entry])
+        merged_block = _bibtex_entry_to_library_entry(
+            merged_entry, path, file_path_style=file_path_style
+        )
+
+        new_blocks: list = []
+        removed_a = False
+        replaced_b = False
+        for block in library.blocks:
+            if isinstance(block, BibtexEntryV2):
+                if not removed_a and block.key == citekey_a:
+                    removed_a = True
+                    continue
+                if not replaced_b and block.key == citekey_b:
+                    replaced_b = True
+                    new_blocks.append(merged_block)
+                    continue
+            new_blocks.append(block)
+
+        new_library = Library(blocks=new_blocks)
+        new_source = _serialize_library(new_library)
+        if new_source != source:
+            _write_bib_text_atomic(path, new_source)
+        return {
+            "found": True,
+            "merged_record": merged_record,
+            "changed_fields": decision["changed_fields"],
+        }
+
+
+def rewrite_entries_in_order(
+    path: str,
+    entries: list[BibtexEntry],
+    *,
+    file_path_style: str = "absolute",
+) -> list[BibtexEntry]:
+    """Rewrite all entries in their existing order, preserving non-entry blocks.
+
+    Requires *entries* to be in the same order and count as the on-disk entry
+    blocks (positional replace, which also supports citekey renames).  Used by
+    reindex; comment positions, ``@string``, and ``@preamble`` are preserved.
+    """
+    with with_bib_lock(path):
+        source = _read_bib_source(path)
+        library = _parse_bib_library(source)
+        _validate_library_parseable(library)
+        existing_entries, _records = _library_to_entries_records(library, path)
+        if len(entries) != len(existing_entries):
+            raise ValueError(
+                "rewrite_entries_in_order requires the same number of entries "
+                f"as on disk (got {len(entries)}, expected {len(existing_entries)})"
+            )
+        _validate_bibtex_roundtrip(entries)
+        new_library = _update_library_blocks(
+            library, entries, path, file_path_style=file_path_style
+        )
+        new_source = _serialize_library(new_library)
+        if new_source != source:
+            _write_bib_text_atomic(path, new_source)
+        return entries
+
+
+# Public aliases for helpers consumed across modules — callers should not reach
+# for the underscore-private names.
+read_bib_file_raw = _read_bib_file_raw
+parse_bib_library = _parse_bib_library
+validate_library_parseable = _validate_library_parseable
+find_entry_index = _find_entry_index
+read_bib_source = _read_bib_source
+
+
 def _library_entry_to_bibtex_entry(entry: BibtexEntryV2) -> BibtexEntry:
     """Convert a bibtexparser v2 Entry to the internal BibtexEntry dict."""
     return {
@@ -547,6 +694,60 @@ def _library_entry_to_bibtex_entry(entry: BibtexEntryV2) -> BibtexEntry:
         "citekey": entry.key,
         "fields": {f.key: f.value for f in entry.fields},
     }
+
+
+# Citekeys are written as ``@type{<key>,`` (unquoted), and field values as
+# ``{<value>}``.  Untrusted metadata (a hostile capture page, a crafted
+# ``--citekey``/``--title``, a malicious ``--metadata-json``) could otherwise
+# break out of those delimiters and inject or corrupt entries, so both are
+# neutralized at this single serialization chokepoint.
+_UNSAFE_CITEKEY = re.compile(r"[^A-Za-z0-9_:.+/\-]")
+_UNSAFE_ENTRY_TYPE = re.compile(r"[^A-Za-z]")
+# Control characters (keep \t and \n) — NUL and friends have no place in a
+# BibTeX field value and can corrupt the file or downstream tools.
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def _safe_citekey(citekey: str) -> str:
+    """Strip characters that could escape the ``@type{<key>,`` context."""
+    cleaned = _UNSAFE_CITEKEY.sub("", citekey).strip(".")
+    return cleaned or "untitled"
+
+
+def _safe_field_value(value: str) -> str:
+    """Make an untrusted field value safe to serialize inside ``{...}``."""
+    return _balance_braces(_CONTROL_CHARS.sub("", value))
+
+
+def _balance_braces(value: str) -> str:
+    """Drop unmatched braces so a field value cannot terminate its ``{...}``.
+
+    Balanced groups (e.g. case protection like ``{DNA}``) are preserved; only
+    stray ``}`` (which would end the field early) and stray ``{`` are removed.
+    """
+    if "{" not in value and "}" not in value:
+        return value
+    kept: list[str] = []
+    depth = 0
+    for ch in value:  # left-to-right: drop unmatched closing braces
+        if ch == "}":
+            if depth == 0:
+                continue
+            depth -= 1
+        elif ch == "{":
+            depth += 1
+        kept.append(ch)
+    out: list[str] = []
+    depth = 0
+    for ch in reversed(kept):  # right-to-left: drop unmatched opening braces
+        if ch == "{":
+            if depth == 0:
+                continue
+            depth -= 1
+        elif ch == "}":
+            depth += 1
+        out.append(ch)
+    return "".join(reversed(out))
 
 
 def _bibtex_entry_to_library_entry(
@@ -563,11 +764,12 @@ def _bibtex_entry_to_library_entry(
     """
     if bib_path and file_path_style == "relative":
         entry = _normalize_file_field(entry, bib_path)
+    entry_type = _UNSAFE_ENTRY_TYPE.sub("", entry["entry_type"]) or "misc"
     return BibtexEntryV2(
-        entry_type=entry["entry_type"],
-        key=entry["citekey"],
+        entry_type=entry_type,
+        key=_safe_citekey(entry["citekey"]),
         fields=[
-            Field(key=k, value=v)
+            Field(key=k, value=_safe_field_value(v))
             for k, v in sorted(entry["fields"].items())
         ],
     )
@@ -631,8 +833,14 @@ def plan_bib_write(
     *,
     entry_type: str = "article",
     force_new: bool = False,
+    index: dict[tuple[Any, str], list[int]] | None = None,
 ) -> WritePlan:
-    """Plan an insert or update operation for a normalized record."""
+    """Plan an insert or update operation for a normalized record.
+
+    *index* is an optional prebuilt identity index (see
+    :func:`pzi.similarity.build_identity_index`) over *existing_records*, reused
+    to avoid rebuilding it on each call in the write path.
+    """
     if entry_type == "article":
         entry_type = _resolve_entry_type(incoming_record)
 
@@ -647,7 +855,7 @@ def plan_bib_write(
             "force_new": True,
         }
 
-    match_index = find_exact_match(incoming_record, list(existing_records))
+    match_index = find_exact_match(incoming_record, list(existing_records), index=index)
     if match_index is None:
         entry = record_to_bibtex_entry(incoming_record, entry_type=entry_type)
         return {

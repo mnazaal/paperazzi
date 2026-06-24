@@ -22,9 +22,13 @@ from typing import Any
 class BrowserSessionManager:
     """Persistent browser session for PDF discovery and download.
 
-    Lazily launches the browser on first request.  Thread-safe: concurrent
-    callers are serialized via an internal lock.  Crash-tolerant: if the
-    underlying session dies, ensure_session() launches a fresh one.
+    Lazily launches the browser on first request.  Thread-safe: the underlying
+    Playwright sync page is not safe for concurrent use, so each discover/
+    download call holds the lock for its whole duration — browser work is
+    single-flighted across the ``ThreadingHTTPServer``'s request threads.  The
+    lock is reentrant so a call may invoke ``ensure_session`` while holding it.
+    Crash-tolerant: if the underlying session dies, ensure_session() launches a
+    fresh one.
     """
 
     def __init__(
@@ -37,7 +41,7 @@ class BrowserSessionManager:
         self._browser = browser
         self._profile_path = profile_path
         self._headless = headless
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._last_used: float = 0.0
         self._session: Any = None
 
@@ -74,25 +78,29 @@ class BrowserSessionManager:
         """Discover PDF URL from a page using the persistent browser session."""
         from pzi.browser_pdf_hook import discover_pdf_url as _discover
 
-        session = self.ensure_session()
-        return _discover(
-            page_url,
-            browser=self._browser,
-            _session=session,
-            headless=self._headless,
-        )
+        # Hold the lock for the whole operation: the shared Playwright page
+        # cannot be driven from two threads at once.
+        with self._lock:
+            session = self.ensure_session()
+            return _discover(
+                page_url,
+                browser=self._browser,
+                _session=session,
+                headless=self._headless,
+            )
 
     def download_pdf_bytes(self, pdf_url: str) -> bytes | None:
         """Download PDF bytes using the persistent browser session."""
         from pzi.browser_pdf_hook import download_pdf as _download
 
-        session = self.ensure_session()
-        return _download(
-            pdf_url,
-            browser=self._browser,
-            _session=session,
-            headless=self._headless,
-        )
+        with self._lock:
+            session = self.ensure_session()
+            return _download(
+                pdf_url,
+                browser=self._browser,
+                _session=session,
+                headless=self._headless,
+            )
 
     def close(self) -> None:
         """Close the browser session.  Idempotent."""

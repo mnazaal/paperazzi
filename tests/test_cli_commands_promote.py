@@ -2,7 +2,13 @@ from argparse import Namespace
 from io import StringIO
 from pathlib import Path
 
-from pzi.commands.promote import run_promote_command
+from pzi.commands.update import run_update_command
+
+
+def run_promote_command(args, **kwargs):
+    """Adapter: `pzi promote` folded into `pzi update --promote`."""
+    args.promote = True
+    return run_update_command(args, **kwargs)
 
 
 def test_run_promote_command_calls_service_for_each_target(tmp_path: Path) -> None:

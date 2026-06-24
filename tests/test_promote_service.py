@@ -1,5 +1,18 @@
 from pzi.add_service import add_record_to_bib
-from pzi.promote_service import promote_bib
+from pzi.promote_service import _score_confidence, promote_bib
+
+
+def test_score_confidence_matches_authors_across_name_formats() -> None:
+    # "Smith, John" (preprint) vs "John Smith" (candidate) must count as an
+    # author match — family-name normalized, not exact-string.
+    preprint = {"title": "Graph Nets", "authors": ["Smith, John"], "year": 2024}
+    candidate = {"title": "Graph Nets", "authors": ["John Smith"], "year": 2024}
+    same_format = {"title": "Graph Nets", "authors": ["Smith, John"], "year": 2024}
+
+    assert _score_confidence(preprint, candidate) == _score_confidence(preprint, same_format)
+    # No author overlap scores strictly lower than a one-author overlap.
+    no_overlap = {"title": "Graph Nets", "authors": ["Jane Doe"], "year": 2024}
+    assert _score_confidence(preprint, candidate) > _score_confidence(preprint, no_overlap)
 
 
 def _seed_bib_with_preprint(tmp_path, bib_path, config_path, **kwargs):

@@ -151,7 +151,6 @@ def _normalize_app_config(raw: Mapping[str, object], validated_bibs: list[BibCon
     raw_promote_confidence_threshold = raw.get("promote_confidence_threshold", 3)
     raw_browser_hook = raw.get("browser_hook", True)
     raw_pzi_data_home = raw.get("pzi_data_home", "~/.local/share/pzi")
-    _raw_browser_profile_path = raw.get("browser_profile_path")  # reserved
     raw_browser_engine = raw.get("browser_engine", "chromium")
     raw_rate_limit_rpm = raw.get("rate_limit_rpm", 60)
     raw_pdf_discovery_parallel = raw.get("pdf_discovery_parallel", False)
@@ -523,11 +522,6 @@ def load_config_file(path: str, *, home_dir: str) -> LoadConfigResult:
     return {"config": config, "errors": errors, "path": str(config_path)}
 
 
-def load_default_config(*, home_dir: str) -> LoadConfigResult:
-    """Load config from the default path under the given home directory."""
-    return load_config_file(default_config_path(home_dir), home_dir=home_dir)
-
-
 # ---------------------------------------------------------------------------
 # TOML serialization
 # ---------------------------------------------------------------------------
@@ -621,8 +615,7 @@ def dump_app_config(config: AppConfig) -> str:
         lines.append(f"rate_limit_rpm = {rate_limit_rpm}")
 
     desktop_hosts = config.get("desktop_fallback_hosts", [])
-    default_hosts = ["biorxiv.org", "medrxiv.org"]
-    if desktop_hosts and desktop_hosts != default_hosts:
+    if desktop_hosts and desktop_hosts != DEFAULT_DESKTOP_FALLBACK_HOSTS:
         dq = '"'
         lines.append(
             f"desktop_fallback_hosts = [{', '.join(dq + _escape(h) + dq for h in desktop_hosts)}]"

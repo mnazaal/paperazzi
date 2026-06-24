@@ -55,12 +55,21 @@ def build_identity_index(
 
 
 def find_exact_match(
-    record: MatchableRecord, existing_records: Sequence[MatchableRecord]
+    record: MatchableRecord,
+    existing_records: Sequence[MatchableRecord],
+    *,
+    index: dict[tuple[IdentityKind, str], list[int]] | None = None,
 ) -> int | None:
-    """Return the first exact-match record position, or None when absent."""
-    index = build_identity_index(existing_records)
+    """Return the first exact-match record position, or None when absent.
+
+    Pass a prebuilt *index* (from :func:`build_identity_index`) to avoid
+    rebuilding it on every call when matching repeatedly against the same
+    ``existing_records`` — the add/capture write path does several lookups per
+    entry.  When omitted, the index is built from *existing_records*.
+    """
+    identity_index = build_identity_index(existing_records) if index is None else index
     for identity in extract_identities(record):
-        matches = index.get((identity["kind"], identity["value"]))
+        matches = identity_index.get((identity["kind"], identity["value"]))
         if matches:
             return matches[0]
     return None

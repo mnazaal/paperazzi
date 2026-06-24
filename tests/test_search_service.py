@@ -55,6 +55,18 @@ default = true
     return config_path, bib_path
 
 
+def test_search_without_filters_is_rejected(seeded_bib, tmp_path):
+    config_path, _bib = seeded_bib
+    result = search_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+    )
+    assert result["status"] == "error"
+    assert result["matches"] == []
+    assert any("at least one" in e for e in result["errors"])
+
+
 def test_query_matches_title(seeded_bib, tmp_path):
     config_path, _bib = seeded_bib
     result = search_bib(

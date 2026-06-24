@@ -72,3 +72,13 @@ def test_classify_input(raw, expected_kind, expected_normalized) -> None:
     assert result["kind"] == expected_kind
     assert result["normalized"] == expected_normalized
     assert result["raw"] == raw
+
+
+def test_normalize_url_preserves_ipv6_brackets() -> None:
+    from pzi.identifiers import normalize_url
+
+    assert (
+        normalize_url("http://[2606:2800:220:1:248:1893:25c8:1946]/paper.pdf")
+        == "http://[2606:2800:220:1:248:1893:25c8:1946]/paper.pdf"
+    )
+    assert normalize_url("http://[::1]:8080/x") == "http://[::1]:8080/x"
