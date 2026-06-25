@@ -392,30 +392,35 @@ def test_parallel_falls_back_to_browser() -> None:
     assert result["pdf_url"] == "https://example.com/browser.pdf"
 
 
-def test_parallel_returns_first_http_result() -> None:
-    """Multiple HTTP steps run in parallel; first success wins."""
+def test_parallel_winner_is_by_step_priority_not_completion() -> None:
+    """HTTP steps run in parallel but the winner is chosen by fallback-chain
+    position (source priority), not by whichever network call returns first.
+
+    The higher-priority step is deliberately the *slower* one: if selection
+    regressed to completion order, the faster low-priority step would win.
+    """
     import time
 
     record: dict[str, object] = {"title": "Paper"}
     context: PdfDiscoveryContext = {}
 
-    def slow_http(r, c):
-        slow_http.__name__ = "web_attachment_step"
-        time.sleep(0.2)
+    def slow_high_priority(r, c):
+        slow_high_priority.__name__ = "web_attachment_step"  # earlier in the list
+        time.sleep(0.05)
         updated = dict(r)
-        updated["pdf_url"] = "https://slow.example.com/pdf"
+        updated["pdf_url"] = "https://high.example.com/pdf"
         return updated
 
-    def fast_http(r, c):
-        fast_http.__name__ = "doi_pdf_step"
+    def fast_low_priority(r, c):
+        fast_low_priority.__name__ = "doi_pdf_step"  # later in the list, returns first
         updated = dict(r)
-        updated["pdf_url"] = "https://fast.example.com/pdf"
+        updated["pdf_url"] = "https://low.example.com/pdf"
         return updated
 
     result = apply_pdf_discovery_parallel(
-        record, [fast_http, slow_http], context, max_workers=2,
+        record, [slow_high_priority, fast_low_priority], context, max_workers=2,
     )
-    assert result["pdf_url"] == "https://fast.example.com/pdf"
+    assert result["pdf_url"] == "https://high.example.com/pdf"
 
 
 def test_parallel_handles_http_step_exceptions() -> None:

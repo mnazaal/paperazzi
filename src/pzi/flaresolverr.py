@@ -108,11 +108,15 @@ def _download_with_cookies(
         jar.set_cookie(c)
 
 
-    # Use a custom opener with the cookie jar
+    # Use the SSRF-pinned opener (redirect re-validation + connect-time IP
+    # pinning) augmented with the FlareSolverr cookie jar, so even this
+    # opt-in Cloudflare-bypass path cannot be steered at a private/internal host.
     import urllib.request
 
+    from pzi.safe_http import build_safe_opener
+
     handler = urllib.request.HTTPCookieProcessor(jar)
-    opener = urllib.request.build_opener(handler)
+    opener = build_safe_opener(extra_handlers=[handler])
 
     request = Request(
         url,

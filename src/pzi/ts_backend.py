@@ -208,7 +208,14 @@ def download_node(
                 shutil.rmtree(p, ignore_errors=True)
 
         with tarfile.open(tmp_path, "r:gz") as tar:
-            tar.extractall(path=node_dir)
+            # filter="data" rejects members with absolute paths, "..", or that
+            # would escape node_dir (tar-slip), and is required on Python 3.14+
+            # where the default-less extractall is an error.  The filter arg
+            # landed in 3.11.4; fall back for older 3.11 patch releases.
+            try:
+                tar.extractall(path=node_dir, filter="data")
+            except TypeError:  # pragma: no cover — Python < 3.11.4 only
+                tar.extractall(path=node_dir)
     except (tarfile.TarError, OSError) as exc:
         raise RuntimeError(f"failed to extract Node.js tarball: {exc}") from exc
     finally:

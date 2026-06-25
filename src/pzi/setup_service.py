@@ -7,6 +7,8 @@ import secrets
 import shlex
 import sys
 
+from pzi.config import escape_toml_string
+
 
 def render_config(
     *,
@@ -63,12 +65,12 @@ def render_config(
         [
             "",
             "[[bibs]]",
-            f'name = "{_escape_toml_string(bib_name)}"',
-            f'path = "{_escape_toml_string(bib_path)}"',
+            f'name = "{escape_toml_string(bib_name)}"',
+            f'path = "{escape_toml_string(bib_path)}"',
         ]
     )
     if papers_dir:
-        lines.append(f'papers_dir = "{_escape_toml_string(papers_dir)}"')
+        lines.append(f'papers_dir = "{escape_toml_string(papers_dir)}"')
     else:
         lines.append("# papers_dir = \"~/bibs/papers\"  # defaults to <bib-dir>/papers/")
     lines.append("default = true")
@@ -113,7 +115,3 @@ def _find_firefox_profile() -> str | None:
     # Sort by mtime descending (most recent first), then alphabetically
     candidates.sort(key=lambda x: (-x[1], x[0]))
     return candidates[0][0]
-
-
-def _escape_toml_string(value: str) -> str:
-    return value.replace("\\", "\\\\").replace('"', '\\"')

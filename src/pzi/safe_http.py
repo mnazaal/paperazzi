@@ -147,13 +147,18 @@ def _pinned_conn_classes(
 
 
 def build_safe_opener(
-    *, context: ssl.SSLContext | None = None, allow_host: str | None = None
+    *,
+    context: ssl.SSLContext | None = None,
+    allow_host: str | None = None,
+    extra_handlers: Sequence[urllib.request.BaseHandler] = (),
 ) -> urllib.request.OpenerDirector:
     """Build an opener that follows redirects safely and pins resolved IPs.
 
     Deliberately omits proxy/file/ftp/data handlers so a redirect cannot pivot
     to a non-http(s) scheme or a local file.  ``allow_host`` permits a single
     explicitly-trusted host (e.g. a configured EZProxy host) on a private IP.
+    ``extra_handlers`` adds caller-supplied handlers (e.g. a cookie processor)
+    while keeping the SSRF pinning and redirect re-validation.
     """
     ctx = context or ssl.create_default_context()
     http_cls, https_cls = _pinned_conn_classes(allow_host)
@@ -164,6 +169,7 @@ def build_safe_opener(
         _ValidatingRedirectHandler(allow_host),
         urllib.request.HTTPErrorProcessor(),
         urllib.request.HTTPDefaultErrorHandler(),
+        *extra_handlers,
     ):
         opener.add_handler(handler)
     return opener

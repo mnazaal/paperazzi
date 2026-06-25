@@ -3,8 +3,8 @@
 import os
 from unittest.mock import patch
 
+from pzi.config import escape_toml_string as _escape_toml_string
 from pzi.setup_service import (
-    _escape_toml_string,
     _find_firefox_profile,
     render_config,
 )

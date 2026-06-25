@@ -591,6 +591,10 @@ def _escape(value: str) -> str:
     return _CONTROL_RE.sub(_ctrl_escape, value)
 
 
+# Public name for reuse by other config writers (e.g. setup_service).
+escape_toml_string = _escape
+
+
 def _optional_string(key: str, value: str | None) -> list[str]:
     """Return a single TOML key = value line if value is not None."""
     if value is not None:
