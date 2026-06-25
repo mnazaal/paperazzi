@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, TypeAlias
+from typing import Any, NotRequired, TypedDict
 
 from pzi.bib_repository import (
     merge_bib_entries,
@@ -16,8 +16,27 @@ from pzi.similarity import (
     compute_similarity_hint,
 )
 
-DedupeResult: TypeAlias = dict[str, Any]
-MergeResult: TypeAlias = dict[str, Any]
+
+class DedupeResult(TypedDict):
+    status: str
+    bib_path: str
+    total_entries: int
+    exact_duplicates: list[dict[str, Any]]
+    fuzzy_candidates: list[dict[str, Any]]
+    total_clusters: int
+    errors: list[str]
+
+
+class MergeResult(TypedDict):
+    status: str
+    citekey_a: str
+    citekey_b: str
+    dry_run: bool
+    message: str
+    merged_title: NotRequired[str]
+    dropped_citekey: NotRequired[str]
+    changed_fields: NotRequired[list[str]]
+    merged_record: NotRequired[dict[str, Any]]
 
 
 def find_duplicates(

@@ -6,13 +6,14 @@ No I/O, no side effects, no imports from CLI/HTTP handler machinery.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from pzi.bibtex import normalize_authors
 
 
 def capture_payload(
-    result: dict[str, Any], *, include_diagnostics: bool = False
+    result: Mapping[str, Any], *, include_diagnostics: bool = False
 ) -> dict[str, Any]:
     payload = {
         "status": result["status"],
@@ -40,7 +41,7 @@ def capture_payload(
     return payload
 
 
-def _base_payload(result: dict[str, Any], **extra: Any) -> dict[str, Any]:
+def _base_payload(result: Mapping[str, Any], **extra: Any) -> dict[str, Any]:
     """Common payload skeleton: status, bib, errors."""
     return {
         "status": result["status"],
@@ -50,13 +51,13 @@ def _base_payload(result: dict[str, Any], **extra: Any) -> dict[str, Any]:
     }
 
 
-def search_payload(result: dict[str, Any]) -> dict[str, Any]:
+def search_payload(result: Mapping[str, Any]) -> dict[str, Any]:
     """Serialize a search_bib result for the HTTP API."""
     matches = result.get("matches", [])
     return _base_payload(result, matches=matches, total=len(matches))
 
 
-def entries_payload(result: dict[str, Any], offset: int, limit: int) -> dict[str, Any]:
+def entries_payload(result: Mapping[str, Any], offset: int, limit: int) -> dict[str, Any]:
     """Serialize entries from list_entries or legacy search_bib results."""
     if "items" in result:
         extra = {
@@ -79,7 +80,7 @@ def entries_payload(result: dict[str, Any], offset: int, limit: int) -> dict[str
     )
 
 
-def detail_payload(record: dict[str, Any], bib_name: str | None) -> dict[str, Any]:
+def detail_payload(record: Mapping[str, Any], bib_name: str | None) -> dict[str, Any]:
     """Serialize a single BibTeX record for the HTTP API."""
     tags = list(record.get("tags") or [])
     return {
@@ -104,7 +105,7 @@ def detail_payload(record: dict[str, Any], bib_name: str | None) -> dict[str, An
     }
 
 
-def tag_list_payload(result: dict[str, Any]) -> dict[str, Any]:
+def tag_list_payload(result: Mapping[str, Any]) -> dict[str, Any]:
     """Serialize a list_tags result for the HTTP API."""
     return _base_payload(
         result,
@@ -113,7 +114,7 @@ def tag_list_payload(result: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def tag_change_payload(result: dict[str, Any]) -> dict[str, Any]:
+def tag_change_payload(result: Mapping[str, Any]) -> dict[str, Any]:
     """Serialize a tag add/remove result for the HTTP API."""
     return _base_payload(
         result,
@@ -126,7 +127,7 @@ def tag_change_payload(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def update_payload(
-    result: dict[str, Any], *, include_diagnostics: bool = False
+    result: Mapping[str, Any], *, include_diagnostics: bool = False
 ) -> dict[str, Any]:
     """Serialize an update_bib result for the HTTP API."""
     return _base_payload(
@@ -139,7 +140,7 @@ def update_payload(
 
 
 def promote_payload(
-    result: dict[str, Any], *, include_diagnostics: bool = False
+    result: Mapping[str, Any], *, include_diagnostics: bool = False
 ) -> dict[str, Any]:
     """Serialize a promote_bib result for the HTTP API."""
     return _base_payload(

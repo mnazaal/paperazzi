@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, TypeAlias, cast
+from typing import Any, NotRequired, TypedDict, cast
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
 
@@ -29,11 +29,27 @@ from pzi.pdf import snapshot_pdf_paths as _snapshot_pdf_paths
 from pzi.similarity import author_overlap
 from pzi.translation_server import fetch_search_translations
 
-PromoteItem: TypeAlias = dict[str, Any]
+
+class PromoteItem(TypedDict):
+    preprint_citekey: str
+    published_citekey: str | None
+    action: str
+    changed_fields: list[str]
+    pdf_attached: bool | None
+    note: str | None
+    diff: NotRequired[str]
+    metadata_diagnostics: NotRequired[list[str]]
+    metadata_warnings: NotRequired[list[str]]
 
 
-
-PromoteResult: TypeAlias = dict[str, Any]
+class PromoteResult(TypedDict):
+    status: str
+    bib_name: str | None
+    dry_run: bool
+    keep_preprint: bool
+    items: list[PromoteItem]
+    errors: list[str]
+    summary: NotRequired[dict[str, Any]]
 
 
 
@@ -166,7 +182,7 @@ def promote_bib(
             items.append(item)
             continue
 
-        pdf_kwargs = dict(
+        pdf_kwargs: dict[str, Any] = dict(
             papers_dir=bib["papers_dir"],
             fetch_binary=fetch_binary,
             flaresolverr_url=effective_flaresolverr_url,
@@ -212,7 +228,7 @@ def promote_bib(
     # Emit a top-level warning when S2 rate-limit failures accumulate.
     s2_rate_count = sum(
         1 for item in items
-        if isinstance(item.get("note"), str)
+        if isinstance(item["note"], str)
         and "semantic-scholar (rate" in item["note"]
     )
     if s2_rate_count >= 2:

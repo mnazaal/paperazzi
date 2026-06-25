@@ -8,7 +8,7 @@ from typing import Any, TypeAlias, cast
 
 from pzi import add_planning as _add_planning
 from pzi.add_planning import fetch_record_for_input, merge_record_sources
-from pzi.bib_repository import read_bib_file, serialize_bibtex
+from pzi.bib_repository import WritePlan, read_bib_file, serialize_bibtex
 from pzi.bibtex import BibtexEntry, NormalizedRecord, bibtex_entry_to_record
 from pzi.config import BibConfig
 from pzi.pdf import fetch_and_store_pdf_with_fallbacks, remove_new_pdf, snapshot_pdf_paths
@@ -275,45 +275,45 @@ def attach_pdf_if_available(
 
 
 def plan_with_applied_record(
-    plan: dict[str, Any],
+    plan: WritePlan,
     intended_record: NormalizedRecord,
     updated_entries: list[BibtexEntry],
-) -> dict[str, Any]:
+) -> WritePlan:
     updated_records = [bibtex_entry_to_record(entry) for entry in updated_entries]
 
     # When force_new was used, both the old and new entries share the same
     # DOI — find_exact_match would return the old entry by identity.
     # Match by citekey instead to preserve the force-generated citekey.
     if plan.get("force_new"):
-        planned_citekey = plan.get("record", {}).get("citekey")
+        planned_citekey = plan["record"].get("citekey")
         if isinstance(planned_citekey, str) and planned_citekey.strip():
             for idx, record in enumerate(updated_records):
                 if record.get("citekey") == planned_citekey:
-                    if planned_citekey == plan.get("record", {}).get("citekey"):
+                    if planned_citekey == plan["record"].get("citekey"):
                         return plan
                     updated_plan = dict(plan)
                     updated_plan["record"] = record
                     updated_plan["entry"] = updated_entries[idx]
-                    return updated_plan
+                    return cast(WritePlan, updated_plan)
         return plan
 
     match_index = find_exact_match(intended_record, updated_records)
     if match_index is None:
         return plan
     applied_record = updated_records[match_index]
-    if applied_record.get("citekey") == plan.get("record", {}).get("citekey"):
+    if applied_record.get("citekey") == plan["record"].get("citekey"):
         return plan
     updated_plan = dict(plan)
     updated_plan["record"] = applied_record
     updated_plan["entry"] = updated_entries[match_index]
-    updated_plan["action"] = "update" if plan.get("action") == "update" else plan.get("action")
-    return updated_plan
+    updated_plan["action"] = "update" if plan["action"] == "update" else plan["action"]
+    return cast(WritePlan, updated_plan)
 
 
 def build_add_record_result(
     *,
-    bib: dict[str, Any],
-    plan: dict[str, Any],
+    bib: BibConfig,
+    plan: WritePlan,
     warnings: list[str],
     dry_run: bool,
 ) -> AddRecordResult:
@@ -353,7 +353,7 @@ def build_add_record_result(
 
 def dry_run_diff(
     *,
-    plan: dict[str, Any],
+    plan: WritePlan,
     existing_entries: list[BibtexEntry],
 ) -> str:
     new_entry = plan["entry"]

@@ -5,11 +5,31 @@ from __future__ import annotations
 import shlex
 import subprocess
 from collections.abc import Callable, Mapping
-from typing import Any, TypeAlias
+from dataclasses import dataclass
+from typing import Any
 
-from pzi.config import BibConfig
+from pzi.config import AppConfig, BibConfig
 
-CaptureContext: TypeAlias = dict[str, Any]
+
+@dataclass(frozen=True)
+class CaptureContext:
+    """Immutable runtime context for one capture: resolved config, bib, and the
+    per-invocation knobs (secrets, browser overrides, API endpoint)."""
+
+    config: AppConfig
+    bib: BibConfig
+    contact_email: str | None
+    unpaywall_email: str | None
+    s2_api_key: str | None
+    browser_pdf_cmd: str | None
+    browser: str | None
+    citekey_format: str | None
+    pdf_filename_format: str | None
+    api_url: str
+    api_auth_token: str | None
+    desktop_fallback_hosts: set[str]
+    pdf_discovery_parallel: bool
+    ezproxy_host: str | None
 
 
 def resolve_optional_value(
@@ -66,8 +86,8 @@ def _reject_shell_metacharacters(command: str) -> None:
 
 def build_capture_context(
     *,
-    config: Mapping[str, Any],
-    bib: BibConfig | Mapping[str, Any],
+    config: AppConfig,
+    bib: BibConfig,
     browser_pdf_cmd_override: str | None,
     browser: str | None,
     resolve_secret: Callable[[str | None, str | None], str | None] | None = None,
@@ -88,25 +108,25 @@ def build_capture_context(
         api_host = config.get("api_listen_host", "127.0.0.1")
         api_port = config.get("api_listen_port", 8765)
         api_url = f"http://{api_host}:{api_port}"
-    return {
-        "config": config,
-        "bib": bib,
-        "contact_email": contact_email,
-        "unpaywall_email": unpaywall_email,
-        "s2_api_key": resolver(
+    return CaptureContext(
+        config=config,
+        bib=bib,
+        contact_email=contact_email,
+        unpaywall_email=unpaywall_email,
+        s2_api_key=resolver(
             config["semantic_scholar_api_key_cmd"],
             config["semantic_scholar_api_key"],
         ),
-        "browser_pdf_cmd": browser_pdf_cmd_override or config.get("browser_pdf_cmd"),
-        "browser": browser,
-        "citekey_format": config.get("citekey_format"),
-        "pdf_filename_format": config.get("pdf_filename_format"),
-        "api_url": api_url,
-        "api_auth_token": config.get("api_auth_token"),
-        "desktop_fallback_hosts": set(config.get("desktop_fallback_hosts", [])),
-        "pdf_discovery_parallel": config.get("pdf_discovery_parallel", False),
-        "ezproxy_host": config.get("ezproxy_host"),
-    }
+        browser_pdf_cmd=browser_pdf_cmd_override or config.get("browser_pdf_cmd"),
+        browser=browser,
+        citekey_format=config.get("citekey_format"),
+        pdf_filename_format=config.get("pdf_filename_format"),
+        api_url=api_url,
+        api_auth_token=config.get("api_auth_token"),
+        desktop_fallback_hosts=set(config.get("desktop_fallback_hosts", [])),
+        pdf_discovery_parallel=config.get("pdf_discovery_parallel", False),
+        ezproxy_host=config.get("ezproxy_host"),
+    )
 
 
 # ---------------------------------------------------------------------------

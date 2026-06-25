@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Sequence
-from typing import Any, TextIO
+from typing import TextIO
 
 from pzi.cli_render import _error_lines, _render_search_matches
 from pzi.commands.common import print_lines, target_list
-from pzi.search_service import search_bib
+from pzi.search_service import SearchResult, search_bib
 
-SearchService = Callable[..., dict[str, Any]]
+SearchService = Callable[..., SearchResult]
 
 
 def run_search_command(

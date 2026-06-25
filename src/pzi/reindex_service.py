@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, TypeAlias
+from typing import Any, TypedDict
 
 from pzi.bib_repository import (
     read_bib_file_raw,
@@ -14,7 +14,13 @@ from pzi.bib_repository import (
 from pzi.format_templates import format_citekey
 from pzi.pdf_planning import plan_pdf_path
 
-ReindexResult: TypeAlias = dict[str, Any]
+
+class ReindexResult(TypedDict):
+    status: str
+    bib_path: str
+    total_entries: int
+    changed: list[dict[str, Any]]
+    errors: list[str]
 
 
 def reindex_library(

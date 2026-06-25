@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
-from typing import Any, TypeAlias
+from typing import Any, NotRequired, TypeAlias, TypedDict
 
 from pzi.bib_repository import (
     delete_bib_entry,
@@ -22,7 +22,10 @@ from pzi.promote_service import is_preprint
 BibInfo: TypeAlias = dict[str, Any]
 
 
-BibListResult: TypeAlias = dict[str, Any]
+class BibListResult(TypedDict):
+    status: str
+    bibs: list[BibInfo]
+    errors: list[str]
 
 
 def list_bibs(*, config_path: str, home_dir: str) -> BibListResult:
@@ -45,10 +48,29 @@ def list_bibs(*, config_path: str, home_dir: str) -> BibListResult:
     }
 
 
-BibStatsResult: TypeAlias = dict[str, Any]
+class BibStatsResult(TypedDict):
+    status: str
+    bib_path: str
+    papers_dir: str
+    total_entries: int
+    with_pdf: int
+    with_doi: int
+    with_arxiv_id: int
+    preprints: int
+    entry_types: dict[str, int]
+    errors: list[str]
 
 
-DeleteEntryResult: TypeAlias = dict[str, Any]
+class DeleteEntryResult(TypedDict):
+    status: str
+    citekey: str
+    bib_path: str
+    message: str
+    errors: list[str]
+    dry_run: NotRequired[bool]
+    title: NotRequired[str]
+    pdf_path: NotRequired[str | None]
+    backup_path: NotRequired[str]
 
 
 def bib_stats(*, bib_path: str, papers_dir: str) -> BibStatsResult:

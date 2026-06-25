@@ -6,7 +6,7 @@ import os
 import shutil
 from collections import Counter
 from pathlib import Path
-from typing import Any, TypeAlias
+from typing import Any, NotRequired, TypedDict
 
 from pzi.bib_repository import (
     read_bib_file_raw,
@@ -16,7 +16,17 @@ from pzi.bib_repository import (
 from pzi.bibtex import BibtexEntry
 from pzi.pdf_planning import pdf_file_present
 
-CleanResult: TypeAlias = dict[str, Any]
+
+class CleanResult(TypedDict):
+    status: str
+    bib_path: str
+    papers_dir: str
+    total_entries: int
+    duplicate_citekeys: list[str]
+    missing_pdfs: list[str]
+    orphan_pdfs: list[str]
+    issues: list[dict[str, Any]]
+    actions: NotRequired[list[dict[str, Any]]]
 
 
 def validate_library(

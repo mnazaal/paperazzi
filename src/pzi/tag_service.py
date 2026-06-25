@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from typing import Any, Literal, TypeAlias, cast
+from typing import Literal, TypedDict, cast
 
 from pzi.bib_repository import (
     find_entry_index,
@@ -46,11 +46,23 @@ def _to_ascii(value: str) -> str:
     normalized = unicodedata.normalize("NFKD", value)
     return normalized.encode("ascii", "ignore").decode("ascii")
 
-TagListResult: TypeAlias = dict[str, Any]
+class TagListResult(TypedDict):
+    status: str
+    bib_name: str | None
+    citekey: str | None
+    tags: list[str]
+    errors: list[str]
 
 
-
-TagChangeResult: TypeAlias = dict[str, Any]
+class TagChangeResult(TypedDict):
+    status: str
+    bib_name: str | None
+    citekey: str | None
+    tags: list[str]
+    changed: bool
+    dry_run: bool
+    message: str
+    errors: list[str]
 
 
 def list_tags(

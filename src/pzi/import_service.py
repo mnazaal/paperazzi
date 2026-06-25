@@ -3,13 +3,24 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, TypeAlias
+from typing import Any, NotRequired, TypedDict
 
 from pzi.add_service import add_record_to_bib
 from pzi.bib_repository import parse_bibtex
 from pzi.bibtex import bibtex_entry_to_record
 
-ImportResult: TypeAlias = dict[str, Any]
+
+class ImportResult(TypedDict):
+    status: str
+    source_path: str
+    message: str
+    errors: list[str]
+    total_source: int
+    imported: int
+    skipped_duplicates: int
+    skipped_errors: int
+    results: list[dict[str, Any]]
+    skipped_in_source: NotRequired[int]
 
 
 def import_from_bibtex(

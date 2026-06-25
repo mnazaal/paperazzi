@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, TypeAlias, cast
+from typing import Any, NotRequired, TypedDict, cast
 
 from pzi.add_planning import (
     metadata_result_confidence_warnings,
@@ -20,11 +20,23 @@ from pzi.bibtex import NormalizedRecord, record_to_bibtex_entry
 from pzi.config import load_and_resolve_bib
 from pzi.translation_server import fetch_search_translations
 
-UpdatePlanItem: TypeAlias = dict[str, Any]
+
+class UpdatePlanItem(TypedDict):
+    citekey: str
+    changed_fields: list[str]
+    applied: bool
+    note: str | None
+    diff: NotRequired[str]
+    metadata_diagnostics: NotRequired[list[str]]
+    metadata_warnings: NotRequired[list[str]]
 
 
-
-UpdateBibResult: TypeAlias = dict[str, Any]
+class UpdateBibResult(TypedDict):
+    status: str
+    bib_name: str | None
+    dry_run: bool
+    items: list[UpdatePlanItem]
+    errors: list[str]
 
 
 
@@ -135,7 +147,7 @@ def update_bib(
             plan = plan_bib_write(enriched, records)
             diff = preview_write_plan(bib["path"], plan)["diff"]
 
-        item = {
+        item: UpdatePlanItem = {
             "citekey": citekey,
             "changed_fields": changed_fields,
             "applied": applied if not dry_run else False,

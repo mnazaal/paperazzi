@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, TypeAlias
+from typing import Any, TypedDict
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -10,11 +10,27 @@ from pzi.capture_context import resolve_optional_value
 from pzi.config import load_config_file
 from pzi.metadata_sources import probe_s2_api
 
-DoctorBibStatus: TypeAlias = dict[str, Any]
+
+class DoctorBibStatus(TypedDict):
+    name: str
+    path: str
+    path_exists: bool
+    papers_dir: str
+    papers_dir_exists: bool
+    default: bool
 
 
-
-DoctorResult: TypeAlias = dict[str, Any]
+class DoctorResult(TypedDict):
+    status: str
+    config_path: str
+    config_ok: bool
+    config_errors: list[str]
+    bibs: list[DoctorBibStatus]
+    translation_server_url: str | None
+    translation_server_reachable: bool
+    translation_probe_error: str | None
+    credentials: dict[str, str]
+    semantic_scholar: dict[str, Any]
 
 
 

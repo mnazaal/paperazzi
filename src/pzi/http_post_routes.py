@@ -429,7 +429,7 @@ def _handle_delete_post(
         dry_run=dry_run,
     )
     status = status_for_service_result(result)
-    return status, result
+    return status, dict(result)
 
 
 def _handle_capture_post(

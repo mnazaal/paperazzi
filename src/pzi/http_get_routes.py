@@ -74,7 +74,7 @@ def _handle_bibs_get(
 ) -> JsonResponse:
     result = list_bibs(config_path=config_path, home_dir=home_dir)
     status = status_for_service_result(result)
-    return status, result
+    return status, dict(result)
 
 
 def _parse_query(query_string: str) -> dict[str, str]:

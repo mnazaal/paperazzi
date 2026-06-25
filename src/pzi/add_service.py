@@ -35,7 +35,7 @@ from pzi.bibtex import (
     normalize_authors,
     resolve_citekey_collision,
 )
-from pzi.capture_context import build_capture_context
+from pzi.capture_context import CaptureContext, build_capture_context
 from pzi.capture_local_pdf import (
     add_local_pdf,
     attach_pdf_if_available,
@@ -56,7 +56,6 @@ from pzi.translation_server import (
 )
 
 AddRecordResult: TypeAlias = dict[str, Any]
-CaptureContext: TypeAlias = dict[str, Any]
 
 _error_result = _add_planning.error_result
 _manual_record_from_overrides = _add_planning.manual_record_from_overrides
@@ -99,19 +98,19 @@ def add_input_to_bib(
         return context_error
     assert context is not None
 
-    config = context["config"]
-    bib = context["bib"]
-    contact_email = context.get("contact_email")
-    unpaywall_email = context["unpaywall_email"]
-    s2_api_key = context["s2_api_key"]
-    effective_browser_pdf_cmd = context["browser_pdf_cmd"]
-    effective_browser = context.get("browser")
-    citekey_format = context["citekey_format"]
-    pdf_filename_format = context["pdf_filename_format"]
-    api_url = context.get("api_url")
-    api_auth_token = context.get("api_auth_token")
-    ezproxy_host = context.get("ezproxy_host")
-    desktop_fallback_hosts = context.get("desktop_fallback_hosts")
+    config = context.config
+    bib = context.bib
+    contact_email = context.contact_email
+    unpaywall_email = context.unpaywall_email
+    s2_api_key = context.s2_api_key
+    effective_browser_pdf_cmd = context.browser_pdf_cmd
+    effective_browser = context.browser
+    citekey_format = context.citekey_format
+    pdf_filename_format = context.pdf_filename_format
+    api_url = context.api_url
+    api_auth_token = context.api_auth_token
+    ezproxy_host = context.ezproxy_host
+    desktop_fallback_hosts = context.desktop_fallback_hosts
     metadata_confidence_min_score = int(config.get("metadata_confidence_min_score", 0))
 
     classified = classify_input(value)
@@ -170,7 +169,7 @@ def add_input_to_bib(
             file_path_style=config.get("pdf_file_path_style", "absolute"),
             api_url=api_url,
             api_auth_token=api_auth_token,
-            desktop_fallback_hosts=config.get("desktop_fallback_hosts"),
+            desktop_fallback_hosts=desktop_fallback_hosts,
             ezproxy_host=ezproxy_host,
         )
 

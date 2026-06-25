@@ -7,14 +7,49 @@ import re
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, TypeAlias
+from typing import Any, TypeAlias, TypedDict
 from urllib.parse import urlsplit
 
-BibConfig: TypeAlias = dict[str, Any]
+
+class BibConfig(TypedDict):
+    name: str
+    path: str
+    papers_dir: str
+    default: bool
 
 
-
-AppConfig: TypeAlias = dict[str, Any]
+class AppConfig(TypedDict):
+    translation_server_url: str
+    bibs: list[BibConfig]
+    api_listen_host: str
+    api_listen_port: int
+    api_auth_token: str | None
+    api_allowed_origins: tuple[str, ...] | None
+    api_max_body_bytes: int
+    contact_email: str | None
+    contact_email_cmd: str | None
+    unpaywall_email: str | None
+    unpaywall_email_cmd: str | None
+    semantic_scholar_api_key: str | None
+    semantic_scholar_api_key_cmd: str | None
+    flaresolverr_url: str | None
+    browser_pdf_cmd: str | None
+    citekey_format: str | None
+    pdf_filename_format: str | None
+    pdf_file_path_style: str
+    page_metadata_cmd: str | None
+    page_metadata_timeout_seconds: int
+    metadata_confidence_min_score: int
+    promote_confidence_threshold: int
+    browser_hook: bool
+    pzi_data_home: str
+    api_url: str
+    browser_profile_path: str | None
+    browser_engine: str
+    rate_limit_rpm: int
+    pdf_discovery_parallel: bool
+    desktop_fallback_hosts: list[str]
+    ezproxy_host: str | None
 
 
 
@@ -44,6 +79,8 @@ def validate_bib_config(
         return None, errors
 
     assert raw_path_val is not None, "already validated"
+    assert name is not None, "already validated"
+    assert isinstance(raw_default, bool), "already validated"
     path = _normalize_path(raw_path_val, home_dir=home_dir)
     papers_dir = (
         _normalize_path(raw_papers_dir, home_dir=home_dir)

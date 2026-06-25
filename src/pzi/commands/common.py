@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, TextIO
 
 from pzi.cli_render import _error_lines
-from pzi.config import load_config_file, resolve_library_target
+from pzi.config import BibConfig, load_config_file, resolve_library_target
 
 
 def print_lines(lines: Sequence[str], out: TextIO) -> None:
@@ -17,7 +17,7 @@ def print_lines(lines: Sequence[str], out: TextIO) -> None:
 
 def resolve_target_or_error(
     *, config_path: str, home_dir: str, bib_selector: str | None, stderr: TextIO,
-) -> tuple[dict[str, Any], dict[str, Any]] | None:
+) -> tuple[dict[str, Any], BibConfig] | None:
     """Load config and resolve a single library target, printing errors on failure.
 
     Returns ``(config, target)`` or ``None`` (after printing the error).  Shared by

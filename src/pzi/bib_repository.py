@@ -10,7 +10,7 @@ import tempfile
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Literal, TypeAlias, cast
+from typing import Any, Literal, NotRequired, TypeAlias, TypedDict, cast
 
 import portalocker
 from bibtexparser.entrypoint import parse_string, write_string
@@ -52,11 +52,33 @@ def _find_entry_index(entries: Sequence[dict[str, Any]], citekey: str) -> int | 
 
 WriteAction = Literal["insert", "update"]
 
-WritePlan: TypeAlias = dict[str, Any]
 
+class WritePlan(TypedDict):
+    """An insert/update operation planned against a BibTeX library.
+
+    The five core keys are always present; only ``force_new`` is optional (set
+    by force-new inserts).  It is a plain ``dict`` at runtime, so dynamic
+    construction / spreads still work — ``cast`` at sites that build it from a
+    plain dict copy.
+    """
+
+    action: WriteAction
+    index: int | None
+    record: NormalizedRecord
+    entry: BibtexEntry
+    changed_fields: list[str]
+    force_new: NotRequired[bool]
+
+
+# Loose record-shaped dict accepted by merge_entries (carries arbitrary keys).
 MergeableEntry: TypeAlias = dict[str, Any]
 
-MergeDecision: TypeAlias = dict[str, Any]
+
+class MergeDecision(TypedDict):
+    """Result of :func:`merge_entries`: the merged record and what changed."""
+
+    merged: NormalizedRecord
+    changed_fields: list[str]
 
 
 @contextmanager
@@ -480,7 +502,7 @@ def _rebase_insert_plan_against_current(
     updated_plan = dict(plan)
     updated_plan["record"] = updated_record
     updated_plan["entry"] = updated_entry
-    return updated_plan
+    return cast(WritePlan, updated_plan)
 
 
 def _validate_bibtex_roundtrip(entries: list[BibtexEntry]) -> None:
@@ -943,7 +965,7 @@ def merge_entries(existing: MergeableEntry, incoming: MergeableEntry) -> MergeDe
             merged[field] = existing[field]
 
     return {
-        "merged": merged,
+        "merged": cast(NormalizedRecord, merged),
         "changed_fields": sorted(set(changed_fields)),
     }
 

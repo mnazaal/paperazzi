@@ -5,11 +5,19 @@ from __future__ import annotations
 import csv
 import io
 import json as _json
-from typing import Any, TypeAlias
+from typing import Any, TypedDict
 
 from pzi.bib_repository import read_bib_file_raw, serialize_bibtex, with_bib_lock
 
-ExportResult: TypeAlias = dict[str, Any]
+
+class ExportResult(TypedDict):
+    status: str
+    bib_path: str
+    total_entries: int
+    format: str
+    content: str
+    content_type: str
+    errors: list[str]
 
 # RIS type mapping from bibtex entry types
 _BIBTEX_TO_RIS_TYPE: dict[str, str] = {

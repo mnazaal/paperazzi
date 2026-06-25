@@ -59,22 +59,20 @@ def test_build_capture_context_resolves_runtime_options() -> None:
         resolve_secret=lambda command, fallback: f"resolved:{command}:{fallback}",
     )
 
-    assert context == {
-        "config": config,
-        "bib": bib,
-        "unpaywall_email": "resolved:email-cmd:fallback@example.com",
-        "contact_email": "resolved:contact-cmd:contact@example.com",
-        "s2_api_key": "resolved:s2-cmd:fallback-key",
-        "browser_pdf_cmd": "override hook",
-        "browser": "firefox",
-        "citekey_format": "{{ authors }}{{ year }}",
-        "pdf_filename_format": "{{ citekey }}-{{ year }}",
-        "api_url": "http://127.0.0.1:8765",
-        "api_auth_token": None,
-            "desktop_fallback_hosts": set(),
-            "pdf_discovery_parallel": False,
-            "ezproxy_host": None,
-        }
+    assert context.config == config
+    assert context.bib == bib
+    assert context.unpaywall_email == "resolved:email-cmd:fallback@example.com"
+    assert context.contact_email == "resolved:contact-cmd:contact@example.com"
+    assert context.s2_api_key == "resolved:s2-cmd:fallback-key"
+    assert context.browser_pdf_cmd == "override hook"
+    assert context.browser == "firefox"
+    assert context.citekey_format == "{{ authors }}{{ year }}"
+    assert context.pdf_filename_format == "{{ citekey }}-{{ year }}"
+    assert context.api_url == "http://127.0.0.1:8765"
+    assert context.api_auth_token is None
+    assert context.desktop_fallback_hosts == set()
+    assert context.pdf_discovery_parallel is False
+    assert context.ezproxy_host is None
 
 
 def test_build_capture_context_uses_contact_email_as_unpaywall_fallback() -> None:
@@ -98,8 +96,8 @@ def test_build_capture_context_uses_contact_email_as_unpaywall_fallback() -> Non
         resolve_secret=lambda command, fallback: f"resolved:{command}:{fallback}" if command else fallback,
     )
 
-    assert context["contact_email"] == "resolved:contact-cmd:contact@example.com"
-    assert context["unpaywall_email"] == "resolved:contact-cmd:contact@example.com"
+    assert context.contact_email == "resolved:contact-cmd:contact@example.com"
+    assert context.unpaywall_email == "resolved:contact-cmd:contact@example.com"
 
 
 def test_resolve_contact_email_prefers_cmd_over_plaintext() -> None:

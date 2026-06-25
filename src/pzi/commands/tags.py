@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, TextIO
 
 from pzi.cli_render import _error_lines, _render_tag_mutation_success
 from pzi.commands.common import print_lines
 from pzi.tag_service import add_tags, list_tags, parse_tag_csv, remove_tags
 
-TagService = Callable[..., dict[str, Any]]
+TagService = Callable[..., Mapping[str, Any]]
 TagParser = Callable[[str], list[str]]
 
 

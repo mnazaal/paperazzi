@@ -2,18 +2,28 @@
 
 from __future__ import annotations
 
-from typing import Any, TypeAlias, cast
+from typing import TypedDict, cast
 
 from pzi.bib_repository import read_bib_file
 from pzi.bibtex import normalize_authors
 from pzi.config import load_and_resolve_bib
 from pzi.tag_service import normalize_tags
 
-SearchMatch: TypeAlias = dict[str, Any]
+
+class SearchMatch(TypedDict):
+    citekey: str
+    title: str | None
+    authors: list[str]
+    year: int | None
+    tags: list[str]
+    matched_fields: list[str]
 
 
-
-SearchResult: TypeAlias = dict[str, Any]
+class SearchResult(TypedDict):
+    status: str
+    bib_name: str | None
+    matches: list[SearchMatch]
+    errors: list[str]
 
 
 
