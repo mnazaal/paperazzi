@@ -5,9 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict
 
-from pzi.add_service import add_record_to_bib
+from pzi.add_service import add_records_to_bib_batch
 from pzi.bib_repository import parse_bibtex
 from pzi.bibtex import bibtex_entry_to_record
+from pzi.config import load_and_resolve_bib
 
 
 class ImportResult(TypedDict):
@@ -96,10 +97,12 @@ def import_from_bibtex(
         record["entry_type"] = entry.get("entry_type", "article")  # type: ignore[typeddict-unknown-key]
         records.append(record)  # type: ignore[arg-type]
 
-    # Pre-dedupe: read target bib once to check for existing matches
-    # We don't have direct access to the target bib path here, but
-    # add_record_to_bib handles dedupe internally. We batch calls and
-    # collect results.
+    # Resolve config + target once, then plan/write every record under a single
+    # lock with one atomic write (see add_records_to_bib_batch) instead of
+    # re-reading config and re-parsing/rewriting the whole .bib per entry.
+    resolved = load_and_resolve_bib(
+        config_path=config_path, home_dir=home_dir, bib_selector=bib_selector,
+    )
 
     results: list[dict[str, Any]] = []
     imported = 0
@@ -107,27 +110,34 @@ def import_from_bibtex(
     skipped_errors = 0
     errors: list[str] = []
 
-    for record in records:
+    if isinstance(resolved, list):
+        # Config/target resolution failed: every record fails identically.
+        batch_results: list[dict[str, Any]] = [
+            {"status": "error", "citekey": r.get("citekey"),
+             "message": "; ".join(resolved), "errors": resolved}
+            for r in records
+        ]
+    else:
+        config, bib = resolved
         try:
-            result = add_record_to_bib(
-                config_path=config_path,
-                home_dir=home_dir,
-                record=record,
-                bib_selector=bib_selector,
+            batch_results = add_records_to_bib_batch(
+                bib=bib,
+                records=records,
                 dry_run=dry_run,
                 force_new=force_new,
+                browser_hook=config.get("browser_hook", True),
+                citekey_format=config.get("citekey_format"),
+                pdf_filename_format=config.get("pdf_filename_format"),
+                file_path_style=config.get("pdf_file_path_style", "absolute"),
             )
         except Exception as exc:
-            citekey = record.get("citekey", "?")
-            results.append({
-                "citekey": citekey,
-                "status": "error",
-                "message": str(exc),
-            })
-            skipped_errors += 1
-            errors.append(f"{citekey}: {exc}")
-            continue
+            batch_results = [
+                {"status": "error", "citekey": r.get("citekey"),
+                 "message": str(exc), "errors": [str(exc)]}
+                for r in records
+            ]
 
+    for record, result in zip(records, batch_results):
         citekey = result.get("citekey", record.get("citekey", "?"))
         status = result.get("status", "unknown")
 

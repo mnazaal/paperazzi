@@ -9,7 +9,7 @@ Metadata fetching is delegated to add_planning.py.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, TypeAlias, cast
 
@@ -24,10 +24,13 @@ from pzi.add_planning import (
     minimum_metadata_diagnostics,
 )
 from pzi.bib_repository import (
+    WritePlan,
+    batch_write_session,
     execute_write_plan,
     plan_bib_write,
     preview_write_plan,
     read_bib_file,
+    validate_bibtex_roundtrip,
 )
 from pzi.bibtex import (
     NormalizedRecord,
@@ -49,7 +52,7 @@ from pzi.pdf import remove_new_pdf as _remove_new_pdf
 from pzi.pdf import snapshot_pdf_paths as _snapshot_pdf_paths
 from pzi.pdf_discovery import DEFAULT_DISCOVERY_STEPS, apply_pdf_discovery
 from pzi.pdf_planning import is_pdf_bytes, plan_pdf_path
-from pzi.similarity import build_identity_index, find_exact_match
+from pzi.similarity import build_identity_index, extract_identities, find_exact_match
 from pzi.translation_server import (
     fetch_search_translations,
     fetch_web_translations,
@@ -469,6 +472,111 @@ def add_record_with_bib(
         result["diff"] = preview_write_plan(bib["path"], plan)["diff"]
 
     return result
+
+
+def add_records_to_bib_batch(
+    *,
+    bib: BibConfig,
+    records: Sequence[Mapping[str, object]],
+    dry_run: bool,
+    force_new: bool = False,
+    browser_hook: bool = True,
+    citekey_format: str | None = None,
+    pdf_filename_format: str | None = None,
+    file_path_style: str = "absolute",
+    fetch_binary=None,
+) -> list[AddRecordResult]:
+    """Plan and write many records into one bib under a single lock and write.
+
+    Per-record semantics match :func:`add_record_with_bib` — citekey generation
+    and collision resolution, identity dedup/merge, PDF reuse/attach, similarity
+    hints — but the library is parsed and serialized once instead of once per
+    record.  State (the records list and identity index) accumulates in memory
+    so that record *K* dedups and resolves citekeys against the library plus
+    records 1…K-1, exactly as the repeated single-write path does.
+
+    Returns one :data:`AddRecordResult` per input record, in order.  A single
+    exclusive lock is held for the whole batch (including any rare per-record
+    PDF downloads), so the import is all-or-nothing rather than committed
+    per entry.  Bad records are skipped with an error result; good ones still
+    write.  This is the bulk path behind :func:`pzi.import_service`.
+    """
+    papers_dir = bib["papers_dir"]
+    existing_pdf_paths = _snapshot_pdf_paths(papers_dir)
+    results: list[AddRecordResult] = []
+
+    with batch_write_session(
+        bib["path"], file_path_style=file_path_style, write=not dry_run,
+    ) as session:
+        existing_records = session.records
+        index = build_identity_index(existing_records)
+
+        for raw in records:
+            record_pdf: str | None = None
+            try:
+                typed = ensure_citekey_for_write(
+                    cast(NormalizedRecord, dict(raw)), existing_records,
+                    citekey_format=citekey_format, force_new=force_new, index=index,
+                )
+                typed = reuse_existing_pdf_fields_for_exact_match(
+                    typed, existing_records, force_new=force_new, index=index,
+                )
+                typed = reuse_orphan_pdf_for_planned_path(
+                    typed, papers_dir=papers_dir, pdf_filename_format=pdf_filename_format,
+                )
+                typed, warnings = attach_pdf_if_available(
+                    record=typed, papers_dir=papers_dir, dry_run=dry_run,
+                    fetch_binary=fetch_binary, browser_hook=browser_hook,
+                    pdf_filename_format=pdf_filename_format,
+                )
+                pdf_path = typed.get("local_pdf_path")
+                record_pdf = pdf_path if isinstance(pdf_path, str) else None
+                typed = _add_planning.attach_similarity_hint(
+                    typed, existing_records, index=index,
+                )
+                plan = plan_bib_write(
+                    typed, existing_records, force_new=force_new, index=index,
+                )
+                validate_bibtex_roundtrip([plan["entry"]])
+            except Exception as exc:
+                if not dry_run:
+                    _remove_new_pdf(record_pdf, existing_pdf_paths)
+                results.append(_error_result(
+                    message="failed to import record", errors=[str(exc)],
+                    dry_run=dry_run, warnings=[], bib=bib,
+                ))
+                continue
+
+            if not dry_run:
+                _apply_plan_in_memory(session.entries, existing_records, index, plan)
+            results.append(build_add_record_result(
+                bib=bib, plan=plan, warnings=warnings, dry_run=dry_run,
+            ))
+
+    return results
+
+
+def _apply_plan_in_memory(
+    entries: list,
+    records: list[NormalizedRecord],
+    index: dict,
+    plan: WritePlan,
+) -> None:
+    """Apply one write plan to the in-memory batch state, keeping entries,
+    records, and the identity index in sync."""
+    planned_record = cast(NormalizedRecord, plan["record"])
+    if plan["action"] == "insert":
+        position = len(records)
+        entries.append(plan["entry"])
+        records.append(planned_record)
+    else:
+        idx = plan["index"]
+        assert idx is not None, "update plan always carries a concrete index"
+        position = idx
+        entries[idx] = plan["entry"]
+        records[idx] = planned_record
+    for identity in extract_identities(planned_record):
+        index.setdefault((identity["kind"], identity["value"]), []).append(position)
 
 
 # ---------------------------------------------------------------------------

@@ -160,6 +160,59 @@ def test_import_multiple_entries() -> None:
         assert len(result["results"]) == 2
 
 
+def test_batch_import_equivalent_to_repeated_single_writes(tmp_path) -> None:
+    """The bulk write path must produce byte-identical results to looping the
+    single-write path: same final .bib and the same per-record actions, including
+    dedup against the library *and* against records added earlier in the run."""
+    from pzi.add_service import add_record_with_bib, add_records_to_bib_batch
+
+    seed = (
+        "@article{seed2020,\n"
+        "  author = {Anderson, A},\n"
+        "  doi = {10.1/seed},\n"
+        "  title = {Seed Paper},\n"
+        "  year = {2020},\n"
+        "}\n"
+    )
+    records: list[dict[str, object]] = [
+        {"citekey": "alpha", "title": "Alpha Paper",
+         "authors": ["Brown, B"], "year": 2021, "doi": "10.1/alpha"},
+        {"citekey": "seeddup", "title": "Seed Paper Revised",
+         "authors": ["Anderson, A"], "year": 2020, "doi": "10.1/seed"},  # dedup vs library
+        {"citekey": "beta", "title": "Beta Paper",
+         "authors": ["Clark, C"], "year": 2022, "doi": "10.1/beta"},
+        {"citekey": "alphadup", "title": "Alpha Paper",
+         "authors": ["Brown, B"], "year": 2021, "doi": "10.1/alpha"},  # dedup vs record 0
+    ]
+
+    def _make_bib(name: str):
+        d = tmp_path / name
+        (d / "papers").mkdir(parents=True)
+        bib_path = d / "library.bib"
+        bib_path.write_text(seed)
+        bib = {"name": "main", "path": str(bib_path),
+               "papers_dir": str(d / "papers"), "default": True}
+        return bib, bib_path
+
+    single_bib, single_path = _make_bib("single")
+    batch_bib, batch_path = _make_bib("batch")
+
+    single_actions = [
+        add_record_with_bib(bib=single_bib, record=dict(rec), dry_run=False)["action"]
+        for rec in records
+    ]
+    batch_actions = [
+        r["action"]
+        for r in add_records_to_bib_batch(
+            bib=batch_bib, records=[dict(r) for r in records], dry_run=False,
+        )
+    ]
+
+    assert batch_actions == single_actions
+    assert batch_actions == ["insert", "update", "insert", "update"]
+    assert single_path.read_text() == batch_path.read_text()
+
+
 def test_import_invalid_bibtex() -> None:
     with tempfile.TemporaryDirectory() as td:
         cp, bp, pd = _setup_config(td)

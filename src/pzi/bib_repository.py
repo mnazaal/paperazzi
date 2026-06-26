@@ -9,6 +9,7 @@ import re
 import tempfile
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, NotRequired, TypeAlias, TypedDict, cast
 
@@ -403,6 +404,52 @@ def execute_write_plan(
         return updated_entries
 
 
+@dataclass
+class BatchWriteSession:
+    """In-memory view of a bib opened for a batch of edits under one lock.
+
+    Callers replace entries in place (updates) and append (inserts), keeping
+    ``entries`` and ``records`` parallel and in on-disk order with inserts
+    trailing — the same invariant :func:`_update_library_blocks` relies on.
+    """
+
+    entries: list[BibtexEntry]
+    records: list[NormalizedRecord]
+
+
+@contextmanager
+def batch_write_session(
+    path: str, *, file_path_style: str = "absolute", write: bool = True,
+) -> Iterator[BatchWriteSession]:
+    """Open a bib once for many edits, writing a single atomic time on exit.
+
+    Reads and parses the library exactly once; the caller mutates the yielded
+    ``entries``/``records`` (replace in place for updates, append for inserts).
+    On clean exit, when *write* is set and the rendered source changed, writes
+    it atomically while preserving comments/``@string``/``@preamble``.
+
+    This collapses N locked read-modify-write cycles (one per record) into one,
+    and makes the whole batch transactional: if the caller raises, nothing is
+    written.  It is the bulk path behind ``import``.
+    """
+    with with_bib_lock(path):
+        source = _read_bib_source(path)
+        library = _parse_bib_library(source)
+        _validate_library_parseable(library)
+        entries, records = _library_to_entries_records(library, path)
+        session = BatchWriteSession(entries=entries, records=records)
+        yield session
+        if not write:
+            return
+        _validate_bibtex_roundtrip(session.entries)
+        new_library = _update_library_blocks(
+            library, session.entries, path, file_path_style=file_path_style
+        )
+        new_source = _serialize_library(new_library)
+        if new_source != source:
+            _write_bib_text_atomic(path, new_source)
+
+
 def preview_write_plan(path: str, plan: WritePlan) -> dict[str, Any]:
     """Preview a write plan without mutating the BibTeX file."""
     with with_bib_lock(path, shared=True):
@@ -707,6 +754,7 @@ parse_bib_library = _parse_bib_library
 validate_library_parseable = _validate_library_parseable
 find_entry_index = _find_entry_index
 read_bib_source = _read_bib_source
+validate_bibtex_roundtrip = _validate_bibtex_roundtrip
 
 
 def _library_entry_to_bibtex_entry(entry: BibtexEntryV2) -> BibtexEntry:
