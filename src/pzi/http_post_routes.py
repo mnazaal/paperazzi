@@ -17,12 +17,20 @@ from dataclasses import dataclass
 from typing import Any, cast
 from urllib.parse import urlsplit
 
+from pzi.add_planning import error_result
+from pzi.bib_repository import ConcurrentEditError
 from pzi.bib_service import delete_entry
 from pzi.bibtex import normalize_authors
 from pzi.capture_core import capture_to_bib
 from pzi.capture_models import AuthHints, CaptureInput, CaptureOptions, PageArtifact, PdfCandidate
 from pzi.config import load_and_resolve_bib, load_config_file
-from pzi.http_payloads import capture_payload, promote_payload, tag_change_payload, update_payload
+from pzi.http_payloads import (
+    capture_payload,
+    inbox_drain_payload,
+    promote_payload,
+    tag_change_payload,
+    update_payload,
+)
 from pzi.http_security import DEFAULT_MAX_BODY_BYTES, safe_public_http_url
 from pzi.http_status import status_for_service_result
 from pzi.pdf_acquisition_plan import build_pdf_acquisition_plan
@@ -40,6 +48,12 @@ from pzi.update_service import update_bib
 MAX_PDF_URL_CANDIDATES = 20
 ATTACH_SESSION_TTL_SECONDS = 600
 MAX_BROWSER_PDF_BYTES = DEFAULT_MAX_BODY_BYTES
+
+# A concurrent external edit aborts the write at the repository layer; report it
+# as 409 Conflict rather than letting it surface as an opaque 500.
+CONCURRENT_EDIT_MESSAGE = (
+    "bib file was modified externally while writing — retry the request"
+)
 
 # ---------------------------------------------------------------------------
 # Capture body helpers
@@ -340,6 +354,10 @@ def _route_delete(body: Any, context: PostContext) -> JsonResponse:
     return _handle_delete_post(body, context.config_path, context.home_dir)
 
 
+def _route_inbox_drain(body: Any, context: PostContext) -> JsonResponse:
+    return _handle_inbox_drain_post(body, context.config_path, context.home_dir)
+
+
 POST_ROUTES: tuple[PostRoute, ...] = (
     PostRoute("/capture", _route_capture),
     PostRoute("/attach-pdf-bytes", _route_attach_pdf_bytes),
@@ -351,6 +369,7 @@ POST_ROUTES: tuple[PostRoute, ...] = (
     PostRoute("/browser/discover", _route_browser_discover),
     PostRoute("/browser/download", _route_browser_download),
     PostRoute("/delete", _route_delete),
+    PostRoute("/inbox/drain", _route_inbox_drain),
 )
 
 
@@ -472,13 +491,23 @@ def _handle_capture_post(
         service_kwargs["browser"] = browser
     config_result = load_config_file(config_path, home_dir=home_dir)
     config = config_result["config"] if config_result["config"] is not None else None
-    result = capture_to_bib(
-        capture_input_from_http_body(body, pdf_candidates=safe_pdf_candidates),
-        capture_options_from_http_body(body, config=config),
-        config_path=config_path,
-        home_dir=home_dir,
-        service_kwargs=service_kwargs,
-    )
+    try:
+        result = capture_to_bib(
+            capture_input_from_http_body(body, pdf_candidates=safe_pdf_candidates),
+            capture_options_from_http_body(body, config=config),
+            config_path=config_path,
+            home_dir=home_dir,
+            service_kwargs=service_kwargs,
+        )
+    except ConcurrentEditError:
+        return 409, capture_payload(
+            error_result(
+                message=CONCURRENT_EDIT_MESSAGE,
+                errors=[CONCURRENT_EDIT_MESSAGE],
+                dry_run=bool(body.get("dry_run", False)),
+                warnings=[],
+            )
+        )
     if attach_session_store is not None:
         _maybe_add_pdf_request(
             cast(dict[str, Any], result),
@@ -716,12 +745,15 @@ def _handle_update_post(
 ) -> tuple[int, dict[str, Any]]:
     if not isinstance(body, dict):
         return 400, {"error": "update body must be a JSON object"}
-    result = update_bib(
-        config_path=config_path,
-        home_dir=home_dir,
-        bib_selector=body.get("bib") if isinstance(body.get("bib"), str) else None,
-        dry_run=bool(body.get("dry_run", True)),
-    )
+    try:
+        result = update_bib(
+            config_path=config_path,
+            home_dir=home_dir,
+            bib_selector=body.get("bib") if isinstance(body.get("bib"), str) else None,
+            dry_run=bool(body.get("dry_run", True)),
+        )
+    except ConcurrentEditError:
+        return 409, {"error": CONCURRENT_EDIT_MESSAGE}
     status = status_for_service_result(result)
     return status, update_payload(
         result, include_diagnostics=bool(body.get("verbose", False))
@@ -733,17 +765,45 @@ def _handle_promote_post(
 ) -> tuple[int, dict[str, Any]]:
     if not isinstance(body, dict):
         return 400, {"error": "promote body must be a JSON object"}
-    result = promote_bib(
-        config_path=config_path,
-        home_dir=home_dir,
-        bib_selector=body.get("bib") if isinstance(body.get("bib"), str) else None,
-        keep_preprint=not bool(body.get("replace", False)),
-        dry_run=bool(body.get("dry_run", True)),
-    )
+    try:
+        result = promote_bib(
+            config_path=config_path,
+            home_dir=home_dir,
+            bib_selector=body.get("bib") if isinstance(body.get("bib"), str) else None,
+            keep_preprint=not bool(body.get("replace", False)),
+            dry_run=bool(body.get("dry_run", True)),
+        )
+    except ConcurrentEditError:
+        return 409, {"error": CONCURRENT_EDIT_MESSAGE}
     status = status_for_service_result(result)
     return status, promote_payload(
         result, include_diagnostics=bool(body.get("verbose", False))
     )
+
+
+def _handle_inbox_drain_post(
+    body: Any, config_path: str, home_dir: str,
+) -> tuple[int, dict[str, Any]]:
+    if not isinstance(body, dict):
+        return 400, {"error": "inbox body must be a JSON object"}
+    inbox_path = body.get("file")
+    if not isinstance(inbox_path, str) or not inbox_path.strip():
+        return 400, {"error": "inbox body must include a 'file' path string"}
+    from pzi.inbox_service import drain_inbox
+    raw_tags = body.get("tags")
+    extra_tags = [t for t in raw_tags if isinstance(t, str)] if isinstance(raw_tags, list) else None
+    raw_delay = body.get("delay")
+    delay = float(raw_delay) if isinstance(raw_delay, (int, float)) and raw_delay >= 0 else 0.0
+    result = drain_inbox(
+        config_path=config_path,
+        home_dir=home_dir,
+        inbox_path=inbox_path.strip(),
+        dry_run=bool(body.get("dry_run", False)),
+        extra_tags=extra_tags,
+        delay=delay,
+    )
+    status = status_for_service_result(result)
+    return status, inbox_drain_payload(result)
 
 
 # ---------------------------------------------------------------------------

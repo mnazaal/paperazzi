@@ -9,9 +9,11 @@ Metadata fetching is delegated to add_planning.py.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import urllib.error
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, TypeAlias, cast
+from urllib.parse import urlsplit
 
 from pzi import add_planning as _add_planning
 from pzi.add_planning import (
@@ -24,6 +26,7 @@ from pzi.add_planning import (
     minimum_metadata_diagnostics,
 )
 from pzi.bib_repository import (
+    ConcurrentEditError,
     WritePlan,
     batch_write_session,
     execute_write_plan,
@@ -52,6 +55,15 @@ from pzi.pdf import remove_new_pdf as _remove_new_pdf
 from pzi.pdf import snapshot_pdf_paths as _snapshot_pdf_paths
 from pzi.pdf_discovery import DEFAULT_DISCOVERY_STEPS, apply_pdf_discovery
 from pzi.pdf_planning import is_pdf_bytes, plan_pdf_path
+from pzi.protocols import (
+    BinaryFetcher,
+    HtmlFetcher,
+    MetadataRecordFetcher,
+    S2RecordFetcher,
+    SearchTranslationFetcher,
+    UnpaywallFetcher,
+    WebTranslationFetcher,
+)
 from pzi.similarity import build_identity_index, extract_identities, find_exact_match
 from pzi.translation_server import (
     fetch_search_translations,
@@ -65,6 +77,24 @@ _manual_record_from_overrides = _add_planning.manual_record_from_overrides
 _merge_fetched_record_with_overrides = _add_planning.merge_fetched_record_with_overrides
 _pdf_result_fields = _add_planning.pdf_result_fields
 
+_AMBIGUOUS_BIB_ERROR = "no matching library target found or selection is ambiguous"
+
+
+def describe_invalid_add_input(value: str) -> str | None:
+    """Return why *value* is not valid ``pzi add`` input, or ``None`` if it is.
+
+    ``pzi add`` accepts a DOI, a URL, or a local PDF path.  A bare word or typo
+    (e.g. ``pzi add l``) classifies as ``unknown`` and would otherwise be
+    written out as an empty ``unknown…untitled`` placeholder entry; a ``*.pdf``
+    argument whose file does not exist is likewise rejected.  Callers use this
+    to fail fast — before starting the translation-server or writing anything.
+    """
+    classified = classify_input(value)
+    if classified["kind"] == "unknown":
+        return f"{value!r} is not a DOI, URL, or local PDF path"
+    if classified["kind"] == "local_pdf" and not Path(value).expanduser().is_file():
+        return f"PDF file not found: {value}"
+    return None
 
 
 def add_input_to_bib(
@@ -75,14 +105,14 @@ def add_input_to_bib(
     record_overrides: dict[str, object],
     bib_selector: str | None,
     dry_run: bool,
-    fetch_web=fetch_web_translations,
-    fetch_search=fetch_search_translations,
-    fetch_binary=None,
-    fetch_unpaywall=None,
-    fetch_crossref=None,
-    fetch_openalex=None,
-    fetch_s2=None,
-    fetch_flaresolverr=None,
+    fetch_web: WebTranslationFetcher = fetch_web_translations,
+    fetch_search: SearchTranslationFetcher = fetch_search_translations,
+    fetch_binary: BinaryFetcher | None = None,
+    fetch_unpaywall: UnpaywallFetcher | None = None,
+    fetch_crossref: MetadataRecordFetcher | None = None,
+    fetch_openalex: MetadataRecordFetcher | None = None,
+    fetch_s2: S2RecordFetcher | None = None,
+    fetch_flaresolverr: HtmlFetcher | None = None,
     pdf_url_candidates: list[str] | None = None,
     browser_pdf_cmd: str | None = None,
     browser: str | None = None,
@@ -117,6 +147,13 @@ def add_input_to_bib(
     metadata_confidence_min_score = int(config.get("metadata_confidence_min_score", 0))
 
     classified = classify_input(value)
+    invalid_input = describe_invalid_add_input(value)
+    if invalid_input is not None:
+        # Reject unrecognized input here too (not just at the CLI) so the HTTP
+        # API and `--from-file` batch path never write a junk placeholder entry.
+        return _error_result(
+            message="invalid input", errors=[invalid_input], dry_run=dry_run, warnings=[]
+        )
     metadata_diagnostics: list[str] = []
     metadata_warnings: list[str] = []
     fallback_for_diagnostics = _fallback_record_for_input(
@@ -265,9 +302,6 @@ def add_input_to_bib(
                 },
             )
             return _finalize(_add(fallback_record))
-        import urllib.error
-        from urllib.parse import urlsplit
-
         is_conn_err = (
             isinstance(exc, (urllib.error.URLError, ConnectionError, OSError))
             and not isinstance(exc, urllib.error.HTTPError)
@@ -377,15 +411,12 @@ def _resolve_capture_context(
     return context, None
 
 
-_AMBIGUOUS_BIB_ERROR = "no matching library target found or selection is ambiguous"
-
-
 def add_record_with_bib(
     *,
     bib: BibConfig,
     record: Mapping[str, object],
     dry_run: bool,
-    fetch_binary=None,
+    fetch_binary: BinaryFetcher | None = None,
     flaresolverr_url: str | None = None,
     browser_pdf_cmd: str | None = None,
     browser: str | None = None,
@@ -425,6 +456,10 @@ def add_record_with_bib(
         pdf_filename_format=pdf_filename_format,
     )
     existing_pdf_paths = _snapshot_pdf_paths(bib["papers_dir"])
+    # The PDF download happens exactly once, before planning. The plan+write
+    # tail below may run twice (concurrent-edit retry), but never re-downloads:
+    # ``record_with_pdf`` already carries ``local_pdf_path``, so the reuse
+    # helpers short-circuit on the second pass.
     record_with_pdf, warnings = attach_pdf_if_available(
         record=typed_record,
         papers_dir=bib["papers_dir"],
@@ -440,26 +475,38 @@ def add_record_with_bib(
         desktop_fallback_hosts=desktop_fallback_hosts,
         ezproxy_host=ezproxy_host,
     )
-    record_with_hint = _add_planning.attach_similarity_hint(
-        record_with_pdf, typed_existing_records, index=existing_index,
-    )
-    plan = plan_bib_write(
-        record_with_hint, typed_existing_records, force_new=force_new, index=existing_index,
-    )
+
+    def _build_plan(
+        existing_records: list[NormalizedRecord],
+    ) -> tuple[NormalizedRecord, WritePlan]:
+        """Derive the citekey/dedup/PDF-reuse/hint plan for ``record_with_pdf``
+        against a snapshot of ``existing_records``. Pure apart from the orphan
+        PDF probe; safe to call repeatedly (no network, no re-download)."""
+        index = build_identity_index(existing_records)
+        rec = ensure_citekey_for_write(
+            record_with_pdf, existing_records,
+            citekey_format=citekey_format, force_new=force_new, index=index,
+        )
+        rec = reuse_existing_pdf_fields_for_exact_match(
+            rec, existing_records, force_new=force_new, index=index,
+        )
+        rec = reuse_orphan_pdf_for_planned_path(
+            rec, papers_dir=bib["papers_dir"], pdf_filename_format=pdf_filename_format,
+        )
+        rec = _add_planning.attach_similarity_hint(rec, existing_records, index=index)
+        return rec, plan_bib_write(rec, existing_records, force_new=force_new, index=index)
+
+    record_with_hint, plan = _build_plan(typed_existing_records)
 
     if not dry_run:
-        try:
-            updated_entries = execute_write_plan(
-                bib["path"], plan, file_path_style=file_path_style
-            )
-            plan = plan_with_applied_record(plan, record_with_hint, updated_entries)
-        except Exception:
-            pdf_path_for_cleanup = record_with_hint.get("local_pdf_path")
-            _remove_new_pdf(
-                pdf_path_for_cleanup if isinstance(pdf_path_for_cleanup, str) else None,
-                existing_pdf_paths,
-            )
-            raise
+        record_with_hint, plan = _execute_plan_with_retry(
+            bib=bib,
+            build_plan=_build_plan,
+            initial_records=typed_existing_records,
+            initial_plan=(record_with_hint, plan),
+            existing_pdf_paths=existing_pdf_paths,
+            file_path_style=file_path_style,
+        )
 
     result: AddRecordResult = build_add_record_result(
         bib=bib,
@@ -474,6 +521,61 @@ def add_record_with_bib(
     return result
 
 
+def _execute_plan_with_retry(
+    *,
+    bib: BibConfig,
+    build_plan: Callable[[list[NormalizedRecord]], tuple[NormalizedRecord, WritePlan]],
+    initial_records: list[NormalizedRecord],
+    initial_plan: tuple[NormalizedRecord, WritePlan],
+    existing_pdf_paths: set[Path],
+    file_path_style: str,
+) -> tuple[NormalizedRecord, WritePlan]:
+    """Commit a write plan, retrying once on a concurrent external edit.
+
+    ``execute_write_plan`` raises :class:`ConcurrentEditError` *before* writing
+    when the bib changed between snapshot and lock; the race window is tiny, so
+    a single retry — re-reading the library and rebuilding the plan against the
+    now-current records — almost always succeeds. The already-downloaded PDF is
+    preserved across the retry and only cleaned up when we give up (final
+    failure) or any other exception aborts the write.
+    """
+    record_with_hint, plan = initial_plan
+    records = initial_records
+    for attempt in range(2):
+        try:
+            updated_entries = execute_write_plan(
+                bib["path"], plan, file_path_style=file_path_style
+            )
+            return record_with_hint, plan_with_applied_record(
+                plan, record_with_hint, updated_entries
+            )
+        except ConcurrentEditError:
+            if attempt == 1:
+                _cleanup_new_pdf(record_with_hint, existing_pdf_paths)
+                raise
+            # Re-read the externally-edited library and replan against it.
+            records = [
+                cast(NormalizedRecord, existing)
+                for existing in read_bib_file(bib["path"])["records"]
+            ]
+            record_with_hint, plan = build_plan(records)
+        except Exception:
+            _cleanup_new_pdf(record_with_hint, existing_pdf_paths)
+            raise
+    # Unreachable: the loop either returns, retries, or raises.
+    raise AssertionError("retry loop exited without committing or raising")
+
+
+def _cleanup_new_pdf(
+    record_with_hint: NormalizedRecord, existing_pdf_paths: set[Path]
+) -> None:
+    pdf_path_for_cleanup = record_with_hint.get("local_pdf_path")
+    _remove_new_pdf(
+        pdf_path_for_cleanup if isinstance(pdf_path_for_cleanup, str) else None,
+        existing_pdf_paths,
+    )
+
+
 def add_records_to_bib_batch(
     *,
     bib: BibConfig,
@@ -484,7 +586,7 @@ def add_records_to_bib_batch(
     citekey_format: str | None = None,
     pdf_filename_format: str | None = None,
     file_path_style: str = "absolute",
-    fetch_binary=None,
+    fetch_binary: BinaryFetcher | None = None,
 ) -> list[AddRecordResult]:
     """Plan and write many records into one bib under a single lock and write.
 
@@ -573,10 +675,34 @@ def _apply_plan_in_memory(
         idx = plan["index"]
         assert idx is not None, "update plan always carries a concrete index"
         position = idx
+        # Drop the outgoing record's identity keys before adding the new
+        # ones: an update can change a record's doi/arxiv/url (e.g. metadata
+        # enrichment mid-batch), and a stale key would otherwise cause the
+        # next record sharing that identity to register a false exact-match.
+        _remove_record_from_index(index, records[idx], idx)
         entries[idx] = plan["entry"]
         records[idx] = planned_record
     for identity in extract_identities(planned_record):
         index.setdefault((identity["kind"], identity["value"]), []).append(position)
+    assert len(entries) == len(records), (
+        f"batch state desync: {len(entries)} entries != {len(records)} records"
+    )
+
+
+def _remove_record_from_index(
+    index: dict, record: NormalizedRecord, position: int
+) -> None:
+    """Remove *position* from every identity bucket the record contributes,
+    pruning buckets that become empty."""
+    for identity in extract_identities(record):
+        key = (identity["kind"], identity["value"])
+        positions = index.get(key)
+        if not positions:
+            continue
+        if position in positions:
+            positions.remove(position)
+        if not positions:
+            del index[key]
 
 
 # ---------------------------------------------------------------------------

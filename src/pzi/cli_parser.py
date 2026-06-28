@@ -11,6 +11,7 @@ import json
 import sys
 from collections.abc import Mapping
 from pathlib import Path
+from typing import NoReturn, TextIO
 
 from pzi import cli_version_text
 from pzi.capture_models import (
@@ -20,6 +21,7 @@ from pzi.capture_models import (
     PdfCandidate,
     load_page_artifact,
 )
+from pzi.fileio import read_text_utf8
 from pzi.tag_service import parse_tag_csv
 
 # ---------------------------------------------------------------------------
@@ -36,6 +38,92 @@ class _PziHelpFormatter(argparse.RawDescriptionHelpFormatter):
         return super()._format_action(action)
 
 
+def _usage_error_lines(parser: argparse.ArgumentParser, message: str) -> list[str]:
+    """Render a bad-invocation error in the canonical two-part format.
+
+    ``<prog>: error: <message>`` followed by a pointer to the command's
+    ``--help``.  Deliberately omits argparse's multi-line ``usage:`` block —
+    the pointer is enough and keeps the message compact.  This is the single
+    source of truth for the format so that both argparse-native errors
+    (:meth:`_PziParser.error`) and the conditional checks in the command
+    runners (via :func:`usage_error_lines`) look byte-for-byte identical.
+    """
+    return [
+        f"{parser.prog}: error: {message}",
+        f"Run '{parser.prog} --help' for usage.",
+    ]
+
+
+class _PziParser(argparse.ArgumentParser):
+    """ArgumentParser that renders errors in the canonical pzi format.
+
+    Errors are written to :attr:`error_stream` (defaulting to ``sys.stderr``)
+    so the CLI can route argparse's own diagnostics through the same injected
+    stream every command runner uses.  Set it with :func:`set_error_stream`.
+    """
+
+    error_stream: TextIO | None = None
+
+    def error(self, message: str) -> NoReturn:
+        stream = self.error_stream if self.error_stream is not None else sys.stderr
+        for line in _usage_error_lines(self, message):
+            print(line, file=stream)
+        sys.exit(2)
+
+
+def set_error_stream(parser: argparse.ArgumentParser, stream: TextIO) -> None:
+    """Route a parser's (and all its subparsers') error output to *stream*."""
+    if isinstance(parser, _PziParser):
+        parser.error_stream = stream
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            for subparser in action.choices.values():
+                set_error_stream(subparser, stream)
+
+
+def usage_error_lines(command_path: tuple[str, ...], message: str) -> list[str]:
+    """Canonical bad-invocation error lines for a command, by subcommand path.
+
+    Used by command runners for *conditional* invocation errors that argparse
+    cannot express (e.g. ``pzi add`` with neither a value nor ``--from-file``).
+    ``command_path`` walks the subparser tree, e.g. ``("add",)`` or
+    ``("pdf", "retry")``.
+    """
+    parser: argparse.ArgumentParser = build_parser()
+    for name in command_path:
+        parser = _find_subparser(parser, name)
+    return _usage_error_lines(parser, message)
+
+
+def _find_subparser(parser: argparse.ArgumentParser, name: str) -> argparse.ArgumentParser:
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction) and name in action.choices:
+            return action.choices[name]
+    raise KeyError(f"no subparser {name!r} under {parser.prog!r}")
+
+
+def _non_negative_int(value: str) -> int:
+    """argparse type: a base-10 integer ``>= 0`` (rejects negatives/garbage)."""
+    try:
+        parsed = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected an integer, got {value!r}") from None
+    if parsed < 0:
+        raise argparse.ArgumentTypeError(f"must be zero or greater, got {parsed}")
+    return parsed
+
+
+def _non_negative_float(value: str) -> float:
+    """argparse type: a number ``>= 0`` (rejects negatives/garbage)."""
+    try:
+        parsed = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected a number, got {value!r}") from None
+    if parsed < 0:
+        raise argparse.ArgumentTypeError(f"must be zero or greater, got {parsed}")
+    return parsed
+
+
 # ---------------------------------------------------------------------------
 # Help text: grouped command listing (plain text)
 # ---------------------------------------------------------------------------
@@ -45,6 +133,7 @@ class _PziHelpFormatter(argparse.RawDescriptionHelpFormatter):
 _COMMAND_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
     ("Capture", (
         ("add", "Capture a paper by DOI, URL, or PDF"),
+        ("inbox", "Drain a configured inbox file into your library"),
         ("pdf", "Retry or attach a PDF for an entry"),
     )),
     ("Browse & search", (
@@ -99,7 +188,7 @@ def _subcommand_epilog(examples: tuple[str, ...]) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = _PziParser(
         prog="pzi",
         usage="pzi <command> [options]",
         description="Capture papers into local BibTeX libraries from DOI, URL, or PDF.",
@@ -108,7 +197,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="version", version=cli_version_text())
     # prog="pzi" so subcommands show `usage: pzi <command> ...`, not the parent usage.
-    subparsers = parser.add_subparsers(dest="command", metavar="command", prog="pzi")
+    subparsers = parser.add_subparsers(
+        dest="command", metavar="command", prog="pzi", parser_class=_PziParser
+    )
 
     def add_config(p: argparse.ArgumentParser) -> None:
         p.add_argument("--config", metavar="PATH", help="path to the pzi config file")
@@ -154,7 +245,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="capture each DOI/URL listed in a file (one per line, '#' comments; '-' for stdin)",
     )
     add_batch.add_argument(
-        "--delay", type=float, default=1.0, metavar="SECONDS",
+        "--delay", type=_non_negative_float, default=1.0, metavar="SECONDS",
         help="pause between items in --from-file mode, with jitter (default: 1.0)",
     )
     add_batch.add_argument(
@@ -183,6 +274,40 @@ def build_parser() -> argparse.ArgumentParser:
         help="read captured page HTML from a file (or '-' for stdin) to extract embedded metadata",
     )
 
+    # ── inbox ────────────────────────────────────────────────────────────
+    inbox_parser = subparsers.add_parser(
+        "inbox",
+        help="Drain an inbox file of URLs/DOIs into your library",
+        description=(
+            "Process a plain-text inbox file: add every URL/DOI, then remove the "
+            "entries that succeed and keep the failures for a later retry.\n\n"
+            "External tools (cron, email filters, shell aliases) append lines; "
+            "'pzi inbox <file>' consumes them.\n\n"
+            "Inbox line format: <doi|url> [#tag1 #tag2] [@bib-name]"
+        ),
+        formatter_class=_PziHelpFormatter,
+        epilog=_subcommand_epilog((
+            "pzi inbox ~/papers/inbox.txt",
+            "pzi inbox ~/papers/inbox.txt --dry-run",
+            "pzi inbox ~/papers/inbox.txt --tags ml --delay 2",
+        )),
+    )
+    inbox_parser.add_argument(
+        "file", metavar="FILE", help="path to the inbox file to drain",
+    )
+    inbox_parser.add_argument(
+        "--dry-run", action="store_true",
+        help="preview what would be added without writing to the library or inbox file",
+    )
+    inbox_parser.add_argument(
+        "--tags", help="comma-separated tags applied to all entries in this drain run",
+    )
+    inbox_parser.add_argument(
+        "--delay", type=_non_negative_float, default=1.0, metavar="SECONDS",
+        help="pause between items, with jitter (default: 1.0)",
+    )
+    add_config(inbox_parser)
+
     # ── pdf ──────────────────────────────────────────────────────────────
     pdf_parser = subparsers.add_parser(
         "pdf",
@@ -195,7 +320,7 @@ def build_parser() -> argparse.ArgumentParser:
             "pzi pdf attach smith2020graph ~/Downloads/paper.pdf",
         )),
     )
-    pdf_sub = pdf_parser.add_subparsers(dest="pdf_command", required=True)
+    pdf_sub = pdf_parser.add_subparsers(dest="pdf_command", required=True, parser_class=_PziParser)
     pdf_retry = pdf_sub.add_parser("retry", help="Retry PDF download for an entry")
     pdf_retry.add_argument("citekey", nargs="?", help="citekey of the entry to retry")
     add_config(pdf_retry)
@@ -212,7 +337,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # ── tag ──────────────────────────────────────────────────────────────
     tag_parser = subparsers.add_parser("tag", help="Manage tags on BibTeX entries")
-    tag_sub = tag_parser.add_subparsers(dest="tag_command", required=True)
+    tag_sub = tag_parser.add_subparsers(dest="tag_command", required=True, parser_class=_PziParser)
     tag_add_p = tag_sub.add_parser("add", help="Add tags to an entry")
     tag_add_p.add_argument("citekey", help="citekey of the entry")
     tag_add_p.add_argument("tags", nargs="+", help="one or more tags to add")
@@ -254,7 +379,7 @@ def build_parser() -> argparse.ArgumentParser:
     # ── update ───────────────────────────────────────────────────────────
     update_parser = subparsers.add_parser(
         "update",
-        help="fill missing metadata; with --promote, replace preprints with published versions",
+        help="Fill missing metadata; with --promote, replace preprints with published versions",
         description=(
             "Conservatively enrich entries by filling missing metadata. By default this only "
             "fills gaps and never replaces a preprint with its published version. Pass "
@@ -304,9 +429,9 @@ def build_parser() -> argparse.ArgumentParser:
     add_config(server_parser)
     server_parser.add_argument("--host", help="bind host (default: api_listen_host, 127.0.0.1)")
     server_parser.add_argument(
-        "--port", type=int, help="bind port (default: api_listen_port, 8765)"
+        "--port", type=_non_negative_int, help="bind port (default: api_listen_port, 8765)"
     )
-    server_parser.add_argument("--stop-after", type=int, metavar="MINUTES",
+    server_parser.add_argument("--stop-after", type=_non_negative_int, metavar="MINUTES",
                                help="auto-stop the whole server after N idle minutes")
 
     # ── init ─────────────────────────────────────────────────────────────
@@ -328,7 +453,7 @@ def build_parser() -> argparse.ArgumentParser:
                              help="browser for PDF fallback (default: chromium)")
 
     # ── delete / entries ─────────────────────────────────────────────────
-    delete_parser = subparsers.add_parser("delete", help="delete a BibTeX entry by citekey")
+    delete_parser = subparsers.add_parser("delete", help="Delete a BibTeX entry by citekey")
     delete_parser.add_argument("citekey", help="citekey of the entry to delete")
     add_config(delete_parser)
     add_single_target(delete_parser)
@@ -336,7 +461,7 @@ def build_parser() -> argparse.ArgumentParser:
     delete_parser.add_argument("--force", action="store_true", help="skip confirmation prompt")
     entries_parser = subparsers.add_parser(
         "entries",
-        help="list entries, show one by citekey, or show library stats",
+        help="List entries, show one by citekey, or show library stats",
         description=(
             "List entries in a library. Pass a CITEKEY to show the full record for one entry, "
             "or --stats to show library-wide statistics."
@@ -357,10 +482,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--stats", action="store_true", help="show library statistics instead of listing entries"
     )
     entries_parser.add_argument(
-        "--offset", type=int, default=0, help="pagination offset (default: 0)"
+        "--offset", type=_non_negative_int, default=0, help="pagination offset (default: 0)"
     )
     entries_parser.add_argument(
-        "--limit", type=int, default=50, help="entries per page (default: 50)"
+        "--limit", type=_non_negative_int, default=50, help="entries per page (default: 50)"
     )
     entries_parser.add_argument(
         "--sort", default="citekey", choices=["citekey", "title", "year", "author"],
@@ -384,10 +509,10 @@ def build_parser() -> argparse.ArgumentParser:
             "pzi fix reindex --rename-citekeys --dry-run",
         )),
     )
-    fix_sub = fix_parser.add_subparsers(dest="fix_command", required=True)
+    fix_sub = fix_parser.add_subparsers(dest="fix_command", required=True, parser_class=_PziParser)
 
     clean_parser = fix_sub.add_parser(
-        "clean", help="check and clean a BibTeX library for integrity issues"
+        "clean", help="Check and clean a BibTeX library for integrity issues"
     )
     add_config(clean_parser)
     add_single_target(clean_parser)
@@ -398,13 +523,13 @@ def build_parser() -> argparse.ArgumentParser:
     clean_parser.add_argument("--json", action="store_true", help="output report as JSON")
 
     dedupe_parser = fix_sub.add_parser(
-        "dedupe", help="find duplicate entries in a BibTeX library"
+        "dedupe", help="Find duplicate entries in a BibTeX library"
     )
     add_config(dedupe_parser)
     add_single_target(dedupe_parser)
     dedupe_parser.add_argument("--json", action="store_true", help="output duplicates as JSON")
 
-    merge_parser = fix_sub.add_parser("merge", help="merge two BibTeX entries by citekey")
+    merge_parser = fix_sub.add_parser("merge", help="Merge two BibTeX entries by citekey")
     merge_parser.add_argument("citekey_a", help="source citekey (will be merged into citekey_b)")
     merge_parser.add_argument("citekey_b", help="target citekey (will receive merged fields)")
     add_config(merge_parser)
@@ -413,7 +538,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     reindex_parser = fix_sub.add_parser(
         "reindex",
-        help="audit citekeys against citekey_format (rename only with --rename-citekeys)",
+        help="Audit citekeys against citekey_format (rename only with --rename-citekeys)",
         description=(
             "Report which citekeys do not match citekey_format. By default this is read-only "
             "and changes nothing, keeping citekeys stable. Pass --rename-citekeys to rewrite "
@@ -436,7 +561,7 @@ def build_parser() -> argparse.ArgumentParser:
     # ── export / import ──────────────────────────────────────────────────
     export_parser = subparsers.add_parser(
         "export",
-        help="export BibTeX library to various formats",
+        help="Export BibTeX library to various formats",
         description="Export the library to BibTeX, CSV, JSON, or RIS (stdout by default).",
         formatter_class=_PziHelpFormatter,
         epilog=_subcommand_epilog((
@@ -455,7 +580,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--force", action="store_true", help="overwrite output file if it exists"
     )
     import_parser = subparsers.add_parser(
-        "import", help="import entries from a BibTeX file into your library"
+        "import", help="Import entries from a BibTeX file into your library"
     )
     import_parser.add_argument("source", help="path to source .bib file")
     add_config(import_parser)
@@ -475,8 +600,7 @@ def load_text_arg(path: str, *, stdin_text: str | None = None) -> str:
     """Load text from a path or stdin marker. Pure boundary helper for CLI capture."""
     if path == "-":
         return sys.stdin.read() if stdin_text is None else stdin_text
-    with open(path, encoding="utf-8") as fh:
-        return fh.read()
+    return read_text_utf8(path)
 
 
 def parse_batch_values(text: str) -> list[str]:

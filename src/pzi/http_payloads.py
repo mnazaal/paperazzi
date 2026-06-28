@@ -154,6 +154,18 @@ def promote_payload(
     )
 
 
+def inbox_drain_payload(result: Mapping[str, Any]) -> dict[str, Any]:
+    """Serialize a drain_inbox result for the HTTP API."""
+    return _base_payload(
+        result,
+        inbox_file=result.get("inbox_file"),
+        dry_run=result.get("dry_run", False),
+        total=result.get("total", 0),
+        counts=result.get("counts", {}),
+        items=result.get("items", []),
+    )
+
+
 def _items_payload(items: object, *, include_diagnostics: bool) -> list[Any]:
     if not isinstance(items, list):
         return []

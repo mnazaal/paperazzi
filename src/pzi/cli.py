@@ -7,7 +7,8 @@ import sys
 from collections.abc import Callable, Sequence
 from typing import TextIO, TypedDict
 
-from pzi.cli_parser import build_parser
+from pzi.bib_repository import ConcurrentEditError
+from pzi.cli_parser import build_parser, set_error_stream
 from pzi.commands.add import run_add_command as _run_add
 from pzi.commands.delete import run_delete_command as _run_delete
 from pzi.commands.doctor import run_doctor_command as _run_doctor
@@ -15,6 +16,7 @@ from pzi.commands.entries import run_entries_command as _run_entries
 from pzi.commands.export import run_export_command as _run_export
 from pzi.commands.fix import run_fix_command as _run_fix
 from pzi.commands.import_ import run_import_command as _run_import
+from pzi.commands.inbox import run_inbox_command as _run_inbox
 from pzi.commands.init import run_init_command as _run_init
 from pzi.commands.pdf import run_pdf_command as _run_pdf
 from pzi.commands.search import run_search_command as _run_search
@@ -22,6 +24,7 @@ from pzi.commands.server import run_server_command as _run_server
 from pzi.commands.tags import run_tag_command as _run_tag
 from pzi.commands.update import run_update_command as _run_update
 from pzi.config import default_config_path
+from pzi.errors import PziError
 
 BibSelector = str | Sequence[str] | None
 
@@ -40,6 +43,7 @@ CLI_COMMANDS: tuple[str, ...] = (
     "entries",
     "export",
     "fix",
+    "inbox",
     "import",
     "init",
     "pdf",
@@ -48,6 +52,20 @@ CLI_COMMANDS: tuple[str, ...] = (
     "tag",
     "update",
 )
+
+
+def _friendly_error(exc: OSError | UnicodeDecodeError) -> str:
+    """Render an expected runtime failure as a concise, human-readable message.
+
+    Avoids the noisy ``[Errno N]`` prefix and the cryptic codec dump that
+    ``str(exc)`` produces, preferring the OS message plus the offending path.
+    """
+    if isinstance(exc, UnicodeDecodeError):
+        return f"file is not valid {exc.encoding.upper()} text"
+    detail = exc.strerror or str(exc)
+    if exc.filename:
+        return f"{detail}: {exc.filename}"
+    return detail
 
 
 def run_cli(
@@ -69,6 +87,9 @@ def run_cli(
 
     out = stdout or sys.stdout
     err = stderr or sys.stderr
+    # Route argparse's own errors through the injected stderr so bad-invocation
+    # diagnostics share the stream (and format) used by the command runners.
+    set_error_stream(parser, err)
 
     if not argv:
         parser.print_help(file=out)
@@ -114,6 +135,7 @@ def run_cli(
         "fix": lambda: _run_fix(
             args, **_cfg, stdout=out, stderr=err, bib_selector=_single_selector,
         ),
+        "inbox": lambda: _run_inbox(args, **_cfg, stdout=out, stderr=err),
         "import": lambda: _run_import(
             args, **_cfg, stdout=out, stderr=err, bib_selector=_bib_selector,
         ),
@@ -138,14 +160,54 @@ def run_cli(
     }
 
     if args.command in _dispatch:
-        return _dispatch[args.command]()
+        try:
+            return _dispatch[args.command]()
+        except BrokenPipeError:
+            # A downstream reader (e.g. `| head`) closed the pipe — let main()
+            # handle it quietly; never report it as a command error.
+            raise
+        except ConcurrentEditError:
+            # Another process edited the bib between our pre-lock snapshot and
+            # acquiring the lock; the write was aborted to prevent data loss.
+            # A retry almost always succeeds (the race window is tiny).
+            print(
+                "error: bib file was modified externally while writing — "
+                "retry the command",
+                file=err,
+            )
+            return 1
+        except PziError as exc:
+            # Carries a message already phrased for the user (e.g. naming the
+            # bib file that is not valid UTF-8).
+            print(f"error: {exc}", file=err)
+            return 1
+        except (OSError, UnicodeDecodeError) as exc:
+            # Expected environmental failures (permission denied, disk full, a
+            # file that is not valid UTF-8, …) become a clean diagnostic
+            # instead of a raw traceback.  Genuine bugs still propagate.
+            print(f"error: {_friendly_error(exc)}", file=err)
+            return 1
 
     print(f"unknown command: {args.command}", file=err)
     return 2
 
 
 def main() -> int:
-    return run_cli(sys.argv[1:])
+    try:
+        return run_cli(sys.argv[1:])
+    except KeyboardInterrupt:
+        print("interrupted", file=sys.stderr)
+        return 130
+    except BrokenPipeError:
+        # Output consumer closed the pipe (e.g. `pzi entries | head`).  Redirect
+        # stdout to devnull so the interpreter's final flush cannot re-raise on
+        # shutdown, then exit with the conventional 128 + SIGPIPE(13) status.
+        try:
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(devnull, sys.stdout.fileno())
+        except (OSError, ValueError):
+            pass  # stdout may have no real fd (e.g. already closed, or captured)
+        return 141
 
 
 if __name__ == "__main__":

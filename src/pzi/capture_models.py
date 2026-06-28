@@ -9,6 +9,8 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 
+from pzi.fileio import read_text_utf8
+
 _SOURCE_PRIORITY: dict[str, int] = {
     "cli": 10,
     "translation": 9,
@@ -117,6 +119,5 @@ def load_page_artifact(path: str, *, stdin_text: str | None = None) -> PageArtif
             html = stdin_text
         return PageArtifact(html=html, source="stdin", path=None)
 
-    with open(path, encoding="utf-8") as fh:
-        html = fh.read()
+    html = read_text_utf8(path)
     return PageArtifact(html=html, source="file", path=path)

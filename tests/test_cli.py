@@ -1110,3 +1110,163 @@ def test_reindex_rename_citekeys_applies_with_warning(tmp_path: Path) -> None:
     assert exit_code == 0
     assert "@article{oldkey," not in bib_path.read_text()  # renamed
     assert "cite" in stderr.getvalue().lower()  # warned about \cite{}
+
+
+# ---------------------------------------------------------------------------
+# Bad-invocation error format + CLI robustness boundary
+# ---------------------------------------------------------------------------
+
+
+def test_invocation_error_has_no_usage_block(tmp_path: Path) -> None:
+    """Bad-invocation errors are two lines: `prog: error: …` + help pointer."""
+    stderr = StringIO()
+    exit_code = run_cli(["add"], home_dir=str(tmp_path), stdout=StringIO(), stderr=stderr)
+    assert exit_code == 2
+    assert stderr.getvalue() == (
+        "pzi add: error: provide a DOI, URL, or PDF path, or use --from-file PATH\n"
+        "Run 'pzi add --help' for usage.\n"
+    )
+
+
+def test_argparse_error_also_has_no_usage_block(tmp_path: Path) -> None:
+    """argparse-native errors share the same compact format (no `usage:` line)."""
+    stderr = StringIO()
+    exit_code = run_cli(["delete"], home_dir=str(tmp_path), stdout=StringIO(), stderr=stderr)
+    assert exit_code == 2
+    out = stderr.getvalue()
+    assert not out.startswith("usage:")
+    assert "pzi delete: error: the following arguments are required: citekey" in out
+    assert out.rstrip().endswith("Run 'pzi delete --help' for usage.")
+
+
+def test_negative_numeric_argument_is_rejected(tmp_path: Path) -> None:
+    stderr = StringIO()
+    exit_code = run_cli(
+        ["entries", "--limit", "-5"], home_dir=str(tmp_path), stdout=StringIO(), stderr=stderr
+    )
+    assert exit_code == 2
+    assert "must be zero or greater" in stderr.getvalue()
+
+
+def test_run_cli_converts_oserror_to_clean_error(tmp_path: Path, monkeypatch) -> None:
+    """An unexpected OSError in a command becomes `error: …` + exit 1, not a traceback."""
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(f'[[bibs]]\nname="ml"\npath="{tmp_path / "x.bib"}"\ndefault=true\n')
+
+    def boom(*_a, **_k):
+        raise PermissionError(13, "Permission denied", str(tmp_path / "x.bib"))
+
+    monkeypatch.setattr(cli, "_run_entries", boom)
+    stderr = StringIO()
+    exit_code = run_cli(
+        ["entries", "--config", str(config_path)],
+        home_dir=str(tmp_path),
+        stdout=StringIO(),
+        stderr=stderr,
+    )
+    assert exit_code == 1
+    # Friendly: no "[Errno 13]" noise, just the OS message + path.
+    assert stderr.getvalue() == f"error: Permission denied: {tmp_path / 'x.bib'}\n"
+
+
+def test_non_utf8_bib_gives_friendly_message(tmp_path: Path) -> None:
+    bib_path = tmp_path / "bad.bib"
+    bib_path.write_bytes(b"@article{x,\n title={caf\xe9}\n}\n")  # 0xe9 is not valid UTF-8
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(f'[[bibs]]\nname="ml"\npath="{bib_path}"\ndefault=true\n')
+    stderr = StringIO()
+    exit_code = run_cli(
+        ["entries", "--config", str(config_path)],
+        home_dir=str(tmp_path),
+        stdout=StringIO(),
+        stderr=stderr,
+    )
+    assert exit_code == 1
+    # Names the offending file so multi-bib users know which one to fix.
+    assert stderr.getvalue() == f"error: {bib_path} is not valid UTF-8 text\n"
+
+
+def test_friendly_error_renders_oserror_and_decode_errors() -> None:
+    from pzi.cli import _friendly_error
+
+    assert (
+        _friendly_error(PermissionError(13, "Permission denied", "/x.bib"))
+        == "Permission denied: /x.bib"
+    )
+    try:
+        b"\xe9".decode("utf-8")
+    except UnicodeDecodeError as exc:
+        assert _friendly_error(exc) == "file is not valid UTF-8 text"
+
+
+def test_main_handles_broken_pipe(monkeypatch) -> None:
+    def _broken(*_a, **_k):
+        raise BrokenPipeError
+
+    monkeypatch.setattr(cli, "run_cli", _broken)
+    monkeypatch.setattr(cli.os, "open", lambda *_a, **_k: -1)
+    monkeypatch.setattr(cli.os, "dup2", lambda *_a, **_k: None)
+    assert cli.main() == 141
+
+
+def test_main_handles_keyboard_interrupt(monkeypatch) -> None:
+    def _interrupt(*_a, **_k):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "run_cli", _interrupt)
+    assert cli.main() == 130
+
+
+def test_maybe_start_watchdog_skips_unowned_backend() -> None:
+    from pzi.commands import server as server_command
+
+    backend = {"url": "http://127.0.0.1:1969", "ready": True,
+               "owned": False, "proc": object()}
+    wd = server_command._maybe_start_watchdog(
+        backend, stdout=StringIO(), stderr=StringIO()
+    )
+    assert wd is None
+
+
+def test_maybe_start_watchdog_starts_for_owned_ready_backend() -> None:
+    from pzi.commands import server as server_command
+
+    class _FakeProc:
+        def poll(self):
+            return None
+
+    proc = _FakeProc()
+    backend = {
+        "url": "http://127.0.0.1:1969", "ready": True, "owned": True, "proc": proc,
+        "node_bin": "/usr/bin/node", "ts_dir": Path("/ts"), "port": 1969,
+        "stderr_log": None,
+    }
+    wd = server_command._maybe_start_watchdog(
+        backend, stdout=StringIO(), stderr=StringIO()
+    )
+    assert wd is not None
+    try:
+        assert wd.current_proc is proc
+    finally:
+        wd.stop()  # joins the daemon thread; no real child to terminate
+
+
+def test_run_cli_reports_concurrent_edit_without_traceback(monkeypatch) -> None:
+    # A concurrent external edit aborts the write at the repository layer; the
+    # CLI must render it as a friendly error and exit 1, not a raw traceback.
+    from pzi.bib_repository import ConcurrentEditError
+
+    def _raise(*_a, **_k):
+        raise ConcurrentEditError("bib file was modified externally")
+
+    monkeypatch.setattr(cli, "_run_add", _raise)
+    stderr = StringIO()
+    exit_code = run_cli(
+        ["add", "https://example.com/paper", "--config", "/tmp/x.toml"],
+        stdout=StringIO(),
+        stderr=stderr,
+    )
+
+    assert exit_code == 1
+    assert "modified externally" in stderr.getvalue()
+    assert "retry" in stderr.getvalue()

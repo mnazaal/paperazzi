@@ -173,7 +173,9 @@ def _normalize_app_config(raw: Mapping[str, object], validated_bibs: list[BibCon
             if isinstance(origin, str) and origin.strip()
         ) or None
 
-    opt = lambda k: _opt_str_from_raw(raw, k)  # noqa: E731
+    def opt(k: str) -> str | None:
+        return _opt_str_from_raw(raw, k)
+
     flaresolverr_url = opt("flaresolverr_url")
     if flaresolverr_url is not None and not _is_http_url(flaresolverr_url):
         flaresolverr_url = None

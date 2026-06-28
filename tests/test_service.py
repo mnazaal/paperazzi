@@ -521,6 +521,58 @@ default = true
     assert result["errors"] == ["server unavailable"]
 
 
+def test_add_input_to_bib_rejects_unrecognized_input_without_fetching(
+    tmp_path: Path,
+) -> None:
+    """`pzi add l` must error out, not insert an empty placeholder entry."""
+    config_path = tmp_path / "config.toml"
+    bib_path = tmp_path / "library.bib"
+    config_path.write_text(
+        f"""
+[[bibs]]
+name = "ml"
+path = "{bib_path}"
+default = true
+""".strip()
+    )
+
+    def boom_fetch_web(url: str, *, server_url: str) -> list[dict[str, object]]:
+        raise AssertionError("fetcher must not run for unrecognized input")
+
+    def boom_fetch_search(query: str, *, server_url: str) -> list[dict[str, object]]:
+        raise AssertionError("fetcher must not run for unrecognized input")
+
+    result = add_input_to_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        value="l",
+        record_overrides={},
+        bib_selector=None,
+        dry_run=False,
+        fetch_web=boom_fetch_web,
+        fetch_search=boom_fetch_search,
+    )
+
+    assert result["status"] == "error"
+    assert result["message"] == "invalid input"
+    assert result["errors"] == ["'l' is not a DOI, URL, or local PDF path"]
+    assert not bib_path.exists()  # nothing was written
+
+
+def test_describe_invalid_add_input_classifies_inputs(tmp_path: Path) -> None:
+    from pzi.add_service import describe_invalid_add_input
+
+    assert describe_invalid_add_input("l") == "'l' is not a DOI, URL, or local PDF path"
+    assert describe_invalid_add_input("10.1145/1327452.1327492") is None
+    assert describe_invalid_add_input("https://example.com/paper") is None
+
+    missing = tmp_path / "missing.pdf"
+    assert describe_invalid_add_input(str(missing)) == f"PDF file not found: {missing}"
+    present = tmp_path / "present.pdf"
+    present.write_bytes(b"%PDF-1.4\n")
+    assert describe_invalid_add_input(str(present)) is None
+
+
 def test_add_input_to_bib_falls_back_to_crossref_when_zotero_returns_501(
     tmp_path: Path,
 ) -> None:
@@ -615,6 +667,89 @@ default = true
     assert result["status"] == "ok"
     assert result["warnings"] == []
     assert "file = {" in bib_path.read_text()
+
+
+def test_add_record_with_bib_retries_once_on_concurrent_edit_without_redownload(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # A concurrent external edit aborts the first write; the retry re-reads,
+    # replans, and commits. The PDF must be downloaded exactly once (the
+    # download happens before planning and is preserved across the retry).
+    from pzi import add_service
+    from pzi.bib_repository import ConcurrentEditError
+
+    real_execute = add_service.execute_write_plan
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    bib_path = tmp_path / "library.bib"
+    bib_path.write_text("")
+    bib = {"name": "ml", "path": str(bib_path),
+           "papers_dir": str(papers), "default": True}
+
+    downloads = {"n": 0}
+
+    def _spy_fetch_binary(url: str):
+        downloads["n"] += 1
+        return (b"%PDF-1.7\nbody", "application/pdf")
+
+    calls = {"n": 0}
+
+    def _flaky_execute(path, plan, *, file_path_style="absolute"):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ConcurrentEditError("bib file was modified externally")
+        return real_execute(path, plan, file_path_style=file_path_style)
+
+    monkeypatch.setattr(add_service, "execute_write_plan", _flaky_execute)
+
+    result = add_service.add_record_with_bib(
+        bib=bib,  # type: ignore[arg-type]
+        record={
+            "citekey": "smith2024graph",
+            "title": "Graph Parsers",
+            "doi": "10.1/foo",
+            "pdf_url": "https://example.com/paper.pdf",
+        },
+        dry_run=False,
+        fetch_binary=_spy_fetch_binary,
+    )
+
+    assert result["status"] == "ok"
+    assert result["action"] == "insert"
+    assert calls["n"] == 2          # first attempt raised, retry committed
+    assert downloads["n"] == 1      # PDF fetched exactly once
+    assert "@article{smith2024graph" in bib_path.read_text()
+
+
+def test_add_record_with_bib_reraises_when_concurrent_edit_persists(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # If the external edit recurs on the retry, give up and re-raise so the
+    # CLI/HTTP layer can render the friendly message.
+    import pytest
+
+    from pzi import add_service
+    from pzi.bib_repository import ConcurrentEditError
+
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    bib_path = tmp_path / "library.bib"
+    bib_path.write_text("")
+    bib = {"name": "ml", "path": str(bib_path),
+           "papers_dir": str(papers), "default": True}
+
+    def _always_raise(path, plan, *, file_path_style="absolute"):
+        raise ConcurrentEditError("bib file was modified externally")
+
+    monkeypatch.setattr(add_service, "execute_write_plan", _always_raise)
+
+    with pytest.raises(ConcurrentEditError):
+        add_service.add_record_with_bib(
+            bib=bib,  # type: ignore[arg-type]
+            record={"citekey": "smith2024graph", "title": "Graph Parsers",
+                    "doi": "10.1/foo"},
+            dry_run=False,
+        )
 
 
 def test_add_input_to_bib_uses_web_fallback_for_doi_pdf_discovery(

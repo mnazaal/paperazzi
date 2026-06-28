@@ -1,5 +1,12 @@
 from pzi.http_payloads import (
     capture_payload,
+    detail_payload,
+    entries_payload,
+    inbox_drain_payload,
+    promote_payload,
+    search_payload,
+    tag_change_payload,
+    tag_list_payload,
     update_payload,
 )
 from pzi.http_post_routes import (
@@ -273,3 +280,80 @@ def test_trusted_fields_prefers_embedded_over_page_title_for_title() -> None:
     # So 'title' should be set from whatever fallback_title was.
     assert "title" in result
     assert "fallback_title" not in result
+
+
+# --- pure response-payload builders ----------------------------------------
+
+
+def test_search_payload_wraps_matches_with_total() -> None:
+    out = search_payload({"status": "ok", "bib_name": "ml",
+                          "matches": [{"citekey": "a"}, {"citekey": "b"}]})
+    assert out == {"status": "ok", "bib": "ml", "errors": [],
+                   "matches": [{"citekey": "a"}, {"citekey": "b"}], "total": 2}
+
+
+def test_entries_payload_listing_form_includes_sort() -> None:
+    out = entries_payload(
+        {"status": "ok", "items": [{"citekey": "a"}], "total": 5,
+         "offset": 0, "limit": 1, "sort": "year"},
+        offset=0, limit=1,
+    )
+    assert out["entries"] == [{"citekey": "a"}]
+    assert out["total"] == 5
+    assert out["sort"] == "year"
+
+
+def test_entries_payload_legacy_matches_form_paginates() -> None:
+    out = entries_payload(
+        {"status": "ok", "matches": [{"c": 1}, {"c": 2}, {"c": 3}]},
+        offset=1, limit=1,
+    )
+    assert out["entries"] == [{"c": 2}]
+    assert out["total"] == 3
+    assert out["offset"] == 1
+
+
+def test_detail_payload_sorts_tags_and_picks_url() -> None:
+    out = detail_payload(
+        {"citekey": "a", "title": "T", "tags": ["z", "a"],
+         "source_url": "https://example.com/s"},
+        "ml",
+    )
+    assert out["bib"] == "ml"
+    assert out["entry"]["tags"] == ["a", "z"]
+    assert out["entry"]["url"] == "https://example.com/s"
+
+
+def test_tag_list_and_tag_change_payloads() -> None:
+    listed = tag_list_payload({"status": "ok", "citekey": "a", "tags": ["x"]})
+    assert listed["citekey"] == "a" and listed["tags"] == ["x"]
+    changed = tag_change_payload(
+        {"status": "ok", "citekey": "a", "tags": ["x"], "changed": True,
+         "dry_run": False, "message": "ok"}
+    )
+    assert changed["changed"] is True and changed["message"] == "ok"
+
+
+def test_promote_payload_carries_summary_and_flags() -> None:
+    out = promote_payload(
+        {"status": "ok", "items": [{"x": 1}], "summary": {"promoted": 1},
+         "keep_preprint": False, "dry_run": False}
+    )
+    assert out["summary"] == {"promoted": 1}
+    assert out["keep_preprint"] is False
+
+
+def test_inbox_drain_payload_shapes_counts_and_items() -> None:
+    out = inbox_drain_payload(
+        {"status": "ok", "inbox_file": "/x/inbox.txt", "dry_run": False,
+         "total": 2, "counts": {"added": 1, "failed": 1}, "items": [{"v": 1}]}
+    )
+    assert out["inbox_file"] == "/x/inbox.txt"
+    assert out["counts"] == {"added": 1, "failed": 1}
+    assert out["total"] == 2
+
+
+def test_items_payload_passes_non_dict_items_through() -> None:
+    # _items_payload via update_payload: a non-dict item is preserved as-is.
+    out = update_payload({"status": "ok", "items": ["raw-string-item"]})
+    assert out["items"] == ["raw-string-item"]

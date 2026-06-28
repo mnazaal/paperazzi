@@ -20,9 +20,12 @@ def test_run_search_command_requires_at_least_one_filter(tmp_path: Path) -> None
         bib_selector=None,
     )
 
-    assert exit_code == 1
+    assert exit_code == 2
     assert stdout.getvalue() == ""
-    assert stderr.getvalue() == "error: at least one of --query, --author, --year, --tag is required\n"
+    assert stderr.getvalue() == (
+        "pzi search: error: at least one of --query, --author, --year, --tag is required\n"
+        "Run 'pzi search --help' for usage.\n"
+    )
 
 
 def test_run_search_command_searches_each_target_and_renders_matches(tmp_path: Path) -> None:

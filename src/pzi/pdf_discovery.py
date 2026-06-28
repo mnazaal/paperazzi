@@ -127,6 +127,9 @@ def apply_pdf_discovery_parallel(
                 try:
                     results[step] = future.result()
                 except Exception:
+                    # A single discovery source failing (network, parse, provider
+                    # error) must not abort the whole fan-out: treat it as "no
+                    # result" so lower-priority sources still get their turn.
                     results[step] = None
         for step in http_steps:
             result = results.get(step)

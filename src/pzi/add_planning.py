@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import urllib.error
+from collections.abc import Mapping, Sequence
 from typing import Any, cast
+from urllib.parse import urlsplit
 
 from pzi.bibtex import NormalizedRecord
 from pzi.flaresolverr import fetch_html_via_flaresolverr
@@ -17,6 +19,14 @@ from pzi.pdf_discovery import (
     DEFAULT_DISCOVERY_STEPS,
     PdfDiscoveryContext,
     apply_pdf_discovery,
+)
+from pzi.protocols import (
+    HtmlFetcher,
+    MetadataRecordFetcher,
+    S2RecordFetcher,
+    SearchTranslationFetcher,
+    UnpaywallFetcher,
+    WebTranslationFetcher,
 )
 from pzi.similarity import compute_similarity_hint, find_exact_match
 
@@ -237,17 +247,17 @@ def fetch_record_for_input(
     raw_value: str,
     classified: Mapping[str, object],
     server_url: str,
-    fetch_web,
-    fetch_search,
+    fetch_web: WebTranslationFetcher,
+    fetch_search: SearchTranslationFetcher,
     contact_email: str | None = None,
     unpaywall_email: str | None = None,
     s2_api_key: str | None = None,
     flaresolverr_url: str | None = None,
-    fetch_unpaywall=None,
-    fetch_crossref=None,
-    fetch_openalex=None,
-    fetch_s2=None,
-    fetch_flaresolverr=None,
+    fetch_unpaywall: UnpaywallFetcher | None = None,
+    fetch_crossref: MetadataRecordFetcher | None = None,
+    fetch_openalex: MetadataRecordFetcher | None = None,
+    fetch_s2: S2RecordFetcher | None = None,
+    fetch_flaresolverr: HtmlFetcher | None = None,
     pdf_url_candidates: list[str] | None = None,
     browser_pdf_cmd: str | None = None,
     cookies: str | None = None,
@@ -340,10 +350,8 @@ def fetch_record_for_input(
             best = dict(merge_record_sources(fallback, meta))
             return _with_pdf_discovery(cast(NormalizedRecord, best))
 
-        from urllib.parse import urlsplit as _urlsplit
-
         raw_as_url = (
-            raw_value if _urlsplit(raw_value).scheme in {"http", "https"} else None
+            raw_value if urlsplit(raw_value).scheme in {"http", "https"} else None
         )
         if raw_as_url:
             web_results = safe_api_call(
@@ -405,13 +413,16 @@ def fetch_record_for_input(
 
         raise ValueError(f"translation server returned no results for URL: {normalized}")
 
-    return fallback
+    # Unreachable in normal flow: `unknown` input is rejected upstream by
+    # describe_invalid_add_input before reaching here.  Guard defensively so a
+    # future caller cannot silently insert an empty placeholder record.
+    raise ValueError(  # pragma: no cover - defensive; unknown is rejected upstream
+        f"unrecognized input (not a DOI, URL, or PDF): {raw_value!r}"
+    )
 
 
 def safe_api_call(fn):
     """Run callable, swallowing urllib HTTPError and returning []."""
-    import urllib.error
-
     try:
         return fn()
     except urllib.error.HTTPError:
@@ -419,7 +430,7 @@ def safe_api_call(fn):
 
 
 def select_best_metadata_result(
-    results: list[Mapping[str, Any]], fallback: Mapping[str, object]
+    results: Sequence[Mapping[str, Any]], fallback: Mapping[str, object]
 ) -> Mapping[str, Any]:
     """Choose best metadata result by pure score, preserving input order on ties."""
     if not results:
@@ -591,10 +602,8 @@ def _fallback_record_for_input(
 
 
 def _url_is_http(value: str) -> bool:
-    from urllib.parse import urlsplit as _urlsplit
-
     try:
-        return _urlsplit(value).scheme in {"http", "https"}
+        return urlsplit(value).scheme in {"http", "https"}
     except ValueError:
         return False
 

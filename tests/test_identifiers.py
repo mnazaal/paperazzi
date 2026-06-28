@@ -81,4 +81,47 @@ def test_normalize_url_preserves_ipv6_brackets() -> None:
         normalize_url("http://[2606:2800:220:1:248:1893:25c8:1946]/paper.pdf")
         == "http://[2606:2800:220:1:248:1893:25c8:1946]/paper.pdf"
     )
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "ftp://example.com/x.pdf",      # unsupported scheme
+        "https:///just-a-path",         # no netloc
+        "http://example.com:notaport/", # port is non-numeric → ValueError
+        "not a url at all",             # no scheme/netloc
+    ],
+)
+def test_normalize_url_rejects_unsupported(raw) -> None:
+    assert normalize_url(raw) is None
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        # arXiv abstract/PDF URLs canonicalize to the arXiv DOI.
+        ("https://arxiv.org/abs/2401.12345", "10.48550/arxiv.2401.12345"),
+        ("https://arxiv.org/abs/2401.12345v2", "10.48550/arxiv.2401.12345"),
+        ("https://arxiv.org/pdf/2401.12345", "10.48550/arxiv.2401.12345"),
+        ("https://arxiv.org/abs/cs/0112017", "10.48550/arxiv.cs/0112017"),
+        # bioRxiv/medRxiv content paths yield the embedded DOI (version stripped).
+        ("https://www.biorxiv.org/content/10.1101/2020.01.01.123456v1",
+         "10.1101/2020.01.01.123456"),
+        ("https://www.medrxiv.org/content/10.1101/2021.05.05.654321v2.full",
+         "10.1101/2021.05.05.654321"),
+        # Zenodo records map to the Zenodo DOI prefix.
+        ("https://zenodo.org/records/1234567", "10.5281/zenodo.1234567"),
+        ("https://zenodo.org/record/7654321", "10.5281/zenodo.7654321"),
+    ],
+)
+def test_classify_input_extracts_repository_dois(raw, expected) -> None:
+    result = classify_input(raw)
+    assert result["kind"] == "doi"
+    assert result["normalized"] == expected
+
+
+def test_classify_input_arxiv_non_id_path_is_plain_url() -> None:
+    # An arXiv URL that is not an abs/pdf identifier stays a plain url.
+    result = classify_input("https://arxiv.org/list/cs.LG/recent")
+    assert result["kind"] == "url"
     assert normalize_url("http://[::1]:8080/x") == "http://[::1]:8080/x"

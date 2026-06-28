@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 CandidatePlan = dict[str, object]
 AcquisitionPlan = dict[str, object]
@@ -205,14 +206,12 @@ def _gateway_timeout(url: str) -> tuple[int, str | None]:
     Returns ``(0, None)`` when the URL does not match any known gateway.
     """
     try:
-        from urllib.parse import urlsplit
         parts = urlsplit(url)
         hostname = parts.hostname or ""
         path = parts.path.lower() if parts.path else ""
     except ValueError:
         return (0, None)
 
-    import re
     for host_re, path_fragment, timeout_ms in _GATEWAY_PATTERNS:
         if re.search(host_re, hostname) and path_fragment in path:
             return (timeout_ms, f"{host_re}:{path_fragment}")

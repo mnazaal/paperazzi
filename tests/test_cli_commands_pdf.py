@@ -67,7 +67,10 @@ def test_run_pdf_command_retry_requires_citekey(tmp_path: Path) -> None:
 
     assert exit_code == 2
     assert stdout.getvalue() == ""
-    assert stderr.getvalue() == "error: citekey required (or use --failed-only for batch retry)\n"
+    assert stderr.getvalue() == (
+        "pzi pdf retry: error: citekey required (or use --failed-only for batch retry)\n"
+        "Run 'pzi pdf retry --help' for usage.\n"
+    )
 
 
 def test_run_pdf_command_failed_only_uses_injected_service(tmp_path: Path) -> None:

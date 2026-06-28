@@ -14,6 +14,7 @@ from pzi.bib_repository import (
     with_bib_lock,
 )
 from pzi.bibtex import BibtexEntry
+from pzi.fileio import read_text_utf8
 from pzi.pdf_planning import pdf_file_present
 
 
@@ -63,7 +64,7 @@ def validate_library(
 
     try:
         from bibtexparser.entrypoint import parse_string as _parse
-        text = Path(bib_path).read_text(encoding="utf-8")
+        text = read_text_utf8(bib_path)
         library = _parse(text)
         validate_library_parseable(library)
     except ValueError as exc:

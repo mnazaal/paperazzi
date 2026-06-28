@@ -410,6 +410,75 @@ def test_patch_cookie_bridge_anchor_missing_fails(tmp_path: Path) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# cookie-bridge patch against realistic Zotero-shaped fixtures
+#
+# The trivial one-line tests above prove the regex anchors fire on a bare
+# anchor string; these prove they still fire inside realistic constructor /
+# handler bodies (indentation + surrounding code), so a drift in the flexible
+# anchor regex relative to real upstream structure is caught.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_TS_JS_FIXTURES = Path(__file__).parent / "fixtures" / "ts_js"
+
+
+def _copy_fixture(name: str, dest_dir: Path) -> Path:
+    dest = dest_dir / name
+    dest.write_text((_TS_JS_FIXTURES / name).read_text(encoding="utf-8"), encoding="utf-8")
+    return dest
+
+
+def test_apply_cookie_patch_session_realistic_fixture(tmp_path: Path) -> None:
+    f = _copy_fixture("webSession.js", tmp_path)
+    assert ts_backend._apply_cookie_patch(f, "session") is None
+    content = f.read_text()
+    assert "_pziCookies" in content
+    assert "this._cookieSandbox = cookieSandbox" in content  # anchor preserved
+    # Idempotent: a second pass is a no-op and does not duplicate the block.
+    assert ts_backend._apply_cookie_patch(f, "session") is None
+    assert f.read_text().count("pzi cookie bridge") == 1
+
+
+def test_apply_cookie_patch_endpoint_realistic_fixture(tmp_path: Path) -> None:
+    f = _copy_fixture("webEndpoint.js", tmp_path)
+    assert ts_backend._apply_cookie_patch(f, "endpoint") is None
+    content = f.read_text()
+    assert "session._cookies" in content
+    assert "await session.handleURL();" in content  # anchor preserved
+    assert ts_backend._apply_cookie_patch(f, "endpoint") is None
+    assert f.read_text().count("pzi cookie bridge") == 1
+
+
+def test_patch_cookie_bridge_applies_to_realistic_fixtures(tmp_path: Path) -> None:
+    # Exercises the real `patch -p0` CLI path end-to-end on realistic source:
+    # _build_cookie_patch must produce a unified diff that re-applies cleanly.
+    ts_dir = tmp_path / "ts"
+    src_dir = ts_dir / "src"
+    src_dir.mkdir(parents=True)
+    _copy_fixture("webSession.js", src_dir)
+    _copy_fixture("webEndpoint.js", src_dir)
+
+    assert ts_backend._patch_cookie_bridge(ts_dir) is True
+    assert "_pziCookies" in (src_dir / "webSession.js").read_text()
+    assert "session._cookies" in (src_dir / "webEndpoint.js").read_text()
+
+
+def test_patch_cookie_bridge_drifted_realistic_fixture_fails(tmp_path: Path) -> None:
+    # Anchor removed (simulating an upstream rewrite): the patch must refuse
+    # rather than corrupt the file — warn-don't-crash contract.
+    ts_dir = tmp_path / "ts"
+    src_dir = ts_dir / "src"
+    src_dir.mkdir(parents=True)
+    session = _copy_fixture("webSession.js", src_dir)
+    drifted = session.read_text().replace("this._cookieSandbox", "this._jar")
+    session.write_text(drifted)
+    _copy_fixture("webEndpoint.js", src_dir)
+
+    assert ts_backend._patch_cookie_bridge(ts_dir) is False
+    # The drifted file is left without a half-applied patch block.
+    assert "pzi cookie bridge" not in session.read_text()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # _npm_cli_path
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -808,3 +877,118 @@ def result(returncode: int, stdout: str, stderr: str) -> MagicMock:
 
 def json_io(data: str) -> io.BytesIO:
     return io.BytesIO(data.encode("utf-8"))
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TranslationServerWatchdog  (tick() observation logic, no real threads)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class _FakeProc:
+    """Minimal Popen stand-in whose liveness is controlled by `_alive`."""
+
+    def __init__(self, alive: bool = True) -> None:
+        self._alive = alive
+
+    def poll(self):
+        return None if self._alive else 1
+
+
+def _make_watchdog(**overrides):
+    defaults = dict(
+        ts_url="http://127.0.0.1:1969",
+        proc=_FakeProc(alive=True),
+        node_bin="/usr/bin/node",
+        ts_dir=Path("/ts"),
+        port=1969,
+        stderr_log=None,
+        stdout=io.StringIO(),
+        stderr=io.StringIO(),
+        is_reachable=lambda url, timeout=2.0: True,
+        start=lambda *a, **k: _FakeProc(alive=True),
+        wait=lambda *a, **k: True,
+        terminate=lambda *a, **k: None,
+    )
+    defaults.update(overrides)
+    return ts_backend.TranslationServerWatchdog(**defaults)
+
+
+def test_watchdog_tick_noop_when_alive_and_reachable() -> None:
+    started: list = []
+    w = _make_watchdog(start=lambda *a, **k: started.append(1) or _FakeProc())
+    w.tick()
+    assert started == []  # no restart while healthy
+
+
+def test_watchdog_tick_restarts_dead_child_and_swaps_proc() -> None:
+    dead = _FakeProc(alive=False)
+    fresh = _FakeProc(alive=True)
+    starts: list = []
+    stderr = io.StringIO()
+
+    w = _make_watchdog(
+        proc=dead, stderr=stderr,
+        start=lambda *a, **k: (starts.append(1), fresh)[1],
+        wait=lambda *a, **k: True,
+    )
+    w.tick()
+
+    assert len(starts) == 1
+    assert w.current_proc is fresh
+    assert "unreachable" in stderr.getvalue()
+
+
+def test_watchdog_tick_restart_only_attempted_once_then_gives_up() -> None:
+    dead = _FakeProc(alive=False)
+    starts: list = []
+
+    # Restart launches a child that never becomes ready: give up, don't thrash.
+    w = _make_watchdog(
+        proc=dead,
+        start=lambda *a, **k: (starts.append(1), _FakeProc(alive=False))[1],
+        wait=lambda *a, **k: False,
+    )
+    w.tick()
+    w.tick()  # second tick must be a no-op (gave up)
+
+    assert len(starts) == 1
+
+
+def test_watchdog_tick_detect_and_warn_without_restart() -> None:
+    dead = _FakeProc(alive=False)
+    starts: list = []
+    stderr = io.StringIO()
+
+    w = _make_watchdog(
+        proc=dead, stderr=stderr, auto_restart=False,
+        start=lambda *a, **k: starts.append(1) or _FakeProc(),
+    )
+    w.tick()
+
+    assert starts == []  # warn only, never restart
+    assert "unreachable" in stderr.getvalue()
+    assert "attempting restart" not in stderr.getvalue()
+
+
+def test_watchdog_stop_terminates_only_a_restarted_child() -> None:
+    # The original child is owned by backend_session, so stop() must not
+    # terminate it; only a watchdog-started replacement is the watchdog's to
+    # tear down.
+    original = _FakeProc(alive=True)
+    terminated: list = []
+
+    w = _make_watchdog(proc=original, terminate=lambda p, **k: terminated.append(p))
+    w.stop()
+    assert terminated == []  # never started a replacement → nothing to kill
+
+    fresh = _FakeProc(alive=True)
+    w2 = _make_watchdog(
+        proc=_FakeProc(alive=False),
+        start=lambda *a, **k: fresh,
+        wait=lambda *a, **k: True,
+        terminate=lambda p, **k: terminated.append(p),
+    )
+    w2.tick()           # restarts → current_proc is `fresh`
+    terminated.clear()
+    w2.stop()
+    assert terminated == [fresh]  # stop terminates the restarted child

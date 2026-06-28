@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, TextIO
 
+from pzi.add_service import describe_invalid_add_input
 from pzi.capture_core import capture_to_bib
 from pzi.capture_models import AuthHints, CaptureInput
 from pzi.cli_parser import (
@@ -17,6 +18,7 @@ from pzi.cli_parser import (
     build_capture_options_from_add_args,
     load_text_arg,
     parse_batch_values,
+    usage_error_lines,
 )
 from pzi.cli_render import _error_lines, _render_add_success
 from pzi.commands.common import print_lines, print_metadata_diagnostics
@@ -47,8 +49,16 @@ def run_add_command(
     from_file = getattr(args, "from_file", None)
     invalid = _validate_add_args(args, from_file=from_file)
     if invalid is not None:
-        print(f"error: {invalid}", file=stderr)
+        print_lines(usage_error_lines(("add",), invalid), stderr)
         return 2
+
+    # Reject unrecognized input (e.g. `pzi add l`) before starting the
+    # translation-server or touching the bib — fail fast with no side effects.
+    if not from_file and args.value:
+        bad_value = describe_invalid_add_input(args.value)
+        if bad_value is not None:
+            print_lines(usage_error_lines(("add",), bad_value), stderr)
+            return 2
 
     cfg = load_config_file(config_path, home_dir=home_dir)
     config = cfg["config"]

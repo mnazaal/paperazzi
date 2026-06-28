@@ -152,3 +152,19 @@ def test_export_ris_inproceedings_type() -> None:
         )
         result = export_ris(bib)
         assert "TY  - CONF" in result["content"]
+
+
+def test_normalize_authors_handles_list_string_and_other() -> None:
+    from pzi.export_service import _normalize_authors
+
+    assert _normalize_authors(["Smith, J", "Doe, A"]) == "Smith, J; Doe, A"
+    assert _normalize_authors("Smith, J and Doe, A") == "Smith, J and Doe, A"
+    assert _normalize_authors(None) == ""
+
+
+def test_normalize_tags_handles_list_string_and_other() -> None:
+    from pzi.export_service import _normalize_tags
+
+    assert _normalize_tags(["ml", "graphs"]) == "ml, graphs"
+    assert _normalize_tags("ml,graphs") == "ml,graphs"
+    assert _normalize_tags(None) == ""

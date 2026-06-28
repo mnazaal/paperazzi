@@ -20,6 +20,7 @@ from pzi.pdf import snapshot_pdf_paths as _snapshot_pdf_paths
 from pzi.pdf import write_pdf_bytes
 from pzi.pdf_download import fetch_and_store_pdf, store_pdf_source
 from pzi.pdf_planning import pdf_file_present
+from pzi.protocols import BinaryFetcher
 
 PdfRetryResult: TypeAlias = dict[str, Any]
 
@@ -49,7 +50,7 @@ def retry_pdf(
     home_dir: str,
     bib_selector: str | None,
     citekey: str,
-    fetch_binary=None,
+    fetch_binary: BinaryFetcher | None = None,
 ) -> PdfRetryResult:
     resolved = load_and_resolve_bib(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector
@@ -288,7 +289,7 @@ def attach_pdf(
     bib_selector: str | None,
     citekey: str,
     source: str,
-    fetch_binary=None,
+    fetch_binary: BinaryFetcher | None = None,
 ) -> PdfAttachResult:
     resolved = load_and_resolve_bib(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector
@@ -601,7 +602,7 @@ def _store_pdf_source(
     source: str,
     papers_dir: str,
     citekey: str,
-    fetch_binary=None,
+    fetch_binary: BinaryFetcher | None = None,
     record: dict[str, object] | None = None,
     filename_format: str | None = None,
     ezproxy_host: str | None = None,

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any, TextIO
 
+from pzi.cli_parser import usage_error_lines
 from pzi.cli_render import _error_lines, _render_pdf_success
 from pzi.commands.common import print_lines
 from pzi.pdf_service import attach_pdf, retry_failed_pdfs, retry_pdf
@@ -64,7 +65,13 @@ def run_pdf_command(
         return 0
 
     if not args.citekey:
-        print("error: citekey required (or use --failed-only for batch retry)", file=stderr)
+        print_lines(
+            usage_error_lines(
+                ("pdf", "retry"),
+                "citekey required (or use --failed-only for batch retry)",
+            ),
+            stderr,
+        )
         return 2
 
     result = retry_pdf_fn(

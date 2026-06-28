@@ -16,11 +16,12 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import TextIO, TypedDict
+from typing import NotRequired, TextIO, TypedDict
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -152,6 +153,30 @@ def _node_bin_dir(data_home: Path) -> Path:
     return data_home / "node"
 
 
+def _extractall_no_traversal(
+    tar: tarfile.TarFile, dest: Path
+) -> None:  # pragma: no cover — Python < 3.11.4 fallback only
+    """Extract *tar* into *dest*, rejecting any member that escapes *dest*.
+
+    Replicates the ``filter="data"`` traversal/symlink guard for the rare
+    Python < 3.11.4 patch releases where that argument is unavailable.
+    """
+    dest_resolved = dest.resolve()
+
+    def _within(target: Path) -> bool:
+        resolved = target.resolve()
+        return resolved == dest_resolved or dest_resolved in resolved.parents
+
+    for member in tar.getmembers():
+        if not _within(dest_resolved / member.name):
+            raise tarfile.TarError(f"unsafe path in tarball: {member.name!r}")
+        if (member.issym() or member.islnk()) and not _within(
+            (dest_resolved / member.name).parent / member.linkname
+        ):
+            raise tarfile.TarError(f"unsafe link in tarball: {member.name!r}")
+    tar.extractall(path=dest)
+
+
 def download_node(
     data_home: Path,
     *,
@@ -215,7 +240,7 @@ def download_node(
             try:
                 tar.extractall(path=node_dir, filter="data")
             except TypeError:  # pragma: no cover — Python < 3.11.4 only
-                tar.extractall(path=node_dir)
+                _extractall_no_traversal(tar, node_dir)
     except (tarfile.TarError, OSError) as exc:
         raise RuntimeError(f"failed to extract Node.js tarball: {exc}") from exc
     finally:
@@ -908,12 +933,21 @@ def _port_from_ts_url(ts_url: str) -> int:
 
 
 class BackendHandle(TypedDict):
-    """Result of :func:`backend_session`."""
+    """Result of :func:`backend_session`.
+
+    For an ``owned`` backend the restart inputs (``node_bin``, ``ts_dir``,
+    ``port``, ``stderr_log``) are populated so a watchdog can re-launch a dead
+    child; they are absent for reused/unmanaged backends.
+    """
 
     url: str | None
     ready: bool
     owned: bool
     proc: subprocess.Popen[bytes] | None
+    node_bin: NotRequired[str]
+    ts_dir: NotRequired[Path]
+    port: NotRequired[int]
+    stderr_log: NotRequired[Path]
 
 
 @contextmanager
@@ -969,6 +1003,157 @@ def backend_session(
     proc = start_ts(node, ts_dir, port=port, stderr_log=stderr_log)
     try:
         ready = wait_for_ts(ts_url, stdout=stdout, stderr=stderr, proc=proc)
-        yield {"url": ts_url, "ready": ready, "owned": True, "proc": proc}
+        yield {
+            "url": ts_url, "ready": ready, "owned": True, "proc": proc,
+            "node_bin": node, "ts_dir": ts_dir, "port": port, "stderr_log": stderr_log,
+        }
     finally:
         terminate_ts(proc)
+
+
+# ---------------------------------------------------------------------------
+# Watchdog: keep a long-lived `pzi server`'s owned TS child alive
+# ---------------------------------------------------------------------------
+
+
+class TranslationServerWatchdog:
+    """Monitor an owned translation-server child and restart it if it dies.
+
+    A long-running ``pzi server`` keeps the translation-server as a bound
+    child. If that child crashes (OOM, SIGKILL) every capture fails until a
+    human restarts it. This watchdog polls liveness on a background thread and,
+    when the child is gone or unreachable, warns once and attempts a single
+    restart. If the restart fails (or the replacement never becomes ready) it
+    gives up to avoid a thrash loop; capture requests then surface the existing
+    "not reachable" error.
+
+    The polling primitives are injected so the observation logic is unit-tested
+    via :meth:`tick` without real threads, timing, or subprocesses. The
+    watchdog owns only the children *it* starts: :meth:`stop` terminates a
+    restarted child, while the original child remains owned by
+    :func:`backend_session`.
+    """
+
+    def __init__(
+        self,
+        *,
+        ts_url: str,
+        proc: subprocess.Popen[bytes],
+        node_bin: str,
+        ts_dir: Path,
+        port: int,
+        stderr_log: Path | None,
+        stdout: TextIO,
+        stderr: TextIO,
+        interval: float = 30.0,
+        auto_restart: bool = True,
+        is_reachable: Callable[..., bool] = is_ts_reachable,
+        start: Callable[..., subprocess.Popen[bytes]] = start_ts,
+        wait: Callable[..., bool] = wait_for_ts,
+        terminate: Callable[..., None] = terminate_ts,
+    ) -> None:
+        self._ts_url = ts_url
+        self._initial_proc = proc
+        self._proc = proc
+        self._node_bin = node_bin
+        self._ts_dir = ts_dir
+        self._port = port
+        self._stderr_log = stderr_log
+        self._stdout = stdout
+        self._stderr = stderr
+        self._interval = interval
+        self._auto_restart = auto_restart
+        self._is_reachable = is_reachable
+        self._start = start
+        self._wait = wait
+        self._terminate = terminate
+
+        self._lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._warned = False
+        self._gave_up = False
+
+    @property
+    def current_proc(self) -> subprocess.Popen[bytes]:
+        """The child currently being monitored (may be a restarted one)."""
+        with self._lock:
+            return self._proc
+
+    def start(self) -> None:
+        """Spawn the background polling thread (daemon, never outlives stop)."""
+        self._thread = threading.Thread(
+            target=self._run, name="pzi-ts-watchdog", daemon=True
+        )
+        self._thread.start()
+
+    def stop(self, *, join_timeout: float = 5.0) -> None:
+        """Stop polling and terminate any child the watchdog itself started."""
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=join_timeout)
+            self._thread = None
+        with self._lock:
+            if self._proc is not self._initial_proc:
+                self._terminate(self._proc)
+
+    def _run(self) -> None:
+        # `Event.wait` returns True once stop() is called, ending the loop; it
+        # also provides the inter-tick delay without a busy spin.
+        while not self._stop_event.wait(self._interval):
+            self.tick()
+
+    def tick(self) -> None:
+        """Perform one liveness observation and, if needed, one restart."""
+        with self._lock:
+            if self._gave_up:
+                return
+            proc = self._proc
+            alive = proc.poll() is None
+            reachable = alive and self._is_reachable(self._ts_url, timeout=1.0)
+            if alive and reachable:
+                self._warned = False
+                return
+
+            if not self._warned:
+                print(
+                    "warning: translation-server became unreachable"
+                    + (" — attempting restart" if self._auto_restart else ""),
+                    file=self._stderr,
+                )
+                self._warned = True
+            if not self._auto_restart:
+                return
+
+            self._restart_locked(proc)
+
+    def _restart_locked(self, dead_proc: subprocess.Popen[bytes]) -> None:
+        """Restart the child once; disable further attempts on failure."""
+        self._terminate(dead_proc)
+        try:
+            new_proc = self._start(
+                self._node_bin, self._ts_dir,
+                port=self._port, stderr_log=self._stderr_log,
+            )
+        except Exception as exc:  # noqa: BLE001 — any start failure ends restarts
+            print(
+                f"warning: translation-server restart failed: {exc} — giving up",
+                file=self._stderr,
+            )
+            self._gave_up = True
+            return
+        ready = self._wait(
+            self._ts_url, stdout=self._stdout, stderr=self._stderr, proc=new_proc
+        )
+        if ready:
+            self._proc = new_proc
+            self._warned = False
+            print("translation-server restarted", file=self._stdout)
+        else:
+            self._terminate(new_proc)
+            print(
+                "warning: restarted translation-server did not become ready"
+                " — giving up",
+                file=self._stderr,
+            )
+            self._gave_up = True

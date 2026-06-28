@@ -58,8 +58,37 @@ def run_server_command(args, *, home_dir, config_path, stdout, stderr) -> int:
                 "capture requests will fail until it is ready",
                 file=stderr,
             )
-        _serve()
+        # For a long-lived server we own the translation-server child; guard it
+        # so a crash mid-session is detected and restarted instead of silently
+        # failing every capture until a human notices.
+        watchdog = _maybe_start_watchdog(backend, stdout=stdout, stderr=stderr)
+        try:
+            _serve()
+        finally:
+            if watchdog is not None:
+                watchdog.stop()
     return 0
+
+
+def _maybe_start_watchdog(backend, *, stdout, stderr):
+    """Start a TS watchdog for an owned, ready backend; else return None."""
+    from pzi.ts_backend import TranslationServerWatchdog
+
+    proc = backend.get("proc")
+    if not (backend.get("owned") and backend.get("ready") and proc is not None):
+        return None
+    ts_url = backend.get("url")
+    node_bin = backend.get("node_bin")
+    ts_dir = backend.get("ts_dir")
+    port = backend.get("port")
+    if not (ts_url and node_bin and ts_dir and port):
+        return None
+    watchdog = TranslationServerWatchdog(
+        ts_url=ts_url, proc=proc, node_bin=node_bin, ts_dir=ts_dir, port=port,
+        stderr_log=backend.get("stderr_log"), stdout=stdout, stderr=stderr,
+    )
+    watchdog.start()
+    return watchdog
 
 
 @contextmanager

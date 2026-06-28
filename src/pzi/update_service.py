@@ -18,6 +18,7 @@ from pzi.bib_repository import (
 )
 from pzi.bibtex import NormalizedRecord, record_to_bibtex_entry
 from pzi.config import load_and_resolve_bib
+from pzi.protocols import SearchTranslationFetcher
 from pzi.translation_server import fetch_search_translations
 
 
@@ -49,7 +50,7 @@ def update_bib(
     home_dir: str,
     bib_selector: str | None,
     dry_run: bool = True,
-    fetch_search=None,
+    fetch_search: SearchTranslationFetcher | None = None,
 ) -> UpdateBibResult:
     resolved = load_and_resolve_bib(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector

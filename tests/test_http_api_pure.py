@@ -108,6 +108,7 @@ def test_post_route_table_covers_declared_json_routes() -> None:
         "/browser/discover",
         "/browser/download",
         "/delete",
+        "/inbox/drain",
     }
 
 
@@ -282,6 +283,50 @@ def test_post_capture_private_url_rejected() -> None:
     )
     assert status == 400
     assert "public http(s) URL" in body["error"]
+
+
+def test_post_capture_concurrent_edit_returns_409(monkeypatch) -> None:
+    # A concurrent external edit must surface as 409, not an opaque 500.
+    from pzi.bib_repository import ConcurrentEditError
+
+    def _raise(*_a, **_k):
+        raise ConcurrentEditError("bib file was modified externally")
+
+    monkeypatch.setattr(http_post_routes, "capture_to_bib", _raise)
+    status, body = http_post_routes.process_post_request(
+        "/capture", {"url": "https://example.com/paper"}, "/tmp/c.toml", "/tmp"
+    )
+    assert status == 409
+    assert body["status"] == "error"
+    assert any("modified externally" in e for e in body["errors"])
+
+
+def test_post_update_concurrent_edit_returns_409(monkeypatch) -> None:
+    from pzi.bib_repository import ConcurrentEditError
+
+    def _raise(*_a, **_k):
+        raise ConcurrentEditError("bib file was modified externally")
+
+    monkeypatch.setattr(http_post_routes, "update_bib", _raise)
+    status, body = http_post_routes.process_post_request(
+        "/update", {"dry_run": False}, "/tmp/c.toml", "/tmp"
+    )
+    assert status == 409
+    assert "modified externally" in body["error"]
+
+
+def test_post_promote_concurrent_edit_returns_409(monkeypatch) -> None:
+    from pzi.bib_repository import ConcurrentEditError
+
+    def _raise(*_a, **_k):
+        raise ConcurrentEditError("bib file was modified externally")
+
+    monkeypatch.setattr(http_post_routes, "promote_bib", _raise)
+    status, body = http_post_routes.process_post_request(
+        "/promote", {"dry_run": False}, "/tmp/c.toml", "/tmp"
+    )
+    assert status == 409
+    assert "modified externally" in body["error"]
 
 
 def test_capture_input_from_http_body_maps_capture_hints() -> None:

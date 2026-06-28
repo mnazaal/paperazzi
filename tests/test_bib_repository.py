@@ -6,6 +6,7 @@ from pzi.bib_repository import (
     ConcurrentEditError,
     apply_write_plan,
     execute_write_plan,
+    parse_bib_library,
     parse_bibtex,
     read_bib_file,
     serialize_bibtex,
@@ -13,6 +14,8 @@ from pzi.bib_repository import (
     with_bib_lock,
     write_bib_file,
 )
+from pzi.bib_serialize import _balance_braces, _safe_citekey, _safe_field_value
+from pzi.bibtex import record_to_bibtex_entry
 
 
 def test_parse_bibtex_reads_entries_and_fields() -> None:
@@ -389,9 +392,6 @@ def test_execute_write_plan_skips_check_for_new_file(tmp_path: Path) -> None:
 
 
 def test_serialize_neutralizes_bibtex_injection() -> None:
-    from pzi.bib_repository import _parse_bib_library
-    from pzi.bibtex import record_to_bibtex_entry
-
     malicious = {
         "citekey": "evil2024} @article{injected, title={pwned}, x={",
         "title": "T} @string{m=1} @article{evil2, author={y",
@@ -400,7 +400,7 @@ def test_serialize_neutralizes_bibtex_injection() -> None:
         "abstract": "x\n@article{fromabstract, t={y}",
     }
     text = serialize_bibtex([record_to_bibtex_entry(malicious)])
-    library = _parse_bib_library(text)
+    library = parse_bib_library(text)
 
     # The whole thing must round-trip as exactly one well-formed entry: nothing
     # broke out of the citekey or a field value to form an injected block.
@@ -411,17 +411,17 @@ def test_serialize_neutralizes_bibtex_injection() -> None:
 
 
 def test_safe_citekey_strips_unsafe_characters() -> None:
-    from pzi.bib_repository import _safe_citekey
-
     assert _safe_citekey("smith2020graph") == "smith2020graph"
     assert _safe_citekey("smith:2020-graph_v2") == "smith:2020-graph_v2"
     assert _safe_citekey("evil} @article{x,") == "evilarticlex"
     assert _safe_citekey("}{@, ") == "untitled"
+    # Path separators are stripped so a citekey cannot carry path components
+    # (it doubles as the PDF filename stem).
+    assert _safe_citekey("../../etc/passwd") == "etcpasswd"
+    assert _safe_citekey("a/b/c") == "abc"
 
 
 def test_balance_braces_keeps_balanced_and_drops_stray() -> None:
-    from pzi.bib_repository import _balance_braces
-
     assert _balance_braces("The {DNA} story") == "The {DNA} story"
     assert _balance_braces("plain text") == "plain text"
     assert "}" not in _balance_braces("Foo} @article{x").replace("{", "")
@@ -430,8 +430,6 @@ def test_balance_braces_keeps_balanced_and_drops_stray() -> None:
 
 
 def test_safe_field_value_strips_control_chars_but_keeps_tab_newline() -> None:
-    from pzi.bib_repository import _safe_field_value
-
     out = _safe_field_value("Title\x00with\x07nul\x1f\tkeep-tab\nkeep-nl")
     assert "\x00" not in out and "\x07" not in out and "\x1f" not in out
     assert "\t" in out and "\n" in out

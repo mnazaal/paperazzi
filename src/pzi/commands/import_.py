@@ -19,10 +19,6 @@ def run_import_command(
     stderr: TextIO,
     bib_selector,
 ) -> int:
-    if not getattr(args, "source", None):
-        print("error: source .bib file required", file=stderr)
-        return 2
-
     source = args.source
     if not Path(source).exists():
         print(f"error: source file not found: {source}", file=stderr)

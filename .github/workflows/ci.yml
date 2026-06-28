@@ -70,3 +70,38 @@ jobs:
           /tmp/pzi-wheel-smoke/bin/pip install dist/*.whl
           /tmp/pzi-wheel-smoke/bin/pzi version
           /tmp/pzi-wheel-smoke/bin/python -c "import pzi; print(pzi.__version__)"
+
+  live:
+    name: Live network smoke (non-gating)
+    runs-on: ubuntu-24.04
+    # Network-dependent metadata paths (Crossref/OpenAlex/S2/Unpaywall) are not
+    # exercised by the gating suite. Run them separately and never block a merge
+    # on third-party flakiness — regressions still show up as a failed check.
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install package and dev tools
+        run: |
+          uv venv .venv
+          uv pip install -e ".[dev]"
+
+      - name: Live smoke tests
+        env:
+          PZI_LIVE: "1"
+          PZI_CONTACT_EMAIL: "pzi-ci@example.com"
+        run: .venv/bin/pytest tests/live/ -m "not browser" -q

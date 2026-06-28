@@ -9,6 +9,7 @@ from pzi.add_service import add_records_to_bib_batch
 from pzi.bib_repository import parse_bibtex
 from pzi.bibtex import bibtex_entry_to_record
 from pzi.config import load_and_resolve_bib
+from pzi.fileio import read_text_utf8
 
 
 class ImportResult(TypedDict):
@@ -53,7 +54,7 @@ def import_from_bibtex(
         }
 
     # Parse source
-    text = source.read_text(encoding="utf-8")
+    text = read_text_utf8(source)
     try:
         source_entries = parse_bibtex(text)
     except Exception as exc:

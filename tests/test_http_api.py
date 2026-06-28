@@ -124,7 +124,17 @@ def test_post_capture_inserts_new_entry_dry_run(tmp_path: Path) -> None:
     config_path, bib_path = _seed(tmp_path)
     port, _thread, server = _serve_once(config_path, tmp_path)
     try:
-        body = json.dumps({"url": "10.1/new", "dry_run": True}).encode("utf-8")
+        # Valid identifier + inline page metadata so the capture resolves
+        # offline (external HTTP is blocked in these tests) via the manual-entry
+        # fallback, without relying on a live translation-server.
+        body = json.dumps(
+            {
+                "url": "https://example.com/new-paper",
+                "page_title": "A New Paper",
+                "doi": "10.1234/new",
+                "dry_run": True,
+            }
+        ).encode("utf-8")
         request = urllib.request.Request(
             f"http://127.0.0.1:{port}/capture",
             data=body,

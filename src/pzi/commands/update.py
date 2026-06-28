@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any, TextIO
 
+from pzi.cli_parser import usage_error_lines
 from pzi.cli_render import (
     _error_lines,
     _render_bib_promote_items,
@@ -42,7 +43,9 @@ def run_update_command(
     """
     promote = getattr(args, "promote", False)
     if getattr(args, "replace", False) and not promote:
-        print("error: --replace only applies with --promote", file=stderr)
+        print_lines(
+            usage_error_lines(("update",), "--replace only applies with --promote"), stderr
+        )
         return 2
 
     ok = True

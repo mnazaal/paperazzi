@@ -14,6 +14,13 @@ from pzi.config import BibConfig
 from pzi.pdf import fetch_and_store_pdf_with_fallbacks, remove_new_pdf, snapshot_pdf_paths
 from pzi.pdf_download import copy_pdf_to_papers_dir
 from pzi.pdf_service import extract_pdf_metadata
+from pzi.protocols import (
+    BinaryFetcher,
+    MetadataRecordFetcher,
+    S2RecordFetcher,
+    SearchTranslationFetcher,
+    WebTranslationFetcher,
+)
 from pzi.similarity import find_exact_match
 from pzi.translation_server import fetch_web_translations
 
@@ -113,13 +120,13 @@ def add_local_pdf(
     record_overrides: dict[str, object],
     dry_run: bool,
     server_url: str,
-    fetch_search,
+    fetch_search: SearchTranslationFetcher,
     ensure_citekey: EnsureCitekey,
     add_record: AddRecord,
-    fetch_web=fetch_web_translations,
-    fetch_crossref=None,
-    fetch_openalex=None,
-    fetch_s2=None,
+    fetch_web: WebTranslationFetcher = fetch_web_translations,
+    fetch_crossref: MetadataRecordFetcher | None = None,
+    fetch_openalex: MetadataRecordFetcher | None = None,
+    fetch_s2: S2RecordFetcher | None = None,
     s2_api_key: str | None = None,
     flaresolverr_url: str | None = None,
     browser_pdf_cmd: str | None = None,
@@ -190,7 +197,7 @@ def attach_pdf_if_available(
     record: NormalizedRecord,
     papers_dir: str,
     dry_run: bool,
-    fetch_binary: Any,
+    fetch_binary: BinaryFetcher | None,
     fetch_pdf: FetchPdf | None = None,
     flaresolverr_url: str | None = None,
     browser_pdf_cmd: str | None = None,

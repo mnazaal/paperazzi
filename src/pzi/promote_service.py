@@ -26,6 +26,12 @@ from pzi.metadata_sources import (
 from pzi.pdf import fetch_and_store_pdf_with_fallbacks
 from pzi.pdf import remove_new_pdf as _remove_new_pdf
 from pzi.pdf import snapshot_pdf_paths as _snapshot_pdf_paths
+from pzi.protocols import (
+    BinaryFetcher,
+    MetadataRecordFetcher,
+    S2RecordWithErrorFetcher,
+    SearchTranslationFetcher,
+)
 from pzi.similarity import author_overlap
 from pzi.translation_server import fetch_search_translations
 
@@ -75,11 +81,11 @@ def promote_bib(
     bib_selector: str | None,
     keep_preprint: bool = True,
     dry_run: bool = True,
-    fetch_search=None,
-    fetch_crossref=None,
-    fetch_openalex=None,
-    fetch_s2=None,
-    fetch_binary=None,
+    fetch_search: SearchTranslationFetcher | None = None,
+    fetch_crossref: MetadataRecordFetcher | None = None,
+    fetch_openalex: MetadataRecordFetcher | None = None,
+    fetch_s2: S2RecordWithErrorFetcher | None = None,
+    fetch_binary: BinaryFetcher | None = None,
     flaresolverr_url: str | None = None,
     browser_pdf_cmd: str | None = None,
     confidence_threshold: int | None = None,
@@ -276,10 +282,10 @@ def _find_published_candidate_with_diagnostics(
     *,
     record: NormalizedRecord,
     server_url: str,
-    fetch_search,
-    fetch_crossref,
-    fetch_openalex,
-    fetch_s2,
+    fetch_search: SearchTranslationFetcher | None,
+    fetch_crossref: MetadataRecordFetcher | None,
+    fetch_openalex: MetadataRecordFetcher | None,
+    fetch_s2: S2RecordWithErrorFetcher | None,
     s2_api_key: str | None,
     contact_email: str | None = None,
 ) -> dict[str, Any]:
@@ -330,11 +336,13 @@ def _find_published_candidate_with_diagnostics(
     if candidate is not None and candidate.get("venue"):
         provider_candidates.append(cast(NormalizedRecord, dict(candidate)))
 
+    s2_fn: S2RecordWithErrorFetcher
     if fetch_s2 is not None:
         s2_fn = fetch_s2  # override already returns (record, error) tuple
     else:
-        def s2_fn(t):
+        def _default_s2(t: str) -> tuple[NormalizedRecord | None, str | None]:
             return fetch_semantic_scholar_record_by_title_with_error(t, api_key=s2_api_key)
+        s2_fn = _default_s2
     try:
         s2_candidate, s2_err = s2_fn(title)
     except HTTPError as exc:
