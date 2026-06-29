@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import functools
 import json
+import re
+import time
+import urllib.error
 from collections.abc import Callable
 from urllib.parse import quote
 
@@ -25,12 +28,16 @@ FetchText = Callable[[str], str]
 
 
 def fetch_crossref_record(
-    doi: str, *, contact_email: str | None = None, fetch_text: FetchText | None = None
+    doi: str,
+    *,
+    contact_email: str | None = None,
+    fetch_text: FetchText | None = None,
+    errors: list[str] | None = None,
 ) -> NormalizedRecord | None:
     """Return normalized record from Crossref for a DOI, or None on failure."""
     fn = fetch_text or _fetch_text
     data = _api_json(f"https://api.crossref.org/works/{quote(doi, safe='')}",
-                     fn=fn, contact_email=contact_email)
+                     fn=fn, contact_email=contact_email, errors=errors)
     if not isinstance(data, dict):
         return None
     work = data.get("message")
@@ -183,14 +190,18 @@ def _crossref_extract_pdf_url(work: dict[str, object]) -> str | None:
 
 
 def fetch_openalex_record(
-    doi: str, *, contact_email: str | None = None, fetch_text: FetchText | None = None
+    doi: str,
+    *,
+    contact_email: str | None = None,
+    fetch_text: FetchText | None = None,
+    errors: list[str] | None = None,
 ) -> NormalizedRecord | None:
     """Return normalized record from OpenAlex for a DOI, or None on failure."""
     fn = fetch_text or _fetch_text
     url = f"https://api.openalex.org/works/doi:{quote(doi, safe='')}"
     if contact_email:
         url = f"{url}?mailto={quote(contact_email, safe='')}"
-    data = _api_json_direct(url, fn)
+    data = _api_json_direct(url, fn, errors=errors)
     if not isinstance(data, dict) or "id" not in data:
         return None
     return _openalex_normalize_work(data)
@@ -294,13 +305,14 @@ def fetch_semantic_scholar_record(
     *,
     api_key: str | None = None,
     fetch_text: FetchText | None = None,
+    errors: list[str] | None = None,
 ) -> NormalizedRecord | None:
     """Return normalized record from Semantic Scholar for a DOI, or None."""
     fn = fetch_text or _make_fetch_text(api_key)
     fields = "title,authors,year,venue,externalIds,openAccessPdf"
     base = "https://api.semanticscholar.org/graph/v1/paper"
     url = f"{base}/DOI:{quote(doi, safe='')}?fields={fields}"
-    data = _api_json_direct(url, fn)
+    data = _api_json_direct(url, fn, errors=errors)
     if not isinstance(data, dict) or "error" in data or "message" in data:
         return None
     return _s2_normalize_paper(data)
@@ -459,20 +471,214 @@ def _fetch_text_with_identity(
     return fn(url)
 
 
-def _api_json(url: str, *, fn: FetchText, contact_email: str | None = None) -> object | None:
+def _api_json(
+    url: str,
+    *,
+    fn: FetchText,
+    contact_email: str | None = None,
+    errors: list[str] | None = None,
+) -> object | None:
     """Fetch JSON from a metadata API, returning None on network or parse errors."""
     try:
         return json.loads(_fetch_text_with_identity(fn, url, contact_email=contact_email))
-    except (OSError, json.JSONDecodeError, ValueError):
+    except urllib.error.HTTPError as exc:
+        if errors is not None:
+            errors.append(f"HTTP {exc.code}")
+        return None
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        if errors is not None:
+            errors.append(str(exc))
         return None
 
 
-def _api_json_direct(url: str, fn: FetchText) -> object | None:
+def _api_json_direct(
+    url: str,
+    fn: FetchText,
+    *,
+    errors: list[str] | None = None,
+) -> object | None:
     """Fetch JSON without identity headers, returning None on network or parse errors."""
     try:
         return json.loads(fn(url))
-    except (OSError, json.JSONDecodeError, ValueError):
+    except urllib.error.HTTPError as exc:
+        if errors is not None:
+            errors.append(f"HTTP {exc.code}")
         return None
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        if errors is not None:
+            errors.append(str(exc))
+        return None
+
+
+# ============================================================================
+# DBLP
+# ============================================================================
+
+
+def fetch_dblp_record_by_title(
+    title: str, *, contact_email: str | None = None, fetch_text: FetchText | None = None
+) -> NormalizedRecord | None:
+    """Return the first normalized DBLP publication match for a title, or None.
+
+    DBLP is the authority for CS-conference / journal metadata.  ``contact_email``
+    is accepted for signature parity with the other title-search providers but
+    unused (DBLP needs no identification).
+    """
+    if not title.strip():
+        return None
+    fn = fetch_text or _fetch_text
+    url = f"https://dblp.org/search/publ/api?q={quote(title.strip(), safe='')}&format=json&h=1"
+    info = _dblp_first_hit(_api_json_direct(url, fn))
+    return _dblp_normalize(info) if info is not None else None
+
+
+def _dblp_first_hit(data: object) -> dict[str, object] | None:
+    if not isinstance(data, dict):
+        return None
+    result = data.get("result")
+    hits = result.get("hits") if isinstance(result, dict) else None
+    hit = hits.get("hit") if isinstance(hits, dict) else None
+    if not isinstance(hit, list) or not hit:
+        return None
+    info = hit[0].get("info") if isinstance(hit[0], dict) else None
+    return info if isinstance(info, dict) else None
+
+
+def _strip_dblp_suffix(name: str) -> str:
+    # DBLP disambiguates homonyms with a trailing 4-digit id ("John Smith 0001").
+    return re.sub(r"\s+\d{4}$", "", name).strip()
+
+
+def _dblp_authors(info: dict[str, object]) -> list[str]:
+    authors_field = info.get("authors")
+    raw = authors_field.get("author") if isinstance(authors_field, dict) else None
+    if isinstance(raw, dict):  # DBLP collapses a single author to a bare object
+        raw = [raw]
+    names: list[str] = []
+    for author in raw if isinstance(raw, list) else []:
+        if isinstance(author, dict):
+            text = author.get("text")
+            if isinstance(text, str) and text.strip():
+                names.append(_strip_dblp_suffix(text))
+        elif isinstance(author, str) and author.strip():
+            names.append(_strip_dblp_suffix(author))
+    return names
+
+
+_DBLP_TYPE_MAP: dict[str, str] = {
+    "Conference and Workshop Papers": "conferencePaper",
+    "Journal Articles": "journalArticle",
+    "Informal and Other Publications": "preprint",
+    "Books and Theses": "book",
+}
+
+
+def _dblp_normalize(info: dict[str, object]) -> NormalizedRecord:
+    raw_title = info.get("title")
+    title = raw_title.rstrip(".").strip() if isinstance(raw_title, str) else None
+
+    raw_year = info.get("year")
+    year: int | None = None
+    if isinstance(raw_year, int):
+        year = raw_year
+    elif isinstance(raw_year, str) and raw_year.isdigit():
+        year = int(raw_year)
+
+    raw_venue = info.get("venue")
+    if isinstance(raw_venue, list):
+        venue = ", ".join(v for v in raw_venue if isinstance(v, str)) or None
+    elif isinstance(raw_venue, str):
+        venue = raw_venue
+    else:
+        venue = None
+
+    raw_doi = info.get("doi")
+    record: NormalizedRecord = {
+        "title": title or None,
+        "authors": _dblp_authors(info),
+        "year": year,
+        "venue": venue or None,
+        "doi": normalize_doi(raw_doi) if isinstance(raw_doi, str) else None,
+    }
+    raw_type = info.get("type")
+    if isinstance(raw_type, str):
+        item_type = _DBLP_TYPE_MAP.get(raw_type)
+        if item_type:
+            record["item_type"] = item_type
+    return record
+
+
+# ============================================================================
+# OpenReview
+# ============================================================================
+
+
+def fetch_openreview_record_by_title(
+    title: str, *, contact_email: str | None = None, fetch_text: FetchText | None = None
+) -> NormalizedRecord | None:
+    """Return the first normalized OpenReview note matching a title, or None.
+
+    OpenReview owns the submission record for many ML venues (ICLR / NeurIPS /
+    TMLR) that DOI-based sources cannot positively confirm.  ``contact_email`` is
+    accepted for signature parity but unused.
+    """
+    if not title.strip():
+        return None
+    fn = fetch_text or _fetch_text
+    url = (
+        "https://api.openreview.net/notes/search?"
+        f"term={quote(title.strip(), safe='')}&limit=1&content=all"
+    )
+    note = _openreview_first_note(_api_json_direct(url, fn))
+    return _openreview_normalize(note) if note is not None else None
+
+
+def _openreview_first_note(data: object) -> dict[str, object] | None:
+    if not isinstance(data, dict):
+        return None
+    notes = data.get("notes")
+    if not isinstance(notes, list) or not notes:
+        return None
+    return notes[0] if isinstance(notes[0], dict) else None
+
+
+def _openreview_field(content: dict[str, object], key: str) -> object:
+    # API v2 wraps each field as {"value": ...}; v1 stores the value plainly.
+    value = content.get(key)
+    if isinstance(value, dict) and "value" in value:
+        return value["value"]
+    return value
+
+
+def _openreview_normalize(note: dict[str, object]) -> NormalizedRecord:
+    raw_content = note.get("content")
+    content = raw_content if isinstance(raw_content, dict) else {}
+
+    title = _openreview_field(content, "title")
+    raw_authors = _openreview_field(content, "authors")
+    authors = (
+        [a for a in raw_authors if isinstance(a, str)] if isinstance(raw_authors, list) else []
+    )
+    venue = _openreview_field(content, "venue")
+
+    year: int | None = None
+    for key in ("pdate", "cdate"):
+        ts = note.get(key)
+        if isinstance(ts, int) and ts > 0:
+            year = time.gmtime(ts / 1000).tm_year
+            break
+
+    record: NormalizedRecord = {
+        "title": str(title) if isinstance(title, str) and title else None,
+        "authors": authors,
+        "year": year,
+        "venue": str(venue) if isinstance(venue, str) and venue else None,
+        "doi": None,
+    }
+    pdf = _openreview_field(content, "pdf")
+    if isinstance(pdf, str) and pdf.startswith("/"):
+        record["pdf_url"] = f"https://openreview.net{pdf}"
+    return record
 
 
 # ============================================================================

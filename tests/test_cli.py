@@ -998,6 +998,7 @@ def test_cli_update_promote_dispatches_to_promote_service(tmp_path: Path) -> Non
             "bib_selector": None,
             "dry_run": False,
             "keep_preprint": False,
+            "mark_resolved": False,
         }
     ]
     assert stderr.getvalue() == ""
@@ -1017,6 +1018,25 @@ def test_cli_update_replace_without_promote_is_rejected(tmp_path: Path) -> None:
 
     assert exit_code == 2
     assert "--replace only applies with --promote" in stderr.getvalue()
+
+
+def test_cli_update_mark_resolved_without_promote_is_rejected(tmp_path: Path) -> None:
+    stderr = StringIO()
+    args = Namespace(
+        target=None, dry_run=False, replace=False, verbose=False,
+        promote=False, mark_resolved=True,
+    )
+
+    exit_code = run_update_command(
+        args,
+        home_dir=str(tmp_path),
+        config_path=str(tmp_path / "config.toml"),
+        stdout=StringIO(),
+        stderr=stderr,
+    )
+
+    assert exit_code == 2
+    assert "--mark-resolved only applies with --promote" in stderr.getvalue()
 
 
 def test_cli_browser_command_removed(tmp_path: Path) -> None:

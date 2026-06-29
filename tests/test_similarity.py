@@ -1,10 +1,75 @@
 from pzi.similarity import (
     author_overlap,
+    author_surnames,
+    authors_swapped,
+    classify_given_pair,
     compute_similarity_hint,
+    has_truncation_sentinel,
+    is_truncation_sentinel,
     jaccard_similarity,
+    levenshtein_within_1,
     normalize_title,
     title_tokens,
 )
+
+
+def test_levenshtein_within_1() -> None:
+    assert levenshtein_within_1("privacy", "privacy") is True       # equal
+    assert levenshtein_within_1("privacy", "privacys") is True      # insertion
+    assert levenshtein_within_1("residual", "resicual") is True     # substitution
+    assert levenshtein_within_1("xabc", "abc") is True              # leading insertion
+    assert levenshtein_within_1("abc", "abxyc") is False            # distance 2
+    assert levenshtein_within_1("graph", "trees") is False          # far apart
+
+
+def test_truncation_sentinels() -> None:
+    assert is_truncation_sentinel("others") is True
+    assert is_truncation_sentinel("et al.") is True
+    assert is_truncation_sentinel("Smith, Jane") is False
+    assert has_truncation_sentinel(["Smith, J", "others"]) is True
+    assert has_truncation_sentinel(["Smith, J", "Doe, A"]) is False
+
+
+def test_author_overlap_decodes_html_entities() -> None:
+    # DBLP emits &apos; / &amp;; these must match their decoded forms.
+    assert author_overlap(["d&apos;Amore, Luca"], ["d'Amore, Luca"]) == 1
+    assert author_overlap(["Smith &amp; Co"], ["Co, Ann"]) == 1
+
+
+def test_author_surnames_order_and_forms() -> None:
+    assert author_surnames(["Smith, Jane", "John Doe"]) == ["smith", "doe"]
+    assert author_surnames(["", "  "]) == []
+
+
+def test_authors_swapped_detects_reorder() -> None:
+    assert authors_swapped(["Young, Z", "Doe, A"], ["Doe, A", "Young, Z"]) is True
+
+
+def test_authors_swapped_false_for_same_order() -> None:
+    assert authors_swapped(["Smith, J", "Doe, A"], ["Smith, J", "Doe, A"]) is False
+
+
+def test_authors_swapped_escapes_alphabetized_candidate() -> None:
+    # An alphabetized source (signalled by the caller) is a record artifact.
+    assert (
+        authors_swapped(
+            ["Young, Z", "Adams, A"], ["Adams, A", "Young, Z"], candidate_alphabetized=True
+        )
+        is False
+    )
+
+
+def test_authors_swapped_false_for_different_sets() -> None:
+    assert authors_swapped(["Smith, J", "Doe, A"], ["Smith, J", "Roe, B"]) is False
+
+
+def test_classify_given_pair() -> None:
+    assert classify_given_pair("John", "John") == "match"
+    assert classify_given_pair("J", "John") == "variant"        # initial
+    assert classify_given_pair("J.", "John") == "variant"
+    assert classify_given_pair("Jon", "Jonathan") == "variant"  # prefix
+    assert classify_given_pair("Shunyu", "Denny") == "substitution"
+    assert classify_given_pair("", "John") == "variant"         # missing data
 
 
 def test_normalize_title_strips_punctuation_and_lowercases() -> None:

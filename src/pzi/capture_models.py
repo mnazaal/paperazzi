@@ -72,6 +72,7 @@ class CaptureOptions:
 
     dry_run: bool = False
     force_new: bool = False
+    metadata_strict: bool = False
     page_metadata_cmd: str | None = None
     page_metadata_timeout_seconds: int = 5
 

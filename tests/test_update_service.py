@@ -748,6 +748,52 @@ default = true
         "metadata confidence low: selected result score=59 below 60; verify captured metadata"
     ]
 
+def test_update_bib_unexpected_error_isolated_per_record(tmp_path: Path) -> None:
+    """A non-OSError/ValueError failure on one record must not abort the pass.
+
+    Only the lookup *call* is narrowly caught inside the helper; anything else
+    (here a RuntimeError) propagates to the loop's per-record guard, which
+    records an "update failed" item and lets later records still enrich.
+    """
+    bib_path = tmp_path / "ml.bib"
+    config_path = _write_config(tmp_path, bib_path)
+    for citekey, arxiv in [("alpha2024", "2401.00001"), ("beta2024", "2401.00002")]:
+        add_record_to_bib(
+            config_path=str(config_path),
+            home_dir=str(tmp_path),
+            record={"citekey": citekey, "title": citekey, "arxiv_id": arxiv},
+            bib_selector=None,
+            dry_run=False,
+        )
+
+    def _search(query: str, *, server_url: str) -> list[dict]:
+        if query == "2401.00001":
+            raise RuntimeError("kaboom")  # not OSError/ValueError
+        return [
+            {
+                "item_type": "journalArticle",
+                "record": {"venue": "NeurIPS", "doi": "10.9/beta", "year": 2024},
+                "attachments": [],
+            }
+        ]
+
+    result = update_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        dry_run=False,
+        fetch_search=_search,
+    )
+
+    assert result["status"] == "ok"
+    by_key = {item["citekey"]: item for item in result["items"]}
+    assert "update failed" in by_key["alpha2024"]["note"]
+    assert by_key["alpha2024"]["applied"] is False
+    # The second record still enriched despite the first record blowing up.
+    assert by_key["beta2024"]["applied"] is True
+    assert "doi = {10.9/beta}" in bib_path.read_text()
+
+
 # ── from test_update_final.py ──
 
 """Edge tests for update_service.py uncovered lines (53, 80, 94, 104).

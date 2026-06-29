@@ -46,6 +46,7 @@ def test_run_promote_command_calls_service_for_each_target(tmp_path: Path) -> No
             "bib_selector": "main",
             "dry_run": True,
             "keep_preprint": False,
+            "mark_resolved": False,
         },
         {
             "config_path": str(tmp_path / "config.toml"),
@@ -53,6 +54,7 @@ def test_run_promote_command_calls_service_for_each_target(tmp_path: Path) -> No
             "bib_selector": "ml",
             "dry_run": True,
             "keep_preprint": False,
+            "mark_resolved": False,
         },
     ]
     assert "DRY RUN: no preprints to promote" in stdout.getvalue()

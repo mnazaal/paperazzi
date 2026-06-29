@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import re
 import unicodedata
 from collections.abc import Sequence
@@ -114,16 +115,30 @@ def jaccard_similarity(a: set[str], b: set[str]) -> float:
     return len(a & b) / union if union else 0.0
 
 
-def _normalize_author(name: str) -> str:
-    ascii_name = (
-        unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode("ascii")
-    )
+def _to_ascii(text: str) -> str:
+    """Decode HTML entities (DBLP emits ``&apos;``/``&amp;``) then strip diacritics."""
+    decoded = html.unescape(text)
+    return unicodedata.normalize("NFKD", decoded).encode("ascii", "ignore").decode("ascii")
+
+
+def _split_family_given(name: str) -> tuple[str, str]:
+    """Split a personal name into (family, given) in ASCII, lowercased.
+
+    Handles both ``"Family, Given"`` and ``"Given Family"`` orderings.
+    """
+    ascii_name = _to_ascii(name).strip()
     if "," in ascii_name:
-        family = ascii_name.split(",", 1)[0]
-    else:
-        parts = ascii_name.split()
-        family = parts[-1] if parts else ""
-    return _NON_ALNUM.sub("", family.lower())
+        family, _, given = ascii_name.partition(",")
+        return family.strip().lower(), given.strip().lower()
+    parts = ascii_name.split()
+    if not parts:
+        return "", ""
+    return parts[-1].lower(), " ".join(parts[:-1]).lower()
+
+
+def _normalize_author(name: str) -> str:
+    family, _ = _split_family_given(name)
+    return _NON_ALNUM.sub("", family)
 
 
 def author_overlap(a: list[str], b: list[str]) -> int:
@@ -132,6 +147,113 @@ def author_overlap(a: list[str], b: list[str]) -> int:
     norm_a.discard("")
     norm_b.discard("")
     return len(norm_a & norm_b)
+
+
+def author_surnames(authors: Sequence[str]) -> list[str]:
+    """Return normalized family names in input order, dropping empties."""
+    return [s for s in (_normalize_author(a) for a in authors) if s]
+
+
+def is_alphabetized_record(doi: object) -> bool:
+    """True for sources that publish authors A–Z rather than as-submitted.
+
+    Crossref proceedings deposits under the ``10.52202`` prefix (NeurIPS / ICML)
+    sort contributors alphabetically, so a surname reordering against such a
+    record is a deposit artifact, not a genuine author swap.
+    """
+    return isinstance(doi, str) and doi.strip().lower().startswith("10.52202")
+
+
+def authors_swapped(
+    entry: Sequence[str],
+    candidate: Sequence[str],
+    *,
+    candidate_alphabetized: bool = False,
+) -> bool:
+    """True when both lists hold the same surname multiset but a different order.
+
+    Pass ``candidate_alphabetized=True`` (see :func:`is_alphabetized_record`) to
+    suppress the flag for sources that sort authors A–Z, where a reordering is a
+    record artifact rather than a real swap.
+    """
+    e = author_surnames(entry)
+    c = author_surnames(candidate)
+    if len(e) < 2 or sorted(e) != sorted(c) or e == c:
+        return False
+    if candidate_alphabetized:
+        return False
+    return True
+
+
+GivenPair = Literal["match", "variant", "substitution"]
+
+
+def classify_given_pair(a: str, b: str) -> GivenPair:
+    """Classify two given-name strings as match / variant / substitution.
+
+    ``variant`` covers initials, abbreviations, diacritic/transliteration noise,
+    and added/dropped middle names — anything consistent with the same person.
+    A genuinely different first name returns ``substitution``.
+    """
+    na = _NON_ALNUM.sub(" ", _to_ascii(a).lower()).strip()
+    nb = _NON_ALNUM.sub(" ", _to_ascii(b).lower()).strip()
+    if not na or not nb:
+        return "variant"  # missing data: not evidence of substitution
+    if na == nb:
+        return "match"
+    first_a, first_b = na.split(), nb.split()
+    head_a, head_b = first_a[0], first_b[0]
+    # Initial vs full ("j" / "john"), or one a prefix of the other.
+    if head_a[0] != head_b[0]:
+        return "substitution"
+    if head_a == head_b or head_a.startswith(head_b) or head_b.startswith(head_a):
+        return "variant"
+    if len(head_a) == 1 or len(head_b) == 1:  # single initial sharing first letter
+        return "variant"
+    return "substitution"
+
+
+def levenshtein_within_1(a: str, b: str) -> bool:
+    """True iff the edit distance between *a* and *b* is at most 1.
+
+    Bounded check — no full DP matrix.  Catches single-character title typos
+    (``"Privacy"`` vs ``"Privacys"``) that whole-token similarity waves through.
+    """
+    if a == b:
+        return True
+    la, lb = len(a), len(b)
+    if abs(la - lb) > 1:
+        return False
+    if la == lb:  # at most one substitution
+        return sum(1 for x, y in zip(a, b) if x != y) == 1
+    # Lengths differ by exactly one: allow a single insertion / deletion.
+    shorter, longer = (a, b) if la < lb else (b, a)
+    i = j = 0
+    edited = False
+    while i < len(shorter) and j < len(longer):
+        if shorter[i] == longer[j]:
+            i += 1
+            j += 1
+        elif edited:
+            return False
+        else:
+            edited = True
+            j += 1  # consume one extra char from the longer string
+    return True
+
+
+_AUTHOR_SENTINELS = frozenset({"others", "et al", "etal"})
+
+
+def is_truncation_sentinel(author: str) -> bool:
+    """True when an author entry is an ``and others`` / ``et al`` truncation marker."""
+    token = _to_ascii(author).strip().lower().rstrip(".")
+    return token in _AUTHOR_SENTINELS
+
+
+def has_truncation_sentinel(authors: Sequence[str]) -> bool:
+    """True when any author entry discloses truncation (``and others`` / ``et al``)."""
+    return any(is_truncation_sentinel(a) for a in authors)
 
 
 def compute_similarity_hint(

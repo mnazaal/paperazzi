@@ -18,6 +18,7 @@ from urllib.parse import urlsplit
 from pzi import add_planning as _add_planning
 from pzi.add_planning import (
     _fallback_record_for_input,
+    build_discovery_context,
     fetch_record_for_input,
     has_minimum_metadata,
     merge_record_sources,
@@ -64,7 +65,7 @@ from pzi.protocols import (
     UnpaywallFetcher,
     WebTranslationFetcher,
 )
-from pzi.similarity import build_identity_index, extract_identities, find_exact_match
+from pzi.similarity import build_identity_index, find_exact_match
 from pzi.translation_server import (
     fetch_search_translations,
     fetch_web_translations,
@@ -118,6 +119,7 @@ def add_input_to_bib(
     browser: str | None = None,
     cookies: str | None = None,
     force_new: bool = False,
+    metadata_strict: bool = False,
 ) -> AddRecordResult:
     context, context_error = _resolve_capture_context(
         config_path=config_path,
@@ -213,11 +215,16 @@ def add_input_to_bib(
             ezproxy_host=ezproxy_host,
         )
 
+    provider_errors: list[str] = []
+
     def _finalize(result: AddRecordResult) -> AddRecordResult:
         if metadata_diagnostics:
             result["metadata_diagnostics"] = metadata_diagnostics
-        if metadata_warnings:
-            result["warnings"] = [*result.get("warnings", []), *metadata_warnings]
+        extra_warnings = [*metadata_warnings, *(
+            f"provider error ({e})" for e in provider_errors
+        )]
+        if extra_warnings:
+            result["warnings"] = [*result.get("warnings", []), *extra_warnings]
         return result
 
     if classified["kind"] == "local_pdf":
@@ -244,7 +251,7 @@ def add_input_to_bib(
         )
 
     try:
-        fetched_record = fetch_record_for_input(
+        fetched_record, _fetched_provider_errors = fetch_record_for_input(
             raw_value=value,
             classified=classified,
             server_url=config["translation_server_url"],
@@ -267,6 +274,15 @@ def add_input_to_bib(
             desktop_fallback_hosts=desktop_fallback_hosts,
             pdf_discovery_parallel=config.get("pdf_discovery_parallel", False),
         )
+        provider_errors.extend(_fetched_provider_errors)
+        effective_strict = metadata_strict or bool(config.get("metadata_strict", False))
+        if effective_strict and provider_errors:
+            return _error_result(
+                message="metadata provider error (--strict-metadata)",
+                errors=list(provider_errors),
+                dry_run=dry_run,
+                warnings=[],
+            )
     except Exception as exc:
         manual_record = _manual_record_from_overrides(record_overrides)
         if classified["kind"] in {"doi", "url", "pdf_url"} and has_minimum_metadata(manual_record):
@@ -280,26 +296,33 @@ def add_input_to_bib(
             )
             fallback_record = apply_pdf_discovery(
                 fallback_record,
+                # The translation server is unreachable here, so skip the step
+                # that depends on its /web attachments; everything else still
+                # runs against the shared discovery context.
                 [
                     step for step in DEFAULT_DISCOVERY_STEPS
                     if step.__name__ != "web_attachment_step"
                 ],
-                {
-                    "raw_value": value,
-                    "server_url": config["translation_server_url"],
-                    "unpaywall_email": unpaywall_email,
-                    "s2_api_key": s2_api_key,
-                    "flaresolverr_url": config.get("flaresolverr_url"),
-                    "browser_pdf_cmd": effective_browser_pdf_cmd,
-                    "pdf_url_candidates": pdf_url_candidates,
-                    "fetch_web": fetch_web,
-                    "fetch_unpaywall": fetch_unpaywall,
-                    "fetch_crossref": fetch_crossref,
-                    "fetch_openalex": fetch_openalex,
-                    "fetch_s2": fetch_s2,
-                    "fetch_flaresolverr": fetch_flaresolverr,
-                    "translation_attachments": None,
-                },
+                build_discovery_context(
+                    raw_value=value,
+                    server_url=config["translation_server_url"],
+                    unpaywall_email=unpaywall_email,
+                    contact_email=contact_email,
+                    s2_api_key=s2_api_key,
+                    flaresolverr_url=config.get("flaresolverr_url"),
+                    browser_pdf_cmd=effective_browser_pdf_cmd,
+                    pdf_url_candidates=pdf_url_candidates,
+                    cookies=cookies,
+                    fetch_web=fetch_web,
+                    fetch_unpaywall=fetch_unpaywall,
+                    fetch_crossref=fetch_crossref,
+                    fetch_openalex=fetch_openalex,
+                    fetch_s2=fetch_s2,
+                    fetch_flaresolverr=fetch_flaresolverr,
+                    api_url=api_url,
+                    api_auth_token=api_auth_token,
+                    desktop_fallback_hosts=desktop_fallback_hosts,
+                ),
             )
             return _finalize(_add(fallback_record))
         is_conn_err = (
@@ -606,103 +629,80 @@ def add_records_to_bib_batch(
     papers_dir = bib["papers_dir"]
     existing_pdf_paths = _snapshot_pdf_paths(papers_dir)
     results: list[AddRecordResult] = []
+    # PDFs downloaded for records that have been applied to the session.
+    # If the batch fails at commit time (check_consistency or roundtrip
+    # validation), the bib is not written but these files exist on disk —
+    # the outer except removes them to avoid orphans.
+    batch_pdfs: list[str] = []
 
-    with batch_write_session(
-        bib["path"], file_path_style=file_path_style, write=not dry_run,
-    ) as session:
-        existing_records = session.records
-        index = build_identity_index(existing_records)
+    try:
+        with batch_write_session(
+            bib["path"], file_path_style=file_path_style, write=not dry_run,
+        ) as session:
+            # ``session`` owns entries/records/index and keeps them in lockstep;
+            # the local aliases just make the per-record read calls below terse.
+            existing_records = session.records
+            index = session.index
 
-        for raw in records:
-            record_pdf: str | None = None
-            try:
-                typed = ensure_citekey_for_write(
-                    cast(NormalizedRecord, dict(raw)), existing_records,
-                    citekey_format=citekey_format, force_new=force_new, index=index,
-                )
-                typed = reuse_existing_pdf_fields_for_exact_match(
-                    typed, existing_records, force_new=force_new, index=index,
-                )
-                typed = reuse_orphan_pdf_for_planned_path(
-                    typed, papers_dir=papers_dir, pdf_filename_format=pdf_filename_format,
-                )
-                typed, warnings = attach_pdf_if_available(
-                    record=typed, papers_dir=papers_dir, dry_run=dry_run,
-                    fetch_binary=fetch_binary, browser_hook=browser_hook,
-                    pdf_filename_format=pdf_filename_format,
-                )
-                pdf_path = typed.get("local_pdf_path")
-                record_pdf = pdf_path if isinstance(pdf_path, str) else None
-                typed = _add_planning.attach_similarity_hint(
-                    typed, existing_records, index=index,
-                )
-                plan = plan_bib_write(
-                    typed, existing_records, force_new=force_new, index=index,
-                )
-                validate_bibtex_roundtrip([plan["entry"]])
-            except Exception as exc:
+            for raw in records:
+                record_pdf: str | None = None
+                try:
+                    typed = ensure_citekey_for_write(
+                        cast(NormalizedRecord, dict(raw)), existing_records,
+                        citekey_format=citekey_format, force_new=force_new, index=index,
+                    )
+                    typed = reuse_existing_pdf_fields_for_exact_match(
+                        typed, existing_records, force_new=force_new, index=index,
+                    )
+                    typed = reuse_orphan_pdf_for_planned_path(
+                        typed, papers_dir=papers_dir, pdf_filename_format=pdf_filename_format,
+                    )
+                    typed, warnings = attach_pdf_if_available(
+                        record=typed, papers_dir=papers_dir, dry_run=dry_run,
+                        fetch_binary=fetch_binary, browser_hook=browser_hook,
+                        pdf_filename_format=pdf_filename_format,
+                    )
+                    pdf_path = typed.get("local_pdf_path")
+                    record_pdf = pdf_path if isinstance(pdf_path, str) else None
+                    typed = _add_planning.attach_similarity_hint(
+                        typed, existing_records, index=index,
+                    )
+                    plan = plan_bib_write(
+                        typed, existing_records, force_new=force_new, index=index,
+                    )
+                    validate_bibtex_roundtrip([plan["entry"]])
+                except Exception as exc:
+                    if not dry_run:
+                        _remove_new_pdf(record_pdf, existing_pdf_paths)
+                    results.append(_error_result(
+                        message="failed to import record", errors=[str(exc)],
+                        dry_run=dry_run, warnings=[], bib=bib,
+                    ))
+                    continue
+
                 if not dry_run:
-                    _remove_new_pdf(record_pdf, existing_pdf_paths)
-                results.append(_error_result(
-                    message="failed to import record", errors=[str(exc)],
-                    dry_run=dry_run, warnings=[], bib=bib,
+                    # Register before apply_plan: if apply_plan raises an
+                    # internal invariant error, or if the commit-time checks
+                    # (check_consistency / roundtrip) raise after the loop, the
+                    # outer handler removes this PDF. On a clean commit the
+                    # outer except is not triggered, so no spurious cleanup.
+                    if record_pdf is not None:
+                        batch_pdfs.append(record_pdf)
+                    session.apply_plan(plan)
+                results.append(build_add_record_result(
+                    bib=bib, plan=plan, warnings=warnings, dry_run=dry_run,
                 ))
-                continue
 
-            if not dry_run:
-                _apply_plan_in_memory(session.entries, existing_records, index, plan)
-            results.append(build_add_record_result(
-                bib=bib, plan=plan, warnings=warnings, dry_run=dry_run,
-            ))
+    except Exception:
+        # Batch commit failed (invariant violation or roundtrip check). The bib
+        # was not written. Remove any PDFs we downloaded for applied records so
+        # nothing is left orphaned on disk.
+        if not dry_run:
+            for pdf_path in batch_pdfs:
+                _remove_new_pdf(pdf_path, existing_pdf_paths)
+        raise
 
     return results
-
-
-def _apply_plan_in_memory(
-    entries: list,
-    records: list[NormalizedRecord],
-    index: dict,
-    plan: WritePlan,
-) -> None:
-    """Apply one write plan to the in-memory batch state, keeping entries,
-    records, and the identity index in sync."""
-    planned_record = cast(NormalizedRecord, plan["record"])
-    if plan["action"] == "insert":
-        position = len(records)
-        entries.append(plan["entry"])
-        records.append(planned_record)
-    else:
-        idx = plan["index"]
-        assert idx is not None, "update plan always carries a concrete index"
-        position = idx
-        # Drop the outgoing record's identity keys before adding the new
-        # ones: an update can change a record's doi/arxiv/url (e.g. metadata
-        # enrichment mid-batch), and a stale key would otherwise cause the
-        # next record sharing that identity to register a false exact-match.
-        _remove_record_from_index(index, records[idx], idx)
-        entries[idx] = plan["entry"]
-        records[idx] = planned_record
-    for identity in extract_identities(planned_record):
-        index.setdefault((identity["kind"], identity["value"]), []).append(position)
-    assert len(entries) == len(records), (
-        f"batch state desync: {len(entries)} entries != {len(records)} records"
-    )
-
-
-def _remove_record_from_index(
-    index: dict, record: NormalizedRecord, position: int
-) -> None:
-    """Remove *position* from every identity bucket the record contributes,
-    pruning buckets that become empty."""
-    for identity in extract_identities(record):
-        key = (identity["kind"], identity["value"])
-        positions = index.get(key)
-        if not positions:
-            continue
-        if position in positions:
-            positions.remove(position)
-        if not positions:
-            del index[key]
 
 
 # ---------------------------------------------------------------------------

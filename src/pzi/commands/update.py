@@ -47,6 +47,12 @@ def run_update_command(
             usage_error_lines(("update",), "--replace only applies with --promote"), stderr
         )
         return 2
+    mark_resolved = getattr(args, "mark_resolved", False)
+    if mark_resolved and not promote:
+        print_lines(
+            usage_error_lines(("update",), "--mark-resolved only applies with --promote"), stderr
+        )
+        return 2
 
     ok = True
     for target in target_list(args.target):
@@ -57,6 +63,7 @@ def run_update_command(
                 bib_selector=target,
                 dry_run=args.dry_run,
                 keep_preprint=not args.replace,
+                mark_resolved=mark_resolved,
             )
             render = _render_bib_promote_items
             failure = "promote failed"

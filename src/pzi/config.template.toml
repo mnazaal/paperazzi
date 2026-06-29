@@ -49,6 +49,7 @@ api_listen_port = 8765
 # Metadata confidence tuning
 # promote_confidence_threshold = 3   # min score to promote a preprint → published (default 3)
 # metadata_confidence_min_score = 0  # warn when add/update accept a candidate below this score (default 0)
+# metadata_cache_ttl = 0             # cache metadata-API responses on disk for N seconds (0 = off)
 # pdf_discovery_parallel = false     # run the PDF discovery fallback chain in parallel
 
 [[bibs]]

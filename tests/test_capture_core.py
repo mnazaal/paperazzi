@@ -42,6 +42,7 @@ def test_capture_to_bib_maps_model_to_add_service_kwargs() -> None:
             "bib_selector": "ml",
             "dry_run": True,
             "force_new": True,
+            "metadata_strict": False,
             # ranked: cli (10) > page (7), so a.pdf before b.pdf
             "pdf_url_candidates": [
                 "https://example.com/a.pdf",
@@ -112,6 +113,7 @@ def test_capture_to_bib_omits_empty_optional_kwargs() -> None:
             "bib_selector": None,
             "dry_run": False,
             "force_new": False,
+            "metadata_strict": False,
         }
     ]
 

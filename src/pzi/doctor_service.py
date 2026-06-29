@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import stat
 from typing import Any, TypedDict
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -31,7 +33,29 @@ class DoctorResult(TypedDict):
     translation_probe_error: str | None
     credentials: dict[str, str]
     semantic_scholar: dict[str, Any]
+    config_permissions_warning: str | None
 
+
+def config_permissions_warning(config_path: str) -> str | None:
+    """Warn when the config file is readable/writable beyond its owner.
+
+    The config can carry secrets and executable ``*_cmd`` / ``browser_pdf_cmd``
+    / ``page_metadata_cmd`` hooks, so group/other access is a real exposure
+    (read = secret leak, write = arbitrary command execution as the user).
+    Returns a recommendation string, or ``None`` when perms are fine or cannot
+    be determined (e.g. on a platform without POSIX modes).
+    """
+    try:
+        mode = stat.S_IMODE(os.stat(config_path).st_mode)
+    except OSError:
+        return None
+    if mode & 0o077:
+        return (
+            f"config file is accessible to group/other (mode {mode:#o}); "
+            f"it may hold secrets and executes *_cmd hooks — run "
+            f"`chmod 600 {config_path}`"
+        )
+    return None
 
 
 def doctor_check(
@@ -54,6 +78,9 @@ def doctor_check(
             "translation_probe_error": None,
             "credentials": {},
             "semantic_scholar": {},
+            "config_permissions_warning": config_permissions_warning(
+                config_result["path"]
+            ),
         }
     config = config_result["config"]
 
@@ -121,6 +148,9 @@ def doctor_check(
             "key_effective": s2_key_effective,
             "probe_error": s2_probe_error,
         },
+        "config_permissions_warning": config_permissions_warning(
+            config_result["path"]
+        ),
     }
 
 

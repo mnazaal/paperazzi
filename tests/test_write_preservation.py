@@ -1,9 +1,10 @@
 """Source-preservation regressions: every entry mutation must keep comments,
 ``@string``/``@preamble`` macros, untouched entries, and honor file_path_style.
 
-Covers the write paths that previously went through the lossy ``write_bib_file``
-(tag add/remove and delete); merge and reindex preservation are covered in
-``test_dedupe_service`` and ``test_reindex_service``.
+Covers insert and update (via ``add_record_with_bib``) plus the tag add/remove
+and delete paths that previously went through the lossy ``write_bib_file``;
+merge and reindex preservation are covered in ``test_dedupe_service`` and
+``test_reindex_service``.
 """
 
 from __future__ import annotations
@@ -11,13 +12,16 @@ from __future__ import annotations
 import os
 import tempfile
 from pathlib import Path
+from typing import Any
 
+from pzi.add_service import add_record_with_bib
 from pzi.bib_service import delete_entry
 from pzi.tag_service import add_tags, remove_tags
 
 _PRESERVE_BIB = (
     "% library header comment\n"
     "@string{acm = {ACM}}\n"
+    '@preamble{ "\\newcommand{\\noop}[1]{}" }\n'
     "\n"
     "@article{smith2024, title = {Deep Learning}, author = {Smith, John}, year = {2024}}\n"
     "@article{jones2023, title = {Vision}, author = {Jones, K}, year = {2023}}\n"
@@ -51,6 +55,7 @@ def test_tag_add_preserves_comments_macros_and_other_entries() -> None:
         text = Path(bib).read_text()
         assert "% library header comment" in text
         assert "@string{acm" in text
+        assert "@preamble{" in text
         assert "@article{jones2023," in text  # untouched entry survives
         assert "keywords = {ml}" in text
 
@@ -112,3 +117,65 @@ def test_delete_preserves_comments_macros_and_other_entries() -> None:
         assert "@article{jones2023," in text  # kept
         assert "% library header comment" in text  # comment preserved
         assert "@string{acm" in text  # macro preserved
+        assert "@preamble{" in text  # preamble preserved
+
+
+def _bib(td: str) -> dict[str, Any]:
+    bib = os.path.join(td, "lib.bib")
+    papers = os.path.join(td, "papers")
+    os.makedirs(papers, exist_ok=True)
+    Path(bib).write_text(_PRESERVE_BIB)
+    return {"name": "main", "path": bib, "papers_dir": papers, "default": True}
+
+
+def test_insert_new_entry_preserves_comments_macros_and_preamble() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        bib = _bib(td)
+
+        result = add_record_with_bib(
+            bib=bib,  # type: ignore[arg-type]
+            record={"citekey": "new2025", "title": "Fresh Work",
+                    "authors": ["New, N"], "year": 2025, "doi": "10.1/new"},
+            dry_run=False,
+        )
+
+        assert result["status"] == "ok" and result["action"] == "insert"
+        text = Path(bib["path"]).read_text()
+        assert "@article{new2025," in text  # new entry written
+        assert "@article{smith2024," in text and "@article{jones2023," in text
+        assert "% library header comment" in text
+        assert "@string{acm" in text
+        assert "@preamble{" in text
+
+
+def test_update_existing_entry_preserves_comments_macros_and_preamble() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "lib.bib")
+        papers = os.path.join(td, "papers")
+        os.makedirs(papers, exist_ok=True)
+        # Entry carries a DOI so the incoming record exact-matches and updates
+        # in place rather than inserting a duplicate.
+        Path(bib).write_text(
+            "% library header comment\n"
+            "@string{acm = {ACM}}\n"
+            '@preamble{ "\\newcommand{\\noop}[1]{}" }\n'
+            "\n"
+            "@article{smith2024, title = {Deep Learning}, author = {Smith, John}, "
+            "year = {2024}, doi = {10.1/smith}}\n"
+            "@article{jones2023, title = {Vision}, author = {Jones, K}, year = {2023}}\n"
+        )
+        bib_cfg = {"name": "main", "path": bib, "papers_dir": papers, "default": True}
+
+        result = add_record_with_bib(
+            bib=bib_cfg,  # type: ignore[arg-type]
+            record={"title": "Deep Learning", "authors": ["Smith, John"],
+                    "year": 2024, "doi": "10.1/smith", "pdf_url": "https://x.test/p.pdf"},
+            dry_run=False,
+        )
+
+        assert result["status"] == "ok" and result["action"] == "update"
+        text = Path(bib).read_text()
+        assert "@article{jones2023," in text  # untouched entry survives
+        assert "% library header comment" in text
+        assert "@string{acm" in text
+        assert "@preamble{" in text

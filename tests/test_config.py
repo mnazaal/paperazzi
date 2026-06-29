@@ -112,6 +112,7 @@ def test_validate_app_config_applies_defaults() -> None:
         "page_metadata_timeout_seconds": 5,
         "metadata_confidence_min_score": 0,
         "promote_confidence_threshold": 3,
+        "metadata_cache_ttl": 0,
         "browser_hook": True,
         "pzi_data_home": os.path.expanduser("~/.local/share/pzi"),
         "api_url": "http://127.0.0.1:8765",

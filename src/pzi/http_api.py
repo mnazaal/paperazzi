@@ -121,6 +121,7 @@ def _serve_pdf(
     request.send_response(200)
     request.send_header("Content-Type", response.content_type)
     request.send_header("Content-Length", str(size))
+    request.send_header("X-Content-Type-Options", "nosniff")
     request.send_header(
         "Content-Disposition",
         f'inline; filename="{response.filename}"',
@@ -170,6 +171,7 @@ def _serve_export_raw(
     request.send_response(200)
     request.send_header("Content-Type", response.content_type)
     request.send_header("Content-Length", str(len(response.content)))
+    request.send_header("X-Content-Type-Options", "nosniff")
     request.send_header(
         "Content-Disposition",
         f'inline; filename="{response.filename}"',
@@ -333,6 +335,7 @@ def _respond(
     request.send_response(status)
     request.send_header("Content-Type", "application/json")
     request.send_header("Content-Length", str(len(body)))
+    request.send_header("X-Content-Type-Options", "nosniff")
     if rate_remaining is not None:
         request.send_header("X-RateLimit-Remaining", str(rate_remaining))
     if rate_reset is not None:

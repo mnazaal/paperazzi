@@ -1,3 +1,4 @@
+from pzi.add_service import ensure_citekey_for_write
 from pzi.bibtex import (
     generate_citekey,
     generate_citekey_base,
@@ -5,6 +6,38 @@ from pzi.bibtex import (
     repair_split_initials,
     resolve_citekey_collision,
 )
+
+# ── ensure_citekey_for_write: the documented stable-handle policy ──────────────
+# (reuse-on-match and collision-suffix are also exercised in test_service.py;
+# these pin the force_new and generate-when-missing branches.)
+
+
+def test_ensure_citekey_force_new_suffixes_instead_of_reusing() -> None:
+    # An exact match would normally reuse the existing key; force_new must
+    # instead mint a distinct suffixed key so the duplicate is a new entry.
+    record = {"doi": "10.1/a", "title": "Paper"}
+    existing = [{"doi": "10.1/a", "citekey": "smith2024paper"}]
+
+    result = ensure_citekey_for_write(record, existing, force_new=True)  # type: ignore[arg-type]
+
+    assert result["citekey"] == "smith2024paper-2"
+
+
+def test_ensure_citekey_generates_base_when_missing_and_no_match() -> None:
+    record = {"title": "Graph Parsers", "authors": ["Smith, John"], "year": 2024}
+
+    result = ensure_citekey_for_write(record, [])  # type: ignore[arg-type]
+
+    # Author-year-title base key (exact slug rules covered by generate_citekey tests).
+    assert result["citekey"].startswith("smith2024")
+
+
+def test_ensure_citekey_keeps_unique_explicit_key() -> None:
+    record = {"citekey": "mykey2024", "doi": "10.1/x"}
+
+    result = ensure_citekey_for_write(record, [])  # type: ignore[arg-type]
+
+    assert result["citekey"] == "mykey2024"
 
 
 def test_generate_citekey_base_from_author_year_title() -> None:

@@ -213,6 +213,68 @@ def test_batch_import_equivalent_to_repeated_single_writes(tmp_path) -> None:
     assert single_path.read_text() == batch_path.read_text()
 
 
+def test_batch_import_parity_for_citekey_collision_and_pdf_reuse(tmp_path) -> None:
+    """Bulk and repeated-single paths must agree on the trickier cases too:
+    a citekey collision between two *distinct* papers (suffix, not dedup) and
+    PDF reuse when a later record is an exact duplicate of an earlier one."""
+    from pzi.add_service import add_record_with_bib, add_records_to_bib_batch
+
+    def _make_fetch_binary():
+        downloads = {"n": 0}
+
+        def _fetch(url: str):
+            downloads["n"] += 1
+            return (b"%PDF-1.7\nbody", "application/pdf")
+
+        return _fetch, downloads
+
+    records: list[dict[str, object]] = [
+        {"citekey": "dup", "title": "First Paper", "authors": ["Brown, B"],
+         "year": 2021, "doi": "10.1/a", "pdf_url": "https://example.com/a.pdf"},
+        {"citekey": "dup", "title": "Second Paper", "authors": ["Clark, C"],
+         "year": 2022, "doi": "10.1/b"},  # same citekey, different paper -> suffix
+        {"citekey": "ignored", "title": "First Paper", "authors": ["Brown, B"],
+         "year": 2021, "doi": "10.1/a"},  # exact dupe of record 0 -> reuse key + PDF
+    ]
+
+    def _make_bib(name: str):
+        d = tmp_path / name
+        (d / "papers").mkdir(parents=True)
+        bib_path = d / "library.bib"
+        bib_path.write_text("")
+        bib = {"name": "main", "path": str(bib_path),
+               "papers_dir": str(d / "papers"), "default": True}
+        return bib, bib_path, d / "papers"
+
+    single_bib, single_path, single_papers = _make_bib("single")
+    batch_bib, batch_path, batch_papers = _make_bib("batch")
+
+    # Relative file paths so the only legitimate per-bib difference (the
+    # absolute papers_dir prefix) doesn't mask a real divergence.
+    single_fetch, single_dl = _make_fetch_binary()
+    single_results = [
+        add_record_with_bib(
+            bib=single_bib, record=dict(rec), dry_run=False,
+            fetch_binary=single_fetch, file_path_style="relative",
+        )
+        for rec in records
+    ]
+    batch_fetch, batch_dl = _make_fetch_binary()
+    batch_results = add_records_to_bib_batch(
+        bib=batch_bib, records=[dict(r) for r in records], dry_run=False,
+        fetch_binary=batch_fetch, file_path_style="relative",
+    )
+
+    assert [r["action"] for r in batch_results] == [r["action"] for r in single_results]
+    assert [r["citekey"] for r in batch_results] == [r["citekey"] for r in single_results]
+    assert [r["citekey"] for r in single_results] == ["dup", "dup-2", "dup"]
+    assert single_path.read_text() == batch_path.read_text()
+    # Same number of downloads and stored PDFs across both paths (record 2
+    # reuses record 0's PDF rather than re-downloading).
+    assert single_dl["n"] == batch_dl["n"] == 1
+    assert len(list(single_papers.glob("*.pdf"))) == len(list(batch_papers.glob("*.pdf"))) == 1
+
+
 def test_import_invalid_bibtex() -> None:
     with tempfile.TemporaryDirectory() as td:
         cp, bp, pd = _setup_config(td)

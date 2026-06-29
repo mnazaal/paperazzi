@@ -10,6 +10,7 @@ from typing import TextIO, TypedDict
 from pzi.bib_repository import ConcurrentEditError
 from pzi.cli_parser import build_parser, set_error_stream
 from pzi.commands.add import run_add_command as _run_add
+from pzi.commands.check import run_check_command as _run_check
 from pzi.commands.delete import run_delete_command as _run_delete
 from pzi.commands.doctor import run_doctor_command as _run_doctor
 from pzi.commands.entries import run_entries_command as _run_entries
@@ -38,6 +39,7 @@ class _CommonRunKwargs(TypedDict):
 
 CLI_COMMANDS: tuple[str, ...] = (
     "add",
+    "check",
     "delete",
     "doctor",
     "entries",
@@ -119,6 +121,9 @@ def run_cli(
             args, **_cfg,
             stdout=out, stderr=err, bib_selector=_single_selector,
             fetch_web=fetch_web, fetch_search=fetch_search,
+        ),
+        "check": lambda: _run_check(
+            args, **_cfg, stdout=out, stderr=err, bib_selector=_single_selector,
         ),
         "delete": lambda: _run_delete(
             args, **_cfg, stdout=out, stderr=err, bib_selector=_bib_selector,

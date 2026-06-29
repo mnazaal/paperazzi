@@ -1,3 +1,4 @@
+import pzi.promote_service as promote_service
 from pzi.add_service import add_record_to_bib
 from pzi.promote_service import _score_confidence, promote_bib
 
@@ -123,6 +124,39 @@ def test_promote_update_in_place(tmp_path):
     text = bib_path.read_text()
     assert "journal = {Journal of Parsing}" in text
     assert "doi = {10.9/jop}" in text
+
+
+def test_promote_mark_resolved_tags_and_skips_on_rerun(tmp_path):
+    bib_path = tmp_path / "ml.bib"
+    config_path = _write_config(tmp_path, bib_path)
+    _seed_bib_with_preprint(tmp_path, bib_path, config_path)
+
+    first = promote_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        keep_preprint=True,
+        dry_run=False,
+        mark_resolved=True,
+        fetch_search=_fake_search_with_venue,
+    )
+    assert first["summary"]["created"] == 1
+    assert first["summary"]["marked_resolved"] == 1
+    assert "promoted" in bib_path.read_text()  # preprint now carries the marker tag
+
+    # Re-running skips the already-tagged preprint instead of re-promoting it.
+    second = promote_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        keep_preprint=True,
+        dry_run=False,
+        mark_resolved=True,
+        fetch_search=_fake_search_with_venue,
+    )
+    assert second["summary"]["checked"] == 0
+    assert second["summary"]["skipped_already_resolved"] == 1
+    assert second["summary"]["created"] == 0
 
 
 def test_promote_keep_preprint_creates_new_entry(tmp_path):
@@ -344,6 +378,8 @@ def test_promote_uses_s2_api_key(tmp_path):
         fetch_search=lambda q, **kw: [],
         fetch_crossref=lambda t: None,
         fetch_openalex=lambda t: None,
+        fetch_dblp=lambda t: None,
+        fetch_openreview=lambda t: None,
         fetch_s2=fake_s2,
     )
 
@@ -510,6 +546,8 @@ def test_promote_s2_http_429_rate_limit_no_key(tmp_path):
         fetch_search=lambda q, **kw: [],
         fetch_crossref=lambda t: None,
         fetch_openalex=lambda t: None,
+        fetch_dblp=lambda t: None,
+        fetch_openreview=lambda t: None,
         fetch_s2=fake_s2,
     )
     assert len(result["items"]) == 1
@@ -539,6 +577,8 @@ def test_promote_s2_http_403_with_key(tmp_path):
         fetch_search=lambda q, **kw: [],
         fetch_crossref=lambda t: None,
         fetch_openalex=lambda t: None,
+        fetch_dblp=lambda t: None,
+        fetch_openreview=lambda t: None,
         fetch_s2=fake_s2,
     )
     assert len(result["items"]) == 1
@@ -568,6 +608,8 @@ def test_promote_s2_http_500_generic(tmp_path):
         fetch_search=lambda q, **kw: [],
         fetch_crossref=lambda t: None,
         fetch_openalex=lambda t: None,
+        fetch_dblp=lambda t: None,
+        fetch_openreview=lambda t: None,
         fetch_s2=fake_s2,
     )
     assert len(result["items"]) == 1
@@ -591,6 +633,8 @@ def test_promote_s2_data_error_rate_limit_no_key(tmp_path):
         fetch_search=lambda q, **kw: [],
         fetch_crossref=lambda t: None,
         fetch_openalex=lambda t: None,
+        fetch_dblp=lambda t: None,
+        fetch_openreview=lambda t: None,
         fetch_s2=fake_s2,
     )
     assert len(result["items"]) == 1
@@ -614,6 +658,8 @@ def test_promote_s2_data_error_auth_with_key(tmp_path):
         fetch_search=lambda q, **kw: [],
         fetch_crossref=lambda t: None,
         fetch_openalex=lambda t: None,
+        fetch_dblp=lambda t: None,
+        fetch_openreview=lambda t: None,
         fetch_s2=fake_s2,
     )
     assert len(result["items"]) == 1
@@ -643,8 +689,79 @@ def test_promote_s2_summary_warning_multiple_rate_limits(tmp_path):
         fetch_search=lambda q, **kw: [],
         fetch_crossref=lambda t: None,
         fetch_openalex=lambda t: None,
+        fetch_dblp=lambda t: None,
+        fetch_openreview=lambda t: None,
         fetch_s2=fake_s2,
     )
     assert result["status"] == "ok"
     assert "s2_warning" in result["summary"]
     assert "2 Semantic Scholar rate-limit failures" in result["summary"]["s2_warning"]
+
+
+def test_promote_unexpected_error_isolated_per_record(tmp_path, monkeypatch):
+    """A handler blowing up on one preprint must not abort the whole run.
+
+    The loop's per-record guard turns the failure into an explainable skip
+    (counted in ``summary['skipped_failed']``) and lets later preprints promote.
+    """
+    bib_path = tmp_path / "ml.bib"
+    config_path = _write_config(tmp_path, bib_path)
+    for ck, arxiv, title in [
+        ("alpha2024", "2401.00001", "Alpha Net"),
+        ("beta2024", "2401.00002", "Beta Net"),
+    ]:
+        add_record_to_bib(
+            config_path=str(config_path),
+            home_dir=str(tmp_path),
+            record={
+                "citekey": ck,
+                "title": title,
+                "arxiv_id": arxiv,
+                "year": 2024,
+                "authors": ["Smith, Jane"],
+            },
+            bib_selector=None,
+            dry_run=False,
+        )
+
+    def _search(query: str, *, server_url: str):
+        title, doi = ("Alpha Net", "10.9/alpha") if "Alpha" in query else ("Beta Net", "10.9/beta")
+        return [
+            {
+                "item_type": "journalArticle",
+                "record": {
+                    "title": title,
+                    "venue": "Journal of Parsing",
+                    "doi": doi,
+                    "year": 2024,
+                    "authors": ["Smith, Jane"],
+                },
+                "attachments": [],
+            }
+        ]
+
+    original = promote_service._handle_update_in_place
+
+    def _flaky(*, preprint_record, **kwargs):
+        if preprint_record.get("citekey") == "alpha2024":
+            raise RuntimeError("kaboom")
+        return original(preprint_record=preprint_record, **kwargs)
+
+    monkeypatch.setattr(promote_service, "_handle_update_in_place", _flaky)
+
+    result = promote_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        keep_preprint=False,
+        dry_run=False,
+        fetch_search=_search,
+    )
+
+    assert result["status"] == "ok"
+    items = {it["preprint_citekey"]: it for it in result["items"]}
+    assert "promotion failed" in items["alpha2024"]["note"]
+    assert result["summary"]["skipped_failed"] == 1
+    # The second preprint still promoted despite the first record raising.
+    assert items["beta2024"]["action"] == "update"
+    assert "doi = {10.9/beta}" in bib_path.read_text()

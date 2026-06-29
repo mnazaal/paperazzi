@@ -70,3 +70,68 @@ def test_fetch_text_rejects_response_over_max_bytes(monkeypatch) -> None:
         raise AssertionError("expected ValueError")
     except ValueError as exc:
         assert str(exc) == "response body exceeds maximum size: 10 bytes"
+
+
+# ---------------------------------------------------------------------------
+# build_metadata_fetch_text
+# ---------------------------------------------------------------------------
+
+
+class _RecordingLimiter:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def wait(self, url: str) -> None:
+        self.calls.append(url)
+
+
+def test_build_metadata_fetch_text_rate_limits_and_passes_kwargs() -> None:
+    seen: list[tuple[str, dict]] = []
+
+    def inner(url, **kwargs):
+        seen.append((url, kwargs))
+        return "BODY"
+
+    limiter = _RecordingLimiter()
+    fetch = fetch_helpers.build_metadata_fetch_text({}, inner=inner, rate_limiter=limiter)
+
+    assert fetch("http://x/api", user_agent="ua") == "BODY"
+    assert seen == [("http://x/api", {"user_agent": "ua"})]
+    assert limiter.calls == ["http://x/api"]
+
+
+def test_build_metadata_fetch_text_cache_hit_short_circuits(tmp_path) -> None:
+    from pzi.metadata_cache import MetadataCache
+
+    calls = {"n": 0}
+
+    def inner(url, **kwargs):
+        calls["n"] += 1
+        return "BODY"
+
+    limiter = _RecordingLimiter()
+    cache = MetadataCache(tmp_path, 60)
+    fetch = fetch_helpers.build_metadata_fetch_text(
+        {}, inner=inner, cache=cache, rate_limiter=limiter
+    )
+
+    assert fetch("http://x/api") == "BODY"  # miss: inner + cache.set
+    assert fetch("http://x/api") == "BODY"  # hit: no inner, no rate gate
+    assert calls["n"] == 1
+    assert limiter.calls == ["http://x/api"]
+
+
+def test_build_metadata_fetch_text_enables_cache_from_config(tmp_path) -> None:
+    calls = {"n": 0}
+
+    def inner(url, **kwargs):
+        calls["n"] += 1
+        return "BODY"
+
+    limiter = _RecordingLimiter()
+    config = {"metadata_cache_ttl": 60, "pzi_data_home": str(tmp_path)}
+    fetch = fetch_helpers.build_metadata_fetch_text(config, inner=inner, rate_limiter=limiter)
+
+    assert fetch("http://x/api") == "BODY"
+    assert fetch("http://x/api") == "BODY"
+    assert calls["n"] == 1  # second call served from the config-enabled cache

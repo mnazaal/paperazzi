@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import functools
 import time
 import urllib.error
+from collections.abc import Callable, Mapping
+from pathlib import Path
+from typing import Any
 from urllib.request import Request
 
+from pzi.metadata_cache import MetadataCache
+from pzi.rate_limit import RateLimiter
 from pzi.safe_http import SsrfBlocked, safe_urlopen
 
 DEFAULT_USER_AGENT = "pzi/1.0 (mailto:pzi)"
@@ -100,6 +106,46 @@ def fetch_text(
                 time.sleep(min(2**attempt, 8))  # 0s, 2s, 4s (capped at 8)
 
     raise last_error  # type: ignore[misc]
+
+
+def build_metadata_fetch_text(
+    config: Mapping[str, Any],
+    *,
+    api_key: str | None = None,
+    inner: Callable[..., str] | None = None,
+    cache: MetadataCache | None = None,
+    rate_limiter: RateLimiter | None = None,
+) -> Callable[..., str]:
+    """Compose ``fetch_text`` with opt-in disk caching and per-host rate limiting.
+
+    Returns a ``FetchText``-shaped callable: ``fetch(url, **kwargs)`` where the
+    keyword args (e.g. ``user_agent``) pass through to the underlying fetch.  A
+    cache hit short-circuits both the network call and the rate gate; misses are
+    spaced per host and then cached.  Caching is active only when
+    ``metadata_cache_ttl`` > 0; the rate limiter always applies.
+
+    ``inner`` / ``cache`` / ``rate_limiter`` are injectable for tests.
+    """
+    base = inner or functools.partial(fetch_text, api_key=api_key)
+    if cache is None:
+        ttl = int(config.get("metadata_cache_ttl", 0) or 0)
+        if ttl > 0:
+            cache_dir = Path(str(config.get("pzi_data_home", "."))) / "metadata-cache"
+            cache = MetadataCache(cache_dir, ttl)
+    limiter = rate_limiter if rate_limiter is not None else RateLimiter()
+
+    def fetch(url: str, **kwargs: Any) -> str:
+        if cache is not None:
+            hit = cache.get(url)
+            if hit is not None:
+                return hit
+        limiter.wait(url)
+        text = base(url, **kwargs)
+        if cache is not None:
+            cache.set(url, text)
+        return text
+
+    return fetch
 
 
 def fetch_binary(

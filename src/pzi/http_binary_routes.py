@@ -5,6 +5,7 @@ Keep socket writes in ``http_api``. Keep BibTeX lookup and path validation here.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,20 @@ from typing import Any
 from pzi.bib_repository import read_bib_file
 from pzi.config import load_and_resolve_bib
 from pzi.export_service import export_bibtex, export_csv, export_json, export_ris
+
+# Characters unsafe inside a quoted ``Content-Disposition`` filename: control
+# bytes (incl. CR/LF, which could split the header) plus the quote/backslash
+# that would terminate or escape the quoted-string. Citekeys and bib names flow
+# from local files, but sanitising here keeps a stray quote/newline from
+# corrupting the response headers.
+_UNSAFE_FILENAME_RE = re.compile(r'[\x00-\x1f"\\]')
+
+
+def safe_header_filename(name: str, *, fallback: str = "download") -> str:
+    """Return *name* with header-unsafe characters replaced, never empty."""
+    cleaned = _UNSAFE_FILENAME_RE.sub("_", name).strip()
+    return cleaned or fallback
+
 
 EXPORT_FORMATS = {
     "bibtex": (export_bibtex, "bib"),
@@ -69,7 +84,7 @@ def build_pdf_file_response(
     return 200, PdfFileResponse(
         path=pdf_file,
         content_type="application/pdf",
-        filename=f"{citekey}.pdf",
+        filename=safe_header_filename(f"{citekey}.pdf"),
     )
 
 
@@ -103,7 +118,7 @@ def build_export_bytes_response(
     return 200, ExportBytesResponse(
         content=content,
         content_type=str(result["content_type"]),
-        filename=f"{bib_name}.{extension}",
+        filename=safe_header_filename(f"{bib_name}.{extension}"),
     )
 
 

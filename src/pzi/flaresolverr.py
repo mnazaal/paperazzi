@@ -5,11 +5,23 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from typing import Any, TypeAlias
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from pzi.fetch_helpers import DEFAULT_MAX_RESPONSE_BYTES, _read_limited
 
 FetchText = Callable[[str, object], str]
+
+
+def _valid_server_url(server_url: str) -> bool:
+    """Return True for an http(s) FlareSolverr endpoint.
+
+    Config already drops a malformed ``flaresolverr_url``; this is a
+    defence-in-depth guard so the public fetchers never hand a non-http(s)
+    scheme (e.g. ``file://``) to the raw ``urlopen`` in :func:`_post_json`.
+    """
+    parts = urlsplit(server_url)
+    return parts.scheme in {"http", "https"} and bool(parts.netloc)
 
 
 FlareSolverrCookies: TypeAlias = dict[str, Any]
@@ -27,6 +39,8 @@ def fetch_html_via_flaresolverr(
     post_json: FetchText | None = None,
 ) -> str | None:
     """Return page HTML fetched via FlareSolverr, or None on failure."""
+    if not _valid_server_url(server_url):
+        return None
     fn = post_json or _post_json
     try:
         endpoint = server_url.rstrip("/") + "/v1"
@@ -50,6 +64,8 @@ def fetch_pdf_via_flaresolverr(
     Uses FlareSolverr to bypass Cloudflare, then downloads the PDF
     using the obtained cookies.
     """
+    if not _valid_server_url(server_url):
+        return None
     fn = post_json or _post_json
     try:
         endpoint = server_url.rstrip("/") + "/v1"

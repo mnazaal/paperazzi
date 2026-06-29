@@ -17,6 +17,25 @@ from pzi.http_security import (
 from pzi.pdf_attach_session import build_attach_session
 from pzi.pdf_attach_session_store import AttachSessionStore
 
+# === safe_header_filename ===
+
+
+def test_safe_header_filename_strips_quotes_and_crlf() -> None:
+    cleaned = http_binary_routes.safe_header_filename('ev"il\r\nSet-Cookie: x.pdf')
+    assert '"' not in cleaned
+    assert "\r" not in cleaned
+    assert "\n" not in cleaned
+
+
+def test_safe_header_filename_falls_back_when_empty() -> None:
+    assert http_binary_routes.safe_header_filename("") == "download"
+    assert http_binary_routes.safe_header_filename("   ") == "download"
+
+
+def test_safe_header_filename_keeps_ordinary_name() -> None:
+    assert http_binary_routes.safe_header_filename("smith2024graph.pdf") == "smith2024graph.pdf"
+
+
 # === process_get_request ===
 
 

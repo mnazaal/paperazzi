@@ -27,6 +27,22 @@ def test_fetch_html_via_flaresolverr_success():
     assert result == html
 
 
+def test_fetch_html_via_flaresolverr_rejects_non_http_endpoint():
+    calls: list[str] = []
+
+    def spy_post(endpoint: str, payload: object) -> str:
+        calls.append(endpoint)
+        return json.dumps({"status": "ok", "solution": {"response": "x"}})
+
+    result = fetch_html_via_flaresolverr(
+        "https://example.com",
+        server_url="file:///etc/passwd",
+        post_json=spy_post,
+    )
+    assert result is None
+    assert calls == []  # guarded before any request is issued
+
+
 def test_fetch_html_via_flaresolverr_error_status():
     result = fetch_html_via_flaresolverr(
         "https://example.com",

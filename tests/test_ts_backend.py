@@ -1,10 +1,9 @@
 """Tests for src/pzi/ts_backend.py."""
 
 import io
-import json
+import re
 import signal
 import subprocess
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 from urllib.error import HTTPError, URLError
@@ -12,222 +11,19 @@ from urllib.error import HTTPError, URLError
 from pzi import ts_backend
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# detect_node
+# Pinned repo refs
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def test_detect_node_returns_path_when_version_ok() -> None:
-    with patch("pzi.ts_backend.shutil.which", return_value="/usr/bin/node"):
-        with patch("pzi.ts_backend.subprocess.run") as mock_run:
-            mock_run.return_value = result(0, "v22.11.0\n", "")
-            node = ts_backend.detect_node()
-    assert node == "/usr/bin/node"
+_FULL_SHA = re.compile(r"\A[0-9a-f]{40}\Z")
 
 
-def test_detect_node_returns_none_when_not_found() -> None:
-    with patch("pzi.ts_backend.shutil.which", return_value=None):
-        assert ts_backend.detect_node() is None
-
-
-def test_detect_node_returns_none_when_version_too_old() -> None:
-    with patch("pzi.ts_backend.shutil.which", return_value="/usr/bin/node"):
-        with patch("pzi.ts_backend.subprocess.run") as mock_run:
-            mock_run.return_value = result(0, "v18.0.0\n", "")
-            node = ts_backend.detect_node()
-    assert node is None
-
-
-def test_detect_node_returns_none_on_nonzero_exit() -> None:
-    with patch("pzi.ts_backend.shutil.which", return_value="/usr/bin/node"):
-        with patch("pzi.ts_backend.subprocess.run") as mock_run:
-            mock_run.return_value = result(1, "", "error")
-            node = ts_backend.detect_node()
-    assert node is None
-
-
-def test_detect_node_returns_none_on_unparseable_version() -> None:
-    with patch("pzi.ts_backend.shutil.which", return_value="/usr/bin/node"):
-        with patch("pzi.ts_backend.subprocess.run") as mock_run:
-            mock_run.return_value = result(0, "not-a-version\n", "")
-            node = ts_backend.detect_node()
-    assert node is None
-
-
-def test_detect_node_handles_oserror() -> None:
-    with patch("pzi.ts_backend.shutil.which", return_value="/usr/bin/node"):
-        with patch("pzi.ts_backend.subprocess.run", side_effect=OSError):
-            node = ts_backend.detect_node()
-    assert node is None
-
-
-def test_detect_node_handles_timeout() -> None:
-    with patch("pzi.ts_backend.shutil.which", return_value="/usr/bin/node"):
-        with patch(
-            "pzi.ts_backend.subprocess.run",
-            side_effect=subprocess.TimeoutExpired(["node"], 5),
-        ):
-            node = ts_backend.detect_node()
-    assert node is None
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# _node_dist_name
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def test_node_dist_name_linux_x64() -> None:
-    with patch.object(sys, "platform", "linux"):
-        with patch("pzi.ts_backend.platform.machine", return_value="x86_64"):
-            assert ts_backend._node_dist_name() == "linux-x64"
-
-
-def test_node_dist_name_linux_arm64() -> None:
-    with patch.object(sys, "platform", "linux"):
-        with patch("pzi.ts_backend.platform.machine", return_value="aarch64"):
-            assert ts_backend._node_dist_name() == "linux-arm64"
-
-
-def test_node_dist_name_darwin_x64() -> None:
-    with patch.object(sys, "platform", "darwin"):
-        with patch("pzi.ts_backend.platform.machine", return_value="x86_64"):
-            assert ts_backend._node_dist_name() == "darwin-x64"
-
-
-def test_node_dist_name_darwin_arm64() -> None:
-    with patch.object(sys, "platform", "darwin"):
-        with patch("pzi.ts_backend.platform.machine", return_value="arm64"):
-            assert ts_backend._node_dist_name() == "darwin-arm64"
-
-
-def test_node_dist_name_unsupported_platform_raises() -> None:
-    with patch.object(sys, "platform", "win32"):
-        try:
-            ts_backend._node_dist_name()
-            assert False, "expected RuntimeError"
-        except RuntimeError:
-            pass
-
-
-def test_node_dist_name_unsupported_arch_raises() -> None:
-    with patch.object(sys, "platform", "linux"):
-        with patch("pzi.ts_backend.platform.machine", return_value="mips"):
-            try:
-                ts_backend._node_dist_name()
-                assert False, "expected RuntimeError"
-            except RuntimeError:
-                pass
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# _latest_node_version
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def test_latest_node_version_returns_major_version() -> None:
-    data = [
-        {"version": "v23.1.0"},
-        {"version": "v22.15.0"},
-        {"version": "v22.14.0"},
-    ]
-    with patch(
-        "pzi.ts_backend.urlopen",
-        return_value=json_io(json.dumps(data)),
-    ):
-        ver = ts_backend._latest_node_version()
-    assert ver == "22.15.0"
-
-
-def test_latest_node_version_no_matching_major_raises() -> None:
-    data = [{"version": "v20.0.0"}]
-    with patch(
-        "pzi.ts_backend.urlopen",
-        return_value=json_io(json.dumps(data)),
-    ):
-        try:
-            ts_backend._latest_node_version()
-            assert False, "expected RuntimeError"
-        except RuntimeError:
-            pass
-
-
-def test_latest_node_version_skips_entries_without_version() -> None:
-    data = [
-        {"version": None},
-        {"version": "v22.10.0"},
-    ]
-    with patch(
-        "pzi.ts_backend.urlopen",
-        return_value=json_io(json.dumps(data)),
-    ):
-        ver = ts_backend._latest_node_version()
-    assert ver == "22.10.0"
-
-
-def test_latest_node_version_network_error_raises() -> None:
-    with patch(
-        "pzi.ts_backend.urlopen",
-        return_value=json_io(json.dumps([])),
-    ):
-        try:
-            ts_backend._latest_node_version()
-            assert False, "expected RuntimeError"
-        except RuntimeError:
-            pass
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# _node_bin_dir
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def test_node_bin_dir() -> None:
-    home = Path("/home/user/.local/share/pzi")
-    assert ts_backend._node_bin_dir(home) == home / "node"
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# ensure_node
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def test_ensure_node_returns_system_node_if_found() -> None:
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-    with patch("pzi.ts_backend.detect_node", return_value="/usr/bin/node"):
-        result = ts_backend.ensure_node(
-            Path("/tmp"),
-            interactive=True,
-            stdout=stdout,
-            stderr=stderr,
-        )
-    assert result == "/usr/bin/node"
-
-
-def test_ensure_node_non_interactive_downloads() -> None:
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-    with patch("pzi.ts_backend.detect_node", return_value=None):
-        with patch("pzi.ts_backend.download_node", return_value="/tmp/node/bin/node"):
-            result = ts_backend.ensure_node(
-                Path("/tmp"),
-                interactive=False,
-                stdout=stdout,
-                stderr=stderr,
-            )
-    assert result == "/tmp/node/bin/node"
-
-
-def test_ensure_node_download_failure_returns_none() -> None:
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-    with patch("pzi.ts_backend.detect_node", return_value=None):
-        with patch(
-            "pzi.ts_backend.download_node",
-            side_effect=RuntimeError("download failed"),
-        ):
-            result = ts_backend.ensure_node(
-                Path("/tmp"),
-                interactive=False,
-                stdout=stdout,
-                stderr=stderr,
-            )
-    assert result is None
-    assert "failed to download" in stderr.getvalue()
+def test_ts_repos_refs_are_pinned_full_shas() -> None:
+    """Every translation-server dependency must be pinned to a 40-char commit
+    SHA, never a floating ref like ``main`` or a tag — a moving ref means a
+    mid-release translator change can silently break existing installs."""
+    for repo in ts_backend._TS_REPOS:
+        ref = repo["ref"]
+        assert _FULL_SHA.match(ref), f"{repo['name']} ref {ref!r} is not a 40-char SHA"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -864,22 +660,6 @@ def test_clone_repo_uses_fetch_checkout_for_hash_ref(tmp_path: Path) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Helpers
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def result(returncode: int, stdout: str, stderr: str) -> MagicMock:
-    r = MagicMock()
-    r.returncode = returncode
-    r.stdout = stdout
-    r.stderr = stderr
-    return r
-
-
-def json_io(data: str) -> io.BytesIO:
-    return io.BytesIO(data.encode("utf-8"))
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
 # TranslationServerWatchdog  (tick() observation logic, no real threads)
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -992,3 +772,69 @@ def test_watchdog_stop_terminates_only_a_restarted_child() -> None:
     terminated.clear()
     w2.stop()
     assert terminated == [fresh]  # stop terminates the restarted child
+
+
+def test_wait_for_ts_aborts_when_should_abort_true() -> None:
+    """should_abort short-circuits the poll loop before any health probe."""
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with patch("pzi.ts_backend.urlopen") as mock_urlopen, \
+            patch("pzi.ts_backend.time.sleep"):
+        result = ts_backend.wait_for_ts(
+            "http://127.0.0.1:1969",
+            timeout=90,
+            stdout=stdout,
+            stderr=stderr,
+            should_abort=lambda: True,
+        )
+    assert result is False
+    mock_urlopen.assert_not_called()
+    assert "did not become ready" not in stderr.getvalue()
+
+
+def test_watchdog_restart_does_not_hold_lock_during_wait() -> None:
+    # The blocking readiness wait must run lock-free, otherwise stop() (Ctrl-C on
+    # a long-lived `pzi server`) would block behind a 90s wait. Prove the lock is
+    # free during the wait by probing it from inside the injected wait callback.
+    dead = _FakeProc(alive=False)
+    fresh = _FakeProc(alive=True)
+    lock_free: list = []
+
+    w = _make_watchdog(proc=dead, start=lambda *a, **k: fresh)
+
+    def _wait(*a, **k):
+        acquired = w._lock.acquire(blocking=False)
+        lock_free.append(acquired)
+        if acquired:
+            w._lock.release()
+        return True
+
+    w._wait = _wait
+    w.tick()
+
+    assert lock_free == [True]  # the lock was available while waiting
+    assert w.current_proc is fresh
+
+
+def test_watchdog_restart_aborted_when_stop_races_in() -> None:
+    # If stop() is requested while the replacement is coming up, the watchdog
+    # must tear the replacement down instead of adopting it.
+    dead = _FakeProc(alive=False)
+    fresh = _FakeProc(alive=True)
+    terminated: list = []
+
+    w = _make_watchdog(
+        proc=dead,
+        start=lambda *a, **k: fresh,
+        terminate=lambda p, **k: terminated.append(p),
+    )
+
+    def _wait(*a, **k):
+        w._stop_event.set()  # shutdown races in during the wait
+        return True
+
+    w._wait = _wait
+    w.tick()
+
+    assert fresh in terminated      # replacement torn down, not leaked
+    assert w.current_proc is dead   # original proc not swapped out

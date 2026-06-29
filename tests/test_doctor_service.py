@@ -1,6 +1,32 @@
 """Edge tests for doctor_service.py uncovered lines (line 80: _probe_translation_server)."""
 
-from pzi.doctor_service import _probe_translation_server, doctor_check
+import os
+
+from pzi.doctor_service import (
+    _probe_translation_server,
+    config_permissions_warning,
+    doctor_check,
+)
+
+
+def test_config_permissions_warning_flags_group_other_access(tmp_path) -> None:
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("contact_email = 'x@y.z'\n")
+    os.chmod(cfg, 0o644)
+    warning = config_permissions_warning(str(cfg))
+    assert warning is not None
+    assert "chmod 600" in warning
+
+
+def test_config_permissions_warning_clean_for_owner_only(tmp_path) -> None:
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("contact_email = 'x@y.z'\n")
+    os.chmod(cfg, 0o600)
+    assert config_permissions_warning(str(cfg)) is None
+
+
+def test_config_permissions_warning_none_for_missing_file(tmp_path) -> None:
+    assert config_permissions_warning(str(tmp_path / "nope.toml")) is None
 
 
 def test_probe_translation_server_success(monkeypatch) -> None:

@@ -36,7 +36,12 @@ from pzi.bibtex import (
     resolve_citekey_collision,
 )
 from pzi.fileio import read_text_utf8
-from pzi.similarity import find_exact_match
+from pzi.similarity import (
+    IdentityKind,
+    build_identity_index,
+    extract_identities,
+    find_exact_match,
+)
 
 
 class ConcurrentEditError(RuntimeError):
@@ -312,17 +317,104 @@ def execute_write_plan(
         return updated_entries
 
 
+def _invariant(condition: bool, message: str) -> None:
+    """Raise on a violated internal invariant.
+
+    Used instead of ``assert`` for load-bearing batch-state guards: ``assert``
+    is stripped under ``python -O``, which would silently disable the only thing
+    standing between a desynced batch and a corrupt write.
+    """
+    if not condition:
+        raise RuntimeError(f"internal invariant violated: {message}")
+
+
+def _index_positions(
+    index: dict[tuple[IdentityKind, str], list[int]],
+) -> dict[tuple[IdentityKind, str], set[int]]:
+    """Normalize an identity index to ``key -> set(positions)`` for comparison.
+
+    Position *order* within a bucket is irrelevant to dedup (any matching
+    position is a hit), so consistency is compared set-wise; empty buckets are
+    dropped so a pruned-vs-absent key is not a spurious mismatch.
+    """
+    return {key: set(positions) for key, positions in index.items() if positions}
+
+
 @dataclass
 class BatchWriteSession:
     """In-memory view of a bib opened for a batch of edits under one lock.
 
-    Callers replace entries in place (updates) and append (inserts), keeping
-    ``entries`` and ``records`` parallel and in on-disk order with inserts
-    trailing — the same invariant :func:`_update_library_blocks` relies on.
+    Owns the three structures that must move in lockstep across a batch: the
+    parsed ``entries``, their projected ``records``, and the identity ``index``
+    used for exact-match dedup.  Callers apply each planned edit through
+    :meth:`apply_plan` rather than mutating the lists directly, so the
+    entries/records parallelism (relied on by :func:`_update_library_blocks`)
+    and the identity index stay coherent in one place.
     """
 
     entries: list[BibtexEntry]
     records: list[NormalizedRecord]
+    index: dict[tuple[IdentityKind, str], list[int]]
+
+    def apply_plan(self, plan: WritePlan) -> None:
+        """Fold one write plan into the in-memory state, keeping entries,
+        records, and the identity index in sync."""
+        planned_record = cast(NormalizedRecord, plan["record"])
+        if plan["action"] == "insert":
+            position = len(self.records)
+            self.entries.append(plan["entry"])
+            self.records.append(planned_record)
+        else:
+            idx = plan["index"]
+            if idx is None:
+                raise RuntimeError(
+                    "internal invariant violated: "
+                    "update plan always carries a concrete index"
+                )
+            position = idx
+            # Drop the outgoing record's identity keys before adding the new
+            # ones: an update can change a record's doi/arxiv/url (e.g. metadata
+            # enrichment mid-batch), and a stale key would otherwise cause the
+            # next record sharing that identity to register a false exact-match.
+            self._remove_from_index(self.records[idx], idx)
+            self.entries[idx] = plan["entry"]
+            self.records[idx] = planned_record
+        for identity in extract_identities(planned_record):
+            self.index.setdefault((identity["kind"], identity["value"]), []).append(position)
+        _invariant(
+            len(self.entries) == len(self.records),
+            f"batch state desync: {len(self.entries)} entries != {len(self.records)} records",
+        )
+
+    def _remove_from_index(self, record: NormalizedRecord, position: int) -> None:
+        """Remove *position* from every identity bucket *record* contributes,
+        pruning buckets that become empty."""
+        for identity in extract_identities(record):
+            key = (identity["kind"], identity["value"])
+            positions = self.index.get(key)
+            if not positions:
+                continue
+            if position in positions:
+                positions.remove(position)
+            if not positions:
+                del self.index[key]
+
+    def check_consistency(self) -> None:
+        """Verify the in-memory state is internally coherent.
+
+        Cheap O(N) guard run before the atomic write: a desync here means a
+        stale or missing identity key, which would let a later record falsely
+        dedup against the wrong entry.  Because the session is transactional,
+        raising aborts the whole batch with nothing written.
+        """
+        _invariant(
+            len(self.entries) == len(self.records),
+            f"batch state desync: {len(self.entries)} entries != {len(self.records)} records",
+        )
+        _invariant(
+            _index_positions(self.index) == _index_positions(build_identity_index(self.records)),
+            "identity index out of sync with records",
+        )
 
 
 @contextmanager
@@ -331,10 +423,10 @@ def batch_write_session(
 ) -> Iterator[BatchWriteSession]:
     """Open a bib once for many edits, writing a single atomic time on exit.
 
-    Reads and parses the library exactly once; the caller mutates the yielded
-    ``entries``/``records`` (replace in place for updates, append for inserts).
-    On clean exit, when *write* is set and the rendered source changed, writes
-    it atomically while preserving comments/``@string``/``@preamble``.
+    Reads and parses the library exactly once; the caller folds each edit in
+    through :meth:`BatchWriteSession.apply_plan`.  On clean exit, when *write*
+    is set and the rendered source changed, writes it atomically while
+    preserving comments/``@string``/``@preamble``.
 
     This collapses N locked read-modify-write cycles (one per record) into one,
     and makes the whole batch transactional: if the caller raises, nothing is
@@ -345,10 +437,13 @@ def batch_write_session(
         library = _parse_bib_library(source)
         _validate_library_parseable(library)
         entries, records = _library_to_entries_records(library, path)
-        session = BatchWriteSession(entries=entries, records=records)
+        session = BatchWriteSession(
+            entries=entries, records=records, index=build_identity_index(records),
+        )
         yield session
         if not write:
             return
+        session.check_consistency()
         _validate_bibtex_roundtrip(session.entries)
         new_library = _update_library_blocks(
             library, session.entries, path, file_path_style=file_path_style

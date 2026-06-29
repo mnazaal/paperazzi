@@ -139,6 +139,7 @@ _COMMAND_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
     ("Browse & search", (
         ("entries", "List entries, show one by citekey, or --stats"),
         ("search", "Search by query, author, year, or tag"),
+        ("check", "Validate references against authoritative sources"),
         ("tag", "Add, remove, or list tags"),
     )),
     ("Maintain", (
@@ -238,6 +239,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_parser.add_argument("--verbose", action="store_true", help="show metadata diagnostics")
     add_parser.add_argument("--json", action="store_true", help="write result as JSON")
+    add_parser.add_argument(
+        "--strict-metadata", action="store_true",
+        help="fail if any metadata provider returns an error instead of falling back silently",
+    )
 
     add_batch = add_parser.add_argument_group("bulk capture")
     add_batch.add_argument(
@@ -376,6 +381,37 @@ def build_parser() -> argparse.ArgumentParser:
     add_multi_target(search_parser)
     search_parser.add_argument("--json", action="store_true", help="output matches as JSON")
 
+    # ── check ────────────────────────────────────────────────────────────
+    check_parser = subparsers.add_parser(
+        "check",
+        help="Validate references against authoritative metadata sources",
+        description=(
+            "Read-only audit: verify each entry exists with the claimed metadata "
+            "across Crossref/OpenAlex/DBLP/OpenReview/Semantic Scholar, flagging "
+            "fabricated or mismatched references. Never writes the library."
+        ),
+        formatter_class=_PziHelpFormatter,
+        epilog=_subcommand_epilog((
+            "pzi check",
+            "pzi check --report audit.json",
+            "pzi check --strict --jsonl audit.jsonl",
+        )),
+    )
+    check_parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="tighten the verdict gate and exit non-zero if any entry is problematic",
+    )
+    check_parser.add_argument(
+        "--report", metavar="PATH", help="write the full result as JSON to PATH"
+    )
+    check_parser.add_argument(
+        "--jsonl", metavar="PATH", help="write one JSON object per entry to PATH"
+    )
+    add_config(check_parser)
+    add_single_target(check_parser)
+    check_parser.add_argument("--json", action="store_true", help="output the result as JSON")
+
     # ── update ───────────────────────────────────────────────────────────
     update_parser = subparsers.add_parser(
         "update",
@@ -407,6 +443,10 @@ def build_parser() -> argparse.ArgumentParser:
     update_parser.add_argument(
         "--replace", action="store_true",
         help="with --promote, update the preprint entry in place instead of keeping both",
+    )
+    update_parser.add_argument(
+        "--mark-resolved", action="store_true",
+        help="with --promote, tag promoted preprints and skip already-tagged ones on re-runs",
     )
 
     # ── doctor ───────────────────────────────────────────────────────────
@@ -682,6 +722,7 @@ def build_capture_options_from_add_args(
     return CaptureOptions(
         dry_run=args.dry_run,
         force_new=getattr(args, "force_new", False),
+        metadata_strict=getattr(args, "strict_metadata", False),
         page_metadata_cmd=(
             page_metadata_cmd
             if isinstance(page_metadata_cmd, str) and page_metadata_cmd.strip()

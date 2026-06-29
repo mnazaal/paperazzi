@@ -1,15 +1,40 @@
+import urllib.error
+
 from pzi.add_planning import (
     _coerce_year,
     attach_similarity_hint,
+    build_discovery_context,
     error_result,
+    fetch_record_for_input,
     has_minimum_metadata,
     manual_record_from_overrides,
     merge_fetched_record_with_overrides,
     minimum_metadata_diagnostics,
     pdf_result_fields,
+    safe_api_call,
     split_record_overrides,
 )
 from pzi.format_templates import format_citekey, format_pdf_filename, render_zotero_template
+
+# Every key a discovery step may read. If a step starts consuming a new context
+# key, add it here so the shared builder (used by both the normal fetch path and
+# the add_service TS-failure fallback) is guaranteed to provide it.
+_DISCOVERY_CONTEXT_KEYS = {
+    "raw_value", "server_url", "unpaywall_email", "contact_email", "s2_api_key",
+    "flaresolverr_url", "browser_pdf_cmd", "pdf_url_candidates", "cookies",
+    "fetch_web", "fetch_unpaywall", "fetch_crossref", "fetch_openalex", "fetch_s2",
+    "fetch_flaresolverr", "translation_attachments", "api_url", "api_auth_token",
+    "desktop_fallback_hosts", "pdf_discovery_parallel",
+}
+
+
+def test_build_discovery_context_has_full_key_set() -> None:
+    ctx = build_discovery_context(raw_value="https://x.test", server_url="http://ts")
+    assert set(ctx) == _DISCOVERY_CONTEXT_KEYS
+    # Defaults are filled even when only the two required args are supplied,
+    # so the fallback path can never omit a key the steps expect.
+    assert ctx["cookies"] is None
+    assert ctx["pdf_discovery_parallel"] is False
 
 
 def test_split_record_overrides_separates_fallback_prefixes() -> None:
@@ -317,3 +342,54 @@ def test_format_pdf_filename_basic() -> None:
     )
     assert "Smith" in result
     assert "2024" in result
+
+
+# ---------------------------------------------------------------------------
+# Provider-error propagation
+# ---------------------------------------------------------------------------
+
+
+def test_safe_api_call_records_http_error() -> None:
+    """safe_api_call appends HTTP error codes to the errors list."""
+    errors: list[str] = []
+    exc = urllib.error.HTTPError(None, 429, "Too Many Requests", {}, None)  # type: ignore[arg-type]
+
+    result = safe_api_call(lambda: (_ for _ in ()).throw(exc), errors=errors)
+
+    assert result == []
+    assert errors == ["HTTP 429"]
+
+
+def test_safe_api_call_without_errors_stays_silent() -> None:
+    """When errors is not given, HTTPError is still swallowed silently."""
+    exc = urllib.error.HTTPError(None, 500, "Server Error", {}, None)  # type: ignore[arg-type]
+
+    result = safe_api_call(lambda: (_ for _ in ()).throw(exc))
+
+    assert result == []
+
+
+def test_fetch_record_for_input_returns_provider_errors() -> None:
+    """fetch_record_for_input returns (record, errors); errors accumulate across providers."""
+    doi = "10.1/test"
+    doi_429 = urllib.error.HTTPError(None, 429, "Too Many Requests", {}, None)  # type: ignore[arg-type]
+
+    def _failing_crossref(doi: str, **_: object) -> None:
+        raise doi_429
+
+    def _good_openalex(doi: str, **_: object):
+        return {"title": "Test Paper", "doi": doi}
+
+    record, provider_errors = fetch_record_for_input(
+        raw_value=doi,
+        classified={"kind": "doi", "normalized": doi},
+        server_url="http://ts.test",
+        fetch_web=lambda *a, **k: [],
+        fetch_search=lambda *a, **k: [],
+        fetch_crossref=_failing_crossref,
+        fetch_openalex=_good_openalex,
+    )
+
+    assert record.get("title") == "Test Paper"
+    assert provider_errors, "expected at least one provider error"
+    assert any("429" in e for e in provider_errors)

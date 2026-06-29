@@ -8,14 +8,10 @@ from __future__ import annotations
 
 import difflib
 import os
-import platform
 import re
 import shutil
 import signal
 import subprocess
-import sys
-import tarfile
-import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -24,6 +20,8 @@ from pathlib import Path
 from typing import NotRequired, TextIO, TypedDict
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+from pzi.node_runtime import ensure_node
 
 # ---------------------------------------------------------------------------
 # Pinned repository references.
@@ -67,266 +65,8 @@ _TS_REPOS: list[dict[str, str]] = [
     },
 ]
 
-_MIN_NODE_MAJOR = 22
 _TS_DEFAULT_PORT = 1969
 _SENTINEL_FILENAME = ".pzi-installed"
-
-# ---------------------------------------------------------------------------
-# Node.js detection / download
-# ---------------------------------------------------------------------------
-
-
-def detect_node(min_version: tuple[int, int] = (_MIN_NODE_MAJOR, 0)) -> str | None:
-    """Return path to system Node.js binary if it meets min_version, else None."""
-    node = shutil.which("node")
-    if node is None:
-        return None
-    try:
-        result = subprocess.run(
-            [node, "--version"], capture_output=True, text=True, timeout=5
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if result.returncode != 0:
-        return None
-    version_str = result.stdout.strip().lstrip("v")
-    try:
-        parts = version_str.split(".")
-        major = int(parts[0])
-        minor = int(parts[1]) if len(parts) > 1 else 0
-    except (ValueError, IndexError):
-        return None
-    if (major, minor) < min_version:
-        return None
-    return node
-
-
-def _node_dist_name() -> str:
-    """Map sys.platform + machine to the Node.js dist suffix."""
-    plat = sys.platform
-    arch = platform.machine()
-    if plat == "linux":
-        plat_name = "linux"
-    elif plat == "darwin":
-        plat_name = "darwin"
-    else:
-        raise RuntimeError(f"unsupported platform for portable Node.js: {plat}")
-
-    if arch in ("x86_64", "amd64"):
-        arch_name = "x64"
-    elif arch in ("aarch64", "arm64"):
-        arch_name = "arm64"
-    else:
-        raise RuntimeError(f"unsupported architecture for portable Node.js: {arch}")
-
-    return f"{plat_name}-{arch_name}"
-
-
-def _latest_node_version() -> str:
-    """Return the latest v{_MIN_NODE_MAJOR}.x version string from the index."""
-    mirror = os.environ.get("PZI_NODE_MIRROR", "https://nodejs.org/dist")
-    index_url = f"{mirror}/index.json"
-    try:
-        with urlopen(Request(index_url, method="GET"), timeout=15) as resp:
-            import json
-
-            data = json.loads(resp.read())
-    except (URLError, OSError, ValueError) as exc:
-        raise RuntimeError(f"failed to fetch Node.js version index: {exc}") from exc
-
-    for entry in data:
-        version: str | None = entry.get("version")
-        if not isinstance(version, str):
-            continue
-        stripped = version.lstrip("v")
-        try:
-            major = int(stripped.split(".")[0])
-        except (ValueError, IndexError):
-            continue
-        if major == _MIN_NODE_MAJOR:
-            return stripped
-    raise RuntimeError(f"no Node.js v{_MIN_NODE_MAJOR}.x found in {index_url}")
-
-
-def _node_bin_dir(data_home: Path) -> Path:
-    """Return the directory that contains the node binary after extraction."""
-    return data_home / "node"
-
-
-def _extractall_no_traversal(
-    tar: tarfile.TarFile, dest: Path
-) -> None:  # pragma: no cover — Python < 3.11.4 fallback only
-    """Extract *tar* into *dest*, rejecting any member that escapes *dest*.
-
-    Replicates the ``filter="data"`` traversal/symlink guard for the rare
-    Python < 3.11.4 patch releases where that argument is unavailable.
-    """
-    dest_resolved = dest.resolve()
-
-    def _within(target: Path) -> bool:
-        resolved = target.resolve()
-        return resolved == dest_resolved or dest_resolved in resolved.parents
-
-    for member in tar.getmembers():
-        if not _within(dest_resolved / member.name):
-            raise tarfile.TarError(f"unsafe path in tarball: {member.name!r}")
-        if (member.issym() or member.islnk()) and not _within(
-            (dest_resolved / member.name).parent / member.linkname
-        ):
-            raise tarfile.TarError(f"unsafe link in tarball: {member.name!r}")
-    tar.extractall(path=dest)
-
-
-def download_node(
-    data_home: Path,
-    *,
-    stdout: TextIO,
-    stderr: TextIO,
-) -> str:
-    """Download portable Node.js tarball and extract to ``data_home/node/``.
-
-    Returns the path to the node binary.
-    """
-    version = _latest_node_version()
-    dist_name = _node_dist_name()
-    mirror = os.environ.get("PZI_NODE_MIRROR", "https://nodejs.org/dist")
-    tarball_name = f"node-v{version}-{dist_name}.tar.gz"
-    url = f"{mirror}/v{version}/{tarball_name}"
-
-    node_dir = _node_bin_dir(data_home)
-    bin_path = node_dir / "bin" / "node"
-    if detect_node() == str(bin_path):
-        return str(bin_path)
-
-    node_dir.mkdir(parents=True, exist_ok=True)
-
-    print(f"downloading Node.js v{version} ({dist_name}) …", file=stdout)
-    stdout.flush()
-
-    tmp_path: Path | None = None
-    try:
-        with urlopen(Request(url, method="GET"), timeout=300) as resp:
-            with tempfile.NamedTemporaryFile(
-                suffix=".tar.gz", delete=False, dir=node_dir
-            ) as tmp:
-                tmp_path = Path(tmp.name)
-                while True:
-                    chunk = resp.read(65536)
-                    if not chunk:
-                        break
-                    tmp.write(chunk)
-    except (URLError, OSError) as exc:
-        if tmp_path is not None:
-            try:
-                tmp_path.unlink()
-            except OSError:
-                pass
-        raise RuntimeError(f"failed to download Node.js from {url}: {exc}") from exc
-
-    try:
-        # Remove previous extraction if it exists
-        for p in list(node_dir.glob("node-v*")):
-            if p.is_dir():
-                shutil.rmtree(p, ignore_errors=True)
-        for p in list(node_dir.iterdir()):
-            if p.name.startswith("node-v") and p.is_dir():
-                shutil.rmtree(p, ignore_errors=True)
-
-        with tarfile.open(tmp_path, "r:gz") as tar:
-            # filter="data" rejects members with absolute paths, "..", or that
-            # would escape node_dir (tar-slip), and is required on Python 3.14+
-            # where the default-less extractall is an error.  The filter arg
-            # landed in 3.11.4; fall back for older 3.11 patch releases.
-            try:
-                tar.extractall(path=node_dir, filter="data")
-            except TypeError:  # pragma: no cover — Python < 3.11.4 only
-                _extractall_no_traversal(tar, node_dir)
-    except (tarfile.TarError, OSError) as exc:
-        raise RuntimeError(f"failed to extract Node.js tarball: {exc}") from exc
-    finally:
-        try:
-            tmp_path.unlink()
-        except OSError:
-            pass
-
-    # The extracted dir is ``node-v{version}-{dist}``.
-    # Find it and symlink or note the bin path.
-    extracted_dir: Path | None = None
-    for entry in node_dir.iterdir():
-        if entry.is_dir() and entry.name.startswith(f"node-v{version}"):
-            extracted_dir = entry
-            break
-
-    if extracted_dir is None:
-        raise RuntimeError(f"Node.js tarball extracted but dir not found in {node_dir}")
-
-    actual_bin = extracted_dir / "bin" / "node"
-    if not actual_bin.exists():
-        raise RuntimeError(f"node binary not found at {actual_bin}")
-
-    # Verify it runs
-    try:
-        result = subprocess.run(
-            [str(actual_bin), "--version"], capture_output=True, text=True, timeout=5
-        )
-        if result.returncode != 0:
-            raise RuntimeError(f"downloaded node exited with {result.returncode}")
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise RuntimeError(f"downloaded node failed to start: {exc}") from exc
-
-    return str(actual_bin)
-
-
-def ensure_node(
-    data_home: Path,
-    *,
-    interactive: bool = True,
-    stdout: TextIO,
-    stderr: TextIO,
-) -> str | None:
-    """Ensure Node.js >= {_MIN_NODE_MAJOR} is available.
-
-    Checks system PATH first.  If not found and ``interactive=True``, prompts
-    the user before downloading.  In non-interactive mode (e.g. ``pzi init
-    --setup``) downloads automatically.
-
-    Returns the path to the node binary, or ``None`` if the user declined.
-    """
-    node = detect_node()
-    if node is not None:
-        return node
-
-    target = _node_bin_dir(data_home)
-
-    if interactive:
-        print(file=stderr)
-        print(f"Node.js >= {_MIN_NODE_MAJOR} not found on PATH.", file=stderr)
-        print(file=stderr)
-        print("  [1] Install Node.js manually, then retry `pzi server`", file=stderr)
-        print(f"  [2] Let pzi download portable Node.js to {target}/ (~40MB)", file=stderr)
-        print(file=stderr)
-        try:
-            choice = input("Choose [1/2]: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\ncancelled", file=stderr)
-            return None
-        if choice != "2":
-            print(
-                "Install Node.js >=22 manually, then run `pzi server`.",
-                file=stderr,
-            )
-            return None
-
-    try:
-        path = download_node(data_home, stdout=stdout, stderr=stderr)
-        print(f"Node.js installed to {path}", file=stdout)
-        return path
-    except RuntimeError as exc:
-        print(f"failed to download Node.js: {exc}", file=stderr)
-        if not interactive:
-            print("install Node.js >=22 manually, then retry.", file=stderr)
-        return None
-
 
 # ---------------------------------------------------------------------------
 # Translation-server bootstrap
@@ -869,17 +609,24 @@ def wait_for_ts(
     stdout: TextIO,
     stderr: TextIO,
     proc: subprocess.Popen[bytes] | None = None,
+    should_abort: Callable[[], bool] | None = None,
 ) -> bool:
     """Poll translation-server until reachable or timeout. Returns True if ready.
 
     If *proc* is provided, monitors the subprocess and fails fast if it exits
-    before the server becomes reachable.
+    before the server becomes reachable.  If *should_abort* is provided and
+    returns ``True`` (e.g. the owning ``pzi server`` is shutting down), the wait
+    returns ``False`` promptly instead of blocking out the full timeout.
     """
     health_url = url.rstrip("/")
     started_at = time.monotonic()
     deadline = started_at + timeout
     attempt = 0
     while time.monotonic() < deadline:
+        # Abort promptly on shutdown rather than holding the caller for the
+        # remaining timeout (the watchdog passes its stop event here).
+        if should_abort is not None and should_abort():
+            return False
         # Fail fast if the subprocess died
         if proc is not None and proc.poll() is not None:
             returncode = proc.returncode
@@ -1125,11 +872,22 @@ class TranslationServerWatchdog:
             if not self._auto_restart:
                 return
 
-            self._restart_locked(proc)
+        # Restart OUTSIDE the lock: the readiness wait can block for tens of
+        # seconds, and holding the lock here would make stop() (Ctrl-C on a
+        # long-lived `pzi server`) block behind it.
+        self._perform_restart(proc)
 
-    def _restart_locked(self, dead_proc: subprocess.Popen[bytes]) -> None:
-        """Restart the child once; disable further attempts on failure."""
+    def _perform_restart(self, dead_proc: subprocess.Popen[bytes]) -> None:
+        """Restart the child once, without holding the lock across the wait.
+
+        Disables further attempts on failure.  The blocking ``start``/``wait``
+        run lock-free; only the short commit (swap proc / record give-up) takes
+        the lock.  If :meth:`stop` races in while we wait, the freshly started
+        replacement is torn down instead of adopted.
+        """
         self._terminate(dead_proc)
+        if self._stop_event.is_set():
+            return
         try:
             new_proc = self._start(
                 self._node_bin, self._ts_dir,
@@ -1140,20 +898,28 @@ class TranslationServerWatchdog:
                 f"warning: translation-server restart failed: {exc} — giving up",
                 file=self._stderr,
             )
-            self._gave_up = True
+            with self._lock:
+                self._gave_up = True
             return
         ready = self._wait(
-            self._ts_url, stdout=self._stdout, stderr=self._stderr, proc=new_proc
+            self._ts_url, stdout=self._stdout, stderr=self._stderr,
+            proc=new_proc, should_abort=self._stop_event.is_set,
         )
-        if ready:
-            self._proc = new_proc
-            self._warned = False
-            print("translation-server restarted", file=self._stdout)
-        else:
-            self._terminate(new_proc)
-            print(
-                "warning: restarted translation-server did not become ready"
-                " — giving up",
-                file=self._stderr,
-            )
-            self._gave_up = True
+        with self._lock:
+            if self._stop_event.is_set():
+                # Shutting down — don't adopt the replacement; tear it down so
+                # it doesn't outlive the watchdog.
+                self._terminate(new_proc)
+                return
+            if ready:
+                self._proc = new_proc
+                self._warned = False
+                print("translation-server restarted", file=self._stdout)
+            else:
+                self._terminate(new_proc)
+                print(
+                    "warning: restarted translation-server did not become ready"
+                    " — giving up",
+                    file=self._stderr,
+                )
+                self._gave_up = True

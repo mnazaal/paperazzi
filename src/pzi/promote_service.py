@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import functools
+from collections.abc import Callable, Mapping
 from typing import Any, NotRequired, TypedDict, cast
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
@@ -17,10 +18,13 @@ from pzi.bib_repository import (
 from pzi.bibtex import NormalizedRecord, generate_citekey, normalize_authors, record_to_bibtex_entry
 from pzi.capture_context import resolve_contact_email, resolve_optional_value
 from pzi.config import load_and_resolve_bib
+from pzi.fetch_helpers import build_metadata_fetch_text
 from pzi.format_templates import format_citekey
 from pzi.metadata_sources import (
     fetch_crossref_record_by_title,
+    fetch_dblp_record_by_title,
     fetch_openalex_record_by_title,
+    fetch_openreview_record_by_title,
     fetch_semantic_scholar_record_by_title_with_error,
 )
 from pzi.pdf import fetch_and_store_pdf_with_fallbacks
@@ -32,7 +36,9 @@ from pzi.protocols import (
     S2RecordWithErrorFetcher,
     SearchTranslationFetcher,
 )
+from pzi.resolution_match import score_match
 from pzi.similarity import author_overlap
+from pzi.tag_service import add_tags
 from pzi.translation_server import fetch_search_translations
 
 
@@ -69,6 +75,9 @@ _SCORE_AUTHOR_MAX = 3
 _SCORE_YEAR_EXACT = 2
 _SCORE_YEAR_ADJACENT = 1
 
+# Tag written to a preprint by `--mark-resolved` so re-runs can skip it.
+_RESOLVED_TAG = "promoted"
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -84,11 +93,14 @@ def promote_bib(
     fetch_search: SearchTranslationFetcher | None = None,
     fetch_crossref: MetadataRecordFetcher | None = None,
     fetch_openalex: MetadataRecordFetcher | None = None,
+    fetch_dblp: MetadataRecordFetcher | None = None,
+    fetch_openreview: MetadataRecordFetcher | None = None,
     fetch_s2: S2RecordWithErrorFetcher | None = None,
     fetch_binary: BinaryFetcher | None = None,
     flaresolverr_url: str | None = None,
     browser_pdf_cmd: str | None = None,
     confidence_threshold: int | None = None,
+    mark_resolved: bool = False,
 ) -> PromoteResult:
     resolved = load_and_resolve_bib(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector
@@ -115,6 +127,10 @@ def promote_bib(
         if confidence_threshold is None
         else confidence_threshold
     )
+    # Compose the metadata fetcher once (opt-in disk cache + per-host rate
+    # limiting); the resolver uses it as the default for its title-search
+    # providers unless a fetcher override is injected (e.g. by tests).
+    metadata_fetch_text = build_metadata_fetch_text(config, api_key=s2_api_key)
 
     read_result = read_bib_file(bib["path"])
     records = read_result["records"]
@@ -125,12 +141,17 @@ def promote_bib(
 
     items: list[PromoteItem] = []
     summary = _empty_summary()
+    resolved_preprints: list[str] = []
 
     for record in records:
         preprint_ck = record.get("citekey")
         if not isinstance(preprint_ck, str):
             continue  # pragma: no cover — covered by integration/browser tests
         if not is_preprint(record):
+            continue
+        if mark_resolved and _RESOLVED_TAG in (record.get("tags") or []):
+            # Already promoted on a previous --mark-resolved run; skip re-checking.
+            summary["skipped_already_resolved"] += 1
             continue
         summary["checked"] += 1
 
@@ -140,9 +161,12 @@ def promote_bib(
             fetch_search=fetch_search,
             fetch_crossref=fetch_crossref,
             fetch_openalex=fetch_openalex,
+            fetch_dblp=fetch_dblp,
+            fetch_openreview=fetch_openreview,
             fetch_s2=fetch_s2,
             s2_api_key=s2_api_key,
             contact_email=contact_email,
+            metadata_fetch_text=metadata_fetch_text,
         )
         candidate = candidate_result["candidate"]
         provider_errors = candidate_result["provider_errors"]
@@ -188,6 +212,17 @@ def promote_bib(
             items.append(item)
             continue
 
+        # Explainable 0–100 breakdown for the accepted candidate (shown under
+        # --verbose); the integer threshold gate above is unchanged.
+        match = score_match(record, candidate)
+        match_line = (
+            f"match confidence {match['score']}/100 "
+            f"(title {match['title_similarity']}, author {match['author_similarity']})"
+        )
+        if match["flags"]:
+            match_line += f"; flags: {', '.join(match['flags'])}"
+        metadata_diagnostics = [match_line, *metadata_diagnostics]
+
         pdf_kwargs: dict[str, Any] = dict(
             papers_dir=bib["papers_dir"],
             fetch_binary=fetch_binary,
@@ -197,29 +232,44 @@ def promote_bib(
             browser_hook=config.get("browser_hook", True),
         )
 
-        if keep_preprint:
-            item = _handle_keep_preprint(
-                bib_path=bib["path"],
-                preprint_record=record,
-                candidate=candidate,
-                records=records,
-                existing_citekeys=existing_citekeys,
-                dry_run=dry_run,
-                citekey_format=config.get("citekey_format"),
-                **pdf_kwargs,
-            )
-        else:
-            item = _handle_update_in_place(
-                bib_path=bib["path"],
-                preprint_record=record,
-                candidate=candidate,
-                dry_run=dry_run,
-                **pdf_kwargs,
-            )
+        # Isolate the write/handler for one preprint: an unexpected failure here
+        # (malformed candidate, mid-write error) must surface as an explainable
+        # skip and let the rest of the library promote, not abort the whole run.
+        # The handlers clean up any downloaded PDF before raising.
+        try:
+            if keep_preprint:
+                item = _handle_keep_preprint(
+                    bib_path=bib["path"],
+                    preprint_record=record,
+                    candidate=candidate,
+                    records=records,
+                    existing_citekeys=existing_citekeys,
+                    dry_run=dry_run,
+                    citekey_format=config.get("citekey_format"),
+                    **pdf_kwargs,
+                )
+            else:
+                item = _handle_update_in_place(
+                    bib_path=bib["path"],
+                    preprint_record=record,
+                    candidate=candidate,
+                    dry_run=dry_run,
+                    **pdf_kwargs,
+                )
+        except Exception as exc:  # noqa: BLE001 — one failing entry must not abort the run
+            summary["skipped_failed"] += 1
+            items.append(_skip_item(preprint_ck, f"promotion failed: {exc}"))
+            continue
         if metadata_diagnostics:
             item["metadata_diagnostics"] = metadata_diagnostics
 
         items.append(item)  # pragma: no branch — covered by integration/browser tests
+        if item.get("action") in {"create", "update"}:
+            # Keep mode leaves the preprint in place; tag it so a later
+            # --mark-resolved run skips it.  Replace mode rewrites the entry to
+            # the published version (no longer a preprint), so no tag is needed.
+            if keep_preprint:
+                resolved_preprints.append(preprint_ck)
         if item.get("action") == "create":
             summary["created"] += 1
         elif item.get("action") == "update":
@@ -250,6 +300,15 @@ def promote_bib(
                 "Configure semantic_scholar_api_key_cmd in config.toml for higher limits."
             )
 
+    if mark_resolved and not dry_run and resolved_preprints:
+        _tag_resolved(
+            config_path=config_path,
+            home_dir=home_dir,
+            bib_selector=bib_selector,
+            citekeys=resolved_preprints,
+        )
+        summary["marked_resolved"] = len(resolved_preprints)
+
     return {
         "status": "ok",
         "bib_name": bib["name"],
@@ -269,8 +328,24 @@ def _empty_summary() -> dict[str, Any]:
         "skipped_no_candidate": 0,
         "skipped_low_confidence": 0,
         "skipped_existing": 0,
+        "skipped_already_resolved": 0,
+        "skipped_failed": 0,
         "provider_errors": 0,
     }
+
+
+def _tag_resolved(
+    *, config_path: str, home_dir: str, bib_selector: str | None, citekeys: list[str]
+) -> None:
+    """Tag each promoted preprint with the resolved marker (best-effort)."""
+    for citekey in citekeys:
+        add_tags(
+            config_path=config_path,
+            home_dir=home_dir,
+            bib_selector=bib_selector,
+            citekey=citekey,
+            tags=[_RESOLVED_TAG],
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +363,9 @@ def _find_published_candidate_with_diagnostics(
     fetch_s2: S2RecordWithErrorFetcher | None,
     s2_api_key: str | None,
     contact_email: str | None = None,
+    fetch_dblp: MetadataRecordFetcher | None = None,
+    fetch_openreview: MetadataRecordFetcher | None = None,
+    metadata_fetch_text: Callable[..., str] | None = None,
 ) -> dict[str, Any]:
     provider_errors: list[str] = []
     search_fn = fetch_search or fetch_search_translations
@@ -318,7 +396,9 @@ def _find_published_candidate_with_diagnostics(
         return {"candidate": None, "provider_errors": provider_errors}
 
     provider_candidates: list[NormalizedRecord] = []
-    crossref_fn = fetch_crossref or fetch_crossref_record_by_title
+    crossref_fn = fetch_crossref or _default_provider_fn(
+        fetch_crossref_record_by_title, metadata_fetch_text
+    )
     try:
         candidate = _call_provider(crossref_fn, title, contact_email=contact_email)
     except (OSError, ValueError):
@@ -327,11 +407,36 @@ def _find_published_candidate_with_diagnostics(
     if candidate is not None and candidate.get("venue"):
         provider_candidates.append(cast(NormalizedRecord, dict(candidate)))
 
-    openalex_fn = fetch_openalex or fetch_openalex_record_by_title
+    openalex_fn = fetch_openalex or _default_provider_fn(
+        fetch_openalex_record_by_title, metadata_fetch_text
+    )
     try:
         candidate = _call_provider(openalex_fn, title, contact_email=contact_email)
     except (OSError, ValueError):
         provider_errors.append("openalex")
+        candidate = None
+    if candidate is not None and candidate.get("venue"):
+        provider_candidates.append(cast(NormalizedRecord, dict(candidate)))
+
+    # DBLP and OpenReview are the CS-conference / ML-venue authorities; they
+    # confirm published proceedings versions that the DOI-based sources above
+    # often leave unresolved.  Queried after the polite-pool providers.
+    dblp_fn = fetch_dblp or _default_provider_fn(fetch_dblp_record_by_title, metadata_fetch_text)
+    try:
+        candidate = _call_provider(dblp_fn, title, contact_email=contact_email)
+    except (OSError, ValueError):
+        provider_errors.append("dblp")
+        candidate = None
+    if candidate is not None and candidate.get("venue"):
+        provider_candidates.append(cast(NormalizedRecord, dict(candidate)))
+
+    openreview_fn = fetch_openreview or _default_provider_fn(
+        fetch_openreview_record_by_title, metadata_fetch_text
+    )
+    try:
+        candidate = _call_provider(openreview_fn, title, contact_email=contact_email)
+    except (OSError, ValueError):
+        provider_errors.append("openreview")
         candidate = None
     if candidate is not None and candidate.get("venue"):
         provider_candidates.append(cast(NormalizedRecord, dict(candidate)))
@@ -341,7 +446,9 @@ def _find_published_candidate_with_diagnostics(
         s2_fn = fetch_s2  # override already returns (record, error) tuple
     else:
         def _default_s2(t: str) -> tuple[NormalizedRecord | None, str | None]:
-            return fetch_semantic_scholar_record_by_title_with_error(t, api_key=s2_api_key)
+            return fetch_semantic_scholar_record_by_title_with_error(
+                t, api_key=s2_api_key, fetch_text=metadata_fetch_text
+            )
         s2_fn = _default_s2
     try:
         s2_candidate, s2_err = s2_fn(title)
@@ -386,6 +493,16 @@ def _find_published_candidate_with_diagnostics(
         }
 
     return {"candidate": None, "provider_errors": provider_errors}
+
+
+def _default_provider_fn(
+    base_fn: Callable[..., NormalizedRecord | None],
+    fetch_text: Callable[..., str] | None,
+) -> Callable[..., NormalizedRecord | None]:
+    """Bind the composed (cached / rate-limited) fetcher to a title-search provider."""
+    if fetch_text is None:
+        return base_fn
+    return functools.partial(base_fn, fetch_text=fetch_text)
 
 
 def _call_provider(fn, value: str, *, contact_email: str | None):

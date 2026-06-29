@@ -34,7 +34,8 @@ def _reinstall_server(*, config_path, home_dir, stdout, stderr) -> int:
     """Reinstall the translation-server with the latest pinned versions."""
     import shutil
 
-    from pzi.ts_backend import ensure_node, ensure_translation_server, is_ts_reachable
+    from pzi.node_runtime import ensure_node
+    from pzi.ts_backend import ensure_translation_server, is_ts_reachable
 
     cfg = load_config_file(config_path, home_dir=home_dir)
     config = cfg["config"]

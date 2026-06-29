@@ -72,6 +72,15 @@ Bulk capture runs sequentially with a polite delay (`--delay`), reuses one
 translation-server, prints per-item progress, and writes any failures to
 `<input>.failed.txt` so you can re-run just those: `pzi add --from-file urls.failed.txt`.
 
+For a persistent capture queue, use `pzi inbox <file>`. It processes every
+DOI/URL line (lines beginning with `#` are comments; trailing `#tag` and
+`@library` tokens set per-line tags and target), adds each one, then **rewrites
+the file in place keeping only the lines that failed** — so re-running retries
+exactly what is left. Unlike `--from-file` (which appends failures to a separate
+`.failed.txt`), the inbox file *is* the queue: drop new links into it over time and
+drain whenever you like. `--dry-run` previews without writing to the library or the
+inbox file.
+
 ### 4. Optional: capture from the browser
 
 Use this for authenticated publisher pages, browser-only PDF links, or one-click capture.
@@ -119,13 +128,15 @@ Shared flags: most library commands accept `[--target <name|path>]`; read comman
 pzi init [--force] [--setup --bib PATH] [--papers-dir PATH]
 pzi add <doi|url|pdf> [--tags t1,t2] [--dry-run]
 pzi add --from-file <file|-> [--tags t1,t2] [--delay S] [--failures-out PATH]  # bulk
+pzi inbox <file> [--dry-run] [--tags t1,t2] [--delay S]   # drain a file of DOIs/URLs
 pzi pdf retry <citekey>
 pzi pdf attach <citekey> <url-or-path>
 pzi tag add|remove <citekey> <tag...>
 pzi tag list [citekey]
 pzi search [--query <text>] [--author <name>] [--year <int>] [--tag <tag>]
+pzi check [--strict] [--report PATH] [--jsonl PATH] [--json]   # validate references
 pzi update [--dry-run]                        # fill missing metadata
-pzi update --promote [--dry-run] [--replace]  # replace preprints with published versions
+pzi update --promote [--dry-run] [--replace] [--mark-resolved]  # replace preprints with published versions
 pzi entries [--offset N] [--limit N] [--sort citekey|title|year|author]
 pzi entries <citekey>                         # show the full record for one entry
 pzi entries --stats                           # library statistics
@@ -161,6 +172,8 @@ For external `.bib` files managed by Zotero, Paperpile, LaTeX projects, or hand 
 | Crossref | DOI/title metadata and PDF links | no key; `contact_email` recommended for polite User-Agent |
 | OpenAlex | DOI/title metadata and OA URLs | no key; `contact_email` sent as `mailto` |
 | Semantic Scholar | fallback metadata/PDF and promotion fallback | optional `semantic_scholar_api_key_cmd` / `semantic_scholar_api_key` for better limits |
+| DBLP | CS-conference/journal metadata for promotion and `check` | no key |
+| OpenReview | ML-venue (ICLR/NeurIPS/TMLR) metadata for promotion and `check` | no key |
 | Unpaywall | open-access PDF by DOI | `unpaywall_email_cmd` / `unpaywall_email`, else `contact_email` |
 | DOAJ / Europe PMC | open-access PDF lookup | no key |
 | Playwright browser hook | JS/authenticated PDF discovery | no API key; configured by `browser_pdf_cmd` |
@@ -175,16 +188,48 @@ pzi treats citekeys as stable external handles and never renames existing keys a
 - Same paper as an existing entry → reuse the existing citekey.
 - New paper with an occupied citekey → add a numeric suffix (`smith2024graph-2`).
 - Promotion keeps the preprint key by default; `--replace` updates in place.
+- `--mark-resolved` tags each promoted preprint (`promoted`) and skips already-tagged entries on later runs, so re-running promotion over a large library only revisits what is new.
+
+### Validate references (`pzi check`)
+
+`pzi check` audits a library against authoritative metadata sources
+(Crossref → OpenAlex → DBLP → OpenReview → Semantic Scholar), flagging
+fabricated or mismatched references — useful before submitting a paper given
+arXiv's 2026 hallucinated-reference policy. It is **read-only** (never writes the
+`.bib`) and needs **no translation-server**, so it runs in CI.
+
+Each entry gets one of three verdicts:
+
+- **verified** — every claimed field is positively confirmed by a source
+- **could-not-verify** — a record was found but a field could not be confirmed, or
+  nothing matched (an abstention — *not* a clean pass)
+- **problematic** — positive evidence of a defect (title/author/year mismatch,
+  chimeric citation, fabricated author, implausible year)
+
+```sh
+pzi check                              # human-readable, problematic entries first
+pzi check --report audit.json          # full JSON report
+pzi check --strict --jsonl audit.jsonl # one JSON object per entry; CI-friendly
+```
+
+`--strict` raises the confidence bar, queries every source (no early exit), adds
+two high-stakes checks — single-edit **title typos** (a title within one
+character of the matched record, which whole-word matching misses) and silently
+**truncated author lists** (fewer authors than the record with no `and others`
+sentinel) — and **exits non-zero when any entry is problematic** so CI can gate on
+it. `--json` prints the full result to stdout.
 
 ### HTTP API
 
-`pzi server` exposes local endpoints for capture, search, listing, detail, export, PDF serving, tags, update, promote, browser PDF discovery/download, and delete. Main extension endpoint: `POST /capture`; health check: `GET /health`.
+`pzi server` exposes local endpoints for capture, search, listing, detail, export, PDF serving, tags, update, promote, browser PDF discovery/download, inbox drain (`POST /inbox/drain`), and delete. Main extension endpoint: `POST /capture`; health check: `GET /health`.
 
 Security defaults are local-first: bind to `127.0.0.1`, allow local/extension origins, cap body size, and require `X-Pzi-Token` or bearer auth when `api_auth_token` is set. Keep non-loopback binds behind your own network protections.
 
 ## Architecture
 
 pzi is local-first and BibTeX-native. Internally, it keeps pure planning logic separate from side effects and uses this ingest pipeline: `classify → fetch → normalize → match → attach PDF → plan → write`.
+
+Three front-ends — the CLI (`pzi.cli` → `pzi.commands.*`), the local HTTP API (`pzi.http_api`, used by the browser extension), and the extension itself — all converge on one service core (`pzi.add_service`), so capture behaves identically however it is triggered. Network access goes through dependency-injected fetcher seams typed in `pzi.protocols` (translation-server, Crossref/OpenAlex/S2, Unpaywall, PDF/binary), which is what lets the test suite run hermetically without hitting the network. The pure planning/serialization modules (`capture_core`, `pdf_discovery`, `pdf_planning`, `bibtex`, `similarity`, `url_safety`, …) never import the CLI/HTTP/browser layers; that boundary is enforced by `tests/test_layer_boundaries.py`. Writes are funneled through `pzi.bib_repository`, which holds a `portalocker` lock and aborts on a concurrent external edit (detected by hashing the on-disk source) rather than clobbering it.
 
 ## Compatibility
 

@@ -39,6 +39,32 @@ def _render_search_matches(result: Mapping[str, Any]) -> list[str]:
     return lines or ["no matches"]
 
 
+_CHECK_SYMBOL = {"verified": "✓", "could_not_verify": "?", "problematic": "✗"}
+
+
+def _render_check_items(result: Mapping[str, Any]) -> list[str]:
+    # Problematic first, then could-not-verify, then verified — most actionable on top.
+    order = {"problematic": 0, "could_not_verify": 1, "verified": 2}
+    items = sorted(result["items"], key=lambda i: order.get(i["verdict"], 3))
+    lines = []
+    for item in items:
+        symbol = _CHECK_SYMBOL.get(item["verdict"], "?")
+        detail = ""
+        if item["verdict"] != "verified":
+            reason = item["mismatches"][0] if item["mismatches"] else item["verdict"]
+            detail = f" — {reason}"
+        lines.append(
+            f"{symbol} {item['verdict']:<16} {item['citekey']} "
+            f"({item['confidence_score']}/100){detail}"
+        )
+    counts = result["counts"]
+    summary = (
+        f"checked {result['total']}: {counts['verified']} verified, "
+        f"{counts['could_not_verify']} could-not-verify, {counts['problematic']} problematic"
+    )
+    return [*(lines or ["no entries to check"]), summary]
+
+
 def _render_bib_update_items(result: Mapping[str, Any]) -> list[str]:
     prefix = _dry_run_prefix(result)
     lines = []
@@ -81,6 +107,7 @@ def _render_bib_promote_items(result: Mapping[str, Any]) -> list[str]:
             f"low confidence {summary['skipped_low_confidence']}; "
             f"existing {summary['skipped_existing']}; "
             f"provider errors {summary['provider_errors']}"
+            + (f"; failed {summary['skipped_failed']}" if summary.get("skipped_failed") else "")
         )
         s2_warning = summary.get("s2_warning")
         if isinstance(s2_warning, str) and s2_warning:

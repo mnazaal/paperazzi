@@ -242,6 +242,61 @@ def attach_similarity_hint(
 # ---------------------------------------------------------------------------
 
 
+def build_discovery_context(
+    *,
+    raw_value: str,
+    server_url: str,
+    unpaywall_email: str | None = None,
+    contact_email: str | None = None,
+    s2_api_key: str | None = None,
+    flaresolverr_url: str | None = None,
+    browser_pdf_cmd: str | None = None,
+    pdf_url_candidates: list[str] | None = None,
+    cookies: str | None = None,
+    fetch_web: WebTranslationFetcher | None = None,
+    fetch_unpaywall: UnpaywallFetcher | None = None,
+    fetch_crossref: MetadataRecordFetcher | None = None,
+    fetch_openalex: MetadataRecordFetcher | None = None,
+    fetch_s2: S2RecordFetcher | None = None,
+    fetch_flaresolverr: HtmlFetcher | None = None,
+    translation_attachments: list[dict[str, object]] | None = None,
+    api_url: str | None = None,
+    api_auth_token: str | None = None,
+    desktop_fallback_hosts: set[str] | None = None,
+    pdf_discovery_parallel: bool = False,
+) -> PdfDiscoveryContext:
+    """Assemble the context dict consumed by the PDF-discovery steps.
+
+    Single source of truth for the context shape: both the normal fetch path
+    (:func:`fetch_record_for_input`) and the translation-server-failure fallback
+    in :mod:`pzi.add_service` build their context here, so the two can no longer
+    drift (the fallback previously hand-rolled a subset and silently omitted
+    keys like ``cookies`` / ``contact_email``).
+    """
+    return {
+        "raw_value": raw_value,
+        "server_url": server_url,
+        "unpaywall_email": unpaywall_email,
+        "contact_email": contact_email,
+        "s2_api_key": s2_api_key,
+        "flaresolverr_url": flaresolverr_url,
+        "browser_pdf_cmd": browser_pdf_cmd,
+        "pdf_url_candidates": pdf_url_candidates,
+        "cookies": cookies,
+        "fetch_web": fetch_web,
+        "fetch_unpaywall": fetch_unpaywall,
+        "fetch_crossref": fetch_crossref,
+        "fetch_openalex": fetch_openalex,
+        "fetch_s2": fetch_s2,
+        "fetch_flaresolverr": fetch_flaresolverr,
+        "translation_attachments": translation_attachments,
+        "api_url": api_url,
+        "api_auth_token": api_auth_token,
+        "desktop_fallback_hosts": desktop_fallback_hosts,
+        "pdf_discovery_parallel": pdf_discovery_parallel,
+    }
+
+
 def fetch_record_for_input(
     *,
     raw_value: str,
@@ -265,7 +320,8 @@ def fetch_record_for_input(
     api_auth_token: str | None = None,
     desktop_fallback_hosts: set[str] | None = None,
     pdf_discovery_parallel: bool = False,
-) -> NormalizedRecord:
+) -> tuple[NormalizedRecord, list[str]]:
+    provider_errors: list[str] = []
     kind = classified["kind"]
     normalized = cast(str | None, classified["normalized"])
     fallback = _fallback_record_for_input(
@@ -275,28 +331,28 @@ def fetch_record_for_input(
     def _discovery_context(
         translation_attachments: list[dict[str, object]] | None = None,
     ) -> PdfDiscoveryContext:
-        return {
-            "raw_value": raw_value,
-            "server_url": server_url,
-            "unpaywall_email": unpaywall_email,
-            "contact_email": contact_email,
-            "s2_api_key": s2_api_key,
-            "flaresolverr_url": flaresolverr_url,
-            "browser_pdf_cmd": browser_pdf_cmd,
-            "pdf_url_candidates": pdf_url_candidates,
-            "cookies": cookies,
-            "fetch_web": fetch_web,
-            "fetch_unpaywall": fetch_unpaywall,
-            "fetch_crossref": fetch_crossref,
-            "fetch_openalex": fetch_openalex,
-            "fetch_s2": fetch_s2,
-            "fetch_flaresolverr": fetch_flaresolverr,
-            "translation_attachments": translation_attachments,
-            "api_url": api_url,
-            "api_auth_token": api_auth_token,
-            "desktop_fallback_hosts": desktop_fallback_hosts,
-            "pdf_discovery_parallel": pdf_discovery_parallel,
-        }
+        return build_discovery_context(
+            raw_value=raw_value,
+            server_url=server_url,
+            unpaywall_email=unpaywall_email,
+            contact_email=contact_email,
+            s2_api_key=s2_api_key,
+            flaresolverr_url=flaresolverr_url,
+            browser_pdf_cmd=browser_pdf_cmd,
+            pdf_url_candidates=pdf_url_candidates,
+            cookies=cookies,
+            fetch_web=fetch_web,
+            fetch_unpaywall=fetch_unpaywall,
+            fetch_crossref=fetch_crossref,
+            fetch_openalex=fetch_openalex,
+            fetch_s2=fetch_s2,
+            fetch_flaresolverr=fetch_flaresolverr,
+            translation_attachments=translation_attachments,
+            api_url=api_url,
+            api_auth_token=api_auth_token,
+            desktop_fallback_hosts=desktop_fallback_hosts,
+            pdf_discovery_parallel=pdf_discovery_parallel,
+        )
 
     def _with_pdf_discovery(
         base_record: NormalizedRecord,
@@ -324,31 +380,40 @@ def fetch_record_for_input(
         )
 
     if kind == "doi" and normalized is not None:
-        results = safe_api_call(lambda: fetch_search(normalized, server_url=server_url))
+        results = safe_api_call(
+            lambda: fetch_search(normalized, server_url=server_url),
+            errors=provider_errors,
+        )
         if results:
             selected = select_best_metadata_result(results, fallback)
             best = dict(merge_record_sources(fallback, selected["record"]))
             return _with_pdf_discovery(
                 cast(NormalizedRecord, best), translation_attachments=selected.get("attachments")
-            )
+            ), provider_errors
 
         meta = _call_metadata_fetcher(
             fetch_crossref or fetch_crossref_record,
             normalized,
             contact_email=contact_email,
+            errors=provider_errors,
         )
         if meta is None:
             meta = _call_metadata_fetcher(
                 fetch_openalex or fetch_openalex_record,
                 normalized,
                 contact_email=contact_email,
+                errors=provider_errors,
             )
         if meta is None:
-            s2_fn = fetch_s2 or (lambda d: fetch_semantic_scholar_record(d, api_key=s2_api_key))
-            meta = s2_fn(normalized)
+            if fetch_s2 is not None:
+                meta = fetch_s2(normalized)
+            else:
+                meta = fetch_semantic_scholar_record(
+                    normalized, api_key=s2_api_key, errors=provider_errors
+                )
         if meta is not None:
             best = dict(merge_record_sources(fallback, meta))
-            return _with_pdf_discovery(cast(NormalizedRecord, best))
+            return _with_pdf_discovery(cast(NormalizedRecord, best)), provider_errors
 
         raw_as_url = (
             raw_value if urlsplit(raw_value).scheme in {"http", "https"} else None
@@ -357,7 +422,8 @@ def fetch_record_for_input(
             web_results = safe_api_call(
                 lambda: fetch_web(raw_as_url, server_url=server_url)
                 if cookies is None
-                else fetch_web(raw_as_url, server_url=server_url, cookies=cookies)
+                else fetch_web(raw_as_url, server_url=server_url, cookies=cookies),
+                errors=provider_errors,
             )
             if web_results:
                 best = dict(
@@ -366,7 +432,7 @@ def fetch_record_for_input(
                 return _with_pdf_discovery(
                     cast(NormalizedRecord, best),
                     translation_attachments=web_results[0].get("attachments"),
-                )
+                ), provider_errors
 
             if flaresolverr_url is not None:  # pragma: no branch
                 fn = fetch_flaresolverr or (
@@ -377,7 +443,7 @@ def fetch_record_for_input(
                     meta = extract_metadata_from_html(html)
                     if meta is not None:  # pragma: no branch — covered by integration/browser tests
                         best = dict(merge_record_sources(meta, fallback))
-                        return _with_pdf_discovery(cast(NormalizedRecord, best))
+                        return _with_pdf_discovery(cast(NormalizedRecord, best)), provider_errors
 
         suffix = (
             " (page may be Cloudflare-protected — configure flaresolverr_url to bypass)"
@@ -390,7 +456,8 @@ def fetch_record_for_input(
         results = safe_api_call(
             lambda: fetch_web(normalized, server_url=server_url)
             if cookies is None
-            else fetch_web(normalized, server_url=server_url, cookies=cookies)
+            else fetch_web(normalized, server_url=server_url, cookies=cookies),
+            errors=provider_errors,
         )
         if results:
             selected = select_best_metadata_result(results, fallback)
@@ -398,7 +465,7 @@ def fetch_record_for_input(
             best = _with_pdf_discovery(
                 cast(NormalizedRecord, best), translation_attachments=selected.get("attachments")
             )
-            return merge_record_sources(fallback, best)
+            return merge_record_sources(fallback, best), provider_errors
 
         if flaresolverr_url is not None:
             fn = fetch_flaresolverr or (
@@ -409,7 +476,7 @@ def fetch_record_for_input(
                 meta = extract_metadata_from_html(html)
                 if meta is not None:
                     best = dict(merge_record_sources(meta, fallback))
-                    return _with_pdf_discovery(cast(NormalizedRecord, best))
+                    return _with_pdf_discovery(cast(NormalizedRecord, best)), provider_errors
 
         raise ValueError(f"translation server returned no results for URL: {normalized}")
 
@@ -421,11 +488,13 @@ def fetch_record_for_input(
     )
 
 
-def safe_api_call(fn):
-    """Run callable, swallowing urllib HTTPError and returning []."""
+def safe_api_call(fn, *, errors: list[str] | None = None):
+    """Run callable, returning [] on HTTPError (and recording it when errors is given)."""
     try:
         return fn()
-    except urllib.error.HTTPError:
+    except urllib.error.HTTPError as exc:
+        if errors is not None:
+            errors.append(f"HTTP {exc.code}")
         return []
 
 
@@ -567,13 +636,34 @@ def _metadata_diagnostic_line(
     return "; ".join(parts)
 
 
-def _call_metadata_fetcher(fn, doi: str, *, contact_email: str | None):
-    if contact_email:
-        try:
-            return fn(doi, contact_email=contact_email)
-        except TypeError:
+def _call_metadata_fetcher(
+    fn, doi: str, *, contact_email: str | None, errors: list[str] | None = None
+):
+    extra = {"errors": errors} if errors is not None else {}
+    try:
+        if contact_email:
+            try:
+                return fn(doi, contact_email=contact_email, **extra)
+            except TypeError:
+                try:
+                    return fn(doi, contact_email=contact_email)
+                except TypeError:
+                    return fn(doi)
+        elif extra:
+            try:
+                return fn(doi, **extra)
+            except TypeError:
+                return fn(doi)
+        else:
             return fn(doi)
-    return fn(doi)
+    except urllib.error.HTTPError as exc:
+        if errors is not None:
+            errors.append(f"HTTP {exc.code}")
+        return None
+    except (OSError, TimeoutError) as exc:
+        if errors is not None:
+            errors.append(str(exc))
+        return None
 
 
 def _fallback_record_for_input(

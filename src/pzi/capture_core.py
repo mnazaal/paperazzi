@@ -61,6 +61,7 @@ def capture_to_bib(
         "bib_selector": capture.bib_selector,
         "dry_run": options.dry_run,
         "force_new": options.force_new,
+        "metadata_strict": options.metadata_strict,
     }
     if pdf_candidates:
         kwargs["pdf_url_candidates"] = pdf_candidates

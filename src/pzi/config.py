@@ -41,6 +41,7 @@ class AppConfig(TypedDict):
     page_metadata_timeout_seconds: int
     metadata_confidence_min_score: int
     promote_confidence_threshold: int
+    metadata_cache_ttl: int
     browser_hook: bool
     pzi_data_home: str
     api_url: str
@@ -188,6 +189,7 @@ def _normalize_app_config(raw: Mapping[str, object], validated_bibs: list[BibCon
     raw_api_max_body_bytes = raw.get("api_max_body_bytes", 64 * 1024 * 1024)
     raw_metadata_confidence_min_score = raw.get("metadata_confidence_min_score", 0)
     raw_promote_confidence_threshold = raw.get("promote_confidence_threshold", 3)
+    raw_metadata_cache_ttl = raw.get("metadata_cache_ttl", 0)
     raw_browser_hook = raw.get("browser_hook", True)
     raw_pzi_data_home = raw.get("pzi_data_home", "~/.local/share/pzi")
     raw_browser_engine = raw.get("browser_engine", "chromium")
@@ -230,6 +232,7 @@ def _normalize_app_config(raw: Mapping[str, object], validated_bibs: list[BibCon
         ),
         "metadata_confidence_min_score": _safe_int(raw_metadata_confidence_min_score, 0),
         "promote_confidence_threshold": _safe_int(raw_promote_confidence_threshold, 3),
+        "metadata_cache_ttl": max(0, _safe_int(raw_metadata_cache_ttl, 0)),
         "browser_hook": _safe_bool(raw_browser_hook, True),
         "pzi_data_home": os.path.expanduser(str(raw_pzi_data_home)),
         "api_url": api_url,
@@ -304,6 +307,14 @@ def validate_app_config(
         or raw_promote_confidence_threshold < 0
     ):
         errors.append("promote_confidence_threshold must be a non-negative integer")
+
+    raw_metadata_cache_ttl = raw.get("metadata_cache_ttl", 0)
+    if (
+        not isinstance(raw_metadata_cache_ttl, int)
+        or isinstance(raw_metadata_cache_ttl, bool)
+        or raw_metadata_cache_ttl < 0
+    ):
+        errors.append("metadata_cache_ttl must be a non-negative integer")
 
     raw_pdf_file_path_style = raw.get("pdf_file_path_style", "absolute")
     if raw_pdf_file_path_style not in {"absolute", "relative"}:

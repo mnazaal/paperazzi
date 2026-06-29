@@ -1,14 +1,19 @@
 from pathlib import Path
+from typing import cast
+from unittest.mock import patch
+
+import pytest
 
 from pzi.add_service import (
     add_input_to_bib,
     add_record_to_bib,
+    add_record_with_bib,
     ensure_citekey_for_write,
     existing_citekeys,
     reuse_existing_pdf_fields_for_exact_match,
     reuse_orphan_pdf_for_planned_path,
 )
-from pzi.bib_repository import plan_bib_write
+from pzi.bib_repository import ConcurrentEditError, plan_bib_write
 from pzi.bibtex import record_to_bibtex_entry
 from pzi.capture_local_pdf import build_add_record_result, dry_run_diff, plan_with_applied_record
 
@@ -719,6 +724,10 @@ def test_add_record_with_bib_retries_once_on_concurrent_edit_without_redownload(
     assert calls["n"] == 2          # first attempt raised, retry committed
     assert downloads["n"] == 1      # PDF fetched exactly once
     assert "@article{smith2024graph" in bib_path.read_text()
+    # The single downloaded PDF survives the replan and is referenced by the
+    # committed entry — not re-downloaded and not left orphaned.
+    assert len(list(papers.glob("*.pdf"))) == 1
+    assert "file = {" in bib_path.read_text()
 
 
 def test_add_record_with_bib_reraises_when_concurrent_edit_persists(
@@ -750,6 +759,52 @@ def test_add_record_with_bib_reraises_when_concurrent_edit_persists(
                     "doi": "10.1/foo"},
             dry_run=False,
         )
+
+
+def test_add_record_with_bib_cleans_up_pdf_when_concurrent_edit_persists(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # When the retry also hits a concurrent edit and we give up, the PDF that
+    # was downloaded before planning must be removed — not left orphaned in
+    # papers_dir.
+    import pytest
+
+    from pzi import add_service
+    from pzi.bib_repository import ConcurrentEditError
+
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    bib_path = tmp_path / "library.bib"
+    bib_path.write_text("")
+    bib = {"name": "ml", "path": str(bib_path),
+           "papers_dir": str(papers), "default": True}
+
+    downloads = {"n": 0}
+
+    def _spy_fetch_binary(url: str):
+        downloads["n"] += 1
+        return (b"%PDF-1.7\nbody", "application/pdf")
+
+    def _always_raise(path, plan, *, file_path_style="absolute"):
+        raise ConcurrentEditError("bib file was modified externally")
+
+    monkeypatch.setattr(add_service, "execute_write_plan", _always_raise)
+
+    with pytest.raises(ConcurrentEditError):
+        add_service.add_record_with_bib(
+            bib=bib,  # type: ignore[arg-type]
+            record={
+                "citekey": "smith2024graph",
+                "title": "Graph Parsers",
+                "doi": "10.1/foo",
+                "pdf_url": "https://example.com/paper.pdf",
+            },
+            dry_run=False,
+            fetch_binary=_spy_fetch_binary,
+        )
+
+    assert downloads["n"] == 1                  # downloaded once, before planning
+    assert list(papers.glob("*.pdf")) == []     # and cleaned up on give-up
 
 
 def test_add_input_to_bib_uses_web_fallback_for_doi_pdf_discovery(
@@ -1418,3 +1473,139 @@ def test_dry_run_diff_mentions_new_entry() -> None:
 
     assert "new entry" in diff
     assert "smith2024paper" in diff
+
+
+# ---------------------------------------------------------------------------
+# Single-write-path PDF cleanup on retry-then-fail
+# ---------------------------------------------------------------------------
+
+_FAKE_PDF = b"%PDF-1.4 fake"
+
+
+def _fake_fetch_binary(url: str) -> tuple[bytes, str | None]:
+    return _FAKE_PDF, "application/pdf"
+
+
+def test_single_path_retry_then_fail_removes_new_pdf(tmp_path: Path) -> None:
+    """A final ConcurrentEditError on the single-write path removes the PDF.
+
+    The PDF is downloaded before the plan+write loop. On the second
+    ConcurrentEditError the cleanup guard must remove it from papers_dir —
+    but must NOT remove any PDF that existed before the capture.
+    """
+    bib_path = tmp_path / "lib.bib"
+    papers_dir = tmp_path / "papers"
+    papers_dir.mkdir()
+
+    # A pre-existing PDF must survive.
+    pre_existing = papers_dir / "preexisting.pdf"
+    pre_existing.write_bytes(_FAKE_PDF)
+
+    bib: dict = {
+        "name": "test",
+        "path": str(bib_path),
+        "papers_dir": str(papers_dir),
+    }
+
+    # Both execute_write_plan attempts raise ConcurrentEditError so the retry
+    # exhausts and re-raises, triggering _cleanup_new_pdf.
+    with patch(
+        "pzi.add_service.execute_write_plan",
+        side_effect=ConcurrentEditError("external edit"),
+    ):
+        with pytest.raises(ConcurrentEditError):
+            add_record_with_bib(
+                bib=cast(dict, bib),
+                record={
+                    "citekey": "smith2024",
+                    "title": "New Paper",
+                    "doi": "10.1/new",
+                    "pdf_url": "http://example.com/new.pdf",
+                },
+                dry_run=False,
+                fetch_binary=_fake_fetch_binary,
+            )
+
+    remaining = list(papers_dir.glob("*.pdf"))
+    assert remaining == [pre_existing], (
+        "only the pre-existing PDF should remain; newly-downloaded PDF must be removed"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Provider error warn / strict-metadata
+# ---------------------------------------------------------------------------
+
+
+def _make_add_input_config(tmp_path: Path) -> tuple[str, str]:
+    config_path = tmp_path / "config.toml"
+    bib_path = tmp_path / "library.bib"
+    config_path.write_text(
+        f"""
+translation_server_url = "http://127.0.0.1:1969"
+
+[[bibs]]
+name = "ml"
+path = "{bib_path}"
+default = true
+""".strip()
+    )
+    return str(config_path), str(bib_path)
+
+
+def test_add_input_to_bib_provider_error_appears_as_warning(tmp_path: Path) -> None:
+    """When a provider fails and fallback succeeds, result is ok with a warning."""
+    import urllib.error
+
+    config_path, _bib_path = _make_add_input_config(tmp_path)
+
+    def fake_fetch_search(query: str, *, server_url: str) -> list[dict[str, object]]:
+        raise urllib.error.HTTPError(None, 429, "Too Many Requests", {}, None)  # type: ignore[arg-type]
+
+    def fake_crossref(doi: str, **_: object) -> dict[str, object]:
+        return {"title": "Good Paper", "doi": doi, "year": 2024}
+
+    result = add_input_to_bib(
+        config_path=config_path,
+        home_dir=str(tmp_path),
+        value="10.1234/good.2024",
+        record_overrides={},
+        bib_selector=None,
+        dry_run=True,
+        fetch_search=fake_fetch_search,
+        fetch_crossref=fake_crossref,
+    )
+
+    assert result["status"] == "ok"
+    warnings = result.get("warnings", [])
+    assert any("429" in w for w in warnings), (
+        f"expected HTTP 429 warning; got warnings={warnings}"
+    )
+
+
+def test_add_input_to_bib_strict_metadata_makes_provider_error_fatal(tmp_path: Path) -> None:
+    """With metadata_strict=True a provider error returns an error result."""
+    import urllib.error
+
+    config_path, _bib_path = _make_add_input_config(tmp_path)
+
+    def fake_fetch_search(query: str, *, server_url: str) -> list[dict[str, object]]:
+        raise urllib.error.HTTPError(None, 429, "Too Many Requests", {}, None)  # type: ignore[arg-type]
+
+    def fake_crossref(doi: str, **_: object) -> dict[str, object]:
+        return {"title": "Good Paper", "doi": doi, "year": 2024}
+
+    result = add_input_to_bib(
+        config_path=config_path,
+        home_dir=str(tmp_path),
+        value="10.1234/good.2024",
+        record_overrides={},
+        bib_selector=None,
+        dry_run=True,
+        fetch_search=fake_fetch_search,
+        fetch_crossref=fake_crossref,
+        metadata_strict=True,
+    )
+
+    assert result["status"] == "error"
+    assert "strict-metadata" in result.get("message", "")
