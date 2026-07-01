@@ -131,5 +131,5 @@ jobs:
       - name: Live smoke tests
         env:
           PZI_LIVE: "1"
-          PZI_CONTACT_EMAIL: "pzi-ci@example.com"
+          PZI_CONTACT_EMAIL: "18580527+mnazaal@users.noreply.github.com"
         run: .venv/bin/pytest tests/live/ -m "not browser" -q

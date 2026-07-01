@@ -1,6 +1,8 @@
 """Live smoke tests for end-to-end add, search, and tag workflows."""
 
 import os
+import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -8,6 +10,7 @@ import pytest
 from pzi.add_service import add_input_to_bib
 from pzi.search_service import search_bib
 from pzi.tag_service import list_tags
+from pzi.ts_backend import backend_session
 
 # Open-access DOI with PDF (PLOS ONE) — used by existing test_live_metadata.py
 OA_DOI = "10.1371/journal.pone.0000308"
@@ -37,8 +40,28 @@ default = true
     return config_path
 
 
+@pytest.fixture(scope="module")
+def running_translation_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
+    """Start a real translation-server for this module's tests, shared to avoid
+    re-cloning/npm-installing per test. Skips (not fails) if it can't come up —
+    this is a network-dependent smoke job, not a gate.
+    """
+    data_home = tmp_path_factory.mktemp("ts-data")
+    config: dict[str, object] = {
+        "translation_server_url": "http://127.0.0.1:1969",
+        "pzi_data_home": str(data_home),
+    }
+    with backend_session(
+        config, config_path="", home_dir=os.path.expanduser("~"),
+        interactive=False, stdout=sys.stdout, stderr=sys.stderr,
+    ) as backend:
+        if not backend["ready"]:
+            pytest.skip("translation-server could not be started for live tests")
+        yield
+
+
 @pytest.fixture
-def live_config_path(tmp_path: Path) -> str:
+def live_config_path(tmp_path: Path, running_translation_server: None) -> str:
     bib_path = tmp_path / "smoke.bib"
     config_path = tmp_path / "config.toml"
     _write_config(str(bib_path), str(config_path))
