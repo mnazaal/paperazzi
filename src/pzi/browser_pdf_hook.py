@@ -152,8 +152,9 @@ def _ensure_browser(browser: str = "firefox") -> bool:  # pragma: no cover — s
         from playwright.sync_api import sync_playwright
     except ImportError:
         print(
-            "playwright package not found. Install pzi normally; "
-            "for development use: pip install -e .[dev]",
+            "playwright package not found. The browser-profile PDF fallback "
+            "is optional; install it with: pip install 'pzi[playwright]' "
+            "(or pipx install 'pzi[playwright]'), then run: playwright install",
             file=sys.stderr,
         )
         return False

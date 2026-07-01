@@ -25,10 +25,13 @@ try:
 except Exception:
     pass
 
-pytestmark = pytest.mark.skipif(
-    not _BROWSER_AVAILABLE,
-    reason="Playwright browser binaries not installed. Run: playwright install chromium firefox",
-)
+pytestmark = [
+    pytest.mark.browser,
+    pytest.mark.skipif(
+        not _BROWSER_AVAILABLE,
+        reason="Playwright browser binaries not installed. Run: playwright install chromium firefox",
+    ),
+]
 
 
 @pytest.fixture

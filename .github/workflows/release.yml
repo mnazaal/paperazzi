@@ -1,0 +1,105 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build sdist + wheel
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install build tools
+        run: |
+          uv venv .venv
+          uv pip install build twine
+
+      - name: Build package
+        run: .venv/bin/python -m build
+
+      - name: Check package metadata (twine)
+        run: .venv/bin/twine check dist/*.tar.gz dist/*.whl
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  github-release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          # Extract the changelog section for this version (between the version
+          # header and the next version header or end of file).
+          version="${tag#v}"
+          body=$(python -c "
+          import re, sys
+          text = open('CHANGELOG.md').read()
+          pattern = rf'## \[{re.escape(sys.argv[1])}\].*?(?=\n## \[|\Z)'
+          m = re.search(pattern, text, re.DOTALL)
+          print(m.group(0) if m else 'See CHANGELOG.md')
+          " "$version")
+          gh release create "$tag" \
+            --title "$tag" \
+            --notes "$body" \
+            dist/*
+    permissions:
+      contents: write
+
+  # --- PyPI publishing (dormant) ---
+  # pzi is not yet on PyPI. This job is wired for trusted publishing but is
+  # disabled until the PyPI project is registered. To enable:
+  #   1. Register the 'pzi' project on PyPI.
+  #   2. Configure a PyPI trusted publisher for this repo (PyPI web UI).
+  #   3. Set the repo variable PYPI_ENABLED to 'true' (repo Settings →
+  #      Secrets and variables → Actions → Variables).
+  pypi:
+    name: Publish to PyPI (dormant)
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: pypi
+      url: https://pypi.org/p/pzi
+    if: vars.PYPI_ENABLED == 'true'
+    permissions:
+      id-token: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

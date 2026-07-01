@@ -34,14 +34,25 @@ pzi is NOT for those who need:
 
 ### 1. Install
 
+pzi is not yet on PyPI. Install from GitHub for now:
+
 ```sh
-uv tool install pzi
-# or:
-pipx install pzi
-# or, with plain pip (some systems may need `pip3`):
-pip install --user pzi
-# or, from GitHub:
+# uv (recommended):
 uv tool install 'pzi @ git+https://github.com/mnazaal/pzi.git'
+# or pipx:
+pipx install 'git+https://github.com/mnazaal/pzi.git'
+# or plain pip (some systems may need `pip3`):
+pip install --user 'pzi @ git+https://github.com/mnazaal/pzi.git'
+```
+
+To enable the optional browser-profile PDF fallback, add the `[playwright]`
+extra (this installs the `playwright` Python package; browser binaries download
+on first use):
+
+```sh
+uv tool install 'pzi[playwright] @ git+https://github.com/mnazaal/pzi.git'
+# or:
+pipx install 'git+https://github.com/mnazaal/pzi.git[playwright]'
 ```
 
 ### 2. Create config
@@ -307,6 +318,14 @@ uv venv .venv
 uv pip install -e ".[dev]"
 ```
 
+The `[dev]` extra includes Playwright. To run the browser integration tests,
+install browser binaries:
+
+```sh
+.venv/bin/playwright install chromium firefox
+pytest -m browser -v
+```
+
 ## Tests
 
 ```sh
@@ -315,4 +334,5 @@ uv pip install -e ".[dev]"
 pytest --cov=pzi --cov-report=term-missing -q
 .venv/bin/python tools/build_extension.py
 .venv/bin/python -m build
+.venv/bin/twine check dist/*.tar.gz dist/*.whl
 ```

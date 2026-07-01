@@ -39,8 +39,9 @@ def run_init_command(args, *, config_path: str, stdout: TextIO, stderr: TextIO) 
             file=stdout,
         )
         print(
-            "for the browser PDF fallback, install Playwright once: "
-            "`playwright install chromium` (it also installs on first use).",
+            "for the browser PDF fallback, install the optional extra once: "
+            "`pip install 'pzi[playwright]'` (or `pipx install 'pzi[playwright]'`), "
+            "then `playwright install chromium` (binaries also install on first use).",
             file=stdout,
         )
     return 0

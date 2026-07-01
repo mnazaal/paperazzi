@@ -780,33 +780,35 @@ name = "pzi"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "argcomplete" },
     { name = "bibtexparser" },
-    { name = "playwright" },
     { name = "portalocker" },
     { name = "pypdf" },
 ]
 
 [package.optional-dependencies]
-completions = [
-    { name = "argcomplete" },
-]
 dev = [
     { name = "build" },
     { name = "coverage", extra = ["toml"] },
+    { name = "playwright" },
     { name = "pyright" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "ruff" },
     { name = "twine" },
 ]
+playwright = [
+    { name = "playwright" },
+]
 
 [package.metadata]
 requires-dist = [
-    { name = "argcomplete", marker = "extra == 'completions'", specifier = ">=3" },
-    { name = "bibtexparser", specifier = "==2.0.0b9" },
+    { name = "argcomplete", specifier = ">=3" },
+    { name = "bibtexparser", specifier = ">=2.0.0b9,<3" },
     { name = "build", marker = "extra == 'dev'", specifier = ">=1" },
     { name = "coverage", extras = ["toml"], marker = "extra == 'dev'", specifier = ">=7.6" },
-    { name = "playwright", specifier = ">=1.40" },
+    { name = "playwright", marker = "extra == 'dev'", specifier = ">=1.40" },
+    { name = "playwright", marker = "extra == 'playwright'", specifier = ">=1.40" },
     { name = "portalocker", specifier = ">=2" },
     { name = "pypdf", specifier = ">=4.0" },
     { name = "pyright", marker = "extra == 'dev'", specifier = ">=1.1" },
@@ -815,7 +817,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },
     { name = "twine", marker = "extra == 'dev'", specifier = ">=5" },
 ]
-provides-extras = ["completions", "dev"]
+provides-extras = ["playwright", "dev"]
 
 [[package]]
 name = "readme-renderer"

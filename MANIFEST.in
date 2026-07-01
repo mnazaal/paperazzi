@@ -4,6 +4,7 @@
 # test tree. Run the test suite from a git checkout (see README "Tests").
 
 include README.md
+include CHANGELOG.md
 include LICENSE
 include pyproject.toml
 
