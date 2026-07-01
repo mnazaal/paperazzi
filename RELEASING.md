@@ -1,6 +1,6 @@
-# Releasing pzi
+# Releasing paperazzi
 
-This document describes the release process for pzi.
+This document describes the release process for paperazzi.
 
 ## Version source of truth
 
@@ -19,11 +19,15 @@ grep '^version' pyproject.toml
 
 ## Versioning scheme
 
-pzi follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html):
+paperazzi follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) with
+[PEP 440](https://peps.python.org/pep-0440/) pre-release identifiers during
+the initial beta series:
 
-- `0.x.y` — beta. Breaking changes are allowed within `0.x`.
+- `0.1.0bN` — pre-1.0 beta pre-releases (`b1`, `b2`, ...). Tags: `v0.1.0b1`,
+  `v0.1.0b2`, etc.
+- `0.x.y` — beta once the `bN` series ends. Breaking changes are allowed
+  within `0.x`.
 - `1.0.0` — first stable release.
-- Tags: `v0.1.0`, `v0.2.0`, `v0.2.1`, etc.
 
 While in `0.x`, bump the minor for new features and the patch for fixes.
 
@@ -89,29 +93,29 @@ Pushing the tag triggers `.github/workflows/release.yml`:
 
 ### 6. Verify the release
 
-- Check the GitHub Release page: `https://github.com/mnazaal/pzi/releases`
+- Check the GitHub Release page: `https://github.com/mnazaal/paperazzi/releases`
 - Confirm the sdist + wheel are attached.
 - Smoke-test the install:
 
 ```sh
-uv tool install 'pzi @ git+https://github.com/mnazaal/pzi.git@v0.2.0'
+uv tool install 'paperazzi @ git+https://github.com/mnazaal/paperazzi.git@v0.2.0'
 pzi --version
 ```
 
 ## Enabling PyPI (future)
 
-pzi is not yet on PyPI. When ready:
+paperazzi is not yet on PyPI. When ready:
 
 1. **Register the project** on PyPI: `https://pypi.org/manage/account/`
 2. **Configure trusted publishing** (OIDC, no API tokens):
    - Go to PyPI → Account settings → Publishing → Add a publisher.
-   - Repository: `mnazaal/pzi`, workflow: `.github/workflows/release.yml`,
+   - Repository: `mnazaal/paperazzi`, workflow: `.github/workflows/release.yml`,
      environment: `pypi`.
 3. **Create the `pypi` environment** in GitHub repo settings:
    - Settings → Environments → New environment → `pypi`.
 4. **Set the repo variable** `PYPI_ENABLED=true`:
    - Settings → Secrets and variables → Actions → Variables → New variable.
-5. **Update README** install instructions to use `pip install pzi` instead of
+5. **Update README** install instructions to use `pip install paperazzi` instead of
    the git-URL form.
 6. **Update RELEASING.md** — remove this section and note that PyPI publishing
    is active.
@@ -125,6 +129,6 @@ as an alternative for tracking `main` or unreleased versions.
 |---|---|---|
 | GitHub Releases | Active | sdist + wheel attached to each tag |
 | PyPI | Dormant | wired, not yet enabled |
-| Homebrew (custom tap) | Planned | `homebrew-pzi` tap, git archive URL |
+| Homebrew (custom tap) | Planned | `homebrew-paperazzi` tap, git archive URL |
 | AUR | Planned | stable PKGBUILD, updated per tag |
-| Nix flake | Planned | `github:mnazaal/pzi` |
+| Nix flake | Planned | `github:mnazaal/paperazzi` |

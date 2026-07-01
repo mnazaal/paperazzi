@@ -237,13 +237,13 @@ export async function captureCurrentTab({ tags = [], bib = null, dryRun = false,
 }
 
 chrome.runtime.onInstalled.addListener(async (details) => {
-  console.log("pzi capture extension installed");
+  console.log("paperazzi capture extension installed");
 
-  // ── Context menu: right-click a link → "Save to pzi" ─────────────────
+  // ── Context menu: right-click a link → "Save to paperazzi" ────────────
   if (typeof chrome !== "undefined" && chrome.contextMenus) {
     chrome.contextMenus.create({
       id: "pzi-capture-link",
-      title: "Save to pzi",
+      title: "Save to paperazzi",
       contexts: ["link"],
     });
   }

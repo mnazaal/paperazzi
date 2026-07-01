@@ -1,13 +1,13 @@
-# pzi Security Model
+# paperazzi Security Model
 
-pzi is local-first. Every data path keeps user content local, rejects
+paperazzi is local-first. Every data path keeps user content local, rejects
 non-local/private network traffic, and exposes the absolute minimum surface
 needed for a browser-extension-assisted paper capture workflow.
 
 ## Architecture overview
 
 ```text
- [Browser (extension)]                        [pzi CLI / server]
+ [Browser (extension)]                        [paperazzi CLI / server]
         |                                           |
         |  POST /capture (JSON)                     |  pzi add <doi/url/pdf>
         |  POST /attach-pdf-bytes (JSON)             |
@@ -20,8 +20,8 @@ needed for a browser-extension-assisted paper capture workflow.
 
 - pzi server binds `127.0.0.1` by default.
 - All HTTP traffic stays on the loopback interface.
-- Translation-server is a local process; pzi auto-starts and auto-stops it.
-- PDF bytes and BibTeX metadata never leave the local machine through pzi.
+- Translation-server is a local process; paperazzi auto-starts and auto-stops it.
+- PDF bytes and BibTeX metadata never leave the local machine through paperazzi.
 
 ## Extension permissions — why each exists
 
@@ -34,7 +34,7 @@ explained below.
 | `storage` | Persist API endpoint, auth token, recent captures, and user preferences (bib selection, dry-run toggle) across sessions. | Small JSON values stored in browser local/session storage. |
 | `scripting` | Inject content scripts to extract embedded metadata (JSON-LD, OpenGraph, highwire tags) and to execute page-context PDF fetches that carry the real browser session. | HTML source, page variables. |
 | `cookies` | Forward cookies from the active tab domain to the translation-server so it can resolve authenticated metadata (e.g., paywalled publisher pages that your institution provides). Used for metadata lookup, not for arbitrary sites. | Cookie header for the active tab's domain only. |
-| `contextMenus` | Register "Save to pzi" right-click menu on links so users can capture a paper URL without navigating to it. | Target link URL (no page access). |
+| `contextMenus` | Register "Save to paperazzi" right-click menu on links so users can capture a paper URL without navigating to it. | Target link URL (no page access). |
 | `webRequest` | Observe network responses to detect PDF files as they load (the PDF observer cache) so the extension can capture PDF candidates that appear via JavaScript redirects or dynamic loads. | Response headers (Content-Type only) and URL. |
 
 ### Host permissions explained
@@ -87,7 +87,7 @@ completes. Only the cross-origin PDF fetch is skipped.
 | PDF candidates (URL list) | local pzi server | PDF discovery | Loopback |
 | PDF bytes (captured) | local pzi server | Save to `papers/` directory | Loopback |
 
-**Nothing leaves the local machine.** pzi never sends PDFs, HTML, or cookies
+**Nothing leaves the local machine.** paperazzi never sends PDFs, HTML, or cookies
 to external services. External metadata APIs (Crossref, OpenAlex, Semantic
 Scholar, Unpaywall, DOAJ, Europe PMC) receive only DOIs, titles, or author
 names — never PDFs, cookies, or HTML.
@@ -122,8 +122,8 @@ If an attacker has code execution on the same machine:
 - They can call the loopback API if no auth token is set.
 - They cannot access browser cookies or extension storage without browser-level compromise.
 
-pzi's threat model assumes the local machine is trusted. If the machine is
-compromised, the attacker can access any local file regardless of pzi.
+paperazzi's threat model assumes the local machine is trusted. If the machine is
+compromised, the attacker can access any local file regardless of paperazzi.
 
 ## Browser extension security
 
@@ -178,7 +178,7 @@ compromised, the attacker can access any local file regardless of pzi.
 - Metadata APIs (Crossref, OpenAlex, S2) see your IP address. If you use a
   VPN, those services see the VPN exit IP.
 - FlareSolverr (optional, opt-in) routes publisher page requests through a
-  third-party service. pzi warns when it is configured.
+  third-party service. paperazzi warns when it is configured.
 - Translation-server (Zotero) may make outbound HTTP requests to publisher
   sites for metadata resolution. These requests carry your machine's IP
   address, not your browser cookies.
@@ -186,7 +186,7 @@ compromised, the attacker can access any local file regardless of pzi.
   that carries your browser profile. It is a local process but may make
   outbound requests to publisher sites. Your institutional access applies if
   you point it at your real browser profile.
-- **EZProxy SSRF exception.** pzi normally pins each connection to a public IP
+- **EZProxy SSRF exception.** paperazzi normally pins each connection to a public IP
   and re-validates every redirect, rejecting private/loopback/link-local
   targets (SSRF defense). When you configure `ezproxy_host`, PDF fetches
   rewritten through *that exact host* are permitted to resolve to a

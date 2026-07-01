@@ -3,8 +3,8 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pzi"
-version = "0.1.0"
+name = "paperazzi"
+version = "0.1.0b1"
 description = "Capture papers into local BibTeX libraries from DOI, URL, or PDF"
 readme = "README.md"
 license = "AGPL-3.0-only"
@@ -31,7 +31,7 @@ dependencies = ["argcomplete>=3", "bibtexparser>=2.0.0b9,<3", "portalocker>=2", 
 [project.optional-dependencies]
 # Playwright powers the optional browser-profile PDF fallback
 # (config key `browser_pdf_cmd`). The base install is lighter without it;
-# install with `pipx install 'pzi[playwright]'` to enable the fallback.
+# install with `pipx install 'paperazzi[playwright]'` to enable the fallback.
 playwright = ["playwright>=1.40"]
 dev = [
     "build>=1",
@@ -45,8 +45,8 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/mnazaal/pzi"
-Repository = "https://github.com/mnazaal/pzi"
+Homepage = "https://github.com/mnazaal/paperazzi"
+Repository = "https://github.com/mnazaal/paperazzi"
 
 [project.scripts]
 pzi = "pzi.cli:main"

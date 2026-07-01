@@ -10,8 +10,8 @@ Usage:
 Outputs:
   dist/firefox/   — unpacked extension for Firefox (load in about:debugging)
   dist/chrome/    — unpacked extension for Chrome (load in chrome://extensions)
-  dist/pzi-capture-firefox.zip
-  dist/pzi-capture-chrome.zip
+  dist/paperazzi-capture-firefox.zip
+  dist/paperazzi-capture-chrome.zip
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SRC_DIR = PROJECT_ROOT / "browser-extension"
 DIST_DIR = PROJECT_ROOT / "dist"
 
-FIREFOX_ID = "pzi-capture@pzi.local"
+FIREFOX_ID = "paperazzi-capture@paperazzi.local"
 
 
 def _load_base_manifest() -> dict[str, Any]:
@@ -138,13 +138,13 @@ def main() -> int:
     _write_manifest(chrome_dir, _build_chrome_manifest(base))
 
     # Create zip packages
-    _zip_directory(firefox_dir, DIST_DIR / "pzi-capture-firefox.zip")
-    _zip_directory(chrome_dir, DIST_DIR / "pzi-capture-chrome.zip")
+    _zip_directory(firefox_dir, DIST_DIR / "paperazzi-capture-firefox.zip")
+    _zip_directory(chrome_dir, DIST_DIR / "paperazzi-capture-chrome.zip")
 
     print(f"Built {firefox_dir}")
     print(f"Built {chrome_dir}")
-    print(f"Created {DIST_DIR / 'pzi-capture-firefox.zip'}")
-    print(f"Created {DIST_DIR / 'pzi-capture-chrome.zip'}")
+    print(f"Created {DIST_DIR / 'paperazzi-capture-firefox.zip'}")
+    print(f"Created {DIST_DIR / 'paperazzi-capture-chrome.zip'}")
     return 0
 
 

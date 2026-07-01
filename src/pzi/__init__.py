@@ -21,7 +21,7 @@ from pzi.url_safety import safe_public_http_url
 
 
 def package_version(
-    distribution_name: str = "pzi",
+    distribution_name: str = "paperazzi",
     *,
     lookup_version: Callable[[str], str] = metadata_version,
 ) -> str:
@@ -32,9 +32,21 @@ def package_version(
         return "unknown"
 
 
-def cli_version_text(package_name: str = "pzi", *, version_text: str | None = None) -> str:
-    """Return argparse-compatible CLI version string."""
-    resolved_version = package_version(package_name) if version_text is None else version_text
+def cli_version_text(
+    package_name: str = "pzi",
+    *,
+    distribution_name: str = "paperazzi",
+    version_text: str | None = None,
+) -> str:
+    """Return argparse-compatible CLI version string.
+
+    ``package_name`` is the printed label (the ``pzi`` command); ``distribution_name``
+    is the installed PyPI distribution (``paperazzi``) used to look up the version —
+    these differ because the distribution name and CLI command name are not the same.
+    """
+    resolved_version = (
+        package_version(distribution_name) if version_text is None else version_text
+    )
     return f"{package_name} {resolved_version}"
 
 

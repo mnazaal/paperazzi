@@ -1,23 +1,23 @@
-# pzi
+# paperazzi
 
-pzi is a local-first bibliography capture tool that makes a Zotero-style capture workflow easy to use with plain BibTeX. Give it a DOI, URL, or PDF; it writes a BibTeX entry and, when possible, saves the PDF next to your library.
+paperazzi is a local-first bibliography capture tool that makes a Zotero-style capture workflow easy to use with plain BibTeX. Give it a DOI, URL, or PDF; it writes a BibTeX entry and, when possible, saves the PDF next to your library. Its CLI command is `pzi`.
 
-**Status: beta.** APIs can rate-limit, promotion is best-effort, browser extension install is manual, and touched `.bib` entries may be rewritten. Report issues at [github.com/mnazaal/pzi/issues](https://github.com/mnazaal/pzi/issues).
+**Status: beta.** APIs can rate-limit, promotion is best-effort, browser extension install is manual, and touched `.bib` entries may be rewritten. Report issues at [github.com/mnazaal/paperazzi/issues](https://github.com/mnazaal/paperazzi/issues).
 
-pzi can manage BibTeX libraries, but it does not require ownership of them. You can use pzi as your main bibliography workflow, or point it directly at existing `.bib` files from Zotero, Paperpile, LaTeX projects, or hand-managed libraries.
+paperazzi can manage BibTeX libraries, but it does not require ownership of them. You can use paperazzi as your main bibliography workflow, or point it directly at existing `.bib` files from Zotero, Paperpile, LaTeX projects, or hand-managed libraries.
 
 One source of truth: your `.bib` file + a sibling `papers/` dir. No database.
 
-## Why pzi?
+## Why paperazzi?
 
-pzi is for those who want:
+paperazzi is for those who want:
 
 - **Plain BibTeX** as source of truth — your `.bib` file is grep-able, git-trackable, and never locked in a database
 - **Local-first** — all data lives in `.bib` + `papers/` dir; no sync service, no cloud dependency
 - **Zero GUI** — CLI + browser extension is the full interface; no desktop app to install
-- **Zotero's translators without Zotero** — pzi runs Zotero's translation-server locally to leverage 1000+ site translators, then stores results in your BibTeX files
+- **Zotero's translators without Zotero** — paperazzi runs Zotero's translation-server locally to leverage 1000+ site translators, then stores results in your BibTeX files
 
-pzi is NOT for those who need:
+paperazzi is NOT for those who need:
 
 - A desktop library browser, PDF reader, or annotation tool → use **Zotero**
 - Sync across machines or group libraries → use **Zotero** or **Paperpile**
@@ -29,30 +29,30 @@ pzi is NOT for those who need:
 
 - Python 3.11+
 - `pip`, `uv` or `pipx` for installation
-- `git` if you want pzi to auto-install the Zotero translation-server
+- `git` if you want paperazzi to auto-install the Zotero translation-server
 - Node.js 22+ (auto-downloaded if missing, requires `git` for cloning)
 
 ### 1. Install
 
-pzi is not yet on PyPI. Install from GitHub for now:
+paperazzi is not yet on PyPI. Install from GitHub for now:
 
 ```sh
 # uv (recommended):
-uv tool install 'pzi @ git+https://github.com/mnazaal/pzi.git'
+uv tool install 'paperazzi @ git+https://github.com/mnazaal/paperazzi.git'
 # or pipx:
-pipx install 'git+https://github.com/mnazaal/pzi.git'
+pipx install 'git+https://github.com/mnazaal/paperazzi.git'
 # or plain pip (some systems may need `pip3`):
-pip install --user 'pzi @ git+https://github.com/mnazaal/pzi.git'
+pip install --user 'paperazzi @ git+https://github.com/mnazaal/paperazzi.git'
 ```
 
-To enable the optional browser-profile PDF fallback, add the `[playwright]`
-extra (this installs the `playwright` Python package; browser binaries download
-on first use):
+This installs the `pzi` command. To enable the optional browser-profile PDF
+fallback, add the `[playwright]` extra (this installs the `playwright` Python
+package; browser binaries download on first use):
 
 ```sh
-uv tool install 'pzi[playwright] @ git+https://github.com/mnazaal/pzi.git'
+uv tool install 'paperazzi[playwright] @ git+https://github.com/mnazaal/paperazzi.git'
 # or:
-pipx install 'git+https://github.com/mnazaal/pzi.git[playwright]'
+pipx install 'git+https://github.com/mnazaal/paperazzi.git[playwright]'
 ```
 
 ### 2. Create config
@@ -61,7 +61,7 @@ pipx install 'git+https://github.com/mnazaal/pzi.git[playwright]'
 pzi init --setup --bib ~/bibs/main.bib
 ```
 
-This creates `~/.config/pzi/config.toml`, configures `~/bibs/main.bib`, and lets pzi launch the translation-server when needed.
+This creates `~/.config/pzi/config.toml`, configures `~/bibs/main.bib`, and lets paperazzi launch the translation-server when needed.
 
 ### 3. Capture a paper from the CLI
 
@@ -106,7 +106,7 @@ Load the unpacked extension:
 - **Firefox**: `about:debugging` → This Firefox → Load Temporary Add-on → `dist/firefox/manifest.json`
 - **Chrome**: `chrome://extensions` → Developer mode → Load unpacked → `dist/chrome/`
 
-In onboarding, keep the default endpoint (`http://127.0.0.1:8765/capture`), set the API token only if configured, then test the connection. Keep `pzi server` running while browsing. Open a paper page, click the pzi icon, choose bib/tags/dry-run if needed, then **Capture current page**; or right-click a paper link → **Save to pzi**. Entries go to your configured `.bib`; PDFs go to `papers/` when available.
+In onboarding, keep the default endpoint (`http://127.0.0.1:8765/capture`), set the API token only if configured, then test the connection. Keep `pzi server` running while browsing. Open a paper page, click the paperazzi icon, choose bib/tags/dry-run if needed, then **Capture current page**; or right-click a paper link → **Save to paperazzi**. Entries go to your configured `.bib`; PDFs go to `papers/` when available.
 
 ---
 
@@ -168,7 +168,7 @@ Without `--target`, commands operate on the configured default library. `--targe
 
 Read/query commands (`search`, `entries`, `entries <citekey>`, `entries --stats`, `tag list`, `fix clean`, `fix dedupe`) accept `--json` for machine-readable output.
 
-For external `.bib` files managed by Zotero, Paperpile, LaTeX projects, or hand edits, use `--dry-run` first and keep a backup or Git history. pzi rewrites entries it touches; known source-preservation limitations:
+For external `.bib` files managed by Zotero, Paperpile, LaTeX projects, or hand edits, use `--dry-run` first and keep a backup or Git history. paperazzi rewrites entries it touches; known source-preservation limitations:
 
 - Malformed BibTeX (unbalanced braces, unterminated strings) is rejected and must be fixed manually
 - Entries with non-standard whitespace or unusual field layouts may be re-serialized when touched
@@ -194,7 +194,7 @@ Provider failures and rate limits are non-fatal. `update --promote` reports skip
 
 ### Citekeys and promotion
 
-pzi treats citekeys as stable external handles and never renames existing keys automatically.
+paperazzi treats citekeys as stable external handles and never renames existing keys automatically.
 
 - Same paper as an existing entry → reuse the existing citekey.
 - New paper with an occupied citekey → add a numeric suffix (`smith2024graph-2`).
@@ -238,7 +238,7 @@ Security defaults are local-first: bind to `127.0.0.1`, allow local/extension or
 
 ## Architecture
 
-pzi is local-first and BibTeX-native. Internally, it keeps pure planning logic separate from side effects and uses this ingest pipeline: `classify → fetch → normalize → match → attach PDF → plan → write`.
+paperazzi is local-first and BibTeX-native. Internally, it keeps pure planning logic separate from side effects and uses this ingest pipeline: `classify → fetch → normalize → match → attach PDF → plan → write`.
 
 Three front-ends — the CLI (`pzi.cli` → `pzi.commands.*`), the local HTTP API (`pzi.http_api`, used by the browser extension), and the extension itself — all converge on one service core (`pzi.add_service`), so capture behaves identically however it is triggered. Network access goes through dependency-injected fetcher seams typed in `pzi.protocols` (translation-server, Crossref/OpenAlex/S2, Unpaywall, PDF/binary), which is what lets the test suite run hermetically without hitting the network. The pure planning/serialization modules (`capture_core`, `pdf_discovery`, `pdf_planning`, `bibtex`, `similarity`, `url_safety`, …) never import the CLI/HTTP/browser layers; that boundary is enforced by `tests/test_layer_boundaries.py`. Writes are funneled through `pzi.bib_repository`, which holds a `portalocker` lock and aborts on a concurrent external edit (detected by hashing the on-disk source) rather than clobbering it.
 
@@ -279,7 +279,7 @@ For Cloudflare-gated pages, optionally configure FlareSolverr:
 flaresolverr_url = "http://127.0.0.1:8191"
 ```
 
-FlareSolverr may violate publisher terms of service; pzi warns when it is used.
+FlareSolverr may violate publisher terms of service; paperazzi warns when it is used.
 
 PDF download tries in order:
 1. **Direct download** - fastest, works for open-access papers
@@ -307,11 +307,11 @@ Checklist:
 
 ## Development install
 
-Use dev extras for hacking on pzi itself:
+Use dev extras for hacking on paperazzi itself:
 
 ```sh
-git clone https://github.com/mnazaal/pzi
-cd pzi
+git clone https://github.com/mnazaal/paperazzi
+cd paperazzi
 pip install -e ".[dev]"
 # or with uv:
 uv venv .venv

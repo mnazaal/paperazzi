@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "pzi capture",
-  "description": "Send the current tab URL to the local pzi capture service.",
+  "name": "paperazzi capture",
+  "description": "Send the current tab URL to the local paperazzi capture service.",
   "version": "0.1.0",
   "icons": {
     "48": "icon48.png",
@@ -28,6 +28,6 @@
   "action": {
     "default_icon": "icon48.png",
     "default_popup": "popup.html",
-    "default_title": "pzi capture"
+    "default_title": "paperazzi capture"
   }
 }

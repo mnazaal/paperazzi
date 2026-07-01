@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-07-01
+## [0.1.0b1] - 2026-07-01
 
 First public beta.
 
@@ -55,5 +55,5 @@ First public beta.
 - No sync, group libraries, or desktop reader (by design).
 - Not yet on PyPI; install from GitHub for now.
 
-[Unreleased]: https://github.com/mnazaal/pzi/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/mnazaal/pzi/releases/tag/v0.1.0
+[Unreleased]: https://github.com/mnazaal/paperazzi/compare/v0.1.0b1...HEAD
+[0.1.0b1]: https://github.com/mnazaal/paperazzi/releases/tag/v0.1.0b1

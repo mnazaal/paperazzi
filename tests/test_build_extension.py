@@ -34,7 +34,7 @@ def test_firefox_manifest_includes_scripts_and_gecko_id() -> None:
         "scripts": ["background.js"],
         "type": "module",
     }
-    assert manifest["browser_specific_settings"]["gecko"]["id"] == "pzi-capture@pzi.local"
+    assert manifest["browser_specific_settings"]["gecko"]["id"] == "paperazzi-capture@paperazzi.local"
 
 
 def test_chrome_manifest_uses_service_worker() -> None:
