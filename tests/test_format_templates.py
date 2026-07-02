@@ -56,6 +56,11 @@ def test_render_zotero_template_variables(template, expected) -> None:
         ("{{ title replaceFrom='Graph' replaceTo='X' truncate='7' }}", "The X N"),
         ("{{ year start='notint' }}", "2024"),  # bad start ignored
         ("{{ year truncate='notint' }}", "2024"),  # bad truncate ignored
+        # Invalid regexes must degrade safely (unsupported options render
+        # empty/unchanged) rather than raising re.error out of a copied
+        # Zotero template.
+        ("{{ title match='[' }}", ""),
+        ("{{ title replaceFrom='[' replaceTo='X' }}", "The Graph Neural Networks of Tomorrow"),
     ],
 )
 def test_render_zotero_template_options(template, expected) -> None:
@@ -114,7 +119,15 @@ def test_format_pdf_filename_truncates_overlong_stem() -> None:
         ('"dq" + year', "dq2024"),
         ("doi", "101foo"),
         ("venue.lower", "neurips"),
-        ("shorttitle(3)", "gra"),
+        ("shorttitle(3)", "graphneuralnetworks"),
+        ("shorttitle(3,5)", "graphneuranetwo"),
+        ("shorttitle(1)", "graph"),
+        # Regression: the unrecognized-field fallback used to look the value
+        # up by the original filter-suffixed, mixed-case token
+        # ("item_type.lower") instead of the parsed field name ("item_type"),
+        # so any field without a dedicated branch (and any filter chain)
+        # always rendered empty.
+        ("item_type.lower", "journalarticle"),
     ],
 )
 def test_format_citekey_better_bibtex(template, expected) -> None:

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "paperazzi"
-version = "0.1.0b1"
+version = "0.1.0b2"
 description = "Capture papers into local BibTeX libraries from DOI, URL, or PDF"
 readme = "README.md"
 license = "AGPL-3.0-only"

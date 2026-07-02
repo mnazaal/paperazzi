@@ -27,6 +27,7 @@ class HttpSecurityConfig(TypedDict):
     allowed_origins: tuple[str, ...]
     max_body_bytes: int
     rate_limit_rpm: int
+    listen_host: str
 
 
 class RateLimiter:
@@ -82,6 +83,7 @@ def build_http_security_config(
     allowed_origins: tuple[str, ...] | list[str] | None = None,
     max_body_bytes: int = DEFAULT_MAX_BODY_BYTES,
     rate_limit_rpm: int = 60,
+    listen_host: str = "127.0.0.1",
 ) -> HttpSecurityConfig:
     """Normalize HTTP security knobs without touching request state."""
     origins = tuple(
@@ -99,6 +101,7 @@ def build_http_security_config(
         "allowed_origins": origins,
         "max_body_bytes": max(0, int(max_body_bytes)),
         "rate_limit_rpm": max(1, int(rate_limit_rpm)),
+        "listen_host": listen_host.strip() or "127.0.0.1",
     }
 
 
@@ -118,6 +121,34 @@ def loopback_bind_host(value: str | None) -> bool:
 def safe_public_http_url(value: str, *, dns_timeout: float = DNS_LOOKUP_TIMEOUT_SECONDS) -> bool:
     """Return True for public http(s) URLs, rejecting localhost/private networks."""
     return _shared_safe_public_http_url(value, dns_timeout=dns_timeout)
+
+
+def _host_only(value: str) -> str:
+    """Strip a port (and IPv6 brackets) from a Host-header-shaped string."""
+    return (urlsplit(f"//{value}").hostname or value).lower()
+
+
+def host_header_allowed(host: str | None, listen_host: str) -> bool:
+    """Return whether a request's Host header matches the server's bind host.
+
+    Guards against DNS rebinding: an attacker-controlled page can point its
+    own domain's DNS at 127.0.0.1 and issue a plain-GET request that carries
+    no Origin header (Origin is only sent for CORS-relevant requests), so the
+    Origin check alone lets it through. A missing Host header is allowed
+    through unchecked — real HTTP/1.1 clients (browsers) always send one, so
+    this only affects hand-built requests without one, never the attack this
+    guards against.
+
+    A loopback bind (the default) accepts only a loopback Host. An explicit
+    non-loopback bind accepts exactly that configured host — no separate
+    override key, per the "no new escape hatch" design decision.
+    """
+    if host is None or not host.strip():
+        return True
+    request_host = _host_only(host.strip())
+    if loopback_bind_host(listen_host):
+        return loopback_bind_host(request_host)
+    return request_host == _host_only(listen_host)
 
 
 def origin_allowed(origin: str | None, allowed_origins: tuple[str, ...]) -> bool:
@@ -153,7 +184,10 @@ def origin_allowed(origin: str | None, allowed_origins: tuple[str, ...]) -> bool
 def request_security_error(
     *, method: str, headers: dict[str, str], security: HttpSecurityConfig
 ) -> tuple[int, str] | None:
-    """Pure request gate: origin + optional bearer/header token."""
+    """Pure request gate: host + origin + optional bearer/header token."""
+    host = headers.get("Host") or headers.get("host")
+    if not host_header_allowed(host, security["listen_host"]):
+        return 403, "host not allowed"
     origin = headers.get("Origin") or headers.get("origin")
     if not origin_allowed(origin, security["allowed_origins"]):
         return 403, "origin not allowed"

@@ -35,7 +35,10 @@ def _render_search_matches(result: Mapping[str, Any]) -> list[str]:
         title = match["title"] or ""
         year = match["year"] if match["year"] is not None else ""
         fields = ",".join(match["matched_fields"])
-        lines.append(f"{match['citekey']}\t{year}\t{title}\t[{fields}]")
+        # "matched:" prefix disambiguates from `pzi entries`' 4th column, which
+        # holds actual author names in the same tab-separated position — a bare
+        # "[authors]" here would read as an author name, not a matched field.
+        lines.append(f"{match['citekey']}\t{year}\t{title}\t[matched: {fields}]")
     return lines or ["no matches"]
 
 

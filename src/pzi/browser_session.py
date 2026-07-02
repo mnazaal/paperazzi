@@ -232,8 +232,8 @@ def _launch_browser(
     except ImportError:  # pragma: no cover — playwright installed in dev/test
         raise ImportError(
             "playwright is required for browser PDF features. "
-            "Install the optional extra: pip install 'pzi[playwright]' "
-            "(or pipx install 'pzi[playwright]'), then: playwright install"
+            "Install the optional extra: pip install 'paperazzi[playwright]' "
+            "(or pipx install 'paperazzi[playwright]'), then: playwright install"
         )
 
     playwright = sync_playwright().start()

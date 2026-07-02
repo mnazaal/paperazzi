@@ -1,3 +1,4 @@
+import http.client
 import json
 import socket
 import threading
@@ -10,6 +11,7 @@ import pytest
 
 from pzi.add_service import add_record_to_bib
 from pzi.http_api import (
+    CONNECTION_READ_TIMEOUT_SECONDS,
     build_handler_class,
     build_http_security_config,
     origin_allowed,
@@ -91,6 +93,18 @@ default = true
     return config_path, bib_path
 
 
+def test_handler_class_sets_per_connection_read_timeout(tmp_path: Path) -> None:
+    # Regression: `server.socket.settimeout()` only bounds accept() on the
+    # listening socket, not reads on sockets already accepted — a slowloris
+    # client trickling bytes (or none) could hold a thread open forever
+    # without this. `StreamRequestHandler.setup()` applies the `timeout`
+    # class attribute to each accepted connection via
+    # `self.connection.settimeout(...)`.
+    handler = build_handler_class(config_path=str(tmp_path / "c.toml"), home_dir=str(tmp_path))
+    assert handler.timeout == CONNECTION_READ_TIMEOUT_SECONDS
+    assert CONNECTION_READ_TIMEOUT_SECONDS > 0
+
+
 def test_get_bibs_returns_bib_list(tmp_path: Path) -> None:
     config_path, _ = _seed(tmp_path)
     port, _thread, server = _serve_once(config_path, tmp_path)
@@ -118,6 +132,27 @@ def test_get_health_includes_config_status(tmp_path: Path) -> None:
         server.shutdown()
         server.server_close()
     assert payload["config_ok"] is True
+
+
+def test_get_rejects_dns_rebinding_host_header(tmp_path: Path) -> None:
+    # Loopback bind (default): a request whose Host header names a foreign
+    # domain — as a DNS-rebinding page pointing its own domain at 127.0.0.1
+    # would send — must be rejected even though it reaches us on 127.0.0.1.
+    config_path, _ = _seed(tmp_path)
+    port, _thread, server = _serve_once(config_path, tmp_path)
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        conn.putrequest("GET", "/health", skip_host=True)
+        conn.putheader("Host", "attacker.com")
+        conn.endheaders()
+        response = conn.getresponse()
+        status = response.status
+        response.read()
+        conn.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert status == 403
 
 
 def test_post_capture_inserts_new_entry_dry_run(tmp_path: Path) -> None:
@@ -214,7 +249,7 @@ def test_post_attach_pdf_bytes_updates_entry(tmp_path: Path) -> None:
     assert payload["status"] == "ok"
     text = bib_path.read_text()
     assert "file = {" in text
-    assert "PDF: https://example.com/browser.pdf" in text
+    assert "pzi-pdf-url = {https://example.com/browser.pdf}" in text
 
 
 def test_options_request_returns_204_with_cors_headers(tmp_path: Path) -> None:

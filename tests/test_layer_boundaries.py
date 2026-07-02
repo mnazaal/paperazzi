@@ -1,16 +1,21 @@
-"""Architectural guard: the pure/planning layer must not import front-ends.
+"""Architectural guard: the core/planning layer must not import front-ends.
 
-pzi keeps pure planning logic separate from the side-effecting front-ends (CLI,
-HTTP API, browser hooks). That split is otherwise only a convention enforced by
-review; this test makes it mechanical.
+pzi keeps core planning logic separate from the side-effecting front-ends
+(CLI, HTTP API, browser hooks). That split is otherwise only a convention
+enforced by review; this test makes it mechanical.
+
+Note: the tier names below describe import *layering*, not functional
+purity — CORE modules may still do real I/O (DNS resolution, HTTP fetches,
+disk reads for a single file). What CORE guarantees is narrower: no
+front-end or browser-hook module is anywhere in the dependency chain.
 
 Every pzi/*.py module is classified into exactly one of five tiers:
 
-  STRICT_PURE  — no front-end AND no browser imports, even transitively.
-  PIPELINE     — may reach browser hooks (PDF/discovery), never front-end.
-  SERVICE      — service-layer modules; no *direct* front-end imports.
-  FRONTEND     — CLI, commands, HTTP API layers.
-  BROWSER      — browser/server-browser hook modules.
+  CORE      — no front-end AND no browser imports, even transitively.
+  PIPELINE  — may reach browser hooks (PDF/discovery), never front-end.
+  SERVICE   — service-layer modules; no *direct* front-end imports.
+  FRONTEND  — CLI, commands, HTTP API layers.
+  BROWSER   — browser/server-browser hook modules.
 
 Any module not in any tier fails test_all_modules_classified(), forcing an
 explicit decision when a new file is added (no silent drift).
@@ -18,7 +23,7 @@ explicit decision when a new file is added (no silent drift).
 The guard checks:
   • Relative imports (``from . import x``) are resolved within pzi, so a
     back-edge via a relative import is caught the same as an absolute one.
-  • STRICT_PURE: transitive closure must not reach FRONTEND or BROWSER.
+  • CORE: transitive closure must not reach FRONTEND or BROWSER.
   • PIPELINE: transitive closure must not reach FRONTEND.
   • SERVICE: direct imports must not include FRONTEND modules.
 """
@@ -39,7 +44,7 @@ _SRC = Path(pzi.__file__).parent
 # exhaustive-classification test.
 # ---------------------------------------------------------------------------
 
-STRICT_PURE: frozenset[str] = frozenset(
+CORE: frozenset[str] = frozenset(
     {
         # Core data / serialization / algorithm
         "bibtex",
@@ -214,7 +219,7 @@ def test_all_modules_classified() -> None:
         for p in _SRC.glob("*.py")
         if p.stem not in ("__init__", "__main__")
     }
-    all_tiers = STRICT_PURE | PIPELINE | SERVICE | FRONTEND | BROWSER
+    all_tiers = CORE | PIPELINE | SERVICE | FRONTEND | BROWSER
 
     unclassified = all_modules - all_tiers
     assert not unclassified, (
@@ -223,7 +228,7 @@ def test_all_modules_classified() -> None:
     )
 
     # Also assert no module appears in more than one tier (tiers are disjoint).
-    tier_list = [STRICT_PURE, PIPELINE, SERVICE, FRONTEND, BROWSER]
+    tier_list = [CORE, PIPELINE, SERVICE, FRONTEND, BROWSER]
     for i, tier_a in enumerate(tier_list):
         for tier_b in tier_list[i + 1 :]:
             overlap = tier_a & tier_b
@@ -231,7 +236,7 @@ def test_all_modules_classified() -> None:
 
 
 def test_strict_pure_no_frontend_or_browser_transitively() -> None:
-    """STRICT_PURE modules must not reach FRONTEND or BROWSER, even transitively.
+    """CORE modules must not reach FRONTEND or BROWSER, even transitively.
 
     A single-hop back-edge (``capture_core`` → some helper → ``http_api``) is
     caught here where the old direct-only check would have missed it.
@@ -239,12 +244,12 @@ def test_strict_pure_no_frontend_or_browser_transitively() -> None:
     graph = _build_import_graph()
     forbidden = FRONTEND | BROWSER
     offenders: dict[str, list[str]] = {}
-    for mod in STRICT_PURE:
+    for mod in CORE:
         reached = _transitive_deps(mod, graph) & forbidden
         if reached:
             offenders[mod] = sorted(reached)
     assert not offenders, (
-        "STRICT_PURE modules transitively import FRONTEND or BROWSER:\n"
+        "CORE modules transitively import FRONTEND or BROWSER:\n"
         + "\n".join(f"  {m} → {deps}" for m, deps in sorted(offenders.items()))
     )
 

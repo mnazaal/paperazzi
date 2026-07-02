@@ -11,7 +11,6 @@ from pzi.bib_repository import find_entry_index, read_bib_file, update_bib_entry
 from pzi.bibtex import (
     BibtexEntry,
     NormalizedRecord,
-    extract_note_field,
     record_to_bibtex_entry,
 )
 from pzi.config import load_and_resolve_bib
@@ -81,9 +80,8 @@ def retry_pdf(
             "errors": [f"citekey not found: {citekey}"],
         }
 
-    raw_note = entries[index]["fields"].get("note")
-    pdf_url = extract_note_field(raw_note, "PDF")
-    if pdf_url is None:
+    pdf_url = _record_at(read_result, index).get("pdf_url")
+    if not isinstance(pdf_url, str) or not pdf_url:
         return {
             "status": "error",
             "bib_name": bib["name"],
@@ -91,7 +89,7 @@ def retry_pdf(
             "local_pdf_path": None,
             "message": "no PDF URL on entry",
             "warnings": [],
-            "errors": ["no PDF URL found in note field"],
+            "errors": ["no PDF URL found on entry"],
         }
 
     filename_format = config.get("pdf_filename_format")
@@ -206,14 +204,9 @@ def retry_failed_pdfs(
             skipped_already_has_pdf += 1
             continue
 
-        # Check if entry has a PDF URL in its note field
-        raw_note = (
-            entry.get("fields", {}).get("note")
-            if isinstance(entry.get("fields"), dict)
-            else None
-        )
-        pdf_url = extract_note_field(raw_note, "PDF") if isinstance(raw_note, str) else None
-        if not pdf_url:
+        # Check if entry has a PDF URL
+        pdf_url = record.get("pdf_url") if isinstance(record, dict) else None
+        if not isinstance(pdf_url, str) or not pdf_url:
             skipped_no_url += 1
             continue
 

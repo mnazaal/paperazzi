@@ -1,0 +1,36 @@
+# paperazzi capture server as a systemd *user* service.
+#
+# Install:
+#   mkdir -p ~/.config/systemd/user
+#   cp packaging/systemd/pzi.service ~/.config/systemd/user/
+#   # Point ExecStart at your real pzi path if it isn't ~/.local/bin/pzi:
+#   #   systemctl --user edit pzi.service   (or edit the copy directly)
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now pzi.service
+#   loginctl enable-linger "$USER"   # keep running when logged out
+#
+# Logs (no terminal needed):  journalctl --user -u pzi -f
+#
+# This wraps `pzi server` (the HTTP API on :8765 that the browser extension
+# talks to). It deliberately does NOT manage the Zotero translation-server
+# directly — `pzi server` spawns that as a bound child and reaps it on exit.
+
+[Unit]
+Description=paperazzi capture server
+Documentation=https://github.com/mnazaal/paperazzi
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# %h is your home dir. Change this line if `which pzi` reports another path
+# (e.g. a pipx/uv/venv location) — systemd does not resolve your shell PATH.
+ExecStart=%h/.local/bin/pzi server
+# Do NOT combine --stop-after with Restart=always: the server exits cleanly on
+# idle, which would just churn-restart. on-failure lets a clean idle-exit stay
+# down while still recovering from crashes.
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

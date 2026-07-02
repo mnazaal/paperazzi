@@ -136,6 +136,45 @@ def test_compute_similarity_hint_respects_year_window() -> None:
     assert hint is None
 
 
+def test_compute_similarity_hint_coerces_string_year() -> None:
+    # Regression: browser-extension fallback metadata supplies year as a
+    # string (embedded_year); a stray string reaching the year-window
+    # comparison must not raise TypeError, and should still compare correctly.
+    existing = [
+        {
+            "citekey": "smith2024graph",
+            "title": "Graph Parsers for Structured Search",
+            "authors": ["Smith, Jane"],
+            "year": 2023,
+        }
+    ]
+    hint = compute_similarity_hint(
+        {
+            "title": "Graph Parsers for Structured Search",
+            "authors": ["Smith, Jane"],
+            "year": "2024",
+        },
+        existing,
+    )
+    assert hint == "smith2024graph"
+
+
+def test_compute_similarity_hint_string_year_outside_window_excluded() -> None:
+    existing = [
+        {
+            "citekey": "smith2015graph",
+            "title": "Graph Parsers",
+            "authors": ["Smith, Jane"],
+            "year": 2015,
+        }
+    ]
+    hint = compute_similarity_hint(
+        {"title": "Graph Parsers", "authors": ["Smith, Jane"], "year": "2024"},
+        existing,
+    )
+    assert hint is None
+
+
 def test_compute_similarity_hint_none_when_no_title() -> None:
     existing = [
         {

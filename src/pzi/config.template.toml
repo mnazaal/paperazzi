@@ -37,7 +37,7 @@ api_listen_port = 8765
 
 # Persistent browser session (server-mode; used by CLI when server is reachable).
 # browser_profile_path = "~/.config/google-chrome/Default"  # browser profile for auth/session
-# browser_engine = "chromium"  # chromium, chrome, or firefox
+# browser_engine = "chromium"  # chromium, firefox, or webkit
 # api_url = "http://127.0.0.1:8765"  # override auto-derived server URL
 # rate_limit_rpm = 60  # max HTTP API requests per minute per client
 # Desktop browser fallback for preprint hosts that block headless browsers.

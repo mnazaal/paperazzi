@@ -4,13 +4,14 @@ from pathlib import Path
 from pzi.pdf import (
     fetch_and_store_pdf_with_fallbacks,
     fetch_unpaywall_pdf_url,
+    write_pdf_bytes,
 )
 from pzi.pdf_download import (
     copy_pdf_to_papers_dir,
     fetch_and_store_pdf,
     store_pdf_source,
 )
-from pzi.pdf_planning import is_pdf_bytes, is_pdf_content_type, plan_pdf_path, write_pdf_bytes
+from pzi.pdf_planning import is_pdf_bytes, is_pdf_content_type, plan_pdf_path
 
 
 def test_is_pdf_bytes_detects_pdf_signature() -> None:

@@ -73,11 +73,20 @@ def apply_pdf_discovery(
     steps: list[PdfDiscoveryStep],
     context: PdfDiscoveryContext,
 ) -> NormalizedRecord:
-    """Run PDF discovery steps in order until pdf_url is populated."""
+    """Run PDF discovery steps in order until pdf_url is populated.
+
+    A step that raises (network, parse, provider error) is treated as "no
+    result" and the chain continues to the next step, matching
+    ``apply_pdf_discovery_parallel``'s per-step isolation — a single failing
+    source must not abort the whole add.
+    """
     for step in steps:
         if record.get("pdf_url"):
             break
-        record = step(record, context)
+        try:
+            record = step(record, context)
+        except Exception:
+            continue
     return record
 
 
@@ -315,9 +324,15 @@ def doi_pdf_step(
         fetch_europepmc_pdf_url,
     )
 
+    # Honor injected seams (tests, alternate providers) the same way
+    # unpaywall_step does, falling back to the real network fetchers.
+    fetch_crossref_pdf = context.get("fetch_crossref_pdf") or fetch_crossref_pdf_url
+    fetch_europepmc_pdf = context.get("fetch_europepmc_pdf") or fetch_europepmc_pdf_url
+    fetch_doaj_pdf = context.get("fetch_doaj_pdf") or fetch_doaj_pdf_url
+
     contact_email = context.get("contact_email")
     pdf_url = _call_pdf_resolver(
-        fetch_crossref_pdf_url,
+        fetch_crossref_pdf,
         doi,
         contact_email=contact_email if isinstance(contact_email, str) else None,
     )
@@ -327,14 +342,14 @@ def doi_pdf_step(
         updated["pdf_source"] = "doi"
         return cast(NormalizedRecord, updated)
 
-    pdf_url = fetch_europepmc_pdf_url(doi)
+    pdf_url = fetch_europepmc_pdf(doi)
     if pdf_url:
         updated = dict(record)
         updated["pdf_url"] = pdf_url
         updated["pdf_source"] = "doi"
         return cast(NormalizedRecord, updated)
 
-    pdf_url = fetch_doaj_pdf_url(doi)
+    pdf_url = fetch_doaj_pdf(doi)
     if pdf_url:
         updated = dict(record)
         updated["pdf_url"] = pdf_url
@@ -487,11 +502,15 @@ def _build_preprint_pdf_url(source: str, landing_url: str) -> str | None:
     if source == "Authorea":
         # https://www.authorea.com/doi/full/10.22541/au.123
         # → https://www.authorea.com/doi/pdf/10.22541/au.123
+        if "/full/" not in landing_url:
+            return None
         return landing_url.replace("/full/", "/pdf/")
 
     if source == "SAGE Advance":
         # https://advance.sagepub.com/doi/10.31124/123
         # → https://advance.sagepub.com/doi/pdf/10.31124/123
+        if "/doi/10." not in landing_url:
+            return None
         return landing_url.replace("/doi/10.", "/doi/pdf/10.")
 
     return None

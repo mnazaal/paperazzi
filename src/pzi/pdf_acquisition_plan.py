@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable
 from urllib.parse import urlencode, urlsplit
 
@@ -175,28 +174,40 @@ def _looks_like_direct_pdf(url: str) -> bool:
 # redirects to the actual PDF.  This is *not* the same as a direct PDF
 # URL — the gateway requires browser navigation + JS execution.
 
-# Master table: (hostname regex, path pattern) → timeout_ms
+# Master table: (base domain, path pattern) → timeout_ms
 # Path patterns are matched against the URL path (case-insensitive).
+# ``None`` as the domain is the generic catch-all (any host).
 # Listed in order of specificity — first match wins.
-_GATEWAY_PATTERNS: tuple[tuple[str, str, int], ...] = (
+_GATEWAY_PATTERNS: tuple[tuple[str | None, str, int], ...] = (
     # -- major publishers ------------------------------------------------------------------
-    (r"dl\.acm\.org$",         r"/doi/pdf/",        20000),  # ACM
-    (r"sciencedirect\.com$",   r"/pdfft",            15000),  # ScienceDirect
-    (r"onlinelibrary\.wiley\.com$", r"/doi/epdf/",   20000),  # Wiley ePDF
-    (r"onlinelibrary\.wiley\.com$", r"/doi/pdf/",    20000),  # Wiley PDF
-    (r"onlinelibrary\.wiley\.com$", r"/doi/pdfdirect/", 20000),  # Wiley PDF Direct
-    (r"tandfonline\.com$",     r"/doi/pdf/",         15000),  # Taylor & Francis
-    (r"sagepub\.com$",         r"/doi/pdf/",         15000),  # SAGE
-    (r"academic\.oup\.com$",   r"/article-pdf/",     15000),  # Oxford
-    (r"academic\.oup\.com$",   r"/pdf/",             15000),  # Oxford (alt)
+    ("dl.acm.org",            r"/doi/pdf/",        20000),  # ACM
+    ("sciencedirect.com",     r"/pdfft",            15000),  # ScienceDirect
+    ("onlinelibrary.wiley.com", r"/doi/epdf/",      20000),  # Wiley ePDF
+    ("onlinelibrary.wiley.com", r"/doi/pdf/",       20000),  # Wiley PDF
+    ("onlinelibrary.wiley.com", r"/doi/pdfdirect/", 20000),  # Wiley PDF Direct
+    ("tandfonline.com",       r"/doi/pdf/",         15000),  # Taylor & Francis
+    ("sagepub.com",           r"/doi/pdf/",         15000),  # SAGE
+    ("academic.oup.com",      r"/article-pdf/",     15000),  # Oxford
+    ("academic.oup.com",      r"/pdf/",             15000),  # Oxford (alt)
 
     # -- generic catch-all: /doi/pdf/ on any host -----------------------------------------
     # Many smaller publishers use the same /doi/pdf/ gateway convention.
-    (r".",                     r"/doi/pdf/",         15000),  # generic DOI PDF gateway
-    (r".",                     r"/doi/epdf/",        15000),  # generic ePDF gateway
-    (r".",                     r"/pdfft",             15000),  # generic /pdfft gateway
-    (r".",                     r"/doi/pdfdirect/",   15000),  # generic PDF Direct
+    (None,                    r"/doi/pdf/",         15000),  # generic DOI PDF gateway
+    (None,                    r"/doi/epdf/",        15000),  # generic ePDF gateway
+    (None,                    r"/pdfft",             15000),  # generic /pdfft gateway
+    (None,                    r"/doi/pdfdirect/",   15000),  # generic PDF Direct
 )
+
+
+def _host_matches_domain(hostname: str, domain: str) -> bool:
+    """True if *hostname* is exactly *domain* or a subdomain of it.
+
+    A substring/suffix check alone (e.g. ``hostname.endswith(domain)``) would
+    also match an unrelated lookalike host like ``evilsciencedirect.com`` for
+    domain ``sciencedirect.com`` — there's no ``.`` requiring a real
+    subdomain boundary. This enforces that boundary.
+    """
+    return hostname == domain or hostname.endswith("." + domain)
 
 
 def _gateway_timeout(url: str) -> tuple[int, str | None]:
@@ -212,7 +223,8 @@ def _gateway_timeout(url: str) -> tuple[int, str | None]:
     except ValueError:
         return (0, None)
 
-    for host_re, path_fragment, timeout_ms in _GATEWAY_PATTERNS:
-        if re.search(host_re, hostname) and path_fragment in path:
-            return (timeout_ms, f"{host_re}:{path_fragment}")
+    for domain, path_fragment, timeout_ms in _GATEWAY_PATTERNS:
+        host_ok = domain is None or _host_matches_domain(hostname, domain)
+        if host_ok and path_fragment in path:
+            return (timeout_ms, f"{domain or '*'}:{path_fragment}")
     return (0, None)

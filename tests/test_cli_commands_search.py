@@ -81,7 +81,10 @@ def test_run_search_command_searches_each_target_and_renders_matches(tmp_path: P
             "tag": "ml",
         },
     ]
-    assert stdout.getvalue() == "main2024\t2024\tGraph Paper\t[title]\nml2024\t2024\tGraph Paper\t[title]\n"
+    assert (
+        stdout.getvalue()
+        == "main2024\t2024\tGraph Paper\t[matched: title]\nml2024\t2024\tGraph Paper\t[matched: title]\n"
+    )
     assert stderr.getvalue() == ""
 
 

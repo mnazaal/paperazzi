@@ -9,8 +9,32 @@ from pzi.identifiers import classify_input, normalize_doi, normalize_url
         ("10.1145/3368089.3409741", "10.1145/3368089.3409741"),
         ("https://doi.org/10.1145/3368089.3409741", "10.1145/3368089.3409741"),
         ("not-a-doi", None),
+        # Regression: doi.org forwards query strings to the resolved target
+        # rather than treating them as part of the DOI, so tracking params
+        # and fragments pasted along with the link must not be captured.
+        (
+            "https://doi.org/10.1145/3368089.3409741?utm_source=twitter",
+            "10.1145/3368089.3409741",
+        ),
+        (
+            "https://doi.org/10.1145/3368089.3409741#section",
+            "10.1145/3368089.3409741",
+        ),
+        ("10.1145/3368089.3409741?ref=x", "10.1145/3368089.3409741"),
+        # Regression: bare "doi:" prefix (case-insensitive, optional space).
+        ("doi:10.1145/3368089.3409741", "10.1145/3368089.3409741"),
+        ("DOI: 10.1145/3368089.3409741", "10.1145/3368089.3409741"),
     ],
-    ids=["plain_doi", "doi_url", "rejects_non_doi"],
+    ids=[
+        "plain_doi",
+        "doi_url",
+        "rejects_non_doi",
+        "doi_url_strips_query",
+        "doi_url_strips_fragment",
+        "plain_doi_strips_query",
+        "doi_prefix",
+        "doi_prefix_uppercase_with_space",
+    ],
 )
 def test_normalize_doi(raw, expected) -> None:
     assert normalize_doi(raw) == expected
@@ -55,6 +79,12 @@ def test_normalize_url(raw, expected) -> None:
         ("https://doi.org/10.1145/1327452.1327492", "doi", "10.1145/1327452.1327492"),
         ("/path/to/paper.pdf", "local_pdf", "/path/to/paper.pdf"),
         ("C:\\Users\\foo\\paper.PDF", "local_pdf", "C:\\Users\\foo\\paper.PDF"),
+        (
+            "https://doi.org/10.1145/1327452.1327492?utm_source=twitter",
+            "doi",
+            "10.1145/1327452.1327492",
+        ),
+        ("doi:10.1145/1327452.1327492", "doi", "10.1145/1327452.1327492"),
     ],
     ids=[
         "detects_doi",
@@ -65,6 +95,8 @@ def test_normalize_url(raw, expected) -> None:
         "extracts_doi_from_doi_org",
         "detects_local_pdf",
         "detects_local_pdf_windows",
+        "doi_org_url_strips_query",
+        "doi_prefix",
     ],
 )
 def test_classify_input(raw, expected_kind, expected_normalized) -> None:

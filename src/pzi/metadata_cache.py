@@ -6,7 +6,7 @@ Disabled unless ``metadata_cache_ttl`` (seconds) is set in config; the cache
 stores the raw response *text* so it composes with the existing
 ``fetch_text`` → JSON → normalize pipeline.
 
-Stdlib only.  Corrupt or unreadable entries are treated as misses, never errors.
+Corrupt or unreadable entries are treated as misses, never errors.
 """
 
 from __future__ import annotations
@@ -19,6 +19,8 @@ import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
+
+from pzi.fileio import fsync_parent_dir
 
 
 class MetadataCache:
@@ -77,6 +79,7 @@ class MetadataCache:
                 f.write(payload)
                 tmp = f.name
             os.replace(tmp, str(path))
+            fsync_parent_dir(path)
         except OSError:
             if tmp is not None:
                 with contextlib.suppress(OSError):

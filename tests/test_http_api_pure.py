@@ -10,6 +10,7 @@ from pzi.http_security import (
     AUTH_HEADER,
     RateLimiter,
     build_http_security_config,
+    host_header_allowed,
     origin_allowed,
     request_security_error,
     validated_content_length,
@@ -566,7 +567,53 @@ def test_build_http_security_config_strips_token_and_origins() -> None:
         "allowed_origins": ("http://localhost/",),
         "max_body_bytes": 0,
         "rate_limit_rpm": 1,
+        "listen_host": "127.0.0.1",
     }
+
+
+def test_host_header_allowed_loopback_bind_rejects_foreign_host() -> None:
+    # DNS-rebinding guard: an attacker page can point its own domain's DNS at
+    # 127.0.0.1 and issue a plain GET carrying Host: attacker.com but no
+    # Origin header (Origin is only sent for CORS-relevant requests).
+    assert not host_header_allowed("attacker.com", "127.0.0.1")
+    assert not host_header_allowed("attacker.com:80", "127.0.0.1")
+
+
+def test_host_header_allowed_loopback_bind_accepts_loopback_host() -> None:
+    assert host_header_allowed("127.0.0.1", "127.0.0.1")
+    assert host_header_allowed("127.0.0.1:8765", "127.0.0.1")
+    assert host_header_allowed("localhost", "127.0.0.1")
+    assert host_header_allowed("[::1]:8765", "127.0.0.1")
+
+
+def test_host_header_allowed_explicit_lan_bind_accepts_that_host() -> None:
+    assert host_header_allowed("192.168.1.5:8765", "192.168.1.5")
+    assert not host_header_allowed("attacker.com", "192.168.1.5")
+    # No implicit loopback carve-out once an operator explicitly binds LAN.
+    assert not host_header_allowed("127.0.0.1", "192.168.1.5")
+
+
+def test_host_header_allowed_missing_host_passes_through() -> None:
+    # Real HTTP/1.1 clients always send Host; only hand-built requests omit
+    # it, and this guard exists to stop DNS rebinding, not malformed clients.
+    assert host_header_allowed(None, "127.0.0.1")
+    assert host_header_allowed("", "127.0.0.1")
+
+
+def test_request_security_error_rejects_dns_rebinding_host() -> None:
+    security = build_http_security_config(auth_token=None, listen_host="127.0.0.1")
+
+    assert request_security_error(
+        method="GET",
+        headers={"Host": "attacker.com"},
+        security=security,
+    ) == (403, "host not allowed")
+
+    assert request_security_error(
+        method="GET",
+        headers={"Host": "127.0.0.1"},
+        security=security,
+    ) is None
 
 
 def test_origin_allowed_accepts_extension_prefixes() -> None:

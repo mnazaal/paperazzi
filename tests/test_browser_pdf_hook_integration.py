@@ -13,25 +13,17 @@ from pathlib import Path
 
 import pytest
 
-_BROWSER_AVAILABLE: bool = False
+from tests.browser_probe import BROWSER_UNAVAILABLE_REASON, browser_available
 
-try:
-    from playwright.sync_api import sync_playwright
+pytestmark = pytest.mark.browser
 
-    with sync_playwright() as p:
-        p.chromium.launch(headless=True).close()
-        p.firefox.launch(headless=True).close()
-    _BROWSER_AVAILABLE = True
-except Exception:
-    pass
 
-pytestmark = [
-    pytest.mark.browser,
-    pytest.mark.skipif(
-        not _BROWSER_AVAILABLE,
-        reason="Playwright browser binaries not installed. Run: playwright install chromium firefox",
-    ),
-]
+@pytest.fixture(autouse=True)
+def _require_browser() -> None:
+    """Skip lazily on first use instead of probing (and launching a real
+    browser) at module-import/collection time."""
+    if not browser_available():
+        pytest.skip(reason=BROWSER_UNAVAILABLE_REASON)
 
 
 @pytest.fixture

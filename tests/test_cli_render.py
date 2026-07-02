@@ -68,7 +68,7 @@ def test_render_search_matches_formats_matches_and_empty_result() -> None:
                 }
             ]
         }
-    ) == ["smith2024graph\t2024\tGraph Parsers\t[title,tags]"]
+    ) == ["smith2024graph\t2024\tGraph Parsers\t[matched: title,tags]"]
 
 
 def test_render_bib_update_items_handles_noop_and_empty() -> None:

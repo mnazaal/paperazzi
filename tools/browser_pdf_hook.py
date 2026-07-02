@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Thin source-tree wrapper for installed ``pzi-browser-hook`` command."""
+"""Thin source-tree wrapper for ``python -m pzi.browser_pdf_hook``."""
 
 from __future__ import annotations
 

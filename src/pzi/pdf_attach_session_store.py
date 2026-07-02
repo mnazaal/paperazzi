@@ -43,6 +43,30 @@ class AttachSessionStore:
             return None
         return mark_attach_session_used(session)
 
+    def claim(self, request_id: str) -> AttachSession | None:
+        """Atomically remove and return a session for exclusive use.
+
+        Unlike ``get``, this pops the session immediately, closing the
+        get-then-later-consume window in which two concurrent requests for
+        the same ``request_id`` could both pass validation before either
+        consumed it. A caller that fails validation or fails to complete the
+        attach must call ``restore`` with the same session, so a legitimate
+        retry (e.g. after a mistyped token, or a transient attach failure)
+        still works — only a request that actually finishes the attach
+        should permanently consume the session.
+        """
+        with self._lock:
+            self._prune_expired_locked()
+            return self._sessions.pop(request_id, None)
+
+    def restore(self, session: AttachSession) -> None:
+        """Put a claimed-but-not-successfully-used session back for retry."""
+        with self._lock:
+            self._prune_expired_locked()
+            if session.used or session.expires_at <= self._clock():
+                return
+            self._sessions[session.request_id] = session
+
     def _prune_expired_locked(self) -> None:
         """Drop expired/used sessions. Caller must hold ``self._lock``."""
         now = self._clock()

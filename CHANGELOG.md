@@ -1,11 +1,149 @@
 # Changelog
 
-All notable changes to pzi are documented here.
+All notable changes to paperazzi (CLI command `pzi`) are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+### Fixed
+
+- Inbox drain (`pzi inbox drain`) could silently drop a line appended to the
+  inbox file (e.g. by the browser extension) while the drain's network calls
+  were in flight: the final rewrite used a stale in-memory snapshot from the
+  start of the drain. The rewrite now re-reads the file and merges in any
+  lines appended after the snapshot was taken, under a short-lived advisory
+  lock scoped to just the final read+rewrite.
+- The HTTP API accepted requests whose `Host` header named an attacker
+  domain even when bound to loopback, which let a DNS-rebinding page (its own
+  domain's DNS pointed at 127.0.0.1) reach the API via a plain GET carrying
+  no `Origin` header. Requests are now also validated against the server's
+  bind host (`api_listen_host`); see `docs/security.md`.
+- The HTTP API server only bounded `accept()` on the listening socket, not
+  reads on already-accepted connections, so a client that opened a
+  connection and trickled bytes (or sent none) could hold a handler thread
+  open indefinitely. Each accepted connection now gets a 30s read timeout.
+- PDF attach sessions (`/attach-pdf-bytes`, `/attach-pdf-raw`) had a
+  get-then-later-consume race: two concurrent requests for the same
+  `request_id` could both pass validation before either was marked consumed,
+  double-spending a one-shot attach token. The session is now claimed
+  (atomically removed) before validation and restored only if that attempt
+  doesn't succeed, so a legitimate retry after a bad token or transient
+  failure still works, but concurrent racers cannot both proceed.
+- `url_safety.public_ip_address` (SSRF guard) treated 100.64.0.0/10
+  (carrier-grade NAT) as publicly routable, and could disagree with the
+  embedded address of an IPv4-mapped IPv6 literal (`::ffff:127.0.0.1`) on
+  some Python patch releases. Now derived from `ip.is_global`, canonicalizing
+  IPv4-mapped literals to their embedded address first.
+- Writing a `.bib` file at a path that was itself a symlink (e.g. pointing
+  into synced cloud storage) silently deleted the symlink and replaced it
+  with a regular file, since `os.replace` treats a symlink destination as
+  the directory entry to replace rather than the file it points at. Bib
+  writes now resolve through the symlink first, so the symlink survives.
+- A non-arXiv `eprint` field (e.g. a bioRxiv preprint ID) was classified as
+  an arXiv ID whenever it was merely non-empty, regardless of
+  `archiveprefix`, fabricating a bogus `arxiv.org` PDF URL. Now gated
+  strictly on `archiveprefix` (case-insensitive `arXiv`).
+- Better BibTeX `shorttitle(N,M)` citekey/filename templates truncated one
+  title word to N characters instead of taking the first N words (each
+  optionally truncated to M characters), and an invalid `match`/`replaceFrom`
+  regex in a copied Zotero template raised instead of degrading safely.
+- `pzi add`'s fallback metadata (e.g. browser-extension page metadata) was
+  never applied when the fetched value was an empty list (`authors: []`) —
+  only `None`/blank-string values were treated as missing.
+- PDF discovery via DOI (Crossref/Europe PMC/DOAJ) always called the real
+  network fetchers, bypassing the same dependency-injection seam used by
+  every other discovery step; and a single discovery step raising an
+  exception aborted the whole sequential discovery chain, unlike the
+  parallel path, which already isolated per-step failures.
+- The publisher PDF-gateway hostname table matched with an unanchored regex,
+  so an unrelated lookalike host (e.g. `evilsciencedirect.com`) could be
+  misidentified as a known publisher gateway. Matching is now a proper
+  domain/subdomain check. Also: the Authorea/SAGE URL rewrites silently
+  returned the unchanged landing-page URL (instead of no PDF found) when
+  their expected path substring was absent; the Better BibTeX renderer's
+  unrecognized-field fallback looked up the raw filter-suffixed token instead
+  of the parsed field name, so any field without a dedicated branch always
+  rendered empty; and `arxiv.org` URL detection didn't recognize
+  `www.arxiv.org`.
+- `pzi add`'s metadata-fetch step caught any exception (not just
+  network/parsing failures) and reported it as "translation server error" —
+  or silently fell back to manually-provided metadata — which could mask an
+  unrelated bug as a network problem. Now scoped to the exception types the
+  fetchers actually raise.
+- A `.bib` write that failed after the temp file was created but before (or
+  during) the atomic rename — e.g. a disk error — left the `.tmp` file behind
+  permanently instead of cleaning it up (the original `.bib` was never at
+  risk, only the leftover temp file). Now removed on any failure, matching
+  the inbox writer's existing behavior.
+
+### Changed
+
+- `.bib`, inbox, and metadata-cache writes now also fsync the containing
+  directory after the atomic rename, so the rename itself survives a crash
+  immediately after a write (previously only the new file's content was
+  guaranteed durable, not the directory entry pointing at it).
+- Releases now attach the prebuilt Firefox and Chrome extension zips
+  (`paperazzi-capture-firefox.zip`, `paperazzi-capture-chrome.zip`) alongside
+  the sdist/wheel, so installing the browser extension no longer requires a
+  repo checkout.
+
+### Docs
+
+- Corrected several stale/inaccurate docs: README pipx install syntax for
+  the `[playwright]` extra, a false "requires git" claim on the Node.js
+  download line, `config.template.toml`'s `browser_engine` value list
+  (dropped `chrome`, added `webkit`), the attach-session TTL in
+  `docs/security.md` (was documented as 5 min, actually 10 min), the
+  `packaging/systemd/pzi.service` `Documentation=` URL, a stale
+  `pzi-browser-hook` console-script reference in `tools/`, and the 0.1.0b1
+  changelog's inflated "100% coverage, mypy clean" quality claim. Also
+  documented `--config PATH`, `pzi pdf retry --failed-only`, previously
+  omitted `add`/`init`/`tag`/`export` flags, and shell-completion
+  enablement in the README CLI reference; added missing env vars
+  (`PZI_NODE_MIRROR`, `PZI_NPM_REGISTRY`,
+  `PZI_DISABLE_DESKTOP_BROWSER_FALLBACK`, `PZI_DOWNLOAD_DIR`,
+  `PZI_DESKTOP_BROWSER_TIMEOUT`, `PZI_SKIP_BROWSER_HOOK`) to the env-var
+  table.
+- Clarified that `PZI_BROWSER` (desktop browser fallback) and `pzi init
+  --browser`/`browser_engine` (headless Playwright automation browser) are
+  independent settings with independent defaults, not the same knob. Also
+  documented that `pzi search --json` always returns a JSON array (one result
+  per searched library), even for a single default target.
+
+## [0.1.0b2] - 2026-07-02
+
+### Fixed
+
+- Crash when a fallback-sourced record (e.g. browser-extension page metadata)
+  supplied `year` as a string: the similarity/dedup check compared it against
+  an `int` and raised `TypeError`. Year is now coerced at the point a
+  `NormalizedRecord` is produced, with a defensive coercion at the comparison
+  site as well.
+- DOI normalization no longer keeps a trailing `?query`/`#fragment` from a
+  pasted `doi.org` link (`doi.org` forwards query strings to the resolved
+  target rather than treating them as part of the DOI). A `doi:` prefix
+  (e.g. `doi:10.1234/abc`) is now also recognized.
+- `pip install`/`pipx install` guidance in `pzi init --setup`, the browser
+  session hook, and the browser PDF hook referenced the wrong package name
+  (`pzi[playwright]`, which does not exist) instead of the actual
+  distribution name, `paperazzi[playwright]`.
+
+### Changed
+
+- **Breaking, `.bib` format:** `pdf_url` and `abstract_url` are no longer
+  packed into the `note` field with `" | "` delimiters and `PDF:`/`Abstract:`
+  labels — a user's own note text containing that same shape could corrupt
+  the parse, and the packed values weren't readable by other BibTeX tools.
+  Each value now has its own field: `pzi-pdf-url`, `pzi-abstract-url`. `note`
+  is now pure free text. Entries written by 0.1.0b1 keep their PDF/abstract
+  URL as inert text inside `note` on next read (nothing is deleted from the
+  file) — re-run `pzi update` or `pzi add` on the affected DOI/URL to
+  repopulate the new fields, or move the value over by hand.
+- `pzi search` output labels the matched-fields column (`[matched: title,tags]`)
+  instead of a bare `[title,tags]`, which read as the same column `pzi entries`
+  uses for actual author names.
 
 ## [0.1.0b1] - 2026-07-01
 
@@ -31,8 +169,8 @@ First public beta.
 - **Architecture**: pure planning logic separated from side effects; dependency-
   injected fetcher seams; layer-boundary tests enforce no CLI/HTTP/browser
   imports in pure modules.
-- **Quality**: 100% test coverage, mypy/pyright clean across 46 source files,
-  ~90 test files.
+- **Quality**: ~81% test coverage, pyright clean (no mypy) across ~90 source
+  files, ~100 test files.
 - **Security**: SSRF guards for FlareSolverr, tar-slip guard for imports,
   loopback-only HTTP binding, optional token auth, documented security model.
 - **Shell completions**: bash/zsh completions via `argcomplete`, included in the
@@ -40,7 +178,7 @@ First public beta.
 
 ### Changed
 
-- Playwright is an optional extra (`pip install 'pzi[playwright]'`) instead of a
+- Playwright is an optional extra (`pip install 'paperazzi[playwright]'`) instead of a
   hard dependency. The base install is lighter; the browser-profile PDF fallback
   is only needed by users who configure `browser_pdf_cmd`.
 - `bibtexparser` pin is `>=2.0.0b9,<3` to allow patch-level updates within the v2
@@ -55,5 +193,6 @@ First public beta.
 - No sync, group libraries, or desktop reader (by design).
 - Not yet on PyPI; install from GitHub for now.
 
-[Unreleased]: https://github.com/mnazaal/paperazzi/compare/v0.1.0b1...HEAD
+[Unreleased]: https://github.com/mnazaal/paperazzi/compare/v0.1.0b2...HEAD
+[0.1.0b2]: https://github.com/mnazaal/paperazzi/compare/v0.1.0b1...v0.1.0b2
 [0.1.0b1]: https://github.com/mnazaal/paperazzi/releases/tag/v0.1.0b1

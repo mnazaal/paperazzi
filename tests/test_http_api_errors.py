@@ -6,12 +6,10 @@ requiring a running translation-server or real network.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
 
-from pzi.config import dump_app_config
 from pzi.http_api import run_server, server_exposure_error
 from pzi.http_post_routes import process_post_request
 from pzi.http_security import (
@@ -21,28 +19,6 @@ from pzi.http_security import (
     request_security_error,
     validated_content_length,
 )
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Config helpers
-# ══════════════════════════════════════════════════════════════════════════════
-
-
-def _write_config(td: str, bib_name: str = "ml") -> str:
-    config_path = os.path.join(td, ".config", "pzi", "config.toml")
-    bib_path = os.path.join(td, f"{bib_name}.bib")
-    papers_dir = os.path.join(td, "papers")
-    os.makedirs(os.path.dirname(config_path), exist_ok=True)
-    os.makedirs(papers_dir, exist_ok=True)
-    config = {
-        "bibs": [{"name": bib_name, "path": bib_path, "papers_dir": papers_dir, "default": True}],
-        "translation_server_url": "http://127.0.0.1:1969",
-        "api_listen_host": "127.0.0.1",
-        "api_listen_port": 8765,
-    }
-    Path(config_path).parent.mkdir(parents=True, exist_ok=True)
-    Path(config_path).write_text(dump_app_config(config))
-    return config_path
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # capture_input_from_http_body edge cases

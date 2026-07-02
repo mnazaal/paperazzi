@@ -1,7 +1,14 @@
 import json
 import re
+import shutil
 import subprocess
 from pathlib import Path
+
+import pytest
+
+pytestmark = pytest.mark.skipif(
+    shutil.which("node") is None, reason="Node.js not found on PATH"
+)
 
 # Rewrite relative ESM imports of local ``.js`` modules to ``.mjs`` so Node can
 # resolve the copied test modules. Matches e.g. "./utils.js" and

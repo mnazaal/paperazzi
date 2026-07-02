@@ -101,6 +101,23 @@ def test_classify_sciencedirect_pdfft_gateway() -> None:
     )
 
 
+def test_classify_lookalike_host_is_not_treated_as_publisher_gateway() -> None:
+    # Regression: the gateway table used to match hostnames with `re.search`
+    # and no leading anchor/domain-boundary check, so an unrelated lookalike
+    # host like "evilacademic.oup.com" (not a subdomain of academic.oup.com —
+    # no "." boundary) would falsely match the Oxford gateway pattern just by
+    # sharing a trailing substring. Uses Oxford's `/article-pdf/` path, which
+    # (unlike ACM/ScienceDirect/Wiley's paths) isn't also in the generic
+    # any-host catch-all list, so a false host match is the only way this
+    # could still classify as a gateway.
+    candidate = classify_pdf_candidate(
+        "https://evilacademic.oup.com/bioinformatics/article-pdf/39/1/btac700",
+        page_url="https://evilacademic.oup.com/bioinformatics/39/1/btac700",
+    )
+
+    assert candidate["kind"] == "article_page"
+
+
 def test_classify_wiley_epdf_gateway() -> None:
     _gateway_assert(
         classify_pdf_candidate(

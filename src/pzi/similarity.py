@@ -256,6 +256,17 @@ def has_truncation_sentinel(authors: Sequence[str]) -> bool:
     return any(is_truncation_sentinel(a) for a in authors)
 
 
+def _as_int_year(value: object) -> int | None:
+    """Defensively coerce a year-ish value to int; callers should already have
+    normalized ints, but this guards against a stray string reaching the
+    ``abs(record_year - existing_year)`` comparison below."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+        return int(value.strip())
+    return None
+
+
 def compute_similarity_hint(
     record: SimilarityCandidate,
     existing_records: Sequence[SimilarityCandidate],
@@ -269,7 +280,7 @@ def compute_similarity_hint(
         return None
 
     record_authors = normalize_authors(record.get("authors"))
-    record_year = record.get("year")
+    record_year = _as_int_year(record.get("year"))
 
     best_key: str | None = None
     best_score: float = 0.0
@@ -282,7 +293,7 @@ def compute_similarity_hint(
         if similarity < title_threshold:
             continue
 
-        existing_year = existing.get("year")
+        existing_year = _as_int_year(existing.get("year"))
         if (
             record_year is not None
             and existing_year is not None

@@ -1,12 +1,15 @@
 """Pure PDF acquisition planning helpers — content-type checks, path planning,
-and filename matching."""
+and filename matching.
+
+Atomic PDF byte writes (real filesystem I/O) live in :mod:`pzi.pdf` instead —
+see ``write_pdf_bytes`` there.
+"""
 
 from __future__ import annotations
 
 import configparser
 import os
 import shlex
-import tempfile
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -174,84 +177,6 @@ _GENERIC_HOSTNAME_PARTS = {
     "fr",
     "jp",
 }
-
-
-def resolve_pdf_destination(destination: Path, data: bytes) -> Path:
-    """Return existing identical path or first free suffixed path."""
-    candidate = destination
-    n = 0
-    while True:
-        if not candidate.exists():
-            return candidate
-        try:
-            if candidate.read_bytes() == data:
-                return candidate
-        except OSError:
-            pass
-        n += 1
-        candidate = destination.with_stem(f"{destination.stem}-{n}")
-
-
-def write_pdf_bytes(
-    *,
-    data: bytes,
-    papers_dir: str,
-    citekey: str,
-    record: PdfRecord | None = None,
-    filename_format: str | None = None,
-) -> str:
-    """Atomically write PDF bytes to planned citekey path."""
-    destination = Path(
-        plan_pdf_path(
-            papers_dir=papers_dir,
-            citekey=citekey,
-            record=record,
-            filename_format=filename_format,
-        )
-    )
-    destination.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
-
-    destination = resolve_pdf_destination(destination, data)
-    if destination.exists():
-        return str(destination)
-
-    while True:
-        temp_fd, temp_name = tempfile.mkstemp(
-            dir=str(destination.parent), prefix=".pdf-", suffix=".tmp"
-        )
-        try:
-            os.fchmod(temp_fd, 0o600)
-            _write_all(temp_fd, data)
-        finally:
-            os.close(temp_fd)
-        temp_path = Path(temp_name)
-        try:
-            os.link(temp_path, destination)
-            return str(destination)
-        except FileExistsError:
-            try:
-                if destination.read_bytes() == data:
-                    return str(destination)
-            except OSError:
-                pass
-            destination = resolve_pdf_destination(destination, data)
-            if destination.exists():
-                return str(destination)
-        finally:
-            try:
-                temp_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-
-
-def _write_all(fd: int, data: bytes) -> None:
-    view = memoryview(data)
-    total = 0
-    while total < len(view):
-        written = os.write(fd, view[total:])
-        if written <= 0:
-            raise OSError("short write while storing PDF")
-        total += written
 
 
 # ---------------------------------------------------------------------------

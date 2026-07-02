@@ -53,7 +53,12 @@ def merge_fetched_record_with_overrides(
         if value is None:
             continue
         current = merged.get(key)
-        if current is None or (isinstance(current, str) and not current.strip()):
+        is_empty = (
+            current is None
+            or (isinstance(current, str) and not current.strip())
+            or (isinstance(current, list) and not current)
+        )
+        if is_empty:
             merged[key] = value
     return merge_record_sources(merged, normal)
 
@@ -714,5 +719,12 @@ def merge_record_sources(
     for key, value in overrides.items():
         if value is not None:
             merged[key] = value
+    # NormalizedRecord declares year: int | None, but fallback sources (e.g.
+    # browser-scraped page metadata) supply it as a string. Coerce here, the
+    # single choke point where a NormalizedRecord is produced, so every caller
+    # gets a real int rather than crashing downstream (e.g. similarity's
+    # abs(record_year - existing_year)).
+    if "year" in merged:
+        merged["year"] = _coerce_year(merged["year"])
     return cast(NormalizedRecord, merged)
 

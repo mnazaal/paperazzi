@@ -88,19 +88,26 @@ def _apply_options(value: str, options: Mapping[str, str]) -> str:
     if not value:
         return ""
 
-    if "match" in options and re.search(options["match"], value) is None:
-        return ""
+    if "match" in options:
+        try:
+            if re.search(options["match"], value) is None:
+                return ""
+        except re.error:
+            return ""
 
     if "replaceFrom" in options:
         flags = re.IGNORECASE if "i" in options.get("regexOpts", "") else 0
         count = 0 if "g" in options.get("regexOpts", "") else 1
-        value = re.sub(
-            options["replaceFrom"],
-            options.get("replaceTo", ""),
-            value,
-            count=count,
-            flags=flags,
-        )
+        try:
+            value = re.sub(
+                options["replaceFrom"],
+                options.get("replaceTo", ""),
+                value,
+                count=count,
+                flags=flags,
+            )
+        except re.error:
+            pass
 
     if "start" in options:
         try:
@@ -182,7 +189,7 @@ def _render_bbt_part(part: str, record: Mapping[str, Any]) -> str:
     elif head in {"doi", "venue"}:
         value = str(record.get(head) or "")
     else:
-        value = str(record.get(part) or "")
+        value = str(record.get(head) or "")
 
     for flt in filters[1:]:
         if flt == "lower":
@@ -197,12 +204,18 @@ def _render_bbt_part(part: str, record: Mapping[str, Any]) -> str:
 
 
 def _shorttitle(record: Mapping[str, Any], token: str) -> str:
+    """Better BibTeX ``shorttitle(N)``/``shorttitle(N,M)``: first N title words
+    (stopwords dropped), each optionally truncated to M characters."""
     title = str(record.get("title") or "")
     match = re.search(r"shorttitle\((\d+)(?:\s*,\s*(\d+))?\)", token)
-    n = int(match.group(1)) if match else 3
+    n_words = int(match.group(1)) if match else 3
+    max_chars = int(match.group(2)) if match and match.group(2) else None
     words = [_sanitize_citekey(w) for w in title.split()]
     words = [w for w in words if w and w not in _STOPWORDS]
-    return "".join(word[:n] for word in words[:1])
+    selected = words[:n_words]
+    if max_chars is not None:
+        selected = [word[:max_chars] for word in selected]
+    return "".join(selected)
 
 
 def _first_creator(record: Mapping[str, Any]) -> str:

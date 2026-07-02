@@ -602,15 +602,17 @@ def _handle_attach_pdf_post(
     if source_url is not None and not safe_public_http_url(source_url):
         return 400, {"error": "source_url must be a public http(s) URL"}
     request_id = body.get("request_id") if isinstance(body.get("request_id"), str) else None
+    session = None
     if request_id is not None:
         if attach_session_store is None:
             return 403, {"error": "attach session store unavailable"}
-        session = attach_session_store.get(request_id)
+        session = attach_session_store.claim(request_id)
         if session is None:
             return 403, {"error": "attach session not found"}
         try:
             pdf_bytes = base64.b64decode(pdf_base64, validate=True)
         except (ValueError, binascii.Error):
+            attach_session_store.restore(session)
             return 400, {"error": "pdf_base64 invalid"}
         attach_token_value = body.get("attach_token")
         token: str = attach_token_value if isinstance(attach_token_value, str) else ""
@@ -625,6 +627,7 @@ def _handle_attach_pdf_post(
             now=now(),
         )
         if validation_error is not None:
+            attach_session_store.restore(session)
             return 403, {"error": validation_error}
     result = attach_pdf_bytes(
         config_path=config_path,
@@ -635,8 +638,8 @@ def _handle_attach_pdf_post(
         source_url=source_url,
     )
     status = status_for_service_result(result)
-    if status == 200 and request_id is not None and attach_session_store is not None:
-        attach_session_store.consume(request_id)
+    if status != 200 and session is not None and attach_session_store is not None:
+        attach_session_store.restore(session)
     return status, result
 
 
@@ -660,10 +663,11 @@ def _handle_attach_pdf_raw_post(
     if source_url is not None and not safe_public_http_url(source_url):
         return 400, {"error": "source_url must be a public http(s) URL"}
     request_id = body.get("request_id") if isinstance(body.get("request_id"), str) else None
+    session = None
     if request_id is not None:
         if attach_session_store is None:
             return 403, {"error": "attach session store unavailable"}
-        session = attach_session_store.get(request_id)
+        session = attach_session_store.claim(request_id)
         if session is None:
             return 403, {"error": "attach session not found"}
         attach_token_value = body.get("attach_token")
@@ -679,6 +683,7 @@ def _handle_attach_pdf_raw_post(
             now=now(),
         )
         if validation_error is not None:
+            attach_session_store.restore(session)
             return 403, {"error": validation_error}
     result = attach_pdf_raw_bytes(
         config_path=config_path,
@@ -689,8 +694,8 @@ def _handle_attach_pdf_raw_post(
         source_url=source_url,
     )
     status = status_for_service_result(result)
-    if status == 200 and request_id is not None and attach_session_store is not None:
-        attach_session_store.consume(request_id)
+    if status != 200 and session is not None and attach_session_store is not None:
+        attach_session_store.restore(session)
     return status, result
 
 

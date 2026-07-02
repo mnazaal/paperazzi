@@ -67,6 +67,7 @@ def build_server_plan(
         if config is not None
         else DEFAULT_MAX_BODY_BYTES,
         rate_limit_rpm=config.get("rate_limit_rpm", 60) if config is not None else 60,
+        listen_host=resolved_host,
     )
     return {
         "status": "ok",

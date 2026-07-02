@@ -20,33 +20,15 @@ from tests.test_paywall_helpers import (
     make_fetch_web_from_article_fixture,
 )
 
-
-def _write_config(td: str, bib_name: str = "ml") -> str:
-    config_path = os.path.join(td, ".config", "pzi", "config.toml")
-    bib_path = os.path.join(td, f"{bib_name}.bib")
-    papers_dir = os.path.join(td, "papers")
-    os.makedirs(os.path.dirname(config_path), exist_ok=True)
-    os.makedirs(papers_dir, exist_ok=True)
-    config = {
-        "bibs": [{"name": bib_name, "path": bib_path, "papers_dir": papers_dir, "default": True}],
-        "translation_server_url": "http://127.0.0.1:1969",
-        "api_listen_host": "127.0.0.1",
-        "api_listen_port": 8765,
-    }
-    Path(config_path).parent.mkdir(parents=True, exist_ok=True)
-    Path(config_path).write_text(dump_app_config(config))
-    return config_path
-
-
 DOI = "10.1234/jmlr.2025.00142"
 
 
 # ── Happy path: DOI → entry + PDF ───────────────────────────────────────────
 
 
-def test_capture_doi_creates_entry_and_saves_pdf(tmp_path: Path) -> None:
+def test_capture_doi_creates_entry_and_saves_pdf(tmp_path: Path, write_app_config) -> None:
     """Full pipeline: DOI → translation server → BibTeX entry + PDF saved."""
-    config_path = _write_config(str(tmp_path))
+    config_path = write_app_config(tmp_path)
     bib_path = tmp_path / "ml.bib"
 
     result = add_input_to_bib(
@@ -82,9 +64,9 @@ def test_capture_doi_creates_entry_and_saves_pdf(tmp_path: Path) -> None:
 # ── Duplicate detection ─────────────────────────────────────────────────────
 
 
-def test_capture_duplicate_doi_reuses_citekey(tmp_path: Path) -> None:
+def test_capture_duplicate_doi_reuses_citekey(tmp_path: Path, write_app_config) -> None:
     """Same DOI captured twice → second capture reuses existing citekey."""
-    config_path = _write_config(str(tmp_path))
+    config_path = write_app_config(tmp_path)
 
     # First capture
     r1 = add_input_to_bib(
@@ -123,9 +105,9 @@ def test_capture_duplicate_doi_reuses_citekey(tmp_path: Path) -> None:
 # ── Dry-run mode ────────────────────────────────────────────────────────────
 
 
-def test_dry_run_does_not_write_files(tmp_path: Path) -> None:
+def test_dry_run_does_not_write_files(tmp_path: Path, write_app_config) -> None:
     """Dry run returns predicted result but writes nothing."""
-    config_path = _write_config(str(tmp_path))
+    config_path = write_app_config(tmp_path)
     bib_path = tmp_path / "ml.bib"
 
     result = add_input_to_bib(
@@ -153,7 +135,9 @@ def test_dry_run_does_not_write_files(tmp_path: Path) -> None:
 # ── Config with multiple bibs ───────────────────────────────────────────────
 
 
-def test_capture_targets_specific_bib_when_multiple_configured(tmp_path: Path) -> None:
+def test_capture_targets_specific_bib_when_multiple_configured(
+    tmp_path: Path, dead_port
+) -> None:
     """Two bibs in config; capture to named bib via bib_selector."""
     td = str(tmp_path)
     # Write config with two bibs
@@ -169,7 +153,7 @@ def test_capture_targets_specific_bib_when_multiple_configured(tmp_path: Path) -
             {"name": "ml", "path": bib_ml, "papers_dir": papers_ml, "default": True},
             {"name": "sys", "path": bib_sys, "papers_dir": papers_sys, "default": False},
         ],
-        "translation_server_url": "http://127.0.0.1:1969",
+        "translation_server_url": f"http://127.0.0.1:{dead_port}",
         "api_listen_host": "127.0.0.1",
         "api_listen_port": 8765,
     }

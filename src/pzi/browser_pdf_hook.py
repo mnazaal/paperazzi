@@ -153,8 +153,8 @@ def _ensure_browser(browser: str = "firefox") -> bool:  # pragma: no cover — s
     except ImportError:
         print(
             "playwright package not found. The browser-profile PDF fallback "
-            "is optional; install it with: pip install 'pzi[playwright]' "
-            "(or pipx install 'pzi[playwright]'), then run: playwright install",
+            "is optional; install it with: pip install 'paperazzi[playwright]' "
+            "(or pipx install 'paperazzi[playwright]'), then run: playwright install",
             file=sys.stderr,
         )
         return False

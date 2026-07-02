@@ -14,31 +14,12 @@ from pzi.bib_service import (
     list_bibs,
     list_entries,
 )
-from pzi.config import dump_app_config
-
-
-def _write_config(td: str, bib_name: str = "ml") -> str:
-    config_path = os.path.join(td, ".config", "pzi", "config.toml")
-    bib_path = os.path.join(td, f"{bib_name}.bib")
-    papers_dir = os.path.join(td, "papers")
-    os.makedirs(os.path.dirname(config_path), exist_ok=True)
-    os.makedirs(papers_dir, exist_ok=True)
-    config = {
-        "bibs": [{"name": bib_name, "path": bib_path, "papers_dir": papers_dir, "default": True}],
-        "translation_server_url": "http://127.0.0.1:1969",
-        "api_listen_host": "127.0.0.1",
-        "api_listen_port": 8765,
-    }
-    Path(config_path).parent.mkdir(parents=True, exist_ok=True)
-    Path(config_path).write_text(dump_app_config(config))
-    return config_path
-
 
 # ── list_bibs ───────────────────────────────────────────────────────────────
 
 
-def test_list_bibs_returns_configured_libraries(tmp_path: Path) -> None:
-    config_path = _write_config(str(tmp_path))
+def test_list_bibs_returns_configured_libraries(tmp_path: Path, write_app_config) -> None:
+    config_path = write_app_config(tmp_path)
     result = list_bibs(config_path=config_path, home_dir=str(tmp_path))
     assert result["status"] == "ok"
     assert len(result["bibs"]) == 1
@@ -55,16 +36,16 @@ def test_list_bibs_errors_on_missing_config(tmp_path: Path) -> None:
 # ── list_entries ────────────────────────────────────────────────────────────
 
 
-def test_list_entries_empty_library(tmp_path: Path) -> None:
-    config_path = _write_config(str(tmp_path))
+def test_list_entries_empty_library(tmp_path: Path, write_app_config) -> None:
+    config_path = write_app_config(tmp_path)
     result = list_entries(config_path=config_path, home_dir=str(tmp_path), bib_selector=None)
     assert result["status"] == "ok"
     assert result["items"] == []
     assert result["total"] == 0
 
 
-def test_list_entries_with_data(tmp_path: Path) -> None:
-    config_path = _write_config(str(tmp_path))
+def test_list_entries_with_data(tmp_path: Path, write_app_config) -> None:
+    config_path = write_app_config(tmp_path)
     bib_path = os.path.join(str(tmp_path), "ml.bib")
     bib_path_ref = Path(bib_path)
     bib_path_ref.write_text(
@@ -81,8 +62,8 @@ def test_list_entries_with_data(tmp_path: Path) -> None:
     assert "smith2024x" in keys
 
 
-def test_list_entries_sort_author_handles_bibtex_author_strings(tmp_path: Path) -> None:
-    config_path = _write_config(str(tmp_path))
+def test_list_entries_sort_author_handles_bibtex_author_strings(tmp_path: Path, write_app_config) -> None:
+    config_path = write_app_config(tmp_path)
     bib_path_ref = Path(os.path.join(str(tmp_path), "ml.bib"))
     bib_path_ref.write_text(
         """@article{zeta2024,
@@ -109,8 +90,8 @@ def test_list_entries_sort_author_handles_bibtex_author_strings(tmp_path: Path) 
     assert [item["citekey"] for item in result["items"]] == ["alpha2024", "zeta2024"]
 
 
-def test_list_entries_respects_pagination(tmp_path: Path) -> None:
-    config_path = _write_config(str(tmp_path))
+def test_list_entries_respects_pagination(tmp_path: Path, write_app_config) -> None:
+    config_path = write_app_config(tmp_path)
     bib_path_ref = Path(os.path.join(str(tmp_path), "ml.bib"))
     entries = ""
     for i in range(5):
@@ -128,8 +109,8 @@ def test_list_entries_respects_pagination(tmp_path: Path) -> None:
 # ── entry_detail ────────────────────────────────────────────────────────────
 
 
-def test_entry_detail_finds_existing(tmp_path: Path) -> None:
-    config_path = _write_config(str(tmp_path))
+def test_entry_detail_finds_existing(tmp_path: Path, write_app_config) -> None:
+    config_path = write_app_config(tmp_path)
     bib_path_ref = Path(os.path.join(str(tmp_path), "ml.bib"))
     bib_path_ref.write_text(
         """@article{smith2024x,
@@ -148,8 +129,8 @@ def test_entry_detail_finds_existing(tmp_path: Path) -> None:
     assert rec["doi"] == "10.1234/test.001"
 
 
-def test_entry_detail_not_found(tmp_path: Path) -> None:
-    config_path = _write_config(str(tmp_path))
+def test_entry_detail_not_found(tmp_path: Path, write_app_config) -> None:
+    config_path = write_app_config(tmp_path)
     result = entry_detail(config_path=config_path, home_dir=str(tmp_path), citekey="nonexistent")
     assert result["status"] == "error"
     assert "not found" in result["message"].lower()
@@ -158,8 +139,8 @@ def test_entry_detail_not_found(tmp_path: Path) -> None:
 # ── delete_entry ────────────────────────────────────────────────────────────
 
 
-def test_delete_entry_creates_backup_before_removing_entry(tmp_path: Path) -> None:
-    _write_config(str(tmp_path))
+def test_delete_entry_creates_backup_before_removing_entry(tmp_path: Path, write_app_config) -> None:
+    write_app_config(tmp_path)
     bib_path = Path(os.path.join(str(tmp_path), "ml.bib"))
     original = """@article{keep2024,
   title = {Keep Me},

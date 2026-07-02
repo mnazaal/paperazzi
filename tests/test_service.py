@@ -377,12 +377,12 @@ default = true
     assert str(pdf_path) not in bib_path.read_text()  # absolute path must NOT appear
 
 
-def test_add_input_to_bib_uses_translation_server_metadata(tmp_path: Path) -> None:
+def test_add_input_to_bib_uses_translation_server_metadata(tmp_path: Path, dead_port) -> None:
     config_path = tmp_path / "config.toml"
     bib_path = tmp_path / "library.bib"
     config_path.write_text(
         f"""
-translation_server_url = "http://127.0.0.1:1969"
+translation_server_url = "http://127.0.0.1:{dead_port}"
 
 [[bibs]]
 name = "ml"
@@ -393,7 +393,7 @@ default = true
 
     def fake_fetch_web(url: str, *, server_url: str) -> list[dict[str, object]]:
         assert url == "https://example.com/paper"
-        assert server_url == "http://127.0.0.1:1969"
+        assert server_url == f"http://127.0.0.1:{dead_port}"
         return [
             {
                 "item_type": "journalArticle",
@@ -429,20 +429,19 @@ default = true
     contents = bib_path.read_text()
     assert "doi = {10.1234/foo}" in contents
     assert "title = {Fetched Title}" in contents
-    assert (
-        "note = {PDF: https://example.com/paper.pdf | "
-        "Abstract: https://example.com/paper}" in contents
-    )
+    assert "pzi-pdf-url = {https://example.com/paper.pdf}" in contents
+    assert "pzi-abstract-url = {https://example.com/paper}" in contents
 
 
 def test_add_input_to_bib_prefers_cli_overrides_to_fetched_metadata(
     tmp_path: Path,
+    dead_port,
 ) -> None:
     config_path = tmp_path / "config.toml"
     bib_path = tmp_path / "library.bib"
     config_path.write_text(
         f"""
-translation_server_url = "http://127.0.0.1:1969"
+translation_server_url = "http://127.0.0.1:{dead_port}"
 
 [[bibs]]
 name = "ml"
@@ -495,12 +494,13 @@ default = true
 
 def test_add_input_to_bib_errors_when_translation_server_fails(
     tmp_path: Path,
+    dead_port,
 ) -> None:
     config_path = tmp_path / "config.toml"
     bib_path = tmp_path / "library.bib"
     config_path.write_text(
         f"""
-translation_server_url = "http://127.0.0.1:1969"
+translation_server_url = "http://127.0.0.1:{dead_port}"
 
 [[bibs]]
 name = "ml"
@@ -510,7 +510,10 @@ default = true
     )
 
     def fake_fetch_web(url: str, *, server_url: str) -> list[dict[str, object]]:
-        raise RuntimeError("server unavailable")
+        # ValueError, not an arbitrary exception type: add_input_to_bib's
+        # except clause is scoped to what a real fetcher can raise (network
+        # errors, malformed-response ValueErrors), not to any Exception.
+        raise ValueError("server unavailable")
 
     result = add_input_to_bib(
         config_path=str(config_path),
@@ -524,6 +527,43 @@ default = true
 
     assert result["status"] == "error"
     assert result["errors"] == ["server unavailable"]
+
+
+def test_add_input_to_bib_does_not_swallow_non_network_bugs(
+    tmp_path: Path,
+    dead_port,
+) -> None:
+    """Regression: add_input_to_bib's except clause used to catch bare
+    Exception, so a real bug (KeyError, AttributeError, ...) anywhere in the
+    fetch/discovery path was silently misreported as a translation-server
+    error instead of surfacing. It's now scoped to actual network/parsing
+    failure types."""
+    config_path = tmp_path / "config.toml"
+    bib_path = tmp_path / "library.bib"
+    config_path.write_text(
+        f"""
+translation_server_url = "http://127.0.0.1:{dead_port}"
+
+[[bibs]]
+name = "ml"
+path = "{bib_path}"
+default = true
+""".strip()
+    )
+
+    def fake_fetch_web(url: str, *, server_url: str) -> list[dict[str, object]]:
+        raise KeyError("unexpected bug, not a network failure")
+
+    with pytest.raises(KeyError):
+        add_input_to_bib(
+            config_path=str(config_path),
+            home_dir=str(tmp_path),
+            value="https://example.com/paper",
+            record_overrides={"title": "Manual Title"},
+            bib_selector=None,
+            dry_run=True,
+            fetch_web=fake_fetch_web,
+        )
 
 
 def test_add_input_to_bib_rejects_unrecognized_input_without_fetching(
@@ -580,13 +620,14 @@ def test_describe_invalid_add_input_classifies_inputs(tmp_path: Path) -> None:
 
 def test_add_input_to_bib_falls_back_to_crossref_when_zotero_returns_501(
     tmp_path: Path,
+    dead_port,
 ) -> None:
     import urllib.error
     config_path = tmp_path / "config.toml"
     bib_path = tmp_path / "library.bib"
     config_path.write_text(
         f"""
-translation_server_url = "http://127.0.0.1:1969"
+translation_server_url = "http://127.0.0.1:{dead_port}"
 
 [[bibs]]
 name = "ml"
@@ -624,12 +665,12 @@ default = true
     assert "title" in result["changed_fields"]
 
 
-def test_add_input_to_bib_downloads_valid_pdf_attachment(tmp_path: Path) -> None:
+def test_add_input_to_bib_downloads_valid_pdf_attachment(tmp_path: Path, dead_port) -> None:
     config_path = tmp_path / "config.toml"
     bib_path = tmp_path / "library.bib"
     config_path.write_text(
         f"""
-translation_server_url = "http://127.0.0.1:1969"
+translation_server_url = "http://127.0.0.1:{dead_port}"
 
 [[bibs]]
 name = "ml"
@@ -809,12 +850,13 @@ def test_add_record_with_bib_cleans_up_pdf_when_concurrent_edit_persists(
 
 def test_add_input_to_bib_uses_web_fallback_for_doi_pdf_discovery(
     tmp_path: Path,
+    dead_port,
 ) -> None:
     config_path = tmp_path / "config.toml"
     bib_path = tmp_path / "library.bib"
     config_path.write_text(
         f"""
-translation_server_url = "http://127.0.0.1:1969"
+translation_server_url = "http://127.0.0.1:{dead_port}"
 
 [[bibs]]
 name = "ml"
@@ -883,12 +925,12 @@ default = true
     assert "https://dl.acm.org/doi/pdf/10.1145/3442188.3445922?download=true" in contents
 
 
-def test_add_input_to_bib_prefers_browser_supplied_pdf_candidate(tmp_path: Path) -> None:
+def test_add_input_to_bib_prefers_browser_supplied_pdf_candidate(tmp_path: Path, dead_port) -> None:
     config_path = tmp_path / "config.toml"
     bib_path = tmp_path / "library.bib"
     config_path.write_text(
         f"""
-translation_server_url = "http://127.0.0.1:1969"
+translation_server_url = "http://127.0.0.1:{dead_port}"
 
 [[bibs]]
 name = "ml"
@@ -927,10 +969,10 @@ default = true
     assert result["status"] == "ok"
     contents = bib_path.read_text()
     assert "file = {" in contents
-    assert "PDF: https://example.com/from-browser.pdf" in contents
+    assert "pzi-pdf-url = {https://example.com/from-browser.pdf}" in contents
 
 
-def test_add_input_to_bib_uses_browser_pdf_command_when_configured(tmp_path: Path) -> None:
+def test_add_input_to_bib_uses_browser_pdf_command_when_configured(tmp_path: Path, dead_port) -> None:
     config_path = tmp_path / "config.toml"
     bib_path = tmp_path / "library.bib"
     hook_path = tmp_path / "browser_hook.py"
@@ -940,7 +982,7 @@ def test_add_input_to_bib_uses_browser_pdf_command_when_configured(tmp_path: Pat
     browser_cmd = f"python {hook_path}"
     config_path.write_text(
         f"""
-translation_server_url = "http://127.0.0.1:1969"
+translation_server_url = "http://127.0.0.1:{dead_port}"
 browser_pdf_cmd = '{browser_cmd}'
 
 [[bibs]]
@@ -979,11 +1021,12 @@ default = true
     assert result["status"] == "ok"
     contents = bib_path.read_text()
     assert "file = {" in contents
-    assert "PDF: https://example.com/from-browser-cmd.pdf" in contents
+    assert "pzi-pdf-url = {https://example.com/from-browser-cmd.pdf}" in contents
 
 
 def test_add_input_to_bib_browser_pdf_command_argument_overrides_config(
     tmp_path: Path,
+    dead_port,
 ) -> None:
     config_path = tmp_path / "config.toml"
     bib_path = tmp_path / "library.bib"
@@ -997,7 +1040,7 @@ def test_add_input_to_bib_browser_pdf_command_argument_overrides_config(
     )
     config_path.write_text(
         f"""
-translation_server_url = "http://127.0.0.1:1969"
+translation_server_url = "http://127.0.0.1:{dead_port}"
 browser_pdf_cmd = 'python {config_hook}'
 
 [[bibs]]
@@ -1036,18 +1079,19 @@ default = true
 
     assert result["status"] == "ok"
     contents = bib_path.read_text()
-    assert "PDF: https://example.com/from-argument.pdf" in contents
+    assert "pzi-pdf-url = {https://example.com/from-argument.pdf}" in contents
     assert "from-config.pdf" not in contents
 
 
 def test_add_record_with_page_metadata_overrides_still_inserts_when_fetch_minimal(
     tmp_path: Path,
+    dead_port,
 ) -> None:
     config_path = tmp_path / "config.toml"
     bib_path = tmp_path / "library.bib"
     config_path.write_text(
         f"""
-translation_server_url = "http://127.0.0.1:1969"
+translation_server_url = "http://127.0.0.1:{dead_port}"
 
 [[bibs]]
 name = "ml"
@@ -1083,12 +1127,13 @@ default = true
 
 def test_add_input_to_bib_doi_uses_browser_metadata_when_lookup_fails(
     tmp_path: Path,
+    dead_port,
 ) -> None:
     config_path = tmp_path / "config.toml"
     bib_path = tmp_path / "library.bib"
     config_path.write_text(
         f"""
-translation_server_url = "http://127.0.0.1:1969"
+translation_server_url = "http://127.0.0.1:{dead_port}"
 
 [[bibs]]
 name = "ml"
@@ -1123,12 +1168,12 @@ default = true
     assert "doi = {10.5555/3327546.3327713}" in text
 
 
-def test_add_input_to_bib_warns_and_skips_html_attachment(tmp_path: Path) -> None:
+def test_add_input_to_bib_warns_and_skips_html_attachment(tmp_path: Path, dead_port) -> None:
     config_path = tmp_path / "config.toml"
     bib_path = tmp_path / "library.bib"
     config_path.write_text(
         f"""
-translation_server_url = "http://127.0.0.1:1969"
+translation_server_url = "http://127.0.0.1:{dead_port}"
 
 [[bibs]]
 name = "ml"
@@ -1173,12 +1218,12 @@ default = true
     assert "file = {" not in bib_path.read_text()
 
 
-def test_add_input_to_bib_uses_unpaywall_when_no_attachment(tmp_path: Path) -> None:
+def test_add_input_to_bib_uses_unpaywall_when_no_attachment(tmp_path: Path, dead_port) -> None:
     config_path = tmp_path / "config.toml"
     bib_path = tmp_path / "library.bib"
     config_path.write_text(
         f"""
-translation_server_url = "http://127.0.0.1:1969"
+translation_server_url = "http://127.0.0.1:{dead_port}"
 unpaywall_email = "test@example.com"
 
 [[bibs]]
@@ -1222,12 +1267,12 @@ default = true
     assert "file = {" in bib_path.read_text()
 
 
-def test_add_input_to_bib_flaresolverr_url_fallback(tmp_path: Path) -> None:
+def test_add_input_to_bib_flaresolverr_url_fallback(tmp_path: Path, dead_port) -> None:
     config_path = tmp_path / "config.toml"
     bib_path = tmp_path / "library.bib"
     config_path.write_text(
         f"""
-translation_server_url = "http://127.0.0.1:1969"
+translation_server_url = "http://127.0.0.1:{dead_port}"
 flaresolverr_url = "http://127.0.0.1:8191"
 
 [[bibs]]
@@ -1271,12 +1316,12 @@ default = true
     assert "Goodfellow" in bib_text
 
 
-def test_add_input_to_bib_flaresolverr_disabled_when_no_url(tmp_path: Path) -> None:
+def test_add_input_to_bib_flaresolverr_disabled_when_no_url(tmp_path: Path, dead_port) -> None:
     config_path = tmp_path / "config.toml"
     bib_path = tmp_path / "library.bib"
     config_path.write_text(
         f"""
-translation_server_url = "http://127.0.0.1:1969"
+translation_server_url = "http://127.0.0.1:{dead_port}"
 
 [[bibs]]
 name = "ml"
@@ -1309,13 +1354,13 @@ default = true
     assert flaresolverr_called == []
 
 
-def test_add_input_to_bib_flaresolverr_doi_embedded_in_url(tmp_path: Path) -> None:
+def test_add_input_to_bib_flaresolverr_doi_embedded_in_url(tmp_path: Path, dead_port) -> None:
     """ACM-style URL with unresolvable pseudo-DOI falls back to FlareSolverr."""
     config_path = tmp_path / "config.toml"
     bib_path = tmp_path / "library.bib"
     config_path.write_text(
         f"""
-translation_server_url = "http://127.0.0.1:1969"
+translation_server_url = "http://127.0.0.1:{dead_port}"
 flaresolverr_url = "http://127.0.0.1:8191"
 
 [[bibs]]
@@ -1537,12 +1582,12 @@ def test_single_path_retry_then_fail_removes_new_pdf(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _make_add_input_config(tmp_path: Path) -> tuple[str, str]:
+def _make_add_input_config(tmp_path: Path, dead_port: int) -> tuple[str, str]:
     config_path = tmp_path / "config.toml"
     bib_path = tmp_path / "library.bib"
     config_path.write_text(
         f"""
-translation_server_url = "http://127.0.0.1:1969"
+translation_server_url = "http://127.0.0.1:{dead_port}"
 
 [[bibs]]
 name = "ml"
@@ -1553,11 +1598,13 @@ default = true
     return str(config_path), str(bib_path)
 
 
-def test_add_input_to_bib_provider_error_appears_as_warning(tmp_path: Path) -> None:
+def test_add_input_to_bib_provider_error_appears_as_warning(
+    tmp_path: Path, dead_port
+) -> None:
     """When a provider fails and fallback succeeds, result is ok with a warning."""
     import urllib.error
 
-    config_path, _bib_path = _make_add_input_config(tmp_path)
+    config_path, _bib_path = _make_add_input_config(tmp_path, dead_port)
 
     def fake_fetch_search(query: str, *, server_url: str) -> list[dict[str, object]]:
         raise urllib.error.HTTPError(None, 429, "Too Many Requests", {}, None)  # type: ignore[arg-type]
@@ -1583,11 +1630,13 @@ def test_add_input_to_bib_provider_error_appears_as_warning(tmp_path: Path) -> N
     )
 
 
-def test_add_input_to_bib_strict_metadata_makes_provider_error_fatal(tmp_path: Path) -> None:
+def test_add_input_to_bib_strict_metadata_makes_provider_error_fatal(
+    tmp_path: Path, dead_port
+) -> None:
     """With metadata_strict=True a provider error returns an error result."""
     import urllib.error
 
-    config_path, _bib_path = _make_add_input_config(tmp_path)
+    config_path, _bib_path = _make_add_input_config(tmp_path, dead_port)
 
     def fake_fetch_search(query: str, *, server_url: str) -> list[dict[str, object]]:
         raise urllib.error.HTTPError(None, 429, "Too Many Requests", {}, None)  # type: ignore[arg-type]

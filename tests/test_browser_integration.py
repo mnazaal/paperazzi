@@ -9,8 +9,15 @@ from pzi.browser_pdf_hook import discover_pdf_url, download_pdf
 from pzi.browser_session import (
     open_browser_session,
 )
+from tests.browser_probe import BROWSER_UNAVAILABLE_REASON, browser_available
 
 pytestmark = pytest.mark.browser
+
+
+@pytest.fixture(autouse=True)
+def _require_browser() -> None:
+    if not browser_available():
+        pytest.skip(reason=BROWSER_UNAVAILABLE_REASON)
 
 
 # ----------------------------------------------------------------

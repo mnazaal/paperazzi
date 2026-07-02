@@ -24,7 +24,9 @@ TRACKING_QUERY_KEYS = frozenset(
     }
 )
 
-DOI_PATTERN = re.compile(r"(?i)^(?:https?://(?:dx\.)?doi\.org/)?(10\.\d{4,9}/\S+)$")
+DOI_PATTERN = re.compile(
+    r"(?i)^(?:doi:\s*|https?://(?:dx\.)?doi\.org/)?(10\.\d{4,9}/[^\s?#]+)(?:[?#]\S*)?$"
+)
 DOI_IN_PATH_PATTERN = re.compile(r"(?i)/doi/(10\.\d{4,9}/[^\s?#]+)")
 ARXIV_ABS_PATTERN = re.compile(r"(?i)^/abs/([a-z\-]+/\d{7}|\d{4}\.\d{4,5})(v\d+)?/?$")
 ARXIV_PDF_PATTERN = re.compile(
@@ -35,7 +37,13 @@ ARXIV_PDF_PATTERN = re.compile(
 
 
 def normalize_doi(value: str) -> str | None:
-    """Return a canonical DOI string, or None if the input is not DOI-like."""
+    """Return a canonical DOI string, or None if the input is not DOI-like.
+
+    The suffix stops at ``?``/``#``: doi.org forwards a query string to the
+    resolved target rather than treating it as part of the DOI, so a pasted
+    ``doi.org`` link with tracking params (``?utm_source=...``) or an anchor
+    must not have that cruft folded into the stored identifier.
+    """
     candidate = value.strip()
     match = DOI_PATTERN.match(candidate)
     if match is None:
@@ -112,7 +120,7 @@ def classify_input(value: str) -> ClassifiedInput:
         if embedded_doi is not None:  # pragma: no branch — covered by integration/browser tests
             return {"kind": "doi", "raw": value, "normalized": embedded_doi}
 
-    if url_parts.hostname == "arxiv.org":
+    if url_parts.hostname in {"arxiv.org", "www.arxiv.org"}:
         arxiv_id = _extract_arxiv_id_from_url_path(url_parts.path)
         if arxiv_id is not None:
             return {
@@ -139,7 +147,7 @@ def classify_input(value: str) -> ClassifiedInput:
     is_pdf = (
         url_parts.path.lower().endswith(".pdf")
         or (
-            url_parts.netloc.lower() == "arxiv.org"
+            url_parts.hostname in {"arxiv.org", "www.arxiv.org"}
             and ARXIV_PDF_PATTERN.match(url_parts.path)
         )
     )

@@ -19,7 +19,6 @@ from pathlib import Path
 
 from pzi.add_service import add_input_to_bib
 from pzi.bib_repository import read_bib_file
-from pzi.config import dump_app_config
 from tests.test_paywall_helpers import (
     make_fetch_binary_403,
     make_fetch_binary_selective,
@@ -28,51 +27,19 @@ from tests.test_paywall_helpers import (
     make_fetch_web_from_article_fixture,
 )
 
-# ── Test helpers ───────────────────────────────────────────────────────────
-
-
-def _write_minimal_config(td: str, *, bib_name: str = "ml") -> str:
-    """Write a minimal config.toml with one bib and translation_server_url.
-
-    Returns the path to the config file.
-    """
-    config_path = os.path.join(td, ".config", "pzi", "config.toml")
-    bib_path = os.path.join(td, f"{bib_name}.bib")
-    papers_dir = os.path.join(td, "papers")
-    os.makedirs(os.path.dirname(config_path), exist_ok=True)
-    os.makedirs(papers_dir, exist_ok=True)
-
-    config = {
-        "bibs": [
-            {
-                "name": bib_name,
-                "path": bib_path,
-                "papers_dir": papers_dir,
-                "default": True,
-            }
-        ],
-        "translation_server_url": "http://127.0.0.1:1969",
-        "api_listen_host": "127.0.0.1",
-        "api_listen_port": 8765,
-    }
-    Path(config_path).parent.mkdir(parents=True, exist_ok=True)
-    Path(config_path).write_text(dump_app_config(config))
-    return config_path
-
-
 DOI = "10.1234/jmlr.2025.00142"
 
 
 # ── Scenario 1: Direct PDF fetch blocked (403) ─────────────────────────────
 
 
-def test_direct_blocked_metadata_succeeds_pdf_fails(tmp_path: Path) -> None:
+def test_direct_blocked_metadata_succeeds_pdf_fails(tmp_path: Path, write_app_config) -> None:
     """Translation server returns metadata with PDF attachment.
 
     Direct binary fetch of the attachment URL returns 403.
     Result: entry created, pdf_status='direct_blocked', suggestion mentions extension.
     """
-    config_path = _write_minimal_config(str(tmp_path))
+    config_path = write_app_config(tmp_path)
     bib_path = tmp_path / "ml.bib"
 
     result = add_input_to_bib(
@@ -136,12 +103,12 @@ def test_browser_hook_step_discovers_pdf_when_configured() -> None:
 # ── Scenario 3: Browser extension attach flow ──────────────────────────────
 
 
-def test_extension_attach_pdf_bytes_after_capture(tmp_path: Path) -> None:
+def test_extension_attach_pdf_bytes_after_capture(tmp_path: Path, write_app_config) -> None:
     """Full browser extension flow: capture creates entry, then PDF bytes attached.
 
     Tests the HTTP API handlers with injected service dependencies.
     """
-    config_path = _write_minimal_config(str(tmp_path))
+    config_path = write_app_config(tmp_path)
     bib_path = tmp_path / "ml.bib"
     _papers_dir = tmp_path / "papers"
 
@@ -197,12 +164,12 @@ def test_extension_attach_pdf_bytes_after_capture(tmp_path: Path) -> None:
 # ── Scenario 4: Unpaywall open-access fallback ─────────────────────────────
 
 
-def test_unpaywall_finds_oa_when_direct_blocked(tmp_path: Path) -> None:
+def test_unpaywall_finds_oa_when_direct_blocked(tmp_path: Path, write_app_config) -> None:
     """Direct PDF fetch blocked by publisher (403).
 
     Unpaywall returns an open-access mirror URL → PDF saved from OA mirror.
     """
-    config_path = _write_minimal_config(str(tmp_path))
+    config_path = write_app_config(tmp_path)
 
     # selective fetch: block publisher, allow OA mirror
     fetch_binary = make_fetch_binary_selective(

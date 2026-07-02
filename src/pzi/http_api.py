@@ -33,6 +33,17 @@ from pzi.pdf_attach_session_store import AttachSessionStore
 # Handler
 # ---------------------------------------------------------------------------
 
+# Per-connection read timeout (slowloris mitigation): a client that opens a
+# connection and then trickles bytes in (or none at all) would otherwise hold
+# a handler thread/socket open indefinitely, since `server.socket.settimeout`
+# below only bounds accept() on the *listening* socket, not reads on sockets
+# already accepted. `socketserver.StreamRequestHandler.setup()` applies the
+# `timeout` class attribute to each accepted connection via
+# `self.connection.settimeout(...)`, so setting it here bounds every
+# individual read/write on that connection.
+CONNECTION_READ_TIMEOUT_SECONDS = 30
+
+
 def server_exposure_error(host: str, security: HttpSecurityConfig) -> str | None:
     """Return refusal reason for unsafe direct server exposure, if any."""
     if security.get("auth_token") or loopback_bind_host(host):
@@ -58,6 +69,7 @@ def build_handler_class(
         (BaseHTTPRequestHandler,),
         {
             "server_version": "pzi/0.1",
+            "timeout": CONNECTION_READ_TIMEOUT_SECONDS,
             "_rate_limiter": RateLimiter(max_requests=security_config["rate_limit_rpm"]),
             "_browser_session_manager": browser_manager,
             "_attach_session_store": store,
@@ -363,7 +375,7 @@ def run_server(  # pragma: no cover — I/O entry point, covered by integration 
     browser_profile_path: str | None = None,
     browser_engine: str = "chromium",
 ) -> None:
-    security_config = security or build_http_security_config()
+    security_config = security or build_http_security_config(listen_host=host)
     exposure_error = server_exposure_error(host, security_config)
     if exposure_error is not None:
         raise ValueError(exposure_error)

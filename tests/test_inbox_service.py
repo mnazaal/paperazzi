@@ -334,3 +334,35 @@ def test_drain_inbox_preserves_order_of_remaining_lines(tmp_path: Path) -> None:
     comment_idx = next(i for i, line in enumerate(lines) if line.startswith("# comment"))
     fail_idx = next(i for i, line in enumerate(lines) if "fail" in line)
     assert comment_idx < fail_idx
+
+
+def test_drain_inbox_appended_line_survives_concurrent_write(tmp_path: Path) -> None:
+    # Regression: drain used to snapshot the file at the start and rewrite
+    # from that stale snapshot at the end, so a line appended by an external
+    # writer (browser extension, editor) while the drain's network calls were
+    # in flight got silently dropped by the final rewrite.
+    inbox = tmp_path / "inbox.txt"
+    inbox.write_text("https://arxiv.org/abs/first\n")
+
+    def add_then_append_externally(**kwargs: Any) -> dict[str, Any]:
+        with inbox.open("a", encoding="utf-8") as f:
+            f.write("https://arxiv.org/abs/appended-mid-drain\n")
+        return {"status": "ok", "action": "insert", "citekey": "ck",
+                "bib_name": "main", "warnings": [], "errors": []}
+
+    result = drain_inbox(config_path=_CFG, home_dir=_HOME, inbox_path=str(inbox),
+                         delay=0, add_fn=add_then_append_externally)
+    assert result["counts"]["added"] == 1
+    remaining = inbox.read_text()
+    assert "appended-mid-drain" in remaining
+    assert "first" not in remaining
+
+
+def test_drain_inbox_lock_file_cleaned_up_alongside_inbox(tmp_path: Path) -> None:
+    inbox = tmp_path / "inbox.txt"
+    inbox.write_text("https://arxiv.org/abs/x\n")
+    drain_inbox(config_path=_CFG, home_dir=_HOME, inbox_path=str(inbox),
+                delay=0, add_fn=_ok_add())
+    # The lock file is a persistent sidecar (like bib_repository's .lock),
+    # not a leftover temp file — assert it exists rather than that it's absent.
+    assert (tmp_path / "inbox.txt.lock").exists()

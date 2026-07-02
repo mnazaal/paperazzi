@@ -7,11 +7,15 @@ import os
 import random
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict
 
+import portalocker
+
+from pzi.fileio import fsync_parent_dir
 from pzi.tag_service import normalize_tags
 
 
@@ -71,6 +75,41 @@ def parse_inbox_line(raw: str) -> InboxLine | None:
 # ---------------------------------------------------------------------------
 
 
+@contextmanager
+def with_inbox_lock(inbox_path: Path) -> Iterator[None]:
+    """Take an advisory exclusive lock scoped to an inbox file.
+
+    A drain reads the whole file, then spends the entire processing loop
+    (network calls, deliberate delays) before rewriting it — a long window in
+    which an external writer (browser extension, editor) can append a new
+    line. Holding this lock only around the final re-read+rewrite (not the
+    whole drain) keeps that window small without blocking appenders for the
+    drain's full duration.
+    """
+    lock_path = Path(str(inbox_path) + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(str(lock_path), "a") as lock_fh:
+        portalocker.lock(lock_fh, portalocker.LOCK_EX)
+        try:
+            yield
+        finally:
+            portalocker.unlock(lock_fh)
+
+
+def _reread_appended_lines(inbox_path: Path, known_line_count: int) -> list[str]:
+    """Return lines appended to the inbox file after the initial drain snapshot.
+
+    The inbox is append-only in practice, so anything beyond the line count
+    the drain started with is a line written concurrently and must survive
+    the rewrite rather than being silently dropped.
+    """
+    try:
+        current_text = inbox_path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    return current_text.splitlines()[known_line_count:]
+
+
 def _write_inbox_atomically(inbox_path: Path, lines: list[str]) -> None:
     """Atomically rewrite the inbox file (POSIX rename)."""
     content = "\n".join(lines) + ("\n" if lines else "")
@@ -82,6 +121,7 @@ def _write_inbox_atomically(inbox_path: Path, lines: list[str]) -> None:
         tmp = f.name
     try:
         os.replace(tmp, str(inbox_path))
+        fsync_parent_dir(inbox_path)
     except Exception:
         with contextlib.suppress(OSError):
             os.unlink(tmp)
@@ -207,7 +247,9 @@ def drain_inbox(
             for i in range(len(raw_lines))
             if parsed[i] is None or i in failed_indices
         ]
-        _write_inbox_atomically(path, remaining)
+        with with_inbox_lock(path):
+            appended = _reread_appended_lines(path, len(raw_lines))
+            _write_inbox_atomically(path, remaining + appended)
 
     return {
         "status": "ok",

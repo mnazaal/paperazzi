@@ -283,7 +283,12 @@ def add_input_to_bib(
                 dry_run=dry_run,
                 warnings=[],
             )
-    except Exception as exc:
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        # Narrowly scoped to what the translation-server / metadata-provider
+        # fetchers actually raise for network and malformed-response
+        # failures, so a genuine bug elsewhere in this block (KeyError,
+        # AttributeError, TypeError, ...) surfaces as a crash instead of
+        # being silently misreported as "translation server error".
         manual_record = _manual_record_from_overrides(record_overrides)
         if classified["kind"] in {"doi", "url", "pdf_url"} and has_minimum_metadata(manual_record):
             fallback_record = merge_record_sources(

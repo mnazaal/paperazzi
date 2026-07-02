@@ -1,7 +1,9 @@
-"""Pure capture request models and artifact loaders.
+"""Capture request models and artifact loaders.
 
 No network, no BibTeX writes.  CLI, HTTP, and browser-extension adapters can
-all build these shapes before calling service code.
+all build these shapes before calling service code. ``load_page_artifact``
+does read local disk/stdin (not pure), but never talks to the network or
+touches a `.bib` file.
 """
 
 from __future__ import annotations

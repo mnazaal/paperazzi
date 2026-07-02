@@ -103,6 +103,30 @@ def test_public_ip_address_rejects_non_public_ranges() -> None:
     assert not public_ip_address("not-an-ip")
 
 
+def test_public_ip_address_rejects_cgnat_range() -> None:
+    # 100.64.0.0/10 (carrier-grade NAT, RFC 6598): not `is_private` under
+    # ipaddress's own flags, but not publicly routable either.
+    assert not public_ip_address("100.64.0.1")
+    assert not public_ip_address("100.100.100.100")
+
+
+def test_public_ip_address_rejects_ipv4_mapped_private_literal() -> None:
+    # ::ffff:<ipv4> wraps an IPv4 address in IPv6 syntax; the wrapper's own
+    # classification could disagree with the embedded address on affected
+    # Python patch releases (CVE-2024-4032), so this must key off the
+    # embedded address instead.
+    assert not public_ip_address("::ffff:127.0.0.1")
+    assert not public_ip_address("::ffff:10.0.0.1")
+    assert not public_ip_address("::ffff:192.168.1.1")
+    assert not public_ip_address("::ffff:100.64.0.1")
+    assert public_ip_address("::ffff:93.184.216.34")
+
+
+def test_public_ip_address_rejects_multicast() -> None:
+    assert not public_ip_address("224.0.0.1")
+    assert not public_ip_address("ff02::1")
+
+
 def test_safe_public_http_url_rejects_non_http_scheme() -> None:
     assert not safe_public_http_url("ftp://example.com/x")
     assert not safe_public_http_url("https://")  # no hostname

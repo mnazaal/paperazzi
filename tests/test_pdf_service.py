@@ -54,7 +54,7 @@ def test_retry_pdf_citekey_not_found(monkeypatch) -> None:
 
 
 def test_retry_pdf_no_pdf_url(monkeypatch) -> None:
-    """citekey found but no PDF URL in note → error path."""
+    """citekey found but no PDF URL on entry → error path."""
     monkeypatch.setattr(
         pdf_service, "load_and_resolve_bib",
         lambda **kw: ({"bibs": []}, {"name": "ml", "path": "/b", "papers_dir": "/p"}),
@@ -63,12 +63,8 @@ def test_retry_pdf_no_pdf_url(monkeypatch) -> None:
         pdf_service, "read_bib_file",
         lambda path: {
             "entries": [{"citekey": "smith2024", "fields": {"note": "some note"}}],
-            "records": [],
+            "records": [{"citekey": "smith2024"}],
         },
-    )
-    monkeypatch.setattr(
-        pdf_service, "extract_note_field",
-        lambda note, label: None,
     )
     result = pdf_service.retry_pdf(
         config_path="/f",
@@ -90,13 +86,9 @@ def test_retry_pdf_fetch_failed(monkeypatch) -> None:
     monkeypatch.setattr(
         pdf_service, "read_bib_file",
         lambda path: {
-            "entries": [{"citekey": "smith2024", "fields": {"note": "PDF: http://x.com/p.pdf"}}],
-            "records": [],
+            "entries": [{"citekey": "smith2024", "fields": {}}],
+            "records": [{"citekey": "smith2024", "pdf_url": "http://x.com/p.pdf"}],
         },
-    )
-    monkeypatch.setattr(
-        pdf_service, "extract_note_field",
-        lambda note, label: "http://x.com/p.pdf",
     )
     monkeypatch.setattr(
         pdf_service, "fetch_and_store_pdf",
@@ -125,13 +117,9 @@ def test_retry_pdf_update_not_found(monkeypatch) -> None:
     monkeypatch.setattr(
         pdf_service, "read_bib_file",
         lambda path: {
-            "entries": [{"citekey": "smith2024", "fields": {"note": "PDF: http://x.com/p.pdf"}}],
-            "records": [],
+            "entries": [{"citekey": "smith2024", "fields": {}}],
+            "records": [{"citekey": "smith2024", "pdf_url": "http://x.com/p.pdf"}],
         },
-    )
-    monkeypatch.setattr(
-        pdf_service, "extract_note_field",
-        lambda note, label: "http://x.com/p.pdf",
     )
     monkeypatch.setattr(
         pdf_service, "fetch_and_store_pdf",
@@ -166,11 +154,10 @@ def test_retry_pdf_removes_new_pdf_when_update_disappears(monkeypatch, tmp_path:
     monkeypatch.setattr(
         pdf_service, "read_bib_file",
         lambda path: {
-            "entries": [{"citekey": "smith2024", "fields": {"note": "PDF: http://x.com/p.pdf"}}],
-            "records": [{"citekey": "smith2024"}],
+            "entries": [{"citekey": "smith2024", "fields": {}}],
+            "records": [{"citekey": "smith2024", "pdf_url": "http://x.com/p.pdf"}],
         },
     )
-    monkeypatch.setattr(pdf_service, "extract_note_field", lambda note, label: "http://x.com/p.pdf")
 
     def fake_fetch(**kwargs):
         papers_dir.mkdir(parents=True, exist_ok=True)
@@ -209,13 +196,9 @@ def test_retry_pdf_success(monkeypatch) -> None:
     monkeypatch.setattr(
         pdf_service, "read_bib_file",
         lambda path: {
-            "entries": [{"citekey": "smith2024", "fields": {"note": "PDF: http://x.com/p.pdf"}}],
-            "records": [],
+            "entries": [{"citekey": "smith2024", "fields": {}}],
+            "records": [{"citekey": "smith2024", "pdf_url": "http://x.com/p.pdf"}],
         },
-    )
-    monkeypatch.setattr(
-        pdf_service, "extract_note_field",
-        lambda note, label: "http://x.com/p.pdf",
     )
     monkeypatch.setattr(
         pdf_service, "fetch_and_store_pdf",
@@ -796,9 +779,8 @@ def test_entry_with_pdf_fields_no_pdf_url() -> None:
     )
     assert result_entry["entry_type"] == "article"
     assert result_entry["citekey"] == "smith2024"
-    # pdf_url should NOT be in the note field since we passed None
-    note = result_entry["fields"].get("note", "")
-    assert "PDF: " not in note or note == ""
+    # pdf_url should NOT be set since we passed None
+    assert "pzi-pdf-url" not in result_entry["fields"]
 
 
 def test_entry_with_pdf_fields_with_pdf_url() -> None:
@@ -823,8 +805,8 @@ def test_entry_with_pdf_fields_with_pdf_url() -> None:
     assert result_entry["citekey"] == "smith2024"
     # local_pdf_path should be set as file field
     assert result_entry["fields"]["file"] == "/p/smith2024.pdf"
-    # pdf_url should be in the note field
-    assert "PDF: https://example.com/p.pdf" in result_entry["fields"].get("note", "")
+    # pdf_url should be in its own field
+    assert result_entry["fields"]["pzi-pdf-url"] == "https://example.com/p.pdf"
 
 
 def test_entry_with_pdf_fields_preserves_existing_note() -> None:
@@ -846,9 +828,8 @@ def test_entry_with_pdf_fields_preserves_existing_note() -> None:
         local_pdf_path="/p/smith2024.pdf",
         pdf_url="https://example.com/p.pdf",
     )
-    note = result_entry["fields"].get("note", "")
-    assert "original note" in note
-    assert "PDF: https://example.com/p.pdf" in note
+    assert result_entry["fields"].get("note") == "original note"
+    assert result_entry["fields"]["pzi-pdf-url"] == "https://example.com/p.pdf"
     assert "file" in result_entry["fields"]
 
 # ── from test_pdf_text_metadata.py ──
@@ -1004,8 +985,8 @@ def test_retry_failed_pdfs_all_skipped(monkeypatch) -> None:
         pdf_service, "read_bib_file",
         lambda path: {
             "entries": [
-                {"citekey": "smith2024", "fields": {"note": "PDF: http://x.com/p.pdf"}},
-                {"citekey": "jones2024", "fields": {"note": "some note"}},
+                {"citekey": "smith2024", "fields": {}},
+                {"citekey": "jones2024", "fields": {}},
             ],
             "records": [
                 {"citekey": "smith2024", "local_pdf_path": "/p/smith2024.pdf"},
@@ -1046,16 +1027,15 @@ def test_retry_failed_pdfs_some_retried(
         pdf_service, "read_bib_file",
         lambda path: {
             "entries": [
-                {"citekey": "smith2024", "fields": {"note": "PDF: http://x.com/p.pdf"}},
-                {"citekey": "jones2024", "fields": {"note": "PDF: http://y.com/q.pdf"}},
+                {"citekey": "smith2024", "fields": {}},
+                {"citekey": "jones2024", "fields": {}},
             ],
             "records": [
-                {"citekey": "smith2024"},
-                {"citekey": "jones2024"},
+                {"citekey": "smith2024", "pdf_url": "http://x.com/p.pdf"},
+                {"citekey": "jones2024", "pdf_url": "http://y.com/q.pdf"},
             ],
         },
     )
-    monkeypatch.setattr(pdf_service, "extract_note_field", lambda note, label: "http://x.com/p.pdf")
     monkeypatch.setattr(pdf_service, "_snapshot_pdf_paths", lambda dir: set())
 
     call_count = {"count": 0}

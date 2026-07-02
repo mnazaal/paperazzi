@@ -35,6 +35,9 @@ jobs:
       - name: Check package metadata (twine)
         run: .venv/bin/twine check dist/*.tar.gz dist/*.whl
 
+      - name: Build browser extension zips
+        run: python tools/build_extension.py
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -73,7 +76,7 @@ jobs:
           gh release create "$tag" \
             --title "$tag" \
             --notes "$body" \
-            dist/*
+            dist/*.tar.gz dist/*.whl dist/*.zip
     permissions:
       contents: write
 

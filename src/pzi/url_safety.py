@@ -101,16 +101,21 @@ def resolved_address_public(item: ResolvedAddress) -> bool:
 
 
 def public_ip_address(value: str) -> bool:
-    """Return True for globally-routable IP address strings."""
+    """Return True for globally-routable IP address strings.
+
+    Rejects an IPv4-mapped IPv6 literal (e.g. ``::ffff:127.0.0.1``) based on
+    its embedded IPv4 address rather than the wrapper's own classification:
+    on some Python patch releases (the CVE-2024-4032 window, roughly
+    3.11.0-3.11.8/3.12.0-3.12.3) the IPv6 wrapper's `is_private`/`is_global`
+    could disagree with the embedded address's real reachability.
+    """
     try:
         ip = ipaddress.ip_address(value)
     except ValueError:
         return False
-    return not (
-        ip.is_private
-        or ip.is_loopback
-        or ip.is_link_local
-        or ip.is_multicast
-        or ip.is_reserved
-        or ip.is_unspecified
-    )
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        ip = mapped
+    # is_global already excludes private/loopback/link-local/reserved/CGNAT,
+    # but (surprisingly) not multicast, so that stays an explicit check.
+    return ip.is_global and not ip.is_multicast

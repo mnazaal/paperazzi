@@ -99,9 +99,10 @@ names — never PDFs, cookies, or HTML.
 | Bind address | `127.0.0.1` only | Keep loopback. Never use `0.0.0.0` without TLS. |
 | Auth token | None (optional) | Set `api_auth_token` in config, copy to extension popup. |
 | Origin check | Allows `chrome-extension://`, `moz-extension://`, `http://localhost`, `http://127.0.0.1` | Restrict to specific origins via `api_allowed_origins` config list. |
+| Host check (DNS rebinding) | Loopback bind accepts only a loopback `Host` header; an explicit non-loopback `api_listen_host` accepts only that host | Kept — derived from `api_listen_host`, no separate config key. Blocks a page that points its own domain's DNS at 127.0.0.1 and sends a plain GET (no Origin header) with `Host: <attacker-domain>`. |
 | Body size cap | 64 MiB (`api_max_body_bytes`) | Lower if you only capture papers (most PDFs are <20 MiB). |
 | Rate limiting | 60 req/min per client IP | Adjust `rate_limit_rpm` in config. |
-| Attach session tokens | Random 32-byte URL-safe token, TTL 5 minutes, one-shot consume | Tokens generated per capture request, validated on raw PDF upload. |
+| Attach session tokens | Random 32-byte URL-safe token, TTL 10 minutes, one-shot consume | Tokens generated per capture request, validated on raw PDF upload. |
 | Content-Length validation | Bodies over `api_max_body_bytes` rejected before reading | Kept. |
 | Recursive DNS safety | `safe_public_http_url` resolves hostnames with 250ms budget, rejects private/local IPs | Kept. One scoped exception: a configured `ezproxy_host` (see below). |
 
@@ -156,7 +157,7 @@ compromised, the attacker can access any local file regardless of paperazzi.
   with `chrome.storage.local` fallback.
 - Auth token stored in extension storage, sent as `X-Pzi-Token` header.
 - PDF bytes are validated (`%PDF-` magic) before upload.
-- Attach sessions have TTL (5 min), max byte limit, and allowlisted source URLs.
+- Attach sessions have TTL (10 min), max byte limit, and allowlisted source URLs.
 - Extension version marker in every capture body for debugging.
 
 ## Recommendations

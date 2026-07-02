@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import difflib
 import hashlib
 import os
@@ -35,7 +36,7 @@ from pzi.bibtex import (
     record_to_bibtex_entry,
     resolve_citekey_collision,
 )
-from pzi.fileio import read_text_utf8
+from pzi.fileio import fsync_parent_dir, read_text_utf8
 from pzi.similarity import (
     IdentityKind,
     build_identity_index,
@@ -159,6 +160,20 @@ def _read_bib_file_raw(path: str) -> ReadBibResult:
     return {"entries": entries, "records": records}
 
 
+def _resolve_write_target(path: str) -> Path:
+    """Resolve a configured bib path to the file that should actually be replaced.
+
+    ``os.replace`` treats a symlink destination as the directory entry to
+    replace, not the file it points at — so writing straight to a symlinked
+    ``.bib`` path would delete the symlink and leave a regular file in its
+    place, silently detaching it from whatever the symlink used to point to
+    (e.g. a synced cloud-storage location). Resolving through the symlink
+    first makes the write land on the real target, which is what a symlinked
+    config path is for.
+    """
+    return Path(os.path.realpath(path))
+
+
 def write_bib_file(
     path: str,
     entries: list[BibtexEntry],
@@ -170,7 +185,7 @@ def write_bib_file(
     ``file_path_style`` controls how absolute ``file`` paths under the bib
     directory are serialized. Internal records still use absolute paths.
     """
-    file_path = Path(path)
+    file_path = _resolve_write_target(path)
     file_path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
     if file_path_style not in {"absolute", "relative"}:
         raise ValueError("file_path_style must be 'absolute' or 'relative'")
@@ -183,24 +198,36 @@ def write_bib_file(
     # filesystem.
     fd, tmp = tempfile.mkstemp(dir=str(file_path.parent), prefix=".bib-", suffix=".tmp")
     try:
-        os.write(fd, content)
-        os.fsync(fd)  # flush to disk before rename so a crash can't leave an empty bib
-    finally:
-        os.close(fd)
-    os.replace(tmp, file_path)
+        try:
+            os.write(fd, content)
+            os.fsync(fd)  # flush to disk before rename so a crash can't leave an empty bib
+        finally:
+            os.close(fd)
+        os.replace(tmp, file_path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+    fsync_parent_dir(file_path)
 
 
 def _write_bib_text_atomic(path: str, text: str) -> None:
-    file_path = Path(path)
+    file_path = _resolve_write_target(path)
     file_path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
     content = text.encode("utf-8")
     fd, tmp = tempfile.mkstemp(dir=str(file_path.parent), prefix=".bib-", suffix=".tmp")
     try:
-        os.write(fd, content)
-        os.fsync(fd)  # flush to disk before rename so a crash can't leave an empty bib
-    finally:
-        os.close(fd)
-    os.replace(tmp, file_path)
+        try:
+            os.write(fd, content)
+            os.fsync(fd)  # flush to disk before rename so a crash can't leave an empty bib
+        finally:
+            os.close(fd)
+        os.replace(tmp, file_path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+    fsync_parent_dir(file_path)
 
 
 def _read_bib_source(path: str) -> str:

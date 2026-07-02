@@ -668,7 +668,7 @@ default = true
     contents = bib_path.read_text()
     assert "author = {Smith, Jane and Doe, John}" in contents
     assert "keywords = {graphs, ml}" in contents
-    assert "PDF: https://example.com/paper.pdf" in contents
+    assert "pzi-pdf-url = {https://example.com/paper.pdf}" in contents
 
 
 def test_cli_add_generates_citekey_when_missing(tmp_path: Path) -> None:
@@ -739,6 +739,10 @@ def test_cli_init_setup_writes_config_only(tmp_path: Path) -> None:
     out = stdout.getvalue()
     assert "playwright install" in out
     assert "pzi server" in out
+    # regression: distribution is "paperazzi", not "pzi" (pzi is only the CLI
+    # command) — pip/pipx install 'pzi[playwright]' installs the wrong package
+    assert "paperazzi[playwright]" in out
+    assert "'pzi[playwright]'" not in out
 
 
 def test_cli_init_setup_with_firefox(tmp_path: Path) -> None:
@@ -1237,10 +1241,10 @@ def test_main_handles_keyboard_interrupt(monkeypatch) -> None:
     assert cli.main() == 130
 
 
-def test_maybe_start_watchdog_skips_unowned_backend() -> None:
+def test_maybe_start_watchdog_skips_unowned_backend(dead_port) -> None:
     from pzi.commands import server as server_command
 
-    backend = {"url": "http://127.0.0.1:1969", "ready": True,
+    backend = {"url": f"http://127.0.0.1:{dead_port}", "ready": True,
                "owned": False, "proc": object()}
     wd = server_command._maybe_start_watchdog(
         backend, stdout=StringIO(), stderr=StringIO()
@@ -1248,7 +1252,7 @@ def test_maybe_start_watchdog_skips_unowned_backend() -> None:
     assert wd is None
 
 
-def test_maybe_start_watchdog_starts_for_owned_ready_backend() -> None:
+def test_maybe_start_watchdog_starts_for_owned_ready_backend(dead_port) -> None:
     from pzi.commands import server as server_command
 
     class _FakeProc:
@@ -1257,8 +1261,8 @@ def test_maybe_start_watchdog_starts_for_owned_ready_backend() -> None:
 
     proc = _FakeProc()
     backend = {
-        "url": "http://127.0.0.1:1969", "ready": True, "owned": True, "proc": proc,
-        "node_bin": "/usr/bin/node", "ts_dir": Path("/ts"), "port": 1969,
+        "url": f"http://127.0.0.1:{dead_port}", "ready": True, "owned": True, "proc": proc,
+        "node_bin": "/usr/bin/node", "ts_dir": Path("/ts"), "port": dead_port,
         "stderr_log": None,
     }
     wd = server_command._maybe_start_watchdog(

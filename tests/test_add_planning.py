@@ -66,6 +66,42 @@ def test_merge_fetched_record_with_overrides_applies_fallback_only_when_empty() 
     assert merged["year"] == 2024
 
 
+def test_merge_fetched_record_with_overrides_applies_fallback_for_empty_list() -> None:
+    # Regression: a fetched `authors: []` (metadata source found the record
+    # but not the author list) used to block the fallback_authors override
+    # entirely, since the emptiness check only recognized None/blank-string,
+    # not an empty list.
+    merged = merge_fetched_record_with_overrides(
+        {"title": "Fetched Title", "authors": []},
+        {"fallback_authors": ["Page Author"]},
+    )
+
+    assert merged["authors"] == ["Page Author"]
+
+
+def test_merge_fetched_record_with_overrides_coerces_string_fallback_year() -> None:
+    # Regression: the HTTP capture route sends fallback_year as a string
+    # (page-scraped embedded_year); merge must not leave a string in the
+    # NormalizedRecord's year field, or downstream similarity comparisons
+    # (abs(int - str)) crash. See test_similarity's coerces_string_year tests.
+    merged = merge_fetched_record_with_overrides(
+        {"title": "Fetched Title"},
+        {"fallback_year": "2024"},
+    )
+
+    assert merged["year"] == 2024
+    assert isinstance(merged["year"], int)
+
+
+def test_merge_fetched_record_with_overrides_drops_unparseable_string_year() -> None:
+    merged = merge_fetched_record_with_overrides(
+        {"title": "Fetched Title"},
+        {"fallback_year": "not-a-year"},
+    )
+
+    assert merged["year"] is None
+
+
 def test_manual_record_from_overrides_merges_fallback_and_normal_values() -> None:
     record = manual_record_from_overrides(
         {"title": "Manual Title", "fallback_year": 2024}
@@ -159,7 +195,9 @@ def test_format_citekey_supports_zotero_template_and_collision_suffix() -> None:
 
 
 def test_format_citekey_supports_common_better_bibtex_formula() -> None:
-    assert format_citekey("auth.lower + shorttitle(3,3) + year", RECORD, set()) == "smithstu2024"
+    # shorttitle(3,3): first 3 non-stopword title words, each truncated to 3
+    # chars — "Study", "Graph", "Parsers" -> "stu"+"gra"+"par".
+    assert format_citekey("auth.lower + shorttitle(3,3) + year", RECORD, set()) == "smithstugrapar2024"
 
 
 # ---------------------------------------------------------------------------

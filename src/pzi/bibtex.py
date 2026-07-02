@@ -117,9 +117,17 @@ def record_to_bibtex_entry(
     if tags:
         fields["keywords"] = ", ".join(tags)
 
-    note = _build_note(record)
+    note = _empty_to_none(record.get("note"))
     if note is not None:
         fields["note"] = note
+
+    pdf_url = _empty_to_none(record.get("pdf_url"))
+    if pdf_url is not None:
+        fields["pzi-pdf-url"] = pdf_url
+
+    abstract_url = _empty_to_none(record.get("abstract_url"))
+    if abstract_url is not None:
+        fields["pzi-abstract-url"] = abstract_url
 
     arxiv_id = _empty_to_none(record.get("arxiv_id"))
     if arxiv_id is not None:
@@ -138,7 +146,6 @@ def bibtex_entry_to_record(entry: BibtexEntry) -> NormalizedRecord:
     fields = entry["fields"]
     arxiv_id = fields.get("eprint")
     archive_prefix = fields.get("archiveprefix")
-    note = fields.get("note")
 
     return {
         "citekey": entry["citekey"],
@@ -148,65 +155,23 @@ def bibtex_entry_to_record(entry: BibtexEntry) -> NormalizedRecord:
         "venue": _empty_to_none(fields.get("journal") or fields.get("booktitle")),
         "doi": _empty_to_none(fields.get("doi")),
         "arxiv_id": _empty_to_none(arxiv_id)
-        if archive_prefix == "arXiv" or arxiv_id
+        if isinstance(archive_prefix, str) and archive_prefix.strip().lower() == "arxiv"
         else None,
         "canonical_url": _empty_to_none(fields.get("url")),
         "source_url": _empty_to_none(fields.get("url")),
-        "pdf_url": extract_note_field(note, "PDF"),
-        "abstract_url": extract_note_field(note, "Abstract"),
+        "pdf_url": _empty_to_none(fields.get("pzi-pdf-url")),
+        "abstract_url": _empty_to_none(fields.get("pzi-abstract-url")),
         "tags": _parse_keywords(fields.get("keywords")),
-        "note": _parse_note_text(note),
+        "note": _empty_to_none(fields.get("note")),
         "local_pdf_path": _empty_to_none(fields.get("file")),
         "abstract": _empty_to_none(fields.get("abstract")),
     }
-
-
-def extract_note_field(note: str | None, label: str) -> str | None:
-    """Extract a labeled segment (e.g. PDF, Abstract) from a note field."""
-    normalized = _empty_to_none(note)
-    if normalized is None:
-        return None
-    prefix = f"{label}:"
-    for part in normalized.split(" | "):
-        if part.startswith(prefix):
-            return part[len(prefix):].strip() or None
-    return None
-
 
 
 def _parse_keywords(value: str | None) -> list[str]:
     if value is None:
         return []
     return [part.strip() for part in value.split(",") if part.strip()]
-
-
-def _build_note(record: NormalizedRecord) -> str | None:
-    note = _empty_to_none(record.get("note"))
-    pdf_url = _empty_to_none(record.get("pdf_url"))
-    abstract_url = _empty_to_none(record.get("abstract_url"))
-
-    segments = [
-        segment
-        for segment in [
-            note,
-            f"PDF: {pdf_url}" if pdf_url else None,
-            f"Abstract: {abstract_url}" if abstract_url else None,
-        ]
-        if segment
-    ]
-    if not segments:
-        return None
-    return " | ".join(segments)
-
-
-def _parse_note_text(value: str | None) -> str | None:
-    normalized = _empty_to_none(value)
-    if normalized is None:
-        return None
-    first = normalized.split(" | ", 1)[0]
-    if first.startswith("PDF:") or first.startswith("Abstract:"):
-        return None
-    return first
 
 
 def _normalize_abstract_text(value: object) -> str | None:

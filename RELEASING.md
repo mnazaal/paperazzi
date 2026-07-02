@@ -85,16 +85,20 @@ git push origin v0.2.0
 
 Pushing the tag triggers `.github/workflows/release.yml`:
 
-1. **build** — builds sdist + wheel, runs twine check, uploads artifacts.
+1. **build** — builds sdist + wheel, runs twine check, builds the Firefox +
+   Chrome extension zips (`tools/build_extension.py`), uploads all of it as a
+   workflow artifact.
 2. **github-release** — creates a GitHub Release with the changelog section as
-   the release notes, attaches sdist + wheel.
+   the release notes, attaches the sdist, wheel, and both extension zips
+   (`paperazzi-capture-firefox.zip`, `paperazzi-capture-chrome.zip`) — so
+   installing the extension no longer requires a repo checkout.
 3. **pypi** — dormant. Only runs when the repo variable `PYPI_ENABLED` is set
    to `true` (see below).
 
 ### 6. Verify the release
 
 - Check the GitHub Release page: `https://github.com/mnazaal/paperazzi/releases`
-- Confirm the sdist + wheel are attached.
+- Confirm the sdist, wheel, and both extension zips are attached.
 - Smoke-test the install:
 
 ```sh
@@ -127,7 +131,7 @@ as an alternative for tracking `main` or unreleased versions.
 
 | Channel | Status | Notes |
 |---|---|---|
-| GitHub Releases | Active | sdist + wheel attached to each tag |
+| GitHub Releases | Active | sdist, wheel, and both extension zips attached to each tag |
 | PyPI | Dormant | wired, not yet enabled |
 | Homebrew (custom tap) | Planned | `homebrew-paperazzi` tap, git archive URL |
 | AUR | Planned | stable PKGBUILD, updated per tag |
