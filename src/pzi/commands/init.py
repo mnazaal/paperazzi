@@ -30,6 +30,7 @@ def run_init_command(
             papers_dir=args.papers_dir,
             with_browser=True,
             browser=args.browser,
+            home_dir=home_dir,
         )
     else:
         template = importlib.resources.files("pzi").joinpath("config.template.toml")

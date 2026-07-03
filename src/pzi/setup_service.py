@@ -8,7 +8,19 @@ import shlex
 import sys
 from pathlib import Path
 
-from pzi.config import escape_toml_string
+from pzi.config import escape_toml_string, tildify_path
+
+
+def _quote_token(token: str) -> str:
+    """Quote *token* for the browser command only when needed to round-trip.
+
+    ``shlex.quote`` is shell-safety oriented and always single-quotes a leading
+    ``~``, but the browser command is split with ``shlex.split`` and run with
+    ``shell=False`` (never via a shell), and pzi expands ``~`` itself. So emit a
+    bare ``~/...`` token when it survives ``shlex.split`` intact, and only fall
+    back to quoting for tokens that otherwise would not (e.g. embedded spaces).
+    """
+    return token if shlex.split(token) == [token] else shlex.quote(token)
 
 
 def provision_api_token(data_home: Path) -> Path:
@@ -42,8 +54,16 @@ def render_config(
     with_browser: bool,
     papers_dir: str | None = None,
     browser: str = "chromium",
+    home_dir: str | None = None,
 ) -> str:
     """Render user config TOML from explicit setup options.
+
+    Absolute paths under the home directory (the interpreter, a browser
+    profile, the bib/papers paths) are folded to ``~/...`` so the generated
+    config — routinely committed to dotfiles — does not expose the home layout,
+    matching the ``~``-relative style of the commented example lines. pzi
+    expands ``~`` on read (``_normalize_path`` for paths, ``_validate_browser_
+    command`` for the browser hook).
 
     No API auth token is written here. ``pzi init`` writes the token to a
     ``0600`` file under the data home, and pzi auto-reads it at runtime from the
@@ -75,13 +95,14 @@ def render_config(
         '# page_metadata_cmd = "paper-meta --json" # optional page HTML metadata hook',
         '# page_metadata_timeout_seconds = 5',
     ]
+    home = home_dir if home_dir is not None else os.path.expanduser("~")
     if with_browser:
-        python = shlex.quote(sys.executable)
+        python = _quote_token(tildify_path(sys.executable, home_dir=home))
         cmd = f'{python} -m pzi.browser_pdf_hook --browser {browser}'
         if browser == "firefox":
             profile = _find_firefox_profile()
             if profile:
-                cmd += f" --profile {shlex.quote(profile)}"
+                cmd += f" --profile {_quote_token(tildify_path(profile, home_dir=home))}"
                 lines.append(
                     "# browser_pdf_cmd uses your Firefox profile for authenticated"
                     " PDF access"
@@ -100,10 +121,11 @@ def render_config(
             "",
             "[[bibs]]",
             f'name = "{escape_toml_string(bib_name)}"',
-            f'path = "{escape_toml_string(bib_path)}"',
+            f'path = "{escape_toml_string(tildify_path(bib_path, home_dir=home))}"',
         ]
     )
     if papers_dir:
+        papers_dir = tildify_path(papers_dir, home_dir=home)
         lines.append(f'papers_dir = "{escape_toml_string(papers_dir)}"')
     else:
         lines.append("# papers_dir = \"~/bibs/papers\"  # defaults to <bib-dir>/papers/")

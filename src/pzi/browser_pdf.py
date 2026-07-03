@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -10,11 +11,17 @@ import sys
 
 
 def _validate_browser_command(command: str) -> list[str]:
-    """Split and validate a browser PDF hook command, raising on unsafe input."""
+    """Split and validate a browser PDF hook command, raising on unsafe input.
+
+    ``shell=False`` execution means the shell never expands ``~``, so do it
+    here: this lets ``config.toml`` carry ``~/...`` paths (e.g. the interpreter
+    or a browser ``--profile``) instead of absolute home paths. Tokens without a
+    leading ``~`` are unchanged.
+    """
     tokens = shlex.split(command)
     if not tokens:
         raise ValueError("empty browser command in config")
-    return tokens
+    return [os.path.expanduser(token) for token in tokens]
 
 
 # Control characters (U+0000-U+001F) — stripped from subprocess stderr

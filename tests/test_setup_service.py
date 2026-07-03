@@ -73,6 +73,44 @@ def test_render_config_with_browser_adds_browser_line() -> None:
     assert '-m pzi.browser_pdf_hook --browser chromium"' in result
 
 
+def test_render_config_folds_home_bib_path_to_tilde() -> None:
+    result = render_config(
+        bib_name="ml",
+        bib_path="/home/tester/projects/lib.bib",
+        with_browser=False,
+        papers_dir="/home/tester/projects/pdfs",
+        home_dir="/home/tester",
+    )
+    assert 'path = "~/projects/lib.bib"' in result
+    assert 'papers_dir = "~/projects/pdfs"' in result
+    # No absolute home path leaks into the committed config.
+    assert "/home/tester" not in result
+
+
+def test_render_config_folds_home_interpreter_to_tilde() -> None:
+    with patch("pzi.setup_service.sys.executable", "/home/tester/.venv/bin/python"):
+        result = render_config(
+            bib_name="ml",
+            bib_path="~/bib/ml.bib",
+            with_browser=True,
+            home_dir="/home/tester",
+        )
+    assert 'browser_pdf_cmd = "~/.venv/bin/python -m pzi.browser_pdf_hook' in result
+    assert "/home/tester" not in result
+
+
+def test_render_config_keeps_system_interpreter_absolute() -> None:
+    with patch("pzi.setup_service.sys.executable", "/usr/bin/python3"):
+        result = render_config(
+            bib_name="ml",
+            bib_path="~/bib/ml.bib",
+            with_browser=True,
+            home_dir="/home/tester",
+        )
+    # A system interpreter outside home is not a leak; leave it absolute.
+    assert 'browser_pdf_cmd = "/usr/bin/python3 -m pzi.browser_pdf_hook' in result
+
+
 def test_render_config_with_firefox_adds_browser_line() -> None:
     """When browser=firefox, the command includes --browser firefox + --profile."""
     with patch(

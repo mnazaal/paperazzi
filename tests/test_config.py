@@ -3,6 +3,7 @@ from pzi.config import (
     default_data_home,
     derive_papers_dir,
     resolve_bib,
+    tildify_path,
     validate_app_config,
     validate_bib_config,
     xdg_config_home,
@@ -10,6 +11,28 @@ from pzi.config import (
 )
 
 HOME = "/home/tester"
+
+
+def test_tildify_path_folds_home_prefix() -> None:
+    assert tildify_path("/home/tester/bib/ml.bib", home_dir=HOME) == "~/bib/ml.bib"
+
+
+def test_tildify_path_returns_bare_tilde_for_home_itself() -> None:
+    assert tildify_path("/home/tester", home_dir=HOME) == "~"
+
+
+def test_tildify_path_leaves_non_home_paths_unchanged() -> None:
+    assert tildify_path("/usr/bin/python3", home_dir=HOME) == "/usr/bin/python3"
+
+
+def test_tildify_path_round_trips_through_normalize() -> None:
+    original = "/home/tester/projects/lib.bib"
+    folded = tildify_path(original, home_dir=HOME)
+    config, errors = validate_bib_config(
+        {"name": "ml", "path": folded}, home_dir=HOME
+    )
+    assert errors == []
+    assert config["path"] == original
 
 
 def test_validate_bib_config_derives_default_papers_dir() -> None:

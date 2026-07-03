@@ -503,6 +503,24 @@ def _normalize_path(value: str, *, home_dir: str) -> str:
     return os.path.normpath(os.path.abspath(expanded))
 
 
+def tildify_path(value: str, *, home_dir: str) -> str:
+    """Inverse of :func:`_normalize_path`: fold a leading *home_dir* to ``~``.
+
+    Lets generated config reference ``~/...`` instead of an absolute home path,
+    so a committed ``config.toml`` does not expose the user's home layout. Paths
+    outside *home_dir* (e.g. a system ``/usr/bin/python3``) are returned
+    unchanged — they are not a privacy leak and may not round-trip through ``~``.
+    """
+    normalized = os.path.normpath(value)
+    home = os.path.normpath(home_dir)
+    if normalized == home:
+        return "~"
+    prefix = home + os.sep
+    if normalized.startswith(prefix):
+        return "~/" + normalized[len(prefix):]
+    return value
+
+
 def _is_http_url(value: str) -> bool:
     parts = urlsplit(value)
     return parts.scheme in {"http", "https"} and bool(parts.netloc)

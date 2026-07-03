@@ -1,9 +1,33 @@
 import base64
 import json
+import os
 import subprocess
 from unittest.mock import patch
 
-from pzi.browser_pdf import discover_pdf_url_with_browser, download_pdf_with_browser
+from pzi.browser_pdf import (
+    _validate_browser_command,
+    discover_pdf_url_with_browser,
+    download_pdf_with_browser,
+)
+
+
+def test_validate_browser_command_expands_tilde_tokens() -> None:
+    tokens = _validate_browser_command(
+        "~/.local/bin/python -m pzi.browser_pdf_hook --profile ~/.mozilla/p"
+    )
+    home = os.path.expanduser("~")
+    assert tokens[0] == f"{home}/.local/bin/python"
+    assert tokens[-1] == f"{home}/.mozilla/p"
+    # Non-path tokens are untouched.
+    assert "--profile" in tokens
+
+
+def test_validate_browser_command_leaves_plain_tokens_unchanged() -> None:
+    assert _validate_browser_command("python -m pzi.browser_pdf_hook") == [
+        "python",
+        "-m",
+        "pzi.browser_pdf_hook",
+    ]
 
 
 def _mock_subprocess(stdout: str = "", returncode: int = 0):

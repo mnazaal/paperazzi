@@ -37,6 +37,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `api_auth_token` continue to work unchanged. **If you ran an older
   `pzi init`, rotate that token: replace the plaintext value (and scrub it from
   any committed history).**
+- `pzi init --setup` now writes home-relative `~/...` paths instead of absolute
+  ones in the generated `config.toml`: the bib `path`/`papers_dir`, the
+  interpreter in `browser_pdf_cmd`, and any Firefox `--profile` are folded to
+  `~` when they live under the home directory (paths outside home, e.g. a system
+  `/usr/bin/python3`, stay absolute). This keeps a committed config from
+  exposing the home layout and makes it consistent with the commented example
+  lines. To support this, the browser hook command now expands a leading `~` in
+  each token at run time (it is split and run with `shell=False`, so the shell
+  never would) — which also makes a hand-written `--profile ~/...` work.
 - Default config and data directories now follow the XDG Base Directory spec:
   the config path resolves under `$XDG_CONFIG_HOME` (default `~/.config`) and
   the data home (`pzi_data_home`, cache for Node.js + translation-server) under
