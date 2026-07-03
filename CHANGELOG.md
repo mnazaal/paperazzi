@@ -7,7 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `PZI_NODE` env var and `node_path` config option to point pzi at an explicit
+  Node.js >=22 binary for the translation-server, instead of PATH auto-detect or
+  the portable download. Intended for version-manager users (fnm/nvm/volta/asdf)
+  and daemon contexts (systemd) whose PATH does not include the shell's Node
+  shims. `PZI_NODE` overrides `node_path`; both override auto-detect. A
+  set-but-broken value is a hard error, not a silent fallback to download.
+
+### Changed
+
+- Default config and data directories now follow the XDG Base Directory spec:
+  the config path resolves under `$XDG_CONFIG_HOME` (default `~/.config`) and
+  the data home (`pzi_data_home`, cache for Node.js + translation-server) under
+  `$XDG_DATA_HOME` (default `~/.local/share`), instead of hardcoding
+  `~/.config` / `~/.local/share`. Non-absolute `XDG_*` values are ignored per
+  the spec. An explicit `pzi_data_home` in config still takes precedence, and
+  when unset the value now respects the injected home directory consistently
+  with bib paths. `pzi init --setup` no longer writes a hardcoded
+  `pzi_data_home` line (it emits a commented example), so the XDG-aware default
+  applies. Chrome/Chromium profile auto-detection likewise honors
+  `$XDG_CONFIG_HOME`.
+
 ### Fixed
+
+- `pzi server` under systemd (or any non-interactive/no-TTY context) silently
+  refused to bootstrap Node.js: `ensure_node` reached the interactive install
+  prompt, `input()` raised `EOFError` on the missing stdin, and that was caught
+  as "cancelled" — so the translation-server never started and every capture
+  failed while `systemctl status` still showed the server "active". When stdin
+  is not a TTY, pzi now downloads portable Node.js automatically (as it already
+  did for `interactive=False`) instead of prompting.
+- `download_node` re-downloaded and re-extracted Node.js on every call even when
+  a matching version was already installed: the reuse check compared against
+  `detect_node()` (system PATH) rather than the actual cached extraction path.
+  It now reuses the previously extracted, runnable binary at
+  `<data_home>/node/node-v<version>-<dist>/bin/node`.
 
 - Inbox drain (`pzi inbox drain`) could silently drop a line appended to the
   inbox file (e.g. by the browser extension) while the drain's network calls

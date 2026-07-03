@@ -420,7 +420,12 @@ def _auto_browser_pdf_cmd(browser: str | None = None) -> str:
 
 
 def _default_chrome_profile() -> Path | None:
-    base = Path.home() / ".config" / "google-chrome"
+    # Chrome/Chromium on Linux honors $XDG_CONFIG_HOME (falling back to
+    # ~/.config), so resolve its profile dir the same way rather than
+    # hardcoding ~/.config.
+    from pzi.config import xdg_config_home
+
+    base = Path(xdg_config_home(str(Path.home()))) / "google-chrome"
     if (base / "Default").exists():
         return base
     return base if base.exists() else None

@@ -20,7 +20,7 @@ def test_render_config_default_no_browser() -> None:
     assert 'browser_pdf_cmd' not in result
     assert 'name = "ml"' in result
     assert 'path = "~/bib/ml.bib"' in result
-    assert 'pzi_data_home = "~/.local/share/pzi"' in result
+    assert '# pzi_data_home = "~/.local/share/pzi"' in result
     assert 'translation_server_url = "http://127.0.0.1:1969"' in result
 
 

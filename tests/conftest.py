@@ -129,6 +129,23 @@ def _block_non_loopback_sockets(request, monkeypatch):
     monkeypatch.setenv("PZI_SKIP_AUTO_START", "1")
 
 
+@pytest.fixture(autouse=True)
+def _clear_xdg_env(request, monkeypatch):
+    """Unset XDG base-dir vars for the unit suite so default path resolution
+    falls back to the injected home_dir / ``$HOME`` and stays hermetic.
+
+    Without this, a developer whose real environment sets ``XDG_CONFIG_HOME``
+    / ``XDG_DATA_HOME`` would have those leak into tests that assert
+    home-relative defaults (config path, ``pzi_data_home``) — and worse, tests
+    could write into the developer's real config/data dirs. Tests that
+    specifically exercise XDG behavior re-set these via ``monkeypatch.setenv``.
+    """
+    if _is_live_test(request):
+        return
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+
+
 def _free_port() -> int:
     s = socket.socket()
     s.bind(("127.0.0.1", 0))

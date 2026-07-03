@@ -44,6 +44,7 @@ class AppConfig(TypedDict):
     metadata_cache_ttl: int
     browser_hook: bool
     pzi_data_home: str
+    node_path: str | None
     api_url: str
     browser_profile_path: str | None
     browser_engine: str
@@ -160,7 +161,9 @@ def _validate_bib_list(
     return validated_bibs, []
 
 
-def _normalize_app_config(raw: Mapping[str, object], validated_bibs: list[BibConfig]) -> AppConfig:
+def _normalize_app_config(
+    raw: Mapping[str, object], validated_bibs: list[BibConfig], *, home_dir: str
+) -> AppConfig:
     """Build a normalized AppConfig from already-validated fields.
 
     Pure normalization — no validation.  Callers must pre-validate.
@@ -191,7 +194,7 @@ def _normalize_app_config(raw: Mapping[str, object], validated_bibs: list[BibCon
     raw_promote_confidence_threshold = raw.get("promote_confidence_threshold", 3)
     raw_metadata_cache_ttl = raw.get("metadata_cache_ttl", 0)
     raw_browser_hook = raw.get("browser_hook", True)
-    raw_pzi_data_home = raw.get("pzi_data_home", "~/.local/share/pzi")
+    raw_pzi_data_home = raw.get("pzi_data_home")
     raw_browser_engine = raw.get("browser_engine", "chromium")
     raw_rate_limit_rpm = raw.get("rate_limit_rpm", 60)
     raw_pdf_discovery_parallel = raw.get("pdf_discovery_parallel", False)
@@ -234,7 +237,12 @@ def _normalize_app_config(raw: Mapping[str, object], validated_bibs: list[BibCon
         "promote_confidence_threshold": _safe_int(raw_promote_confidence_threshold, 3),
         "metadata_cache_ttl": max(0, _safe_int(raw_metadata_cache_ttl, 0)),
         "browser_hook": _safe_bool(raw_browser_hook, True),
-        "pzi_data_home": os.path.expanduser(str(raw_pzi_data_home)),
+        "pzi_data_home": (
+            default_data_home(home_dir)
+            if raw_pzi_data_home is None
+            else os.path.expanduser(str(raw_pzi_data_home))
+        ),
+        "node_path": opt("node_path"),
         "api_url": api_url,
         "browser_profile_path": opt("browser_profile_path"),
         "browser_engine": str(raw_browser_engine).strip() or "chromium",
@@ -420,12 +428,14 @@ def validate_app_config(
     if errors:
         return None, errors
 
-    raw_pzi_data_home = raw.get("pzi_data_home", "~/.local/share/pzi")
-    if not isinstance(raw_pzi_data_home, str) or not raw_pzi_data_home.strip():
+    raw_pzi_data_home = raw.get("pzi_data_home")
+    if raw_pzi_data_home is not None and (
+        not isinstance(raw_pzi_data_home, str) or not raw_pzi_data_home.strip()
+    ):
         errors.append("pzi_data_home must be a non-empty string")
         return None, errors
 
-    return _normalize_app_config(raw, validated_bibs), []
+    return _normalize_app_config(raw, validated_bibs, home_dir=home_dir), []
 
 
 def derive_papers_dir(bib_path: str) -> str:
@@ -524,14 +534,40 @@ DEFAULT_DESKTOP_FALLBACK_HOSTS = [
     "authorea.com",
 ]
 
-DEFAULT_CONFIG_RELATIVE_PATH = ".config/pzi/config.toml"
-
 LoadConfigResult: TypeAlias = dict[str, Any]
 
 
+def _xdg_base_dir(env_var: str, home_dir: str, fallback_rel: str) -> str:
+    """Return an XDG base directory per the XDG Base Directory spec.
+
+    Uses ``$env_var`` when it is set to an *absolute* path; otherwise falls
+    back to ``home_dir/fallback_rel``. The spec mandates ignoring relative
+    values, so a non-absolute ``$env_var`` is treated as unset.
+    """
+    value = os.environ.get(env_var)
+    if value and os.path.isabs(value):
+        return value
+    return os.path.join(home_dir, fallback_rel)
+
+
+def xdg_config_home(home_dir: str) -> str:
+    """Return ``$XDG_CONFIG_HOME`` (if absolute) else ``home_dir/.config``."""
+    return _xdg_base_dir("XDG_CONFIG_HOME", home_dir, ".config")
+
+
+def xdg_data_home(home_dir: str) -> str:
+    """Return ``$XDG_DATA_HOME`` (if absolute) else ``home_dir/.local/share``."""
+    return _xdg_base_dir("XDG_DATA_HOME", home_dir, ".local/share")
+
+
+def default_data_home(home_dir: str) -> str:
+    """Return the default pzi data home: ``<xdg-data-home>/pzi``."""
+    return os.path.join(xdg_data_home(home_dir), "pzi")
+
+
 def default_config_path(home_dir: str) -> str:
-    """Return the default TOML config path under the given home directory."""
-    return str(Path(home_dir) / DEFAULT_CONFIG_RELATIVE_PATH)
+    """Return the default TOML config path: ``<xdg-config-home>/pzi/config.toml``."""
+    return os.path.join(xdg_config_home(home_dir), "pzi", "config.toml")
 
 
 def load_config_file(path: str, *, home_dir: str) -> LoadConfigResult:

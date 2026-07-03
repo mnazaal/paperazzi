@@ -1,10 +1,12 @@
-import os
-
 from pzi.config import (
+    default_config_path,
+    default_data_home,
     derive_papers_dir,
     resolve_bib,
     validate_app_config,
     validate_bib_config,
+    xdg_config_home,
+    xdg_data_home,
 )
 
 HOME = "/home/tester"
@@ -114,7 +116,8 @@ def test_validate_app_config_applies_defaults() -> None:
         "promote_confidence_threshold": 3,
         "metadata_cache_ttl": 0,
         "browser_hook": True,
-        "pzi_data_home": os.path.expanduser("~/.local/share/pzi"),
+        "pzi_data_home": f"{HOME}/.local/share/pzi",
+        "node_path": None,
         "api_url": "http://127.0.0.1:8765",
         "browser_profile_path": None,
         "browser_engine": "chromium",
@@ -297,3 +300,52 @@ def test_resolve_bib_returns_none_when_ambiguous_without_default() -> None:
 
 def test_derive_papers_dir_returns_sibling_directory() -> None:
     assert derive_papers_dir("/home/tester/bib/ml.bib") == "/home/tester/bib/papers"
+
+
+# ── XDG base-directory resolution ───────────────────────────────────────────
+# (conftest's _clear_xdg_env unsets XDG_* by default, so unset-fallback is the
+#  baseline; tests that want the set case re-set the vars explicitly.)
+
+def test_xdg_dirs_fall_back_to_home_when_unset() -> None:
+    assert xdg_config_home(HOME) == f"{HOME}/.config"
+    assert xdg_data_home(HOME) == f"{HOME}/.local/share"
+    assert default_config_path(HOME) == f"{HOME}/.config/pzi/config.toml"
+    assert default_data_home(HOME) == f"{HOME}/.local/share/pzi"
+
+
+def test_xdg_dirs_honor_absolute_env(monkeypatch) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", "/xdg/cfg")
+    monkeypatch.setenv("XDG_DATA_HOME", "/xdg/data")
+    assert default_config_path(HOME) == "/xdg/cfg/pzi/config.toml"
+    assert default_data_home(HOME) == "/xdg/data/pzi"
+
+
+def test_xdg_dirs_ignore_relative_env(monkeypatch) -> None:
+    # The XDG spec mandates ignoring non-absolute values.
+    monkeypatch.setenv("XDG_CONFIG_HOME", "relative/cfg")
+    monkeypatch.setenv("XDG_DATA_HOME", "also/relative")
+    assert default_config_path(HOME) == f"{HOME}/.config/pzi/config.toml"
+    assert default_data_home(HOME) == f"{HOME}/.local/share/pzi"
+
+
+def test_app_config_data_home_honors_xdg(monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", "/xdg/data")
+    config, errors = validate_app_config(
+        {"bibs": [{"name": "ml", "path": "~/bib/ml.bib"}]},
+        home_dir=HOME,
+    )
+    assert errors == []
+    assert config["pzi_data_home"] == "/xdg/data/pzi"
+
+
+def test_app_config_explicit_data_home_overrides_xdg(monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", "/xdg/data")
+    config, errors = validate_app_config(
+        {
+            "pzi_data_home": "/explicit/dir",
+            "bibs": [{"name": "ml", "path": "~/bib/ml.bib"}],
+        },
+        home_dir=HOME,
+    )
+    assert errors == []
+    assert config["pzi_data_home"] == "/explicit/dir"

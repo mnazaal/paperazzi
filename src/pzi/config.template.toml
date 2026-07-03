@@ -33,7 +33,17 @@ api_listen_port = 8765
 # FlareSolverr bypasses Cloudflare (gray area — may violate publisher ToS)
 # flaresolverr_url = "http://127.0.0.1:8191"
 
-# pzi_data_home = "~/.local/share/pzi"  # cache dir for Node.js + translation-server
+# Cache dir for Node.js + translation-server. Defaults to $XDG_DATA_HOME/pzi
+# (i.e. ~/.local/share/pzi when XDG_DATA_HOME is unset). Set to override.
+# pzi_data_home = "~/.local/share/pzi"
+
+# Explicit Node.js >= 22 binary for the translation-server. Set this to use a
+# Node you already manage (fnm/nvm/volta/asdf, a system install, …) instead of
+# letting pzi auto-detect PATH or download a portable build. Absolute path or a
+# command name on PATH. The PZI_NODE env var overrides this. A set-but-broken
+# value is a hard error, not a silent fallback. Useful under systemd/daemons,
+# whose PATH does not include your shell's version-manager shims.
+# node_path = "/home/you/.local/share/fnm/node-versions/v22.10.0/installation/bin/node"
 
 # Persistent browser session (server-mode; used by CLI when server is reachable).
 # browser_profile_path = "~/.config/google-chrome/Default"  # browser profile for auth/session

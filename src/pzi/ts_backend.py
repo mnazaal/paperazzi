@@ -733,7 +733,14 @@ def backend_session(
     raw_home = config.get("pzi_data_home", home_dir)
     data_home = Path(str(raw_home)).expanduser()
 
-    node = ensure_node(data_home, interactive=interactive, stdout=stdout, stderr=stderr)
+    node_path = config.get("node_path")
+    node = ensure_node(
+        data_home,
+        interactive=interactive,
+        node_path=node_path if isinstance(node_path, str) else None,
+        stdout=stdout,
+        stderr=stderr,
+    )
     if node is None:
         yield {"url": ts_url, "ready": False, "owned": False, "proc": None}
         return

@@ -29,7 +29,8 @@ def render_config(
         'api_listen_host = "127.0.0.1"',
         'api_listen_port = 8765',
         f'api_auth_token = "{secrets.token_urlsafe(32)}"',
-        'pzi_data_home = "~/.local/share/pzi"',
+        '# pzi_data_home = "~/.local/share/pzi"  '
+        "# defaults to $XDG_DATA_HOME/pzi (~/.local/share/pzi)",
         '# unpaywall_email = "your@email.com" # optional OA PDF lookup',
         '# unpaywall_email_cmd = "pass show unpaywall-email"',
         '# semantic_scholar_api_key_cmd = "pass show semantic-scholar"',

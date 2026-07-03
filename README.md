@@ -298,6 +298,7 @@ Expected coverage for common sources. ✅ = works out-of-box. ⚠️ = needs con
 | `PZI_BROWSER_PDF_CMD` | Override the `browser_pdf_cmd` config value |
 | `PZI_BROWSER` | Preferred **desktop** browser for the manual "open and watch Downloads/" PDF fallback: `firefox` or `chromium` (default: `firefox`). Independent of `pzi init --browser`/`browser_engine`, which picks the **headless** Playwright browser used for automated capture (default: `chromium`) |
 | `PZI_BROWSER_PROFILE` | Desktop browser profile directory override for the fallback above |
+| `PZI_NODE` | Explicit Node.js >=22 binary for the translation-server (absolute path or a command name on PATH). Overrides PATH auto-detect and the `node_path` config; when set, pzi never prompts or downloads. A broken value is a hard error, not a silent fallback. Use this under systemd/daemons whose PATH lacks your shell's version-manager (fnm/nvm/volta/asdf) shims |
 | `PZI_NODE_MIRROR` | Override the Node.js download server (default: `https://nodejs.org/dist`); must be `https://` |
 | `PZI_NPM_REGISTRY` | Override the npm registry used when installing the translation-server's dependencies |
 | `PZI_DISABLE_DESKTOP_BROWSER_FALLBACK` | Set to skip the "open in desktop browser and watch Downloads/" PDF fallback |

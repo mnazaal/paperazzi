@@ -73,29 +73,59 @@ def _expected_node_sha256(*, mirror: str, version: str, tarball_name: str) -> st
     raise RuntimeError(f"no checksum for {tarball_name} in {url}")
 
 
-def detect_node(min_version: tuple[int, int] = (_MIN_NODE_MAJOR, 0)) -> str | None:
-    """Return path to system Node.js binary if it meets min_version, else None."""
-    node = shutil.which("node")
-    if node is None:
-        return None
+def _node_version_ok(
+    node_bin: str, min_version: tuple[int, int] = (_MIN_NODE_MAJOR, 0)
+) -> bool:
+    """Return True if *node_bin* runs and reports a version >= *min_version*."""
     try:
         result = subprocess.run(
-            [node, "--version"], capture_output=True, text=True, timeout=5
+            [node_bin, "--version"], capture_output=True, text=True, timeout=5
         )
     except (OSError, subprocess.TimeoutExpired):
-        return None
+        return False
     if result.returncode != 0:
-        return None
+        return False
     version_str = result.stdout.strip().lstrip("v")
     try:
         parts = version_str.split(".")
         major = int(parts[0])
         minor = int(parts[1]) if len(parts) > 1 else 0
     except (ValueError, IndexError):
+        return False
+    return (major, minor) >= min_version
+
+
+def detect_node(min_version: tuple[int, int] = (_MIN_NODE_MAJOR, 0)) -> str | None:
+    """Return path to system Node.js binary if it meets min_version, else None."""
+    node = shutil.which("node")
+    if node is None:
         return None
-    if (major, minor) < min_version:
+    return node if _node_version_ok(node, min_version) else None
+
+
+def _resolve_node_override(node_path: str | None) -> str | None:
+    """Resolve an explicit Node.js binary from the ``PZI_NODE`` env var or the
+    ``node_path`` config value (env wins).
+
+    The value may be an absolute path or a bare command name on PATH. Returns
+    the resolved path, or ``None`` when no override is set. Raises
+    :class:`RuntimeError` when an override *is* set but does not resolve to a
+    working Node.js >= {_MIN_NODE_MAJOR} — an explicit override that silently
+    fell back to auto-detect/download would just hide the user's typo.
+    """
+    override = os.environ.get("PZI_NODE") or node_path
+    if not override:
         return None
-    return node
+    resolved = shutil.which(override)
+    if resolved is None and Path(override).is_file():
+        resolved = override
+    if resolved is not None and _node_version_ok(resolved):
+        return resolved
+    raise RuntimeError(
+        f"PZI_NODE/node_path is set to {override!r} but it is not a working "
+        f"Node.js >= {_MIN_NODE_MAJOR} (not found on PATH, not an executable "
+        "file, or below the minimum version). Fix or unset it."
+    )
 
 
 def _node_dist_name() -> str:
@@ -191,9 +221,9 @@ def download_node(
     url = f"{mirror}/v{version}/{tarball_name}"
 
     node_dir = _node_bin_dir(data_home)
-    bin_path = node_dir / "bin" / "node"
-    if detect_node() == str(bin_path):
-        return str(bin_path)
+    existing_bin = node_dir / f"node-v{version}-{dist_name}" / "bin" / "node"
+    if existing_bin.exists() and _node_binary_runs(existing_bin):
+        return str(existing_bin)
 
     node_dir.mkdir(parents=True, exist_ok=True)
 
@@ -280,41 +310,64 @@ def download_node(
     if not actual_bin.exists():
         raise RuntimeError(f"node binary not found at {actual_bin}")
 
-    # Verify it runs
-    try:
-        result = subprocess.run(
-            [str(actual_bin), "--version"], capture_output=True, text=True, timeout=5
-        )
-        if result.returncode != 0:
-            raise RuntimeError(f"downloaded node exited with {result.returncode}")
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise RuntimeError(f"downloaded node failed to start: {exc}") from exc
+    if not _node_binary_runs(actual_bin):
+        raise RuntimeError(f"downloaded node failed to start: {actual_bin}")
 
     return str(actual_bin)
+
+
+def _node_binary_runs(node_bin: Path) -> bool:
+    """Return True if *node_bin* executes and exits cleanly."""
+    try:
+        result = subprocess.run(
+            [str(node_bin), "--version"], capture_output=True, text=True, timeout=5
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
 
 
 def ensure_node(
     data_home: Path,
     *,
     interactive: bool = True,
+    node_path: str | None = None,
     stdout: TextIO,
     stderr: TextIO,
 ) -> str | None:
     """Ensure Node.js >= {_MIN_NODE_MAJOR} is available.
 
-    Checks system PATH first.  If not found and ``interactive=True``, prompts
-    the user before downloading.  In non-interactive mode (e.g. ``pzi init
-    --setup``) downloads automatically.
+    An explicit override (``PZI_NODE`` env var, else the ``node_path`` config
+    value passed here) takes precedence over everything: if set it is used
+    verbatim and pzi never prompts or downloads. A set-but-broken override is a
+    hard error (returns ``None``) rather than a silent fallback, so a typo
+    surfaces instead of triggering a surprise download.
 
-    Returns the path to the node binary, or ``None`` if the user declined.
+    With no override, checks system PATH.  If Node.js is not found and
+    ``interactive=True`` *and* a terminal is attached to stdin, prompts the
+    user before downloading.  Otherwise (``interactive=False``, or
+    ``interactive=True`` with no attached terminal — e.g. a systemd service)
+    downloads automatically: there is nothing to prompt, and blocking on
+    ``input()`` there would just raise ``EOFError`` immediately.
+
+    Returns the path to the node binary, or ``None`` if the override was
+    invalid, the user declined (interactive only), or the download failed.
     """
+    try:
+        override = _resolve_node_override(node_path)
+    except RuntimeError as exc:
+        print(str(exc), file=stderr)
+        return None
+    if override is not None:
+        return override
+
     node = detect_node()
     if node is not None:
         return node
 
     target = _node_bin_dir(data_home)
 
-    if interactive:
+    if interactive and sys.stdin.isatty():
         print(file=stderr)
         print(f"Node.js >= {_MIN_NODE_MAJOR} not found on PATH.", file=stderr)
         print(file=stderr)
@@ -332,6 +385,13 @@ def ensure_node(
                 file=stderr,
             )
             return None
+    elif interactive:
+        print(
+            f"Node.js >= {_MIN_NODE_MAJOR} not found on PATH and no terminal is "
+            f"attached — downloading portable Node.js to {target}/ automatically "
+            "(~40MB). Put Node.js >=22 on PATH to skip this.",
+            file=stderr,
+        )
 
     try:
         path = download_node(data_home, stdout=stdout, stderr=stderr)

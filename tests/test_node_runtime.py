@@ -231,6 +231,94 @@ def test_ensure_node_download_failure_returns_none() -> None:
     assert "failed to download" in stderr.getvalue()
 
 
+def test_ensure_node_no_tty_downloads_without_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """interactive=True but stdin not a TTY (systemd) must auto-download, not
+    block on input() and silently cancel."""
+    monkeypatch.delenv("PZI_NODE", raising=False)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with patch("pzi.node_runtime.detect_node", return_value=None):
+        with patch("pzi.node_runtime.sys.stdin") as mock_stdin:
+            mock_stdin.isatty.return_value = False
+            with patch(
+                "pzi.node_runtime.download_node", return_value="/tmp/node/bin/node"
+            ) as mock_dl:
+                with patch("pzi.node_runtime.input") as mock_input:
+                    result = node_runtime.ensure_node(
+                        Path("/tmp"),
+                        interactive=True,
+                        stdout=stdout,
+                        stderr=stderr,
+                    )
+    assert result == "/tmp/node/bin/node"
+    mock_input.assert_not_called()
+    mock_dl.assert_called_once()
+
+
+def test_ensure_node_override_arg_used_verbatim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("PZI_NODE", raising=False)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with patch("pzi.node_runtime.shutil.which", return_value="/opt/node/bin/node"):
+        with patch("pzi.node_runtime._node_version_ok", return_value=True):
+            with patch("pzi.node_runtime.detect_node") as mock_detect:
+                with patch("pzi.node_runtime.download_node") as mock_dl:
+                    result = node_runtime.ensure_node(
+                        Path("/tmp"),
+                        interactive=True,
+                        node_path="/opt/node/bin/node",
+                        stdout=stdout,
+                        stderr=stderr,
+                    )
+    assert result == "/opt/node/bin/node"
+    mock_detect.assert_not_called()
+    mock_dl.assert_not_called()
+
+
+def test_ensure_node_env_overrides_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PZI_NODE", "/env/node")
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    def _which(name: str) -> str | None:
+        return name if name == "/env/node" else None
+
+    with patch("pzi.node_runtime.shutil.which", side_effect=_which):
+        with patch("pzi.node_runtime._node_version_ok", return_value=True):
+            result = node_runtime.ensure_node(
+                Path("/tmp"),
+                interactive=True,
+                node_path="/config/node",
+                stdout=stdout,
+                stderr=stderr,
+            )
+    assert result == "/env/node"
+
+
+def test_ensure_node_broken_override_is_hard_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A set-but-invalid override must return None, not fall back to download."""
+    monkeypatch.setenv("PZI_NODE", "/does/not/exist")
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with patch("pzi.node_runtime.shutil.which", return_value=None):
+        with patch("pzi.node_runtime.download_node") as mock_dl:
+            result = node_runtime.ensure_node(
+                Path("/tmp"),
+                interactive=False,
+                stdout=stdout,
+                stderr=stderr,
+            )
+    assert result is None
+    mock_dl.assert_not_called()
+    assert "PZI_NODE" in stderr.getvalue()
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # _node_mirror  (PZI_NODE_MIRROR scheme validation)
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -322,6 +410,23 @@ def test_download_node_passes_checksum_then_fails_extract(tmp_path: Path) -> Non
         # on the bogus (non-gzip) tarball during extraction.
         with pytest.raises(RuntimeError, match="extract"):
             node_runtime.download_node(tmp_path, stdout=io.StringIO(), stderr=io.StringIO())
+
+
+def test_download_node_reuses_cached_binary(tmp_path: Path) -> None:
+    """A previously extracted, runnable Node is reused without re-downloading."""
+    node_dir = node_runtime._node_bin_dir(tmp_path)
+    cached = node_dir / "node-v22.15.0-linux-x64" / "bin" / "node"
+    cached.parent.mkdir(parents=True)
+    cached.write_text("#!/bin/sh\n")
+    with patch("pzi.node_runtime._latest_node_version", return_value="22.15.0"), \
+         patch("pzi.node_runtime._node_dist_name", return_value="linux-x64"), \
+         patch("pzi.node_runtime._node_binary_runs", return_value=True), \
+         patch("pzi.node_runtime.urlopen") as mock_urlopen:
+        result_path = node_runtime.download_node(
+            tmp_path, stdout=io.StringIO(), stderr=io.StringIO()
+        )
+    assert result_path == str(cached)
+    mock_urlopen.assert_not_called()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

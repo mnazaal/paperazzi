@@ -48,9 +48,16 @@ def _reinstall_server(*, config_path, home_dir, stdout, stderr) -> int:
         print("translation_server_url not configured", file=stderr)
         return 1
 
-    data_home = Path(config.get("pzi_data_home", "~/.local/share/pzi")).expanduser()
+    data_home = Path(config["pzi_data_home"])
     print("reinstalling translation-server …", file=stdout)
-    node = ensure_node(data_home, interactive=True, stdout=stdout, stderr=stderr)
+    node_path = config.get("node_path")
+    node = ensure_node(
+        data_home,
+        interactive=True,
+        node_path=node_path if isinstance(node_path, str) else None,
+        stdout=stdout,
+        stderr=stderr,
+    )
     if node is None:
         return 1
     ts_dir = data_home / "ts"
