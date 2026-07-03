@@ -6,9 +6,52 @@ import shlex
 import subprocess
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from pzi.config import AppConfig, BibConfig
+
+DEFAULT_TOKEN_FILENAME = "api_token"
+
+
+def _read_default_token_file(data_home: str | None) -> str | None:
+    """Read the auto-discovered API token from ``<data_home>/api_token``.
+
+    Returns the stripped token, or ``None`` when the file is missing/empty.
+    This is what lets ``config.toml`` carry no token reference at all — the
+    file location is derived from the *running* user's resolved data home, so a
+    committed config leaks neither the secret nor an absolute home path.
+    """
+    if not data_home:
+        return None
+    try:
+        content = (Path(data_home) / DEFAULT_TOKEN_FILENAME).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    return content.strip() or None
+
+
+def resolve_api_auth_token(
+    config: Mapping[str, Any],
+    *,
+    run_command: Callable[[str], str] | None = None,
+    resolve_secret: Callable[[str | None, str | None], str | None] | None = None,
+) -> str | None:
+    """Resolve the effective API auth token.
+
+    Precedence: ``api_auth_token_cmd`` → ``api_auth_token`` plaintext →
+    auto-read ``<pzi_data_home>/api_token``. The last step means a fresh
+    ``pzi init`` config needs no token line while auth stays enabled.
+    """
+    resolver = resolve_secret or (
+        lambda command, fallback: resolve_optional_value(
+            command=command, fallback=fallback, run_command=run_command
+        )
+    )
+    explicit = resolver(config.get("api_auth_token_cmd"), config.get("api_auth_token"))
+    if explicit:
+        return explicit
+    return _read_default_token_file(config.get("pzi_data_home"))
 
 
 @dataclass(frozen=True)
@@ -122,9 +165,7 @@ def build_capture_context(
         citekey_format=config.get("citekey_format"),
         pdf_filename_format=config.get("pdf_filename_format"),
         api_url=api_url,
-        api_auth_token=resolver(
-            config.get("api_auth_token_cmd"), config.get("api_auth_token")
-        ),
+        api_auth_token=resolve_api_auth_token(config, resolve_secret=resolver),
         desktop_fallback_hosts=set(config.get("desktop_fallback_hosts", [])),
         pdf_discovery_parallel=config.get("pdf_discovery_parallel", False),
         ezproxy_host=config.get("ezproxy_host"),

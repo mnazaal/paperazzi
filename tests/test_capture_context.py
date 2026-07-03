@@ -1,10 +1,35 @@
 from pzi.capture_context import (
     build_capture_context,
     metadata_user_agent,
+    resolve_api_auth_token,
     resolve_contact_email,
     resolve_optional_value,
     resolve_unpaywall_email,
 )
+
+
+def test_resolve_api_auth_token_auto_reads_default_file(tmp_path) -> None:
+    (tmp_path / "api_token").write_text("filetoken\n")
+    config = {"pzi_data_home": str(tmp_path)}
+    assert resolve_api_auth_token(config) == "filetoken"
+
+
+def test_resolve_api_auth_token_none_when_no_sources(tmp_path) -> None:
+    config = {"pzi_data_home": str(tmp_path)}  # no api_token file present
+    assert resolve_api_auth_token(config) is None
+
+
+def test_resolve_api_auth_token_plaintext_overrides_file(tmp_path) -> None:
+    (tmp_path / "api_token").write_text("filetoken")
+    config = {"pzi_data_home": str(tmp_path), "api_auth_token": "plain"}
+    assert resolve_api_auth_token(config) == "plain"
+
+
+def test_resolve_api_auth_token_cmd_overrides_file(tmp_path) -> None:
+    (tmp_path / "api_token").write_text("filetoken")
+    config = {"pzi_data_home": str(tmp_path), "api_auth_token_cmd": "get-token"}
+    result = resolve_api_auth_token(config, run_command=lambda c: "cmdtoken\n")
+    assert result == "cmdtoken"
 
 
 def test_resolve_optional_value_prefers_command_result() -> None:

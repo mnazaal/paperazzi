@@ -270,7 +270,7 @@ it. `--json` prints the full result to stdout.
 
 Security defaults are local-first: bind to `127.0.0.1`, allow local/extension origins, cap body size, and require `X-Pzi-Token` or bearer auth when a token is set. Keep non-loopback binds behind your own network protections.
 
-The token is read from `api_auth_token_cmd` (a command whose stdout is the token, e.g. `pass show pzi-token`) or the plaintext `api_auth_token`, preferring the command. `pzi init --setup` generates a token, writes it to a `0600` file under the data home, and sets `api_auth_token_cmd = "cat <file>"` — so `config.toml` carries no secret and is safe to commit to dotfiles. `api_auth_token_cmd` runs without a shell: use an absolute path (no `~`) and no shell operators.
+The token is resolved in this order: `api_auth_token_cmd` (a command whose stdout is the token, e.g. `pass show pzi-token`) → the plaintext `api_auth_token` → an auto-read `<data-home>/api_token` file. `pzi init --setup` writes the token to that `0600` file and puts **nothing** token-related in `config.toml`; pzi reads it at runtime from the running user's resolved data home. So the config carries neither the secret nor an absolute home path, and is safe to commit to dotfiles and portable across machines. `api_auth_token_cmd`, if you set one, runs without a shell (no `~` expansion, no shell operators).
 
 ## Architecture
 

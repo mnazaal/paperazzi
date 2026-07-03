@@ -1,11 +1,10 @@
 translation_server_url = "http://127.0.0.1:1969"
 api_listen_host = "127.0.0.1"
 api_listen_port = 8765
-# Optional localhost API hardening. Set a token, then the browser extension must
-# send it. Prefer api_auth_token_cmd so the secret stays out of this file (which
-# is often committed to dotfiles). The command's stdout is the token; it runs
-# without a shell, so use an ABSOLUTE path (no ~) and no shell operators.
-# api_auth_token_cmd = "cat /home/you/.local/share/pzi/api_token"  # or: "pass show pzi-token"
+# Localhost API hardening. `pzi init` writes a token to <data-home>/api_token
+# (0600) and pzi auto-reads it there at runtime, so you normally set nothing
+# here and this file stays secret-free. To override, in precedence order:
+# api_auth_token_cmd = "pass show pzi-token"   # stdout is the token; runs without a shell
 # api_auth_token = "change-me-long-random-token"  # plaintext fallback (avoid committing)
 # api_allowed_origins = ["http://127.0.0.1", "http://localhost", "chrome-extension://", "moz-extension://"]
 # api_max_body_bytes = 67108864  # allows browser extension PDF byte uploads

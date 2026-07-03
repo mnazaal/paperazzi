@@ -11,14 +11,14 @@ from pathlib import Path
 from pzi.config import escape_toml_string
 
 
-def provision_api_token(data_home: Path) -> str:
+def provision_api_token(data_home: Path) -> Path:
     """Generate an API auth token, write it to a ``0600`` file under
-    *data_home*, and return the shell command the config uses to read it back.
+    *data_home*, and return that file's path.
 
     Keeping the token in its own file (not ``config.toml``) is what lets the
-    config be committed to dotfiles safely while API auth stays enabled by
-    default. The returned command is ``cat <token-file>``; users can later
-    replace it with ``pass show ...`` or any other secret manager.
+    config be committed to dotfiles safely: pzi auto-reads this file at runtime
+    from the resolved data home, so the config references neither the secret nor
+    a path. Users who prefer a manager can set ``api_auth_token_cmd`` instead.
     """
     data_home.mkdir(parents=True, exist_ok=True)
     token_path = data_home / "api_token"
@@ -32,7 +32,7 @@ def provision_api_token(data_home: Path) -> str:
     finally:
         os.close(fd)
     os.chmod(token_path, 0o600)
-    return f"cat {shlex.quote(str(token_path))}"
+    return token_path
 
 
 def render_config(
@@ -40,17 +40,16 @@ def render_config(
     bib_name: str,
     bib_path: str,
     with_browser: bool,
-    api_auth_token_cmd: str,
     papers_dir: str | None = None,
     browser: str = "chromium",
 ) -> str:
     """Render user config TOML from explicit setup options.
 
-    ``api_auth_token_cmd`` is the shell command the config uses to read the API
-    auth token at runtime (e.g. ``cat <token-file>``). The token itself is kept
-    out of this file — which users routinely commit into dotfiles — so it never
-    lands in version control. Users can later point it at a password manager
-    (``pass show pzi-token``, etc.).
+    No API auth token is written here. ``pzi init`` writes the token to a
+    ``0600`` file under the data home, and pzi auto-reads it at runtime from the
+    running user's resolved data home — so this file (routinely committed to
+    dotfiles) carries neither the secret nor an absolute home path. Users who
+    prefer a password manager can add ``api_auth_token_cmd = "pass show ..."``.
 
     When ``browser`` is ``"firefox"``, auto-detects the Firefox profile
     directory and includes the ``--profile`` flag in the generated command.
@@ -60,10 +59,9 @@ def render_config(
         'translation_server_url = "http://127.0.0.1:1969"',
         'api_listen_host = "127.0.0.1"',
         'api_listen_port = 8765',
-        "# API auth token is read via this command so the secret stays out of "
-        "this file (safe to commit). Swap in `pass show ...` or another manager "
-        "if you prefer.",
-        f'api_auth_token_cmd = "{escape_toml_string(api_auth_token_cmd)}"',
+        "# API auth token is auto-read from <data-home>/api_token (written by "
+        "`pzi init`); nothing secret is stored here. To use a manager instead: "
+        '# api_auth_token_cmd = "pass show pzi-token"',
         '# pzi_data_home = "~/.local/share/pzi"  '
         "# defaults to $XDG_DATA_HOME/pzi (~/.local/share/pzi)",
         '# unpaywall_email = "your@email.com" # optional OA PDF lookup',

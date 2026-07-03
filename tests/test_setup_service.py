@@ -13,16 +13,14 @@ from pzi.setup_service import (
 
 # ── provision_api_token ─────────────────────────────────────────────────────
 
-def test_provision_api_token_writes_0600_file_and_cat_command(tmp_path) -> None:
+def test_provision_api_token_writes_0600_file(tmp_path) -> None:
     data_home = tmp_path / "data"
-    cmd = provision_api_token(data_home)
-    token_file = data_home / "api_token"
+    token_file = provision_api_token(data_home)
 
+    assert token_file == data_home / "api_token"
     assert token_file.exists()
-    # Secret is a non-empty token, and the command reads exactly that file.
-    token = token_file.read_text().strip()
-    assert token
-    assert cmd == f"cat {token_file}"
+    # Secret is a non-empty token.
+    assert token_file.read_text().strip()
     # Owner-only permissions so the secret is not world/group readable.
     assert stat.S_IMODE(token_file.stat().st_mode) == 0o600
 
@@ -46,7 +44,6 @@ def test_render_config_default_no_browser() -> None:
         bib_name="ml",
         bib_path="~/bib/ml.bib",
         with_browser=False,
-        api_auth_token_cmd="cat /tmp/pzi/api_token",
     )
     assert 'browser_pdf_cmd' not in result
     assert 'name = "ml"' in result
@@ -55,16 +52,16 @@ def test_render_config_default_no_browser() -> None:
     assert 'translation_server_url = "http://127.0.0.1:1969"' in result
 
 
-def test_render_config_uses_token_cmd_not_inline_secret() -> None:
+def test_render_config_writes_no_token_reference() -> None:
     result = render_config(
         bib_name="ml",
         bib_path="~/bib/ml.bib",
         with_browser=False,
-        api_auth_token_cmd="cat /tmp/pzi/api_token",
     )
-    # The secret must never be inlined; only the read-command is written.
-    assert 'api_auth_token_cmd = "cat /tmp/pzi/api_token"' in result
+    # Auto-discovery: the config carries neither the secret nor an active
+    # token line (no plaintext, no _cmd, no path).
     assert 'api_auth_token = "' not in result
+    assert "\napi_auth_token_cmd = " not in result
 
 
 def test_render_config_with_browser_adds_browser_line() -> None:
@@ -72,7 +69,6 @@ def test_render_config_with_browser_adds_browser_line() -> None:
         bib_name="ml",
         bib_path="~/bib/ml.bib",
         with_browser=True,
-        api_auth_token_cmd="cat /tmp/pzi/api_token",
     )
     assert '-m pzi.browser_pdf_hook --browser chromium"' in result
 
@@ -88,8 +84,7 @@ def test_render_config_with_firefox_adds_browser_line() -> None:
             bib_path="~/bib/ml.bib",
             with_browser=True,
             browser="firefox",
-            api_auth_token_cmd="cat /tmp/pzi/api_token",
-        )
+            )
     assert '--browser firefox' in result
     assert '--profile' in result
     assert "authenticated PDF access" in result
@@ -108,8 +103,7 @@ def test_render_config_firefox_no_profile_detected(monkeypatch) -> None:
             bib_path="~/bib/ml.bib",
             with_browser=True,
             browser="firefox",
-            api_auth_token_cmd="cat /tmp/pzi/api_token",
-        )
+            )
     finally:
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)
@@ -123,7 +117,6 @@ def test_render_config_with_papers_dir() -> None:
         bib_path="~/bib/ml.bib",
         with_browser=False,
         papers_dir="~/papers",
-        api_auth_token_cmd="cat /tmp/pzi/api_token",
     )
     assert 'papers_dir = "~/papers"' in result
 
@@ -133,7 +126,6 @@ def test_render_config_escapes_special_chars() -> None:
         bib_name='test"bib',
         bib_path='~/path\\to\\bib',
         with_browser=False,
-        api_auth_token_cmd="cat /tmp/pzi/api_token",
     )
     assert 'name = "test\\"bib"' in result
     assert 'path = "~/path\\\\to\\\\bib"' in result

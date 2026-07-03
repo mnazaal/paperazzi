@@ -9,10 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The HTTP API auth token is now auto-discovered from `<data-home>/api_token`
+  when neither `api_auth_token` nor `api_auth_token_cmd` is set, so a config can
+  carry no token reference at all. Resolution precedence: `api_auth_token_cmd` →
+  `api_auth_token` → the auto-read token file.
 - `api_auth_token_cmd` config option: resolve the HTTP API auth token from a
   command's stdout (e.g. `pass show pzi-token`), matching the existing `*_cmd`
-  secret-indirection pattern used for emails and the S2 key. `pzi server` and
-  the CLI capture path prefer it over the plaintext `api_auth_token`.
+  secret-indirection pattern used for emails and the S2 key.
 - `PZI_NODE` env var and `node_path` config option to point pzi at an explicit
   Node.js >=22 binary for the translation-server, instead of PATH auto-detect or
   the portable download. Intended for version-manager users (fnm/nvm/volta/asdf)
@@ -25,11 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `pzi init --setup` no longer writes the generated API auth token as plaintext
   into `config.toml`. Because users commonly symlink that file into a
   git-tracked dotfiles repo, the inline token was a footgun that leaked a
-  secret into version control. Setup now writes the token to a separate
-  `0600` file (`<data-home>/api_token`) and references it from the config via
-  `api_auth_token_cmd = "cat <file>"`, so auth stays enabled by default while
-  `config.toml` holds no secret and is safe to commit. Existing configs with a
-  plaintext `api_auth_token` continue to work unchanged. **If you ran an older
+  secret into version control. Setup now writes the token to a separate `0600`
+  file (`<data-home>/api_token`) and writes **nothing** token-related into the
+  config — pzi auto-reads that file at runtime from the running user's resolved
+  data home. So `config.toml` carries neither the secret nor an absolute home
+  path (which would expose a username/directory layout) and is safe to commit
+  and portable across machines. Existing configs with a plaintext
+  `api_auth_token` continue to work unchanged. **If you ran an older
   `pzi init`, rotate that token: replace the plaintext value (and scrub it from
   any committed history).**
 - Default config and data directories now follow the XDG Base Directory spec:

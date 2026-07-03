@@ -23,15 +23,13 @@ def run_init_command(
     token_path: Path | None = None
     if args.setup:
         data_home = Path(default_data_home(home_dir))
-        token_cmd = setup_service.provision_api_token(data_home)
-        token_path = data_home / "api_token"
+        token_path = setup_service.provision_api_token(data_home)
         content = setup_service.render_config(
             bib_name=args.name,
             bib_path=args.bib,
             papers_dir=args.papers_dir,
             with_browser=True,
             browser=args.browser,
-            api_auth_token_cmd=token_cmd,
         )
     else:
         template = importlib.resources.files("pzi").joinpath("config.template.toml")
@@ -42,9 +40,9 @@ def run_init_command(
 
     if args.setup and token_path is not None:
         print(
-            f"API auth token written to {token_path} (mode 0600) and referenced "
-            "from the config via `api_auth_token_cmd`, so config.toml holds no "
-            "secret and is safe to commit. Swap in `pass show ...` if you prefer.",
+            f"API auth token written to {token_path} (mode 0600). pzi auto-reads "
+            "it at runtime, so config.toml holds no secret or path and is safe to "
+            "commit. To use a manager instead, set `api_auth_token_cmd`.",
             file=stdout,
         )
 
