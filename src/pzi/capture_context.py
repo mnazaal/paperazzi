@@ -122,7 +122,9 @@ def build_capture_context(
         citekey_format=config.get("citekey_format"),
         pdf_filename_format=config.get("pdf_filename_format"),
         api_url=api_url,
-        api_auth_token=config.get("api_auth_token"),
+        api_auth_token=resolver(
+            config.get("api_auth_token_cmd"), config.get("api_auth_token")
+        ),
         desktop_fallback_hosts=set(config.get("desktop_fallback_hosts", [])),
         pdf_discovery_parallel=config.get("pdf_discovery_parallel", False),
         ezproxy_host=config.get("ezproxy_host"),

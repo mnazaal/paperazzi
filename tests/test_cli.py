@@ -735,6 +735,14 @@ def test_cli_init_setup_writes_config_only(tmp_path: Path) -> None:
     assert 'path = "~/bibs/main.bib"' in config
     assert "flaresolverr_url" not in config
     assert "pzi_data_home" in config
+    # Secret hygiene: token lives in a separate 0600 file, referenced via
+    # api_auth_token_cmd; config.toml (commonly committed) holds no raw token.
+    token_file = tmp_path / ".local" / "share" / "pzi" / "api_token"
+    assert token_file.exists()
+    import stat as _stat
+    assert _stat.S_IMODE(token_file.stat().st_mode) == 0o600
+    assert f"api_auth_token_cmd = \"cat {token_file}\"" in config
+    assert 'api_auth_token = "' not in config
     # config-only: guidance points at first-use bootstrap, no install ran
     out = stdout.getvalue()
     assert "playwright install" in out

@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `api_auth_token_cmd` config option: resolve the HTTP API auth token from a
+  command's stdout (e.g. `pass show pzi-token`), matching the existing `*_cmd`
+  secret-indirection pattern used for emails and the S2 key. `pzi server` and
+  the CLI capture path prefer it over the plaintext `api_auth_token`.
 - `PZI_NODE` env var and `node_path` config option to point pzi at an explicit
   Node.js >=22 binary for the translation-server, instead of PATH auto-detect or
   the portable download. Intended for version-manager users (fnm/nvm/volta/asdf)
@@ -18,6 +22,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `pzi init --setup` no longer writes the generated API auth token as plaintext
+  into `config.toml`. Because users commonly symlink that file into a
+  git-tracked dotfiles repo, the inline token was a footgun that leaked a
+  secret into version control. Setup now writes the token to a separate
+  `0600` file (`<data-home>/api_token`) and references it from the config via
+  `api_auth_token_cmd = "cat <file>"`, so auth stays enabled by default while
+  `config.toml` holds no secret and is safe to commit. Existing configs with a
+  plaintext `api_auth_token` continue to work unchanged. **If you ran an older
+  `pzi init`, rotate that token: replace the plaintext value (and scrub it from
+  any committed history).**
 - Default config and data directories now follow the XDG Base Directory spec:
   the config path resolves under `$XDG_CONFIG_HOME` (default `~/.config`) and
   the data home (`pzi_data_home`, cache for Node.js + translation-server) under

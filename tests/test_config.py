@@ -97,6 +97,7 @@ def test_validate_app_config_applies_defaults() -> None:
         "api_listen_host": "127.0.0.1",
         "api_listen_port": 8765,
         "api_auth_token": None,
+        "api_auth_token_cmd": None,
         "api_allowed_origins": None,
         "api_max_body_bytes": 67108864,
         "contact_email": None,

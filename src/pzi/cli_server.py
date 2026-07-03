@@ -36,8 +36,16 @@ def build_server_plan(
     host: str | None,
     port: int | None,
     config: dict[str, Any] | None,
+    auth_token: str | None = None,
 ) -> ServerPlan:
-    """Resolve server host/port/security without I/O."""
+    """Resolve server host/port/security without I/O.
+
+    ``auth_token`` is the already-resolved effective token (from
+    ``api_auth_token_cmd`` or the ``api_auth_token`` plaintext fallback);
+    resolving the ``_cmd`` runs a subprocess, so the caller (``commands.server``)
+    does it and passes the result here to keep this function I/O-free. When not
+    passed, falls back to the plaintext ``api_auth_token`` in ``config``.
+    """
     if config is None and (host is None or port is None):
         return {"status": "error", "message": "failed to load config"}
 
@@ -50,7 +58,8 @@ def build_server_plan(
     if resolved_host is None or resolved_port is None:
         return {"status": "error", "message": "failed to load config"}
 
-    auth_token = config.get("api_auth_token") if config is not None else None
+    if auth_token is None and config is not None:
+        auth_token = config.get("api_auth_token")
     if not auth_token and not loopback_bind_host(resolved_host):
         return {
             "status": "error",

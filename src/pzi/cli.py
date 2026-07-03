@@ -145,7 +145,7 @@ def run_cli(
             args, **_cfg, stdout=out, stderr=err, bib_selector=_bib_selector,
         ),
         "init": lambda: _run_init(
-            args, config_path=config_path, stdout=out, stderr=err,
+            args, home_dir=effective_home, config_path=config_path, stdout=out, stderr=err,
         ),
         "pdf": lambda: _run_pdf(
             args, **_cfg, stdout=out, stderr=err, bib_selector=_single_selector,

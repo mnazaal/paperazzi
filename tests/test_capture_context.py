@@ -45,6 +45,8 @@ def test_build_capture_context_resolves_runtime_options() -> None:
         "contact_email": "contact@example.com",
         "semantic_scholar_api_key_cmd": "s2-cmd",
         "semantic_scholar_api_key": "fallback-key",
+        "api_auth_token_cmd": "token-cmd",
+        "api_auth_token": "fallback-token",
         "browser_pdf_cmd": "browser hook",
         "citekey_format": "{{ authors }}{{ year }}",
         "pdf_filename_format": "{{ citekey }}-{{ year }}",
@@ -69,7 +71,7 @@ def test_build_capture_context_resolves_runtime_options() -> None:
     assert context.citekey_format == "{{ authors }}{{ year }}"
     assert context.pdf_filename_format == "{{ citekey }}-{{ year }}"
     assert context.api_url == "http://127.0.0.1:8765"
-    assert context.api_auth_token is None
+    assert context.api_auth_token == "resolved:token-cmd:fallback-token"
     assert context.desktop_fallback_hosts == set()
     assert context.pdf_discovery_parallel is False
     assert context.ezproxy_host is None

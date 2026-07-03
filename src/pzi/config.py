@@ -24,6 +24,7 @@ class AppConfig(TypedDict):
     api_listen_host: str
     api_listen_port: int
     api_auth_token: str | None
+    api_auth_token_cmd: str | None
     api_allowed_origins: tuple[str, ...] | None
     api_max_body_bytes: int
     contact_email: str | None
@@ -216,6 +217,7 @@ def _normalize_app_config(
         "api_listen_host": api_listen_host,
         "api_listen_port": api_listen_port,
         "api_auth_token": opt("api_auth_token"),
+        "api_auth_token_cmd": opt("api_auth_token_cmd"),
         "api_allowed_origins": normalized_api_allowed_origins,
         "api_max_body_bytes": _safe_int(raw_api_max_body_bytes, 64 * 1024 * 1024),
         "contact_email": opt("contact_email"),
@@ -286,6 +288,10 @@ def validate_app_config(
     raw_api_auth_token = raw.get("api_auth_token")
     if raw_api_auth_token is not None and not isinstance(raw_api_auth_token, str):
         errors.append("api_auth_token must be a string when provided")
+
+    raw_api_auth_token_cmd = raw.get("api_auth_token_cmd")
+    if raw_api_auth_token_cmd is not None and not isinstance(raw_api_auth_token_cmd, str):
+        errors.append("api_auth_token_cmd must be a string when provided")
 
     raw_api_allowed_origins = raw.get("api_allowed_origins")
     if raw_api_allowed_origins is not None and not (
@@ -675,6 +681,7 @@ def dump_app_config(config: AppConfig) -> str:
     ]
 
     lines.extend(_optional_string("api_auth_token", config.get("api_auth_token")))
+    lines.extend(_optional_string("api_auth_token_cmd", config.get("api_auth_token_cmd")))
     lines.extend(_optional_string_list("api_allowed_origins", config.get("api_allowed_origins")))
     lines.extend(_optional_int("api_max_body_bytes", config.get("api_max_body_bytes")))
     lines.extend(_optional_string("contact_email", config.get("contact_email")))

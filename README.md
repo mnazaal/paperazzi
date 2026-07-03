@@ -268,7 +268,9 @@ it. `--json` prints the full result to stdout.
 
 `pzi server` exposes local endpoints for capture, search, listing, detail, export, PDF serving, tags, update, promote, browser PDF discovery/download, inbox drain (`POST /inbox/drain`), and delete. Main extension endpoint: `POST /capture`; health check: `GET /health`.
 
-Security defaults are local-first: bind to `127.0.0.1`, allow local/extension origins, cap body size, and require `X-Pzi-Token` or bearer auth when `api_auth_token` is set. Keep non-loopback binds behind your own network protections.
+Security defaults are local-first: bind to `127.0.0.1`, allow local/extension origins, cap body size, and require `X-Pzi-Token` or bearer auth when a token is set. Keep non-loopback binds behind your own network protections.
+
+The token is read from `api_auth_token_cmd` (a command whose stdout is the token, e.g. `pass show pzi-token`) or the plaintext `api_auth_token`, preferring the command. `pzi init --setup` generates a token, writes it to a `0600` file under the data home, and sets `api_auth_token_cmd = "cat <file>"` — so `config.toml` carries no secret and is safe to commit to dotfiles. `api_auth_token_cmd` runs without a shell: use an absolute path (no `~`) and no shell operators.
 
 ## Architecture
 

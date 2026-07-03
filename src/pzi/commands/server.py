@@ -6,6 +6,7 @@ import signal
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+from pzi.capture_context import resolve_optional_value
 from pzi.cli_server import build_server_plan
 from pzi.config import load_config_file
 from pzi.http_api import run_server
@@ -16,7 +17,19 @@ def run_server_command(args, *, home_dir, config_path, stdout, stderr) -> int:
     port = args.port
     cfg = load_config_file(config_path, home_dir=home_dir)
     config = cfg["config"]
-    plan = build_server_plan(host=host, port=port, config=config)
+    # Resolve the effective auth token here (running api_auth_token_cmd is I/O,
+    # which build_server_plan must stay free of) and pass it into the plan.
+    auth_token = None
+    if config is not None:
+        try:
+            auth_token = resolve_optional_value(
+                command=config.get("api_auth_token_cmd"),
+                fallback=config.get("api_auth_token"),
+            )
+        except (RuntimeError, ValueError) as exc:
+            print(f"failed to resolve api_auth_token_cmd: {exc}", file=stderr)
+            return 1
+    plan = build_server_plan(host=host, port=port, config=config, auth_token=auth_token)
     if plan["status"] == "error":
         print(plan["message"], file=stderr)
         for error in cfg["errors"]:

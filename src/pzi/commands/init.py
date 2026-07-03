@@ -7,9 +7,12 @@ from pathlib import Path
 from typing import TextIO
 
 from pzi import setup_service
+from pzi.config import default_data_home
 
 
-def run_init_command(args, *, config_path: str, stdout: TextIO, stderr: TextIO) -> int:
+def run_init_command(
+    args, *, home_dir: str, config_path: str, stdout: TextIO, stderr: TextIO
+) -> int:
     dest = Path(config_path)
     if dest.exists() and not args.force:
         print(f"config already exists: {dest} (use --force to overwrite)", file=stderr)
@@ -17,13 +20,18 @@ def run_init_command(args, *, config_path: str, stdout: TextIO, stderr: TextIO) 
 
     dest.parent.mkdir(parents=True, exist_ok=True)
 
+    token_path: Path | None = None
     if args.setup:
+        data_home = Path(default_data_home(home_dir))
+        token_cmd = setup_service.provision_api_token(data_home)
+        token_path = data_home / "api_token"
         content = setup_service.render_config(
             bib_name=args.name,
             bib_path=args.bib,
             papers_dir=args.papers_dir,
             with_browser=True,
             browser=args.browser,
+            api_auth_token_cmd=token_cmd,
         )
     else:
         template = importlib.resources.files("pzi").joinpath("config.template.toml")
@@ -31,6 +39,14 @@ def run_init_command(args, *, config_path: str, stdout: TextIO, stderr: TextIO) 
             content = Path(src).read_text()
     dest.write_text(content)
     print(f"created {dest}", file=stdout)
+
+    if args.setup and token_path is not None:
+        print(
+            f"API auth token written to {token_path} (mode 0600) and referenced "
+            "from the config via `api_auth_token_cmd`, so config.toml holds no "
+            "secret and is safe to commit. Swap in `pass show ...` if you prefer.",
+            file=stdout,
+        )
 
     if args.setup:
         print(

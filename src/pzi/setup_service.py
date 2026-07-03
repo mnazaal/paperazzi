@@ -6,8 +6,33 @@ import os
 import secrets
 import shlex
 import sys
+from pathlib import Path
 
 from pzi.config import escape_toml_string
+
+
+def provision_api_token(data_home: Path) -> str:
+    """Generate an API auth token, write it to a ``0600`` file under
+    *data_home*, and return the shell command the config uses to read it back.
+
+    Keeping the token in its own file (not ``config.toml``) is what lets the
+    config be committed to dotfiles safely while API auth stays enabled by
+    default. The returned command is ``cat <token-file>``; users can later
+    replace it with ``pass show ...`` or any other secret manager.
+    """
+    data_home.mkdir(parents=True, exist_ok=True)
+    token_path = data_home / "api_token"
+    token = secrets.token_urlsafe(32)
+    # Create owner-only from the start so the token is never briefly
+    # world-readable; O_CREAT's mode only applies on creation, so chmod after
+    # to also tighten a pre-existing file.
+    fd = os.open(token_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, (token + "\n").encode("utf-8"))
+    finally:
+        os.close(fd)
+    os.chmod(token_path, 0o600)
+    return f"cat {shlex.quote(str(token_path))}"
 
 
 def render_config(
@@ -15,10 +40,17 @@ def render_config(
     bib_name: str,
     bib_path: str,
     with_browser: bool,
+    api_auth_token_cmd: str,
     papers_dir: str | None = None,
     browser: str = "chromium",
 ) -> str:
     """Render user config TOML from explicit setup options.
+
+    ``api_auth_token_cmd`` is the shell command the config uses to read the API
+    auth token at runtime (e.g. ``cat <token-file>``). The token itself is kept
+    out of this file — which users routinely commit into dotfiles — so it never
+    lands in version control. Users can later point it at a password manager
+    (``pass show pzi-token``, etc.).
 
     When ``browser`` is ``"firefox"``, auto-detects the Firefox profile
     directory and includes the ``--profile`` flag in the generated command.
@@ -28,7 +60,10 @@ def render_config(
         'translation_server_url = "http://127.0.0.1:1969"',
         'api_listen_host = "127.0.0.1"',
         'api_listen_port = 8765',
-        f'api_auth_token = "{secrets.token_urlsafe(32)}"',
+        "# API auth token is read via this command so the secret stays out of "
+        "this file (safe to commit). Swap in `pass show ...` or another manager "
+        "if you prefer.",
+        f'api_auth_token_cmd = "{escape_toml_string(api_auth_token_cmd)}"',
         '# pzi_data_home = "~/.local/share/pzi"  '
         "# defaults to $XDG_DATA_HOME/pzi (~/.local/share/pzi)",
         '# unpaywall_email = "your@email.com" # optional OA PDF lookup',
