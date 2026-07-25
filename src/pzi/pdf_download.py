@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import http.client
 import urllib.error
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -124,7 +125,10 @@ def fetch_and_store_pdf(
                 "or set ezproxy_host for institutional access"
             )
         return None, f"failed to download PDF from {url}: HTTP {exc.code} {exc.reason}"
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, http.client.HTTPException) as exc:
+        # http.client.IncompleteRead (a chunked body cut short mid-download)
+        # derives from HTTPException, not OSError, so without it a truncated
+        # download escapes as a raw traceback out of `pzi add` / `pzi pdf retry`.
         return None, f"failed to download PDF from {url}: {exc}"
 
     if not is_pdf_content_type(content_type) and not is_pdf_bytes(data):

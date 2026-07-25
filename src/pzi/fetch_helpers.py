@@ -51,14 +51,42 @@ def _retry_after_delay(exc: urllib.error.HTTPError, attempt: int) -> float:
     return min(2**attempt, 8)
 
 
+def _expected_content_length(response) -> int | None:
+    """Return the body length the server promised, when it is comparable.
+
+    ``Content-Length`` counts *encoded* bytes, so it cannot be compared against
+    what we hold once a ``Content-Encoding`` is in play.
+    """
+    getheader = getattr(response, "getheader", None)
+    if getheader is None or getheader("Content-Encoding"):
+        return None
+    raw = getheader("Content-Length")
+    if raw is None or not str(raw).strip().isdigit():
+        return None
+    return int(str(raw).strip())
+
+
 def _read_limited(response, *, max_bytes: int) -> bytes:
-    """Read response body up to max_bytes, failing before unbounded memory growth."""
+    """Read response body up to max_bytes, failing before unbounded memory growth.
+
+    Also reconciles what was read against ``Content-Length``: for a body with a
+    known length, ``HTTPResponse.read(amt)`` clips to the bytes remaining and
+    returns *short* rather than raising, so a connection cut mid-body is
+    otherwise completely silent — and a half-downloaded PDF gets written to the
+    library as the paper. (Chunked bodies raise ``IncompleteRead`` instead, which
+    callers translate into a download error.)
+    """
     chunks: list[bytes] = []
     total = 0
     limit = max(0, int(max_bytes))
     while True:
         chunk = response.read(min(READ_CHUNK_BYTES, limit - total + 1))
         if not chunk:
+            expected = _expected_content_length(response)
+            if expected is not None and total < expected:
+                raise ValueError(
+                    f"truncated response body: got {total} of {expected} bytes"
+                )
             return b"".join(chunks)
         total += len(chunk)
         if total > limit:

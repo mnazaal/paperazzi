@@ -27,8 +27,21 @@ ranked by blast radius.
    `BibtexEntry["fields"]` forward; write back only keys the record owns. Closes
    field annihilation, `booktitle`→`journal`, entry-type flattening, relative
    `file` rewriting, tag round-trip asymmetry.
-2. **PDF integrity.** Reject truncated bodies (`%%EOF` + length +
-   Content-Length reconciliation) before storing; catch `http.client.HTTPException`.
+2. **PDF integrity.** Done, with one deliberate narrowing. Implemented:
+   Content-Length reconciliation in `_read_limited` (the silent truncation case
+   — `HTTPResponse.read(amt)` clips and returns short rather than raising), and
+   `http.client.HTTPException` in the download `except` (`IncompleteRead`, the
+   chunked case, derives from neither `OSError` nor `ValueError`, so it escaped
+   as a traceback).
+   **Not implemented: the `%%EOF`-trailer and minimum-size heuristics.** 128
+   `%PDF-` stubs across 32 test files would need migrating to realistic
+   fixtures, and the check carries a false-reject risk (a legitimate PDF refused
+   is worse than a rare truncation stored). With the two checks above, the
+   remaining uncovered case is a body sent with neither Content-Length nor
+   chunked framing, closed cleanly mid-transfer. Revisit as its own change if
+   that shows up in practice; it also needs a warning channel, since the
+   download helpers currently return `(path, error)` with no slot for
+   "stored, but looks truncated".
 3. **Destructive write paths.** `promote` (keep-mode overwrite, author-only
    gate, `None`-clobber, hardcoded `entry_type`, partial apply), `reindex`
    (PDF identity, no rollback, dry-run reporting gap), `clean` (quarantine

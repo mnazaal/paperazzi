@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A PDF download cut short mid-transfer is no longer stored as the paper. Two
+  cases: a body with a known `Content-Length` that stops early was completely
+  silent (`HTTPResponse.read(amt)` clips to the bytes remaining and returns
+  short instead of raising), and a chunked body cut short raised
+  `http.client.IncompleteRead`, which derives from neither `OSError` nor
+  `ValueError` and so escaped the download error handler as a raw traceback out
+  of `pzi add` / `pzi pdf retry`. Reads now reconcile against `Content-Length`
+  (skipped when a `Content-Encoding` makes the comparison meaningless), and the
+  download path reports both cases as a normal download failure, leaving the
+  fallback chain to try the next source.
+
 - **Entry mutations no longer delete BibTeX fields pzi does not model.**
   `pzi tag add/remove`, `pzi update`, and `pzi add` on an entry already in the
   library regenerated the whole `@entry{}` block from the internal record model,

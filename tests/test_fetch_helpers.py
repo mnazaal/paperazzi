@@ -1,4 +1,7 @@
+import pytest
+
 from pzi import fetch_helpers
+from pzi.fetch_helpers import _read_limited
 
 
 class _FakeResponse:
@@ -135,3 +138,52 @@ def test_build_metadata_fetch_text_enables_cache_from_config(tmp_path) -> None:
     assert fetch("http://x/api") == "BODY"
     assert fetch("http://x/api") == "BODY"
     assert calls["n"] == 1  # second call served from the config-enabled cache
+
+
+# --- truncated-response detection ------------------------------------------
+# A body with a known Content-Length that is cut short does not raise from
+# HTTPResponse.read(amt): it clips to the remaining length and returns short.
+# Without reconciling against Content-Length the truncation is silent, and a
+# half-downloaded PDF gets stored as the paper.
+
+
+class _LengthResponse:
+    def __init__(self, body: bytes, headers: dict[str, str]) -> None:
+        self._body = body
+        self._pos = 0
+        self.headers = headers
+
+    def read(self, amt: int) -> bytes:
+        chunk = self._body[self._pos : self._pos + amt]
+        self._pos += len(chunk)
+        return chunk
+
+    def getheader(self, name: str, default=None):
+        return self.headers.get(name, default)
+
+
+def test_read_limited_rejects_body_shorter_than_content_length() -> None:
+    response = _LengthResponse(b"%PDF-1.4 only-40-bytes-of-900", {"Content-Length": "900"})
+    with pytest.raises(ValueError, match="truncated"):
+        _read_limited(response, max_bytes=1_000_000)
+
+
+def test_read_limited_accepts_body_matching_content_length() -> None:
+    body = b"%PDF-1.4 complete"
+    response = _LengthResponse(body, {"Content-Length": str(len(body))})
+    assert _read_limited(response, max_bytes=1_000_000) == body
+
+
+def test_read_limited_skips_reconciliation_without_content_length() -> None:
+    body = b"%PDF-1.4 no length header"
+    assert _read_limited(_LengthResponse(body, {}), max_bytes=1_000_000) == body
+
+
+def test_read_limited_skips_reconciliation_for_encoded_bodies() -> None:
+    """Content-Length counts encoded bytes, so it cannot be compared against
+    the decoded length when a Content-Encoding is in play."""
+    body = b"decoded-longer-than-encoded-length"
+    response = _LengthResponse(
+        body, {"Content-Length": "8", "Content-Encoding": "gzip"}
+    )
+    assert _read_limited(response, max_bytes=1_000_000) == body

@@ -1,3 +1,4 @@
+import http.client
 from pathlib import Path
 
 import pzi.pdf_download as pdf_download
@@ -51,3 +52,42 @@ def test_store_pdf_source_routes_urls_to_downloader(tmp_path: Path) -> None:
     assert error is None
     assert path == str(tmp_path / "smith2024graph.pdf")
     assert (tmp_path / "smith2024graph.pdf").read_bytes() == b"%PDF-from-url"
+
+
+def test_fetch_and_store_reports_incomplete_read_instead_of_raising(tmp_path) -> None:
+    """A chunked body cut short raises http.client.IncompleteRead, which is not
+    an OSError — it used to escape as a traceback out of `pzi add`."""
+
+    def truncated_fetcher(url):
+        raise http.client.IncompleteRead(b"%PDF-1.4 partial", 900)
+
+    path, error = fetch_and_store_pdf(
+        url="https://example.org/paper.pdf",
+        papers_dir=str(tmp_path),
+        citekey="smith2024",
+        fetch_binary=truncated_fetcher,
+    )
+
+    assert path is None
+    assert error is not None and "failed to download PDF" in error
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_fetch_and_store_reports_content_length_truncation(tmp_path) -> None:
+    """The silent case: a body with a known Content-Length that stops early.
+    _read_limited reconciles and raises ValueError, which surfaces as an error
+    rather than a half-written PDF in the library."""
+
+    def short_fetcher(url):
+        raise ValueError("truncated response body: got 40 of 900 bytes")
+
+    path, error = fetch_and_store_pdf(
+        url="https://example.org/paper.pdf",
+        papers_dir=str(tmp_path),
+        citekey="smith2024",
+        fetch_binary=short_fetcher,
+    )
+
+    assert path is None
+    assert error is not None and "truncated response body" in error
+    assert list(tmp_path.iterdir()) == []
