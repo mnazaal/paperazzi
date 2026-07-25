@@ -11,7 +11,7 @@ from pzi.bib_repository import find_entry_index, read_bib_file, update_bib_entry
 from pzi.bibtex import (
     BibtexEntry,
     NormalizedRecord,
-    record_to_bibtex_entry,
+    apply_record_to_entry,
 )
 from pzi.config import load_and_resolve_bib
 from pzi.pdf import remove_new_pdf as _remove_new_pdf
@@ -630,10 +630,9 @@ def _entry_with_pdf_fields(
     updated_record["local_pdf_path"] = local_pdf_path
     if pdf_url is not None:
         updated_record["pdf_url"] = pdf_url
-    return record_to_bibtex_entry(
-        cast(NormalizedRecord, updated_record),
-        entry_type=entry["entry_type"],
-    )
+    # Merge onto the existing entry: attaching a PDF must not rewrite the rest
+    # of the entry from the record model and drop volume/pages/publisher/...
+    return apply_record_to_entry(entry, cast(NormalizedRecord, updated_record))
 
 
 # ---------------------------------------------------------------------------

@@ -32,6 +32,7 @@ from pzi.bib_serialize import (
 from pzi.bibtex import (
     BibtexEntry,
     NormalizedRecord,
+    apply_record_to_entry,
     bibtex_entry_to_record,
     merge_projected_entry,
     record_to_bibtex_entry,
@@ -704,9 +705,11 @@ def merge_bib_entries(
             cast(MergeableEntry, dict(records[idx_a])),
         )
         merged_record = decision["merged"]
-        entry_type = entries[idx_b].get("entry_type", "article")
-        merged_entry = record_to_bibtex_entry(
-            cast(NormalizedRecord, merged_record), entry_type=entry_type
+        # Merge onto B's on-disk entry (B is the survivor), so fields the record
+        # model does not carry survive the merge. A's unmodelled fields are not
+        # carried over — survivor-wins, matching merge_entries' record semantics.
+        merged_entry = apply_record_to_entry(
+            entries[idx_b], cast(NormalizedRecord, merged_record)
         )
         _validate_bibtex_roundtrip([merged_entry])
         merged_block = _bibtex_entry_to_library_entry(

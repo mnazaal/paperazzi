@@ -19,7 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reported success while destroying data. Updates now merge onto the entry as it
   exists on disk: fields the record model owns are rewritten from the record,
   the entry's type is preserved, and everything else is left byte-for-byte
-  alone. Found by the 2026-07-25 audit; see `PLAN.md`.
+  alone. Found by the 2026-07-25 audit; see `PLAN.md`. Covers `pzi tag`,
+  `pzi update`, `pzi add` on an existing entry, `pzi pdf attach`,
+  `pzi pdf retry` (including `--failed-only` and the extension's attach
+  route), and `pzi fix dedupe --merge`. `pzi update --promote` is not yet
+  covered — its projection is entangled with separate promotion defects being
+  fixed next.
 
 ## [0.1.0b2] - 2026-07-25
 

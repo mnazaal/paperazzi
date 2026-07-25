@@ -15,7 +15,9 @@ from pathlib import Path
 from typing import Any
 
 from pzi.add_service import add_record_with_bib
+from pzi.bib_repository import merge_bib_entries
 from pzi.bib_service import delete_entry
+from pzi.pdf_service import attach_pdf
 from pzi.tag_service import add_tags, remove_tags
 
 _PRESERVE_BIB = (
@@ -266,3 +268,56 @@ def test_readd_of_existing_entry_preserves_unmodelled_fields() -> None:
         text = Path(bib).read_text()
         assert "volume = {33}" in text
         assert "publisher = {Curran Associates}" in text
+
+
+def test_pdf_attach_preserves_fields_the_record_model_does_not_carry() -> None:
+    """`pzi pdf attach` goes through _entry_with_pdf_fields, which regenerated
+    the entry from the record and dropped everything the model omits."""
+    with tempfile.TemporaryDirectory() as td:
+        cp, bib, _ = _config(td)
+        Path(bib).write_text(_CONFERENCE_BIB)
+        pdf = Path(td) / "paper.pdf"
+        pdf.write_bytes(b"%PDF-1.4 stub\n")
+
+        result = attach_pdf(
+            config_path=cp, home_dir=td, bib_selector=None,
+            citekey="smith2020graph", source=str(pdf),
+        )
+
+        assert result["status"] == "ok"
+        text = Path(bib).read_text()
+        assert "volume = {33}" in text
+        assert "pages = {1--12}" in text
+        assert "publisher = {Curran Associates}" in text
+        assert "booktitle = {Proceedings of NeurIPS}" in text
+        assert "journal" not in text
+        assert "@inproceedings{smith2020graph," in text
+
+
+def test_merge_preserves_surviving_entrys_unmodelled_fields() -> None:
+    """`pzi fix dedupe --merge` rebuilt the surviving entry from the merged
+    record, so B's volume/pages/publisher vanished on merge."""
+    with tempfile.TemporaryDirectory() as td:
+        _cp, bib, _ = _config(td)
+        Path(bib).write_text(
+            _CONFERENCE_BIB
+            + "@article{smith2020graphdup,\n"
+            "  title = {Graph Networks},\n"
+            "  author = {Smith, Jane and Doe, John},\n"
+            "  doi = {10.1145/9999},\n"
+            "  year = {2020}\n"
+            "}\n"
+        )
+
+        result = merge_bib_entries(
+            bib, citekey_a="smith2020graphdup", citekey_b="smith2020graph"
+        )
+
+        assert result["found"] is True
+        text = Path(bib).read_text()
+        assert "volume = {33}" in text
+        assert "pages = {1--12}" in text
+        assert "publisher = {Curran Associates}" in text
+        assert "booktitle = {Proceedings of NeurIPS}" in text
+        assert "doi = {10.1145/9999}" in text  # merged-in field still applied
+        assert "@inproceedings{smith2020graph," in text
