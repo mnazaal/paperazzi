@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`promote_confidence_threshold` is now a 0-100 match score; the default moves
+  from `3` to `60`.** The promotion gate used to score a handful of coarse
+  features (title exact/substring, capped author overlap, year proximity) on an
+  implicit 0-6 scale, while the explainable 0-100 `score_match` breakdown was
+  computed *after* the gate and only decorated the diagnostics — so `pzi update
+  --promote` could print `match confidence 0/100 … title_mismatch` and write the
+  entry anyway. Both the gate and candidate selection now use the same 0-100
+  score. **A `promote_confidence_threshold` set in `config.toml` must be
+  restated on the new scale**; values above 100 are now rejected at config
+  validation.
+
 ### Fixed
 
 - A PDF download cut short mid-transfer is no longer stored as the paper. Two
@@ -33,9 +46,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   alone. Found by the 2026-07-25 audit; see `PLAN.md`. Covers `pzi tag`,
   `pzi update`, `pzi add` on an existing entry, `pzi pdf attach`,
   `pzi pdf retry` (including `--failed-only` and the extension's attach
-  route), and `pzi fix dedupe --merge`. `pzi update --promote` is not yet
-  covered — its projection is entangled with separate promotion defects being
-  fixed next.
+  route), and `pzi fix dedupe --merge`, and now also `pzi update --promote`
+  (see below).
+
+- **`pzi update --promote --keep-preprint` overwrote the preprint instead of
+  adding the published version.** The merged published record inherits the
+  preprint's `url`, and no metadata provider emits `canonical_url`, so the
+  intended insert identity-matched the preprint itself and became an in-place
+  update of it — reporting `action=create` with a `published_citekey` that
+  existed nowhere in the file, and leaving a dangling
+  `note = {Published version: …}`. `--dry-run` previewed the same wrong outcome.
+  The published entry is now planned as an unconditional insert, and identity
+  that belongs to the preprint (its arXiv/bioRxiv/etc. URL, alongside the
+  `arxiv_id` already dropped) no longer carries over to the published record —
+  which also stops the published entry from being typed `@unpublished`.
+
+- **A promotion could half-apply, committing an entry behind a reported
+  failure.** Keep-mode committed the new entry first and stamped the two
+  cross-reference notes after, and only the note path refuses to patch a library
+  containing a malformed block — so a single broken entry anywhere in the `.bib`
+  left the published entry committed with a `file =` pointing at the PDF the
+  rollback had just deleted, while the run reported `created 0,
+  skipped_failed 1`. No fault injection needed. The insert and the preprint's
+  note are now one atomic batch write, which also refuses up front to patch an
+  unparseable library.
+
+- **Promoting no longer blanks fields the published candidate left empty.** The
+  merge copied every candidate key including explicit `None` — and
+  `_openreview_normalize` always emits `doi: None` — so promoting against those
+  providers deleted a populated DOI. Empty candidate values are now treated as
+  absent metadata rather than an instruction to clear.
+
+- **`pzi update --promote --replace` no longer retypes every promoted entry
+  `@article`.** The in-place branch hardcoded the type and rebuilt the block from
+  the record model, dropping unmodelled fields; it now projects onto the entry on
+  disk and resolves the type the same way keep-mode does. The translation
+  server's item type is also carried into the candidate record, so a promoted
+  conference paper becomes `@inproceedings` rather than defaulting to `@article`.
+
+- **A candidate matching on authors alone is no longer promoted.** Three shared
+  surnames scored exactly the old default threshold, so an unrelated paper by
+  the same group could be written in.
+
+- **A source carrying no author list no longer counts as author disagreement.**
+  Several providers return title and venue only, and scoring that identically to
+  conflicting authors rejected exact title matches outright. It is now tracked
+  as a distinct `author_unknown` flag. For `pzi check` this deliberately does
+  *not* become a free pass: an entry whose only corroborating source cannot
+  confirm authorship now reports `could_not_verify` rather than `verified` —
+  reproducing a real title with invented authors is what a fabricated citation
+  looks like, so silence there would be false assurance. It previously reported
+  `problematic`, which was a false alarm in the other direction.
 
 ## [0.1.0b2] - 2026-07-25
 
