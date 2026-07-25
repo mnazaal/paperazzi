@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0b2] - 2026-07-25
+
 ### Added
 
 - The HTTP API auth token is now auto-discovered from `<data-home>/api_token`
@@ -57,6 +59,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `pzi_data_home` line (it emits a commented example), so the XDG-aware default
   applies. Chrome/Chromium profile auto-detection likewise honors
   `$XDG_CONFIG_HOME`.
+- **Breaking, `.bib` format:** `pdf_url` and `abstract_url` are no longer
+  packed into the `note` field with `" | "` delimiters and `PDF:`/`Abstract:`
+  labels — a user's own note text containing that same shape could corrupt
+  the parse, and the packed values weren't readable by other BibTeX tools.
+  Each value now has its own field: `pzi-pdf-url`, `pzi-abstract-url`. `note`
+  is now pure free text. Entries written by 0.1.0b1 keep their PDF/abstract
+  URL as inert text inside `note` on next read (nothing is deleted from the
+  file) — re-run `pzi update` or `pzi add` on the affected DOI/URL to
+  repopulate the new fields, or move the value over by hand.
+- `pzi search` output labels the matched-fields column (`[matched: title,tags]`)
+  instead of a bare `[title,tags]`, which read as the same column `pzi entries`
+  uses for actual author names.
+- `.bib`, inbox, and metadata-cache writes now also fsync the containing
+  directory after the atomic rename, so the rename itself survives a crash
+  immediately after a write (previously only the new file's content was
+  guaranteed durable, not the directory entry pointing at it).
+- Releases now attach the prebuilt Firefox and Chrome extension zips
+  (`paperazzi-capture-firefox.zip`, `paperazzi-capture-chrome.zip`) alongside
+  the sdist/wheel, so installing the browser extension no longer requires a
+  repo checkout.
 
 ### Fixed
 
@@ -141,17 +163,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   permanently instead of cleaning it up (the original `.bib` was never at
   risk, only the leftover temp file). Now removed on any failure, matching
   the inbox writer's existing behavior.
-
-### Changed
-
-- `.bib`, inbox, and metadata-cache writes now also fsync the containing
-  directory after the atomic rename, so the rename itself survives a crash
-  immediately after a write (previously only the new file's content was
-  guaranteed durable, not the directory entry pointing at it).
-- Releases now attach the prebuilt Firefox and Chrome extension zips
-  (`paperazzi-capture-firefox.zip`, `paperazzi-capture-chrome.zip`) alongside
-  the sdist/wheel, so installing the browser extension no longer requires a
-  repo checkout.
+- Crash when a fallback-sourced record (e.g. browser-extension page metadata)
+  supplied `year` as a string: the similarity/dedup check compared it against
+  an `int` and raised `TypeError`. Year is now coerced at the point a
+  `NormalizedRecord` is produced, with a defensive coercion at the comparison
+  site as well.
+- DOI normalization no longer keeps a trailing `?query`/`#fragment` from a
+  pasted `doi.org` link (`doi.org` forwards query strings to the resolved
+  target rather than treating them as part of the DOI). A `doi:` prefix
+  (e.g. `doi:10.1234/abc`) is now also recognized.
+- `pip install`/`pipx install` guidance in `pzi init --setup`, the browser
+  session hook, and the browser PDF hook referenced the wrong package name
+  (`pzi[playwright]`, which does not exist) instead of the actual
+  distribution name, `paperazzi[playwright]`.
 
 ### Docs
 
@@ -175,39 +199,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   independent settings with independent defaults, not the same knob. Also
   documented that `pzi search --json` always returns a JSON array (one result
   per searched library), even for a single default target.
-
-## [0.1.0b2] - 2026-07-02
-
-### Fixed
-
-- Crash when a fallback-sourced record (e.g. browser-extension page metadata)
-  supplied `year` as a string: the similarity/dedup check compared it against
-  an `int` and raised `TypeError`. Year is now coerced at the point a
-  `NormalizedRecord` is produced, with a defensive coercion at the comparison
-  site as well.
-- DOI normalization no longer keeps a trailing `?query`/`#fragment` from a
-  pasted `doi.org` link (`doi.org` forwards query strings to the resolved
-  target rather than treating them as part of the DOI). A `doi:` prefix
-  (e.g. `doi:10.1234/abc`) is now also recognized.
-- `pip install`/`pipx install` guidance in `pzi init --setup`, the browser
-  session hook, and the browser PDF hook referenced the wrong package name
-  (`pzi[playwright]`, which does not exist) instead of the actual
-  distribution name, `paperazzi[playwright]`.
-
-### Changed
-
-- **Breaking, `.bib` format:** `pdf_url` and `abstract_url` are no longer
-  packed into the `note` field with `" | "` delimiters and `PDF:`/`Abstract:`
-  labels — a user's own note text containing that same shape could corrupt
-  the parse, and the packed values weren't readable by other BibTeX tools.
-  Each value now has its own field: `pzi-pdf-url`, `pzi-abstract-url`. `note`
-  is now pure free text. Entries written by 0.1.0b1 keep their PDF/abstract
-  URL as inert text inside `note` on next read (nothing is deleted from the
-  file) — re-run `pzi update` or `pzi add` on the affected DOI/URL to
-  repopulate the new fields, or move the value over by hand.
-- `pzi search` output labels the matched-fields column (`[matched: title,tags]`)
-  instead of a bare `[title,tags]`, which read as the same column `pzi entries`
-  uses for actual author names.
 
 ## [0.1.0b1] - 2026-07-01
 
