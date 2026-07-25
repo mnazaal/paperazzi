@@ -23,10 +23,14 @@ Approved 2026-07-25. Rationale: one architectural fix closes ~7 reported
 findings; PDF integrity is the other silent-corruption class; the rest is
 ranked by blast radius.
 
-1. **Record projection** (`bibtex.py:82-141` + write paths). Carry
-   `BibtexEntry["fields"]` forward; write back only keys the record owns. Closes
-   field annihilation, `booktitle`→`journal`, entry-type flattening, relative
-   `file` rewriting, tag round-trip asymmetry.
+1. **Record projection.** Done — `bibtex.apply_record_to_entry` /
+   `merge_projected_entry`, wired into `tag_service`, `update_service`,
+   `plan_bib_write` (update branch, guarded on snapshot consistency),
+   `pdf_service._entry_with_pdf_fields`, `bib_repository.merge_bib_entries`.
+   Still lossy by design: `promote_service:819,908` (entangled with step 3),
+   `_rebase_insert_plan_against_current:565`, and the dry-run preview callers
+   `update_service:197` / `promote_service:761,802` (misleading diff, not a bad
+   write).
 2. **PDF integrity.** Done, with one deliberate narrowing. Implemented:
    Content-Length reconciliation in `_read_limited` (the silent truncation case
    — `HTTPResponse.read(amt)` clips and returns short rather than raising), and
@@ -42,10 +46,63 @@ ranked by blast radius.
    that shows up in practice; it also needs a warning channel, since the
    download helpers currently return `(path, error)` with no slot for
    "stored, but looks truncated".
-3. **Destructive write paths.** `promote` (keep-mode overwrite, author-only
-   gate, `None`-clobber, hardcoded `entry_type`, partial apply), `reindex`
-   (PDF identity, no rollback, dry-run reporting gap), `clean` (quarantine
-   overwrite + self-rescan).
+3. **Destructive write paths.** Next up. All five promote defects and the
+   reindex/clean ones were reproduced through the real CLI by an adversarial
+   verifier; details inlined here so the (ephemeral) probe scripts are not
+   needed.
+
+   `promote_service`:
+   - `:761` **keep-mode overwrites the preprint.** `_merge_published_metadata`
+     copies the preprint's `canonical_url` into the published record, so
+     `plan_bib_write`'s `find_exact_match` matches the *preprint itself* on URL
+     identity and the intended insert becomes an in-place update. Reports
+     `action=create` with a `published_citekey` that exists nowhere, plus a
+     dangling `note = {Published version: …}`. Trigger: preprint has `url` and
+     the candidate has no `canonical_url` — and **no** provider normalizer in
+     `metadata_sources.py` ever emits `canonical_url`, so every fallback-provider
+     promotion hits it. `--dry-run` shows the same wrong outcome.
+     Fix: plan with `force_new=True`, or strip the inherited identity.
+   - `:188` **author-only match accepted.** Gate uses `_score_confidence`
+     (`:640`), where ≥3 shared surnames scores exactly 3 = the default
+     `promote_confidence_threshold`. The real 0-100 `score_match` is computed at
+     `:217`, *after* the gate, and only decorates diagnostics — so the tool
+     prints `match confidence 0/100 … title_mismatch` and writes anyway.
+     Fix: gate on `score_match`; never let authors alone clear it.
+   - `:885-893` **candidate `None` blanks populated fields.** The merge loop
+     copies every candidate key including explicit `None`;
+     `_openreview_normalize` (`metadata_sources.py:676`) always emits
+     `doi: None`. Fix: skip `None`/`""`/`[]`.
+   - `:819` **`--replace` hardcodes `entry_type="article"`**, so a promoted
+     `@misc`/`@inproceedings` becomes `@article`. Keep-mode disagrees (it routes
+     through `_resolve_entry_type`). Fix here also routes through
+     `apply_record_to_entry` (step 1 leftover).
+   - `:765-771` **partial apply.** `execute_write_plan` commits, then
+     `_add_note_to_citekey` raises and the rollback removes only the PDF —
+     leaving a committed entry whose `file =` dangles, reported as
+     `created 0, skipped_failed 1`. Needs no fault injection: one malformed
+     block anywhere in the `.bib` triggers it, because the insert path skips
+     `_validate_library_parseable` (only the update path calls it).
+
+   `reindex_service`:
+   - `:83-104` **wrong PDF attached.** `old_pdf_path` comes from
+     `plan_pdf_path(citekey=old_citekey)` instead of `record["local_pdf_path"]`,
+     so a stray `<old_citekey>.pdf` is renamed onto the entry and the real PDF
+     is orphaned. `--dry-run` cannot reveal it: `:111-112` computes
+     `old_pdf`/`new_pdf` and `cli_render.py:201` discards them, printing a bare
+     `" [PDF renamed]"`.
+   - `:96-117` **no rollback.** PDFs are renamed inside the loop, the bib is
+     written after; if `rewrite_entries_in_order` raises, every renamed entry's
+     `file =` dangles. Realistic trigger is not disk failure but the shared lock
+     being released after the read (`:40-41`) and re-taken for the write, so a
+     concurrent `pzi add` changes the entry count.
+
+   `clean_service`:
+   - `:110` `papers.rglob("*.pdf")` descends into `papers_dir/.orphans`, so
+     quarantined files are re-detected forever and plain `pzi fix clean` exits 1
+     permanently once anything has been quarantined. `:162`/`:171` compute
+     `dst = orphan_dir / src.name` and `shutil.move` overwrites silently, so the
+     **second** `--fix` run destroys the archived original on a basename
+     collision.
 4. **Identity normalization.** DOI case/trailing-slash/nested-path in
    `normalize_doi` + `extract_identities`.
 5. **Security.** `bib` selector confinement, attach-session enforcement,
