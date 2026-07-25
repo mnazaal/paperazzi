@@ -203,9 +203,13 @@ def _verdict_from_scores(
 
     if any(f in _PROBLEMATIC_FLAGS for f in flags):
         verdict: Verdict = "problematic"
-    elif best["score"] >= bar:
+    elif best["score"] >= bar and "author_unknown" not in flags:
         verdict = "verified"
     else:
+        # A source carrying no author list cannot corroborate authorship, and a
+        # title match alone is exactly what a fabricated citation reproduces.
+        # That is not evidence of a defect either, so it lands here rather than
+        # in `problematic`: unconfirmed, not wrong.
         verdict = "could_not_verify"
 
     contributions = [f"best match via {best_name}: {c}" for c in best["contributions"]]
@@ -225,6 +229,8 @@ def _mismatch_lines(match: MatchScore) -> list[str]:
         lines.append(f"title similarity only {match['title_similarity']}")
     if "author_mismatch" in match["flags"] or "chimeric" in match["flags"]:
         lines.append(f"author agreement only {match['author_similarity']}")
+    if "author_unknown" in match["flags"]:
+        lines.append("matched record carries no author list to compare")
     if "venue_mismatch" in match["flags"]:
         lines.append("venue disagrees with the matched record")
     if "fabricated_author" in match["flags"]:

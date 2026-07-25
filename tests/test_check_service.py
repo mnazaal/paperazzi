@@ -73,6 +73,45 @@ def test_verified_when_source_confirms(tmp_path):
     assert "crossref" in item["sources_checked"]
 
 
+def test_title_only_source_does_not_verify_authorship(tmp_path):
+    """A source with no author list cannot corroborate authorship.
+
+    Scoring it as author *disagreement* would be a false alarm, but letting a
+    bare title match reach `verified` is worse: reproducing a real title with
+    invented authors is precisely what a fabricated citation looks like. The
+    honest verdict is unconfirmed.
+    """
+    config_path = _setup(
+        tmp_path,
+        citekey="vaswani2017",
+        title="Attention Is All You Need",
+        authors=["Vaswani, Ashish", "Shazeer, Noam"],
+        year=2017,
+    )
+
+    def crossref(_title, **_kw):
+        return {"title": "Attention Is All You Need", "year": 2017, "venue": "NeurIPS"}
+
+    result = check_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        fetch_crossref=crossref,
+        fetch_openalex=_no_source,
+        fetch_dblp=_no_source,
+        fetch_openreview=_no_source,
+        fetch_s2=_no_source,
+        now_year=2026,
+    )
+
+    item = result["items"][0]
+    assert item["verdict"] == "could_not_verify"
+    # Not an accusation of a defect — just unconfirmed.
+    assert "author_mismatch" not in item["flags"]
+    assert "chimeric" not in item["flags"]
+    assert "author_unknown" in item["flags"]
+
+
 def test_could_not_verify_when_no_source_matches(tmp_path):
     config_path = _setup(
         tmp_path, citekey="ghost2020", title="A Totally Real Paper", authors=["Nobody, A"]

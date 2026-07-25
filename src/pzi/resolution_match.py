@@ -95,16 +95,25 @@ def score_match(
         _str_field(entry, "title"), _str_field(candidate, "title")
     )
     author_sim = _author_similarity(entry_authors, cand_authors)
+    # A side with no author list is *absent evidence*, not disagreement, but
+    # `_author_similarity` scores both 0. Penalizing it rejects sparse-but-valid
+    # provider records (some return title + venue only) on a perfect title
+    # match, which is a worse failure than the mismatch it would catch.
+    author_evidence = bool(author_surnames(entry_authors)) and bool(
+        author_surnames(cand_authors)
+    )
 
     flags: list[str] = []
     contributions: list[str] = [
         f"title similarity {title_sim}",
-        f"author similarity {author_sim}",
+        f"author similarity {author_sim}" if author_evidence else "no author data to compare",
     ]
+    if not author_evidence:
+        flags.append("author_unknown")
 
     # Chimeric case: a strong title but weak authors is the classic swapped /
     # fabricated-author citation — score it down asymmetrically.
-    if title_sim >= _TITLE_HIGH and author_sim < _AUTHOR_OK:
+    if author_evidence and title_sim >= _TITLE_HIGH and author_sim < _AUTHOR_OK:
         score = round(title_sim - 0.5 * (100 - author_sim))
         flags.append("chimeric")
         flags.append("author_mismatch")
@@ -115,7 +124,7 @@ def score_match(
             score -= _PENALTY_TITLE
             flags.append("title_mismatch")
             contributions.append(f"title mismatch -{_PENALTY_TITLE}")
-        if author_sim < _AUTHOR_OK:
+        if author_evidence and author_sim < _AUTHOR_OK:
             score -= _PENALTY_AUTHOR
             flags.append("author_mismatch")
             contributions.append(f"author mismatch -{_PENALTY_AUTHOR}")
@@ -125,7 +134,7 @@ def score_match(
         flags.append("venue_mismatch")
         contributions.append(f"venue mismatch -{_PENALTY_VENUE}")
 
-    fabricated = _fabricated_surnames(entry_authors, cand_authors)
+    fabricated = _fabricated_surnames(entry_authors, cand_authors) if author_evidence else []
     if len(fabricated) >= 2:
         penalty = min(len(fabricated) * _PENALTY_FAB_EACH, _PENALTY_FAB_CAP)
         score -= penalty

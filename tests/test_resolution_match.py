@@ -86,3 +86,28 @@ def test_strict_truncation_allows_and_others_sentinel() -> None:
     entry = _rec("Known Paper", ["Smith, J", "others"])  # discloses truncation
     cand = _rec("Known Paper", ["Smith, J", "Doe, A", "Roe, B"])
     assert "author_truncated" not in score_match(entry, cand, strict=True)["flags"]
+
+
+def test_absent_author_list_is_not_scored_as_author_disagreement() -> None:
+    """A candidate carrying no authors is missing evidence, not conflicting
+    evidence: several providers return title + venue only, and scoring that as
+    a mismatch rejects an exact title match outright."""
+    entry = _rec("Attention Is All You Need", ["Vaswani, Ashish"])
+    sparse = _rec("Attention Is All You Need", [])
+
+    result = score_match(entry, sparse)
+
+    assert result["flags"] == ["author_unknown"]
+    assert result["score"] == 100
+
+
+def test_author_disagreement_is_still_penalized() -> None:
+    # The absent-evidence carve-out must not weaken the real mismatch case.
+    entry = _rec("Attention Is All You Need", ["Vaswani, Ashish"])
+    wrong = _rec("Attention Is All You Need", ["Nobody, Real"])
+
+    result = score_match(entry, wrong)
+
+    assert "chimeric" in result["flags"]
+    assert "author_mismatch" in result["flags"]
+    assert result["score"] < 60
