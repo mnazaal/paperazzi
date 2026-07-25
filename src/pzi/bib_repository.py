@@ -819,7 +819,7 @@ _ITEM_TYPE_TO_ENTRY_TYPE: dict[str, str] = {
 }
 
 
-def _resolve_entry_type(record: NormalizedRecord) -> str:
+def resolve_entry_type(record: NormalizedRecord) -> str:
     """Determine BibTeX entry type from record metadata."""
     from pzi.promote_service import detect_preprint_source
 
@@ -857,7 +857,7 @@ def plan_bib_write(
     rewrites ``booktitle`` as ``journal``.
     """
     if entry_type == "article":
-        entry_type = _resolve_entry_type(incoming_record)
+        entry_type = resolve_entry_type(incoming_record)
 
     if force_new:
         entry = record_to_bibtex_entry(incoming_record, entry_type=entry_type)

@@ -9,13 +9,24 @@ from urllib.error import HTTPError
 from urllib.parse import urlsplit
 
 from pzi.bib_repository import (
-    execute_write_plan,
+    BatchWriteSession,
+    ConcurrentEditError,
+    WritePlan,
+    batch_write_session,
     plan_bib_write,
     preview_write_plan,
     read_bib_file,
+    resolve_entry_type,
     update_bib_entry,
 )
-from pzi.bibtex import NormalizedRecord, generate_citekey, normalize_authors, record_to_bibtex_entry
+from pzi.bibtex import (
+    BibtexEntry,
+    NormalizedRecord,
+    generate_citekey,
+    merge_projected_entry,
+    normalize_authors,
+    record_to_bibtex_entry,
+)
 from pzi.capture_context import resolve_contact_email, resolve_optional_value
 from pzi.config import load_and_resolve_bib
 from pzi.fetch_helpers import build_metadata_fetch_text
@@ -37,7 +48,6 @@ from pzi.protocols import (
     SearchTranslationFetcher,
 )
 from pzi.resolution_match import score_match
-from pzi.similarity import author_overlap
 from pzi.tag_service import add_tags
 from pzi.translation_server import fetch_search_translations
 
@@ -64,16 +74,6 @@ class PromoteResult(TypedDict):
     summary: NotRequired[dict[str, Any]]
 
 
-
-# ---------------------------------------------------------------------------
-# Scoring constants
-# ---------------------------------------------------------------------------
-
-_SCORE_TITLE_EXACT = 5
-_SCORE_TITLE_PARTIAL = 3
-_SCORE_AUTHOR_MAX = 3
-_SCORE_YEAR_EXACT = 2
-_SCORE_YEAR_ADJACENT = 1
 
 # Tag written to a preprint by `--mark-resolved` so re-runs can skip it.
 _RESOLVED_TAG = "promoted"
@@ -185,7 +185,12 @@ def promote_bib(
             items.append(item)
             continue
 
-        score = _score_confidence(record, candidate)
+        # Gate on the explainable 0–100 breakdown, not a coarse feature count:
+        # the old integer scale let three shared surnames reach the threshold on
+        # their own, so a candidate flagged `title_mismatch` was written in
+        # anyway while the diagnostics printed `confidence 0/100`.
+        match = score_match(record, candidate)
+        score = match["score"]
         if score < effective_confidence_threshold:
             summary["skipped_low_confidence"] += 1
             item = _skip_item(
@@ -212,9 +217,8 @@ def promote_bib(
             items.append(item)
             continue
 
-        # Explainable 0–100 breakdown for the accepted candidate (shown under
-        # --verbose); the integer threshold gate above is unchanged.
-        match = score_match(record, candidate)
+        # Explainable breakdown of the score the gate above accepted (shown
+        # under --verbose).
         match_line = (
             f"match confidence {match['score']}/100 "
             f"(title {match['title_similarity']}, author {match['author_similarity']})"
@@ -539,7 +543,15 @@ def _translation_candidates(results: Any) -> list[NormalizedRecord]:
             continue
         rec = result.get("record")
         if isinstance(rec, Mapping) and rec.get("venue"):
-            candidates.append(cast(NormalizedRecord, dict(rec)))
+            candidate = dict(rec)
+            # The translation server reports the item type alongside the record,
+            # not inside it. Carry it in, or `resolve_entry_type` has nothing to
+            # go on and every promotion lands as `@article` — including
+            # conference papers.
+            item_type = result.get("item_type")
+            if isinstance(item_type, str) and item_type.strip():
+                candidate.setdefault("item_type", item_type.strip())
+            candidates.append(cast(NormalizedRecord, candidate))
     return candidates
 
 
@@ -559,7 +571,11 @@ def _score_published_candidate(
     preprint: NormalizedRecord,
     candidate: NormalizedRecord,
 ) -> int:
-    score = _score_confidence(preprint, candidate)
+    # Same 0–100 scale the acceptance gate uses, so the selected candidate and
+    # the reported confidence can never disagree. The completeness bonuses stay
+    # small: they break ties between comparably-matching candidates, they do not
+    # promote a poor match over a good one.
+    score = score_match(preprint, candidate)["score"]
     if candidate.get("venue"):
         score += 2
     if candidate.get("doi"):
@@ -635,32 +651,6 @@ def _published_candidate_diagnostic_line(
 # ---------------------------------------------------------------------------
 # Scoring and deduplication
 # ---------------------------------------------------------------------------
-
-
-def _score_confidence(preprint: NormalizedRecord, candidate: NormalizedRecord) -> int:
-    score = 0
-    p_title = str(preprint.get("title") or "").lower().strip()
-    c_title = str(candidate.get("title") or "").lower().strip()
-    if p_title and c_title:
-        if p_title == c_title:
-            score += _SCORE_TITLE_EXACT
-        elif p_title in c_title or c_title in p_title:
-            score += _SCORE_TITLE_PARTIAL
-
-    p_authors = [a for a in (preprint.get("authors") or []) if isinstance(a, str)]
-    c_authors = [a for a in (candidate.get("authors") or []) if isinstance(a, str)]
-    # Family-name normalized overlap so "Smith, John" and "John Smith" match.
-    score += min(author_overlap(p_authors, c_authors), _SCORE_AUTHOR_MAX)
-
-    p_year = preprint.get("year")
-    c_year = candidate.get("year")
-    if isinstance(p_year, int) and isinstance(c_year, int):
-        if p_year == c_year:
-            score += _SCORE_YEAR_EXACT
-        elif abs(p_year - c_year) <= 1:
-            score += _SCORE_YEAR_ADJACENT
-
-    return score
 
 
 def _find_duplicate_citekey(
@@ -739,6 +729,12 @@ def _handle_keep_preprint(
         citekey_format=citekey_format,
     )
     published["citekey"] = published_ck
+    # The new entry's own cross-reference is known before it is written, so it
+    # goes into the record rather than a follow-up update — one fewer write that
+    # can leave the pair half-applied.
+    back_reference = _append_note(published.get("note"), f"Preprint version: {preprint_ck}")
+    if back_reference is not None:
+        published["note"] = back_reference
 
     existing_pdf_paths = _snapshot_pdf_paths(papers_dir)
     published, pdf_attached = _maybe_attach_pdf(
@@ -758,14 +754,15 @@ def _handle_keep_preprint(
     ) or ["venue", "doi"]
 
     diff: str | None = None
-    plan = plan_bib_write(published, records)
     if dry_run:
+        # Same `force_new` as the real write, so the preview shows the insert
+        # the run will actually perform rather than a spurious in-place update.
+        plan = plan_bib_write(published, records, force_new=True)
+        _relocate_venue_for_entry_type(plan["entry"])
         diff = preview_write_plan(bib_path, plan)["diff"]
     else:
         try:
-            execute_write_plan(bib_path, plan)
-            _add_note_to_citekey(bib_path, preprint_ck, f"Published version: {published_ck}")
-            _add_note_to_citekey(bib_path, published_ck, f"Preprint version: {preprint_ck}")
+            _write_published_fork(bib_path, published, preprint_ck, published_ck)
         except Exception:
             _remove_new_pdf(_local_pdf_path(published), existing_pdf_paths)
             raise
@@ -776,6 +773,102 @@ def _handle_keep_preprint(
         pdf_attached=pdf_attached,
         diff=diff,
     )
+
+
+# BibTeX entry types whose venue belongs in `booktitle` rather than `journal`.
+_PROCEEDINGS_ENTRY_TYPES = frozenset({"inproceedings", "incollection", "conference"})
+
+
+def _relocate_venue_for_entry_type(entry: BibtexEntry) -> BibtexEntry:
+    """Move the venue to the key *entry*'s type expects.
+
+    `merge_projected_entry` writes the venue back to whichever key the entry
+    already used, because an ordinary update must not rewrite a proceedings
+    entry's `booktitle` as `journal`. Promotion is the case where the type
+    itself changes, so the venue's home has to follow it — otherwise a workshop
+    paper promoted to a journal ends up an `@article` whose journal name sits in
+    `booktitle`. Mutates and returns *entry*, whose ``fields`` the callers own.
+    """
+    fields = entry["fields"]
+    wanted = "booktitle" if entry["entry_type"] in _PROCEEDINGS_ENTRY_TYPES else "journal"
+    stale = "journal" if wanted == "booktitle" else "booktitle"
+    # Only relocate when the target is free: an entry carrying both keys is
+    # already ambiguous, and dropping either would lose a venue.
+    if stale in fields and wanted not in fields:
+        fields[wanted] = fields.pop(stale)
+    return entry
+
+
+def _write_published_fork(
+    bib_path: str,
+    published: NormalizedRecord,
+    preprint_ck: str,
+    published_ck: str,
+) -> None:
+    """Insert the published entry and cross-reference the preprint, atomically.
+
+    Both edits go through one batch session so the pair cannot half-apply. The
+    old sequence committed the insert first and stamped the preprint's note
+    after, and only the note path refuses to patch a library containing a
+    malformed block — so one broken entry anywhere in the file left the
+    published entry committed (with a ``file =`` pointing at the PDF the
+    rollback had just deleted) behind a reported ``created 0``.
+    """
+    with batch_write_session(bib_path) as session:
+        # `published_ck` was generated against the snapshot read at the top of
+        # the run, but this session re-reads under the lock. `execute_write_plan`
+        # caught that drift with its own ConcurrentEditError; a batch session
+        # reads fresh instead, so the collision is checked here — with
+        # `force_new` set, nothing else would.
+        if any(record.get("citekey") == published_ck for record in session.records):
+            raise ConcurrentEditError(
+                f"citekey {published_ck} appeared in {bib_path} while promoting "
+                f"{preprint_ck}; aborting rather than writing a duplicate entry"
+            )
+        # force_new: the published record is forked from the preprint and can
+        # still share an identity with it, so an identity-matched plan would
+        # turn this insert into an in-place update of the preprint itself. The
+        # candidate was already checked against the library by
+        # `_find_duplicate_citekey`, so there is nothing legitimate to match.
+        plan = plan_bib_write(published, session.records, force_new=True)
+        # The projection always emits the venue as `journal`; a candidate that
+        # resolves to a proceedings type needs it under `booktitle`.
+        _relocate_venue_for_entry_type(plan["entry"])
+        session.apply_plan(plan)
+        note_plan = _plan_note_update(
+            session, preprint_ck, f"Published version: {published_ck}"
+        )
+        if note_plan is not None:
+            session.apply_plan(note_plan)
+
+
+def _plan_note_update(
+    session: BatchWriteSession, citekey: str, text: str
+) -> WritePlan | None:
+    """Plan a note append for *citekey*, or None when there is nothing to do."""
+    for index, record in enumerate(session.records):
+        if record.get("citekey") != citekey:
+            continue
+        new_note = _append_note(record.get("note"), text)
+        if new_note is None:
+            return None
+        updated = cast(NormalizedRecord, {**record, "note": new_note})
+        return {
+            "action": "update",
+            "index": index,
+            "record": updated,
+            # A bare projection, deliberately *not* merged onto the on-disk
+            # entry: `BatchWriteSession.apply_plan` merges the plan itself, and
+            # the two write paths disagree here — `apply_write_plan` replaces, so
+            # plans headed there must arrive pre-merged. Merging twice sends
+            # `venue` through the record's single key a second time, so a
+            # `booktitle` reads back as an absent `journal` and is deleted.
+            "entry": record_to_bibtex_entry(
+                updated, entry_type=session.entries[index]["entry_type"]
+            ),
+            "changed_fields": ["note"],
+        }
+    return None
 
 
 def _handle_update_in_place(
@@ -816,7 +909,22 @@ def _handle_update_in_place(
         )
 
         def _updater(entry, _current):
-            return record_to_bibtex_entry(updated, entry_type="article")
+            # Project onto the entry rather than replacing it: a rebuild from
+            # the record drops every field `NormalizedRecord` does not model
+            # (`volume`, `pages`, `publisher`, ...).
+            projected = record_to_bibtex_entry(
+                updated, entry_type=resolve_entry_type(updated)
+            )
+            merged = merge_projected_entry(entry, projected)
+            # `merge_projected_entry` keeps the on-disk entry type, because an
+            # ordinary update has no business retyping an entry. Promotion is
+            # the exception — the preprint has become a published paper — so the
+            # type is resolved from the promoted record (the same path keep-mode
+            # takes) rather than left as `@unpublished` or hardcoded `@article`.
+            if projected["entry_type"] != merged["entry_type"]:
+                merged["entry_type"] = projected["entry_type"]
+                _relocate_venue_for_entry_type(merged)
+            return merged
 
         update_result = update_bib_entry(bib_path, preprint_ck, _updater)
         if update_result.get("found") is not True:
@@ -890,26 +998,35 @@ def _merge_published_metadata(
     for key, value in candidate.items():
         if key in _USER_OWNED:
             continue
+        # A candidate key the provider could not fill is *absent* metadata, not
+        # an instruction to clear the preprint's. `_openreview_normalize` always
+        # emits `doi: None`, so copying it blindly deletes a populated DOI.
+        if value is None or value == "" or value == []:
+            continue
         merged[key] = value
     merged["tags"] = list(preprint.get("tags") or [])
+
+    # The result describes the *published* version, so it must not inherit the
+    # preprint's identity. Beyond being wrong metadata, an inherited identity is
+    # load-bearing twice over: `find_exact_match` keys on `canonical_url`, so a
+    # kept URL makes the published insert collide with the preprint it came
+    # from, and `resolve_entry_type` keys on the preprint hosts, so it would
+    # type the published entry `@unpublished`.
     merged.pop("arxiv_id", None)
+    for url_field in ("canonical_url", "source_url"):
+        if candidate.get(url_field):
+            continue
+        if _url_domain_on_preprint(merged.get(url_field)):
+            merged.pop(url_field, None)
     return cast(NormalizedRecord, merged)
 
 
-def _add_note_to_citekey(bib_path: str, citekey: str, text: str) -> None:
-    def _updater(entry, current_record):
-        note = current_record.get("note")
-        note_str = str(note) if note is not None else ""
-        if text in note_str:
-            return entry
-        new_note = f"{note_str}; {text}" if note_str else text
-        updated = dict(current_record)
-        updated["note"] = new_note
-        return record_to_bibtex_entry(
-            cast(NormalizedRecord, updated), entry_type=entry["entry_type"]
-        )
-
-    update_bib_entry(bib_path, citekey, _updater)
+def _append_note(existing: object, text: str) -> str | None:
+    """Append *text* to a note, or return None when it is already there."""
+    note_str = str(existing) if existing is not None else ""
+    if text in note_str:
+        return None
+    return f"{note_str}; {text}" if note_str else text
 
 
 def _generate_citekey_for_candidate(

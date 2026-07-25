@@ -192,7 +192,7 @@ def _normalize_app_config(
     raw_api_listen_port = raw.get("api_listen_port", 8765)
     raw_api_max_body_bytes = raw.get("api_max_body_bytes", 64 * 1024 * 1024)
     raw_metadata_confidence_min_score = raw.get("metadata_confidence_min_score", 0)
-    raw_promote_confidence_threshold = raw.get("promote_confidence_threshold", 3)
+    raw_promote_confidence_threshold = raw.get("promote_confidence_threshold", 60)
     raw_metadata_cache_ttl = raw.get("metadata_cache_ttl", 0)
     raw_browser_hook = raw.get("browser_hook", True)
     raw_pzi_data_home = raw.get("pzi_data_home")
@@ -236,7 +236,7 @@ def _normalize_app_config(
             1, _safe_int(raw_page_metadata_timeout_seconds, 5, min_value=1)
         ),
         "metadata_confidence_min_score": _safe_int(raw_metadata_confidence_min_score, 0),
-        "promote_confidence_threshold": _safe_int(raw_promote_confidence_threshold, 3),
+        "promote_confidence_threshold": _safe_int(raw_promote_confidence_threshold, 60),
         "metadata_cache_ttl": max(0, _safe_int(raw_metadata_cache_ttl, 0)),
         "browser_hook": _safe_bool(raw_browser_hook, True),
         "pzi_data_home": (
@@ -314,13 +314,13 @@ def validate_app_config(
     ):
         errors.append("metadata_confidence_min_score must be an integer")
 
-    raw_promote_confidence_threshold = raw.get("promote_confidence_threshold", 3)
+    raw_promote_confidence_threshold = raw.get("promote_confidence_threshold", 60)
     if (
         not isinstance(raw_promote_confidence_threshold, int)
         or isinstance(raw_promote_confidence_threshold, bool)
-        or raw_promote_confidence_threshold < 0
+        or not 0 <= raw_promote_confidence_threshold <= 100
     ):
-        errors.append("promote_confidence_threshold must be a non-negative integer")
+        errors.append("promote_confidence_threshold must be an integer between 0 and 100")
 
     raw_metadata_cache_ttl = raw.get("metadata_cache_ttl", 0)
     if (

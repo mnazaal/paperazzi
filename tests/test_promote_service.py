@@ -1,19 +1,23 @@
 import pzi.promote_service as promote_service
 from pzi.add_service import add_record_to_bib
-from pzi.promote_service import _score_confidence, promote_bib
+from pzi.promote_service import _score_published_candidate, promote_bib
 
 
-def test_score_confidence_matches_authors_across_name_formats() -> None:
+def test_candidate_scoring_matches_authors_across_name_formats() -> None:
     # "Smith, John" (preprint) vs "John Smith" (candidate) must count as an
     # author match — family-name normalized, not exact-string.
     preprint = {"title": "Graph Nets", "authors": ["Smith, John"], "year": 2024}
     candidate = {"title": "Graph Nets", "authors": ["John Smith"], "year": 2024}
     same_format = {"title": "Graph Nets", "authors": ["Smith, John"], "year": 2024}
 
-    assert _score_confidence(preprint, candidate) == _score_confidence(preprint, same_format)
-    # No author overlap scores strictly lower than a one-author overlap.
+    assert _score_published_candidate(preprint, candidate) == _score_published_candidate(
+        preprint, same_format
+    )
+    # No author overlap scores strictly lower than a full author overlap.
     no_overlap = {"title": "Graph Nets", "authors": ["Jane Doe"], "year": 2024}
-    assert _score_confidence(preprint, candidate) > _score_confidence(preprint, no_overlap)
+    assert _score_published_candidate(preprint, candidate) > _score_published_candidate(
+        preprint, no_overlap
+    )
 
 
 def _seed_bib_with_preprint(tmp_path, bib_path, config_path, **kwargs):
@@ -244,7 +248,6 @@ def test_promote_skips_low_confidence(tmp_path):
         bib_selector=None,
         dry_run=False,
         fetch_search=fake_search,
-        confidence_threshold=3,
     )
 
     assert len(result["items"]) == 1
@@ -442,7 +445,9 @@ def test_promote_different_author_year_scoring(tmp_path):
         dry_run=False,
         keep_preprint=False,
         fetch_search=fake_search,
-        confidence_threshold=2,
+        # Above the extra-author/off-by-one-year penalty, below the default bar:
+        # a threshold of 2 would pass no matter how the scoring drifted.
+        confidence_threshold=40,
     )
 
     assert len(result["items"]) == 1
@@ -765,3 +770,301 @@ def test_promote_unexpected_error_isolated_per_record(tmp_path, monkeypatch):
     # The second preprint still promoted despite the first record raising.
     assert items["beta2024"]["action"] == "update"
     assert "doi = {10.9/beta}" in bib_path.read_text()
+
+
+# === destructive write paths (2026-07 audit, PLAN.md step 3) ===
+
+
+def _preprint_bib_text(extra_fields: str = "") -> str:
+    """A raw @unpublished preprint carrying fields the record model does not
+    model, so a rewrite-from-scratch is visible as field loss."""
+    return (
+        "@unpublished{smith2024graph,\n"
+        "  title = {Graph Parsers},\n"
+        "  author = {Smith, Jane},\n"
+        "  year = {2024},\n"
+        "  eprint = {2401.12345},\n"
+        "  archiveprefix = {arXiv},\n"
+        "  volume = {12},\n"
+        "  pages = {3--14},\n"
+        "  publisher = {Cold Spring Press},\n"
+        f"{extra_fields}"
+        "}\n"
+    )
+
+
+def test_promote_keep_preprint_inserts_instead_of_rewriting_the_preprint(tmp_path):
+    """Keep-mode must insert the published version, never patch the preprint.
+
+    The merged published record inherits the preprint's ``url`` — no provider
+    normalizer emits ``canonical_url`` — so an identity-matched write plan turns
+    the intended insert into an in-place update of the preprint itself, and the
+    reported ``published_citekey`` ends up existing nowhere in the file.
+    """
+    bib_path = tmp_path / "ml.bib"
+    config_path = _write_config(tmp_path, bib_path)
+    _seed_bib_with_preprint(
+        tmp_path,
+        bib_path,
+        config_path,
+        canonical_url="https://arxiv.org/abs/2401.12345",
+    )
+
+    result = promote_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        keep_preprint=True,
+        dry_run=False,
+        fetch_search=_fake_search_with_venue,
+    )
+
+    item = result["items"][0]
+    assert item["action"] == "create"
+    published_ck = item["published_citekey"]
+    assert published_ck != "smith2024graph"
+
+    text = bib_path.read_text()
+    # The published citekey the run reported must actually be in the file...
+    assert f"{{{published_ck}," in text
+    # ...and the preprint must still be the preprint: unpublished, and not
+    # carrying the published venue/doi it never had.
+    assert "@unpublished{smith2024graph," in text
+    assert text.count("journal = {Journal of Parsing}") == 1
+    assert text.count("doi = {10.9/jop}") == 1
+
+
+def test_promote_rejects_a_candidate_matching_on_authors_alone(tmp_path):
+    """Shared surnames alone must never clear the promotion gate.
+
+    The gate scores on a coarse integer scale where three shared surnames hit
+    the default threshold exactly, so a candidate with an unrelated title is
+    written in — while the 0-100 ``score_match`` breakdown printed alongside it
+    reports a title mismatch.
+    """
+    bib_path = tmp_path / "ml.bib"
+    config_path = _write_config(tmp_path, bib_path)
+    _seed_bib_with_preprint(
+        tmp_path,
+        bib_path,
+        config_path,
+        authors=["Smith, Jane", "Doe, John", "Roe, Ann"],
+    )
+
+    def fake_search(query, *, server_url):
+        return [
+            {
+                "item_type": "journalArticle",
+                "record": {
+                    "title": "An Entirely Unrelated Study of Beetles",
+                    "venue": "Journal of Coleoptera",
+                    "doi": "10.9/beetle",
+                    "year": 2019,
+                    "authors": ["Smith, Jane", "Doe, John", "Roe, Ann"],
+                },
+                "attachments": [],
+            }
+        ]
+
+    result = promote_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        keep_preprint=False,
+        dry_run=False,
+        fetch_search=fake_search,
+    )
+
+    assert result["items"][0]["action"] == "skip"
+    assert "low confidence" in result["items"][0]["note"]
+    assert "10.9/beetle" not in bib_path.read_text()
+
+
+def test_promote_does_not_blank_fields_the_candidate_left_none(tmp_path):
+    """A candidate key explicitly set to ``None`` must not clear a populated
+    field — ``_openreview_normalize`` always emits ``doi: None``."""
+    bib_path = tmp_path / "ml.bib"
+    config_path = _write_config(tmp_path, bib_path)
+    _seed_bib_with_preprint(tmp_path, bib_path, config_path, doi="10.1/preprint")
+
+    def fake_search(query, *, server_url):
+        return [
+            {
+                "item_type": "journalArticle",
+                "record": {
+                    "title": "Graph Parsers",
+                    "venue": "Journal of Parsing",
+                    "doi": None,
+                    "year": 2024,
+                    "authors": ["Smith, Jane"],
+                },
+                "attachments": [],
+            }
+        ]
+
+    result = promote_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        keep_preprint=False,
+        dry_run=False,
+        fetch_search=fake_search,
+    )
+
+    assert result["items"][0]["action"] == "update"
+    text = bib_path.read_text()
+    assert "doi = {10.1/preprint}" in text
+    assert "journal = {Journal of Parsing}" in text
+
+
+def test_promote_update_in_place_preserves_unmodelled_fields(tmp_path):
+    """Promoting in place rewrites the entry from the record projection, which
+    drops every BibTeX field the record model does not carry."""
+    bib_path = tmp_path / "ml.bib"
+    config_path = _write_config(tmp_path, bib_path)
+    bib_path.write_text(_preprint_bib_text())
+
+    result = promote_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        keep_preprint=False,
+        dry_run=False,
+        fetch_search=_fake_search_with_venue,
+    )
+
+    assert result["items"][0]["action"] == "update"
+    text = bib_path.read_text()
+    assert "volume = {12}" in text
+    assert "pages = {3--14}" in text
+    assert "publisher = {Cold Spring Press}" in text
+    assert "journal = {Journal of Parsing}" in text
+    # The promoted entry is no longer unpublished; its type is resolved from the
+    # published record rather than hardcoded.
+    assert "@article{smith2024graph," in text
+
+
+def test_promote_keep_preprint_note_preserves_unmodelled_preprint_fields(tmp_path):
+    """Stamping the cross-reference note onto the preprint must not rewrite the
+    rest of its entry away."""
+    bib_path = tmp_path / "ml.bib"
+    config_path = _write_config(tmp_path, bib_path)
+    bib_path.write_text(_preprint_bib_text())
+
+    result = promote_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        keep_preprint=True,
+        dry_run=False,
+        fetch_search=_fake_search_with_venue,
+    )
+
+    assert result["items"][0]["action"] == "create"
+    text = bib_path.read_text()
+    assert "Published version:" in text
+    assert "Preprint version:" in text
+    assert "volume = {12}" in text
+    assert "pages = {3--14}" in text
+    assert "publisher = {Cold Spring Press}" in text
+
+
+def test_promote_in_place_moves_the_venue_when_it_retypes_the_entry(tmp_path):
+    """Retyping an entry must move its venue to the key the new type expects.
+
+    `merge_projected_entry` writes the venue back to whichever key the entry
+    already used — right for an ordinary update, wrong when promotion retypes a
+    proceedings entry to `@article`, which would leave the journal name sitting
+    in `booktitle`.
+    """
+    bib_path = tmp_path / "ml.bib"
+    config_path = _write_config(tmp_path, bib_path)
+    bib_path.write_text(
+        "@inproceedings{smith2024graph,\n"
+        "  title = {Graph Parsers},\n"
+        "  author = {Smith, Jane},\n"
+        "  year = {2024},\n"
+        "  booktitle = {Workshop on Parsing},\n"
+        "  eprint = {2401.12345},\n"
+        "  archiveprefix = {arXiv},\n"
+        "}\n"
+    )
+
+    result = promote_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        keep_preprint=False,
+        dry_run=False,
+        fetch_search=_fake_search_with_venue,
+    )
+
+    assert result["items"][0]["action"] == "update"
+    text = bib_path.read_text()
+    assert "@article{smith2024graph," in text
+    assert "journal = {Journal of Parsing}" in text
+    assert "booktitle" not in text
+
+
+def test_promote_keep_preprint_note_preserves_a_booktitle_venue(tmp_path):
+    """The preprint's note update must not move or drop its venue.
+
+    A preprint filed as `@inproceedings` keeps its venue in `booktitle`. The
+    projection round-trips venue through the record's single `venue` key, so a
+    note update that merges twice reads back `journal` (absent), concludes the
+    venue was cleared, and deletes `booktitle`.
+    """
+    bib_path = tmp_path / "ml.bib"
+    config_path = _write_config(tmp_path, bib_path)
+    bib_path.write_text(
+        "@inproceedings{smith2024graph,\n"
+        "  title = {Graph Parsers},\n"
+        "  author = {Smith, Jane},\n"
+        "  year = {2024},\n"
+        "  booktitle = {Workshop on Parsing},\n"
+        "  eprint = {2401.12345},\n"
+        "  archiveprefix = {arXiv},\n"
+        "}\n"
+    )
+
+    result = promote_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        keep_preprint=True,
+        dry_run=False,
+        fetch_search=_fake_search_with_venue,
+    )
+
+    assert result["items"][0]["action"] == "create"
+    text = bib_path.read_text()
+    assert "booktitle = {Workshop on Parsing}" in text
+
+
+def test_promote_keep_preprint_writes_nothing_when_library_is_malformed(tmp_path):
+    """The insert half of keep-mode commits before the note updates run, and
+    only the note path refuses to patch a malformed library — so a broken block
+    anywhere in the file leaves a committed entry behind a reported failure."""
+    bib_path = tmp_path / "ml.bib"
+    config_path = _write_config(tmp_path, bib_path)
+    bib_path.write_text(
+        _preprint_bib_text()
+        + "\n@article{broken2024,\n"
+        "  title = {Missing closing brace\n"
+        "  author = {Someone},\n"
+        "  year = {2024},\n"
+        "}\n"
+    )
+    before = bib_path.read_text()
+
+    result = promote_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        keep_preprint=True,
+        dry_run=False,
+        fetch_search=_fake_search_with_venue,
+    )
+
+    assert result["summary"]["created"] == 0
+    assert bib_path.read_text() == before
