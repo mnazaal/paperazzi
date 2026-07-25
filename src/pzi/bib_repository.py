@@ -33,6 +33,7 @@ from pzi.bibtex import (
     BibtexEntry,
     NormalizedRecord,
     bibtex_entry_to_record,
+    merge_projected_entry,
     record_to_bibtex_entry,
     resolve_citekey_collision,
 )
@@ -136,6 +137,9 @@ def apply_write_plan(entries: list[BibtexEntry], plan: WritePlan) -> list[Bibtex
     if index is None:
         raise ValueError("update plan must include an index")
         # pragma: no cover — covered by integration/browser tests
+    # plan["entry"] is authoritative here: callers reaching this either built it
+    # from an updater callback (which already merged onto the on-disk entry) or
+    # via plan_bib_write, which merges when given existing_entries.
     updated_entries[index] = plan["entry"]
     return updated_entries
 
@@ -404,7 +408,7 @@ class BatchWriteSession:
             # enrichment mid-batch), and a stale key would otherwise cause the
             # next record sharing that identity to register a false exact-match.
             self._remove_from_index(self.records[idx], idx)
-            self.entries[idx] = plan["entry"]
+            self.entries[idx] = merge_projected_entry(self.entries[idx], plan["entry"])
             self.records[idx] = planned_record
         for identity in extract_identities(planned_record):
             self.index.setdefault((identity["kind"], identity["value"]), []).append(position)
@@ -835,12 +839,19 @@ def plan_bib_write(
     entry_type: str = "article",
     force_new: bool = False,
     index: dict[tuple[Any, str], list[int]] | None = None,
+    existing_entries: list[BibtexEntry] | None = None,
 ) -> WritePlan:
     """Plan an insert or update operation for a normalized record.
 
     *index* is an optional prebuilt identity index (see
     :func:`pzi.similarity.build_identity_index`) over *existing_records*, reused
     to avoid rebuilding it on each call in the write path.
+
+    *existing_entries* is the parsed entry list matching *existing_records*.
+    Pass it whenever it is available: an update plan built without it carries a
+    bare projection of the record, so applying it drops every BibTeX field the
+    record model does not carry (``volume``, ``pages``, ``publisher``, ...) and
+    rewrites ``booktitle`` as ``journal``.
     """
     if entry_type == "article":
         entry_type = _resolve_entry_type(incoming_record)
@@ -874,6 +885,15 @@ def plan_bib_write(
     )
     merged_record = merge_decision["merged"]
     entry = record_to_bibtex_entry(merged_record, entry_type=entry_type)
+    # Only merge when the entry list is demonstrably the same snapshot as the
+    # record list — a skewed snapshot (e.g. a re-read after a concurrent edit)
+    # would merge onto the wrong entry, which is worse than the field loss.
+    if (
+        existing_entries is not None
+        and len(existing_entries) == len(existing_records)
+        and existing_entries[match_index]["citekey"] == existing_record.get("citekey")
+    ):
+        entry = merge_projected_entry(existing_entries[match_index], entry)
     return {
         "action": "update",
         "index": match_index,

@@ -11,7 +11,7 @@ from pzi.bib_repository import (
     read_bib_file,
     update_bib_entry,
 )
-from pzi.bibtex import NormalizedRecord, record_to_bibtex_entry
+from pzi.bibtex import NormalizedRecord, apply_record_to_entry
 from pzi.config import load_and_resolve_bib
 
 # ---------------------------------------------------------------------------
@@ -244,7 +244,7 @@ def _mutate_entry_tags(
         file_path_style = config.get("pdf_file_path_style", "absolute")
 
         def _updater(entry, _record):
-            return record_to_bibtex_entry(updated_record, entry_type=entry["entry_type"])
+            return apply_record_to_entry(entry, updated_record)
 
         update_result = update_bib_entry(
             bib["path"], citekey, _updater, file_path_style=file_path_style

@@ -37,6 +37,7 @@ from pzi.bib_repository import (
     validate_bibtex_roundtrip,
 )
 from pzi.bibtex import (
+    BibtexEntry,
     NormalizedRecord,
     generate_citekey,
     normalize_authors,
@@ -506,6 +507,7 @@ def add_record_with_bib(
 
     def _build_plan(
         existing_records: list[NormalizedRecord],
+        existing_entries: list[BibtexEntry],
     ) -> tuple[NormalizedRecord, WritePlan]:
         """Derive the citekey/dedup/PDF-reuse/hint plan for ``record_with_pdf``
         against a snapshot of ``existing_records``. Pure apart from the orphan
@@ -522,9 +524,12 @@ def add_record_with_bib(
             rec, papers_dir=bib["papers_dir"], pdf_filename_format=pdf_filename_format,
         )
         rec = _add_planning.attach_similarity_hint(rec, existing_records, index=index)
-        return rec, plan_bib_write(rec, existing_records, force_new=force_new, index=index)
+        return rec, plan_bib_write(
+            rec, existing_records, force_new=force_new, index=index,
+            existing_entries=existing_entries,
+        )
 
-    record_with_hint, plan = _build_plan(typed_existing_records)
+    record_with_hint, plan = _build_plan(typed_existing_records, read_result["entries"])
 
     if not dry_run:
         record_with_hint, plan = _execute_plan_with_retry(
@@ -552,7 +557,9 @@ def add_record_with_bib(
 def _execute_plan_with_retry(
     *,
     bib: BibConfig,
-    build_plan: Callable[[list[NormalizedRecord]], tuple[NormalizedRecord, WritePlan]],
+    build_plan: Callable[
+        [list[NormalizedRecord], list[BibtexEntry]], tuple[NormalizedRecord, WritePlan]
+    ],
     initial_records: list[NormalizedRecord],
     initial_plan: tuple[NormalizedRecord, WritePlan],
     existing_pdf_paths: set[Path],
@@ -582,11 +589,11 @@ def _execute_plan_with_retry(
                 _cleanup_new_pdf(record_with_hint, existing_pdf_paths)
                 raise
             # Re-read the externally-edited library and replan against it.
+            reread = read_bib_file(bib["path"])
             records = [
-                cast(NormalizedRecord, existing)
-                for existing in read_bib_file(bib["path"])["records"]
+                cast(NormalizedRecord, existing) for existing in reread["records"]
             ]
-            record_with_hint, plan = build_plan(records)
+            record_with_hint, plan = build_plan(records, reread["entries"])
         except Exception:
             _cleanup_new_pdf(record_with_hint, existing_pdf_paths)
             raise

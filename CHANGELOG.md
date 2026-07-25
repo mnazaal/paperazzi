@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Entry mutations no longer delete BibTeX fields pzi does not model.**
+  `pzi tag add/remove`, `pzi update`, and `pzi add` on an entry already in the
+  library regenerated the whole `@entry{}` block from the internal record model,
+  which carries ~13 field names — so `volume`, `pages`, `publisher`, `editor`,
+  `isbn`, `series`, `number`, `month` and any custom field were silently dropped
+  on every touch, and `booktitle` was rewritten as `journal` (turning a
+  conference paper into a malformed `@article`-shaped entry). The operation
+  reported success while destroying data. Updates now merge onto the entry as it
+  exists on disk: fields the record model owns are rewritten from the record,
+  the entry's type is preserved, and everything else is left byte-for-byte
+  alone. Found by the 2026-07-25 audit; see `PLAN.md`.
+
 ## [0.1.0b2] - 2026-07-25
 
 ### Added

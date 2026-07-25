@@ -179,3 +179,90 @@ def test_update_existing_entry_preserves_comments_macros_and_preamble() -> None:
         assert "% library header comment" in text
         assert "@string{acm" in text
         assert "@preamble{" in text
+
+
+_CONFERENCE_BIB = (
+    "@inproceedings{smith2020graph,\n"
+    "  title = {Graph Networks},\n"
+    "  author = {Smith, Jane and Doe, John},\n"
+    "  booktitle = {Proceedings of NeurIPS},\n"
+    "  year = {2020},\n"
+    "  volume = {33},\n"
+    "  pages = {1--12},\n"
+    "  publisher = {Curran Associates},\n"
+    "  editor = {Editor, Ed},\n"
+    "  isbn = {978-1-234-56789-0}\n"
+    "}\n"
+)
+
+
+def test_tag_add_preserves_fields_the_record_model_does_not_carry() -> None:
+    """The mutated entry itself must survive, not just its neighbours.
+
+    Regression for the 2026-07 audit's top finding: mutations regenerated the
+    entry from NormalizedRecord, silently deleting volume/pages/publisher/
+    editor/isbn and rewriting booktitle as journal, while reporting success.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        cp, bib, _ = _config(td)
+        Path(bib).write_text(_CONFERENCE_BIB)
+
+        result = add_tags(
+            config_path=cp, home_dir=td, bib_selector=None,
+            citekey="smith2020graph", tags=["ml"],
+        )
+
+        assert result["status"] == "ok" and result["changed"]
+        text = Path(bib).read_text()
+        assert "volume = {33}" in text
+        assert "pages = {1--12}" in text
+        assert "publisher = {Curran Associates}" in text
+        assert "editor = {Editor, Ed}" in text
+        assert "isbn = {978-1-234-56789-0}" in text
+        assert "keywords = {ml}" in text
+
+
+def test_tag_add_keeps_booktitle_and_entry_type() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        cp, bib, _ = _config(td)
+        Path(bib).write_text(_CONFERENCE_BIB)
+
+        add_tags(
+            config_path=cp, home_dir=td, bib_selector=None,
+            citekey="smith2020graph", tags=["ml"],
+        )
+
+        text = Path(bib).read_text()
+        assert "booktitle = {Proceedings of NeurIPS}" in text
+        assert "journal" not in text
+        assert "@inproceedings{smith2020graph," in text
+
+
+def test_readd_of_existing_entry_preserves_unmodelled_fields() -> None:
+    """`pzi add` on a DOI already in the library takes the update branch of
+    plan_bib_write, which must merge onto the on-disk entry."""
+    with tempfile.TemporaryDirectory() as td:
+        cp, bib, papers = _config(td)
+        Path(bib).write_text(
+            "@inproceedings{smith2020graph,\n"
+            "  title = {Graph Networks},\n"
+            "  author = {Smith, Jane},\n"
+            "  doi = {10.1145/1234},\n"
+            "  volume = {33},\n"
+            "  publisher = {Curran Associates}\n"
+            "}\n"
+        )
+        bib_cfg = {"name": "main", "path": bib, "papers_dir": papers, "default": True}
+
+        result = add_record_with_bib(
+            bib=bib_cfg,  # type: ignore[arg-type]
+            record={"title": "Graph Networks", "authors": ["Smith, Jane"],
+                    "doi": "10.1145/1234", "year": 2020},
+            dry_run=False,
+        )
+
+        assert result["status"] == "ok" and result["action"] == "update"
+
+        text = Path(bib).read_text()
+        assert "volume = {33}" in text
+        assert "publisher = {Curran Associates}" in text

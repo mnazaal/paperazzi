@@ -1,6 +1,10 @@
 import pytest
 
-from pzi.bibtex import bibtex_entry_to_record, record_to_bibtex_entry
+from pzi.bibtex import (
+    apply_record_to_entry,
+    bibtex_entry_to_record,
+    record_to_bibtex_entry,
+)
 
 
 def test_record_to_bibtex_entry_maps_core_fields() -> None:
@@ -180,3 +184,113 @@ def test_note_pdf_url_abstract_url_round_trip_is_byte_identical() -> None:
     assert record["note"] == tricky_note
     assert record["pdf_url"] == "https://example.com/paper.pdf"
     assert record["abstract_url"] == "https://example.com/abstract"
+
+
+# --- apply_record_to_entry: record-owned fields only ------------------------
+# Regression guard for the 2026-07 audit's top finding: mutating an entry
+# regenerated it from NormalizedRecord, silently deleting every BibTeX field
+# the record model does not carry (volume, pages, publisher, editor, isbn, ...)
+# and rewriting booktitle as journal.
+
+
+def _conference_entry() -> dict:
+    return {
+        "entry_type": "inproceedings",
+        "citekey": "smith2020graph",
+        "fields": {
+            "title": "Graph Networks",
+            "author": "Smith, Jane and Doe, John",
+            "booktitle": "Proceedings of NeurIPS",
+            "year": "2020",
+            "volume": "33",
+            "pages": "1--12",
+            "publisher": "Curran Associates",
+            "editor": "Editor, Ed",
+            "isbn": "978-1-234-56789-0",
+        },
+    }
+
+
+def test_apply_record_preserves_unmodelled_fields() -> None:
+    entry = _conference_entry()
+    record = bibtex_entry_to_record(entry)
+    record["tags"] = ["ml"]
+
+    updated = apply_record_to_entry(entry, record)
+
+    for key in ("volume", "pages", "publisher", "editor", "isbn"):
+        assert updated["fields"][key] == entry["fields"][key], f"{key} was dropped"
+    assert updated["fields"]["keywords"] == "ml"
+
+
+def test_apply_record_keeps_booktitle_as_booktitle() -> None:
+    entry = _conference_entry()
+    record = bibtex_entry_to_record(entry)
+    record["tags"] = ["ml"]
+
+    updated = apply_record_to_entry(entry, record)
+
+    assert updated["fields"]["booktitle"] == "Proceedings of NeurIPS"
+    assert "journal" not in updated["fields"]
+    assert updated["entry_type"] == "inproceedings"
+
+
+def test_apply_record_writes_changed_venue_back_to_booktitle() -> None:
+    entry = _conference_entry()
+    record = bibtex_entry_to_record(entry)
+    record["venue"] = "Proceedings of ICML"
+
+    updated = apply_record_to_entry(entry, record)
+
+    assert updated["fields"]["booktitle"] == "Proceedings of ICML"
+    assert "journal" not in updated["fields"]
+
+
+def test_apply_record_uses_journal_when_entry_has_no_booktitle() -> None:
+    entry = {
+        "entry_type": "article",
+        "citekey": "smith2024",
+        "fields": {"title": "T", "journal": "Old Journal", "volume": "7"},
+    }
+    record = bibtex_entry_to_record(entry)
+    record["venue"] = "New Journal"
+
+    updated = apply_record_to_entry(entry, record)
+
+    assert updated["fields"]["journal"] == "New Journal"
+    assert "booktitle" not in updated["fields"]
+    assert updated["fields"]["volume"] == "7"
+
+
+def test_apply_record_removes_cleared_owned_field() -> None:
+    entry = {
+        "entry_type": "article",
+        "citekey": "smith2024",
+        "fields": {"title": "T", "keywords": "ml, graphs", "volume": "7"},
+    }
+    record = bibtex_entry_to_record(entry)
+    record["tags"] = []
+
+    updated = apply_record_to_entry(entry, record)
+
+    assert "keywords" not in updated["fields"]
+    assert updated["fields"]["volume"] == "7"
+
+
+def test_apply_record_keeps_non_arxiv_eprint() -> None:
+    entry = {
+        "entry_type": "article",
+        "citekey": "jones2023",
+        "fields": {
+            "title": "Preprint",
+            "eprint": "2023.01.01.522",
+            "archiveprefix": "bioRxiv",
+        },
+    }
+    record = bibtex_entry_to_record(entry)
+    assert record["arxiv_id"] is None  # not arXiv, so the record never owned it
+
+    updated = apply_record_to_entry(entry, record)
+
+    assert updated["fields"]["eprint"] == "2023.01.01.522"
+    assert updated["fields"]["archiveprefix"] == "bioRxiv"

@@ -141,6 +141,86 @@ def record_to_bibtex_entry(
     }
 
 
+# Fields `record_to_bibtex_entry` emits, i.e. the ones a NormalizedRecord is
+# authoritative for. `venue` and `arxiv_id` are handled separately below because
+# their on-disk home depends on the existing entry. Every field NOT listed here
+# belongs to whoever wrote the .bib and must survive a mutation untouched.
+_RECORD_OWNED_FIELDS = (
+    "title",
+    "author",
+    "year",
+    "doi",
+    "url",
+    "file",
+    "abstract",
+    "keywords",
+    "note",
+    "pzi-pdf-url",
+    "pzi-abstract-url",
+)
+
+
+def apply_record_to_entry(entry: BibtexEntry, record: NormalizedRecord) -> BibtexEntry:
+    """Rewrite only the record-owned fields of *entry*, preserving the rest.
+
+    ``record_to_bibtex_entry`` builds an entry from scratch out of the fields
+    ``NormalizedRecord`` models, so using it to *update* an existing entry drops
+    every other field the user or their publisher put there — ``volume``,
+    ``pages``, ``publisher``, ``editor``, ``isbn``, ``series``, and any custom
+    key. Updaters must go through here instead: a record-owned key is written
+    from the record (or removed when the record cleared it), and anything else
+    is left exactly as it was on disk.
+    """
+    return merge_projected_entry(
+        entry, record_to_bibtex_entry(record, entry_type=entry["entry_type"])
+    )
+
+
+def merge_projected_entry(entry: BibtexEntry, projected_entry: BibtexEntry) -> BibtexEntry:
+    """Merge an already-projected entry onto the entry currently on disk.
+
+    Same contract as :func:`apply_record_to_entry`, for callers that hold a
+    projection rather than the record it came from (e.g. a planned write). The
+    projection is authoritative for the fields it owns; the existing entry keeps
+    its type and every unmodelled field.
+    """
+    projected = projected_entry["fields"]
+    existing = entry["fields"]
+    fields = dict(existing)
+
+    for key in _RECORD_OWNED_FIELDS:
+        if key in projected:
+            fields[key] = projected[key]
+        else:
+            fields.pop(key, None)
+
+    # One record key (`venue`), two possible homes. Write back to whichever the
+    # entry already used: rewriting a proceedings entry's `booktitle` as
+    # `journal` is bibliographically wrong and breaks styles that require it.
+    venue_key = "booktitle" if "booktitle" in existing and "journal" not in existing else "journal"
+    venue = projected.get("journal")
+    if venue is not None:
+        fields[venue_key] = venue
+    else:
+        fields.pop(venue_key, None)
+
+    # `eprint`/`archiveprefix` round-trip into the record only when the prefix
+    # says arXiv (see `bibtex_entry_to_record`), so a bioRxiv — or prefix-less —
+    # eprint was never the record's to delete.
+    if "eprint" in projected:
+        fields["eprint"] = projected["eprint"]
+        fields["archiveprefix"] = projected["archiveprefix"]
+    elif existing.get("archiveprefix", "").strip().lower() == "arxiv":
+        fields.pop("eprint", None)
+        fields.pop("archiveprefix", None)
+
+    return {
+        "entry_type": entry["entry_type"],
+        "citekey": projected_entry["citekey"],
+        "fields": fields,
+    }
+
+
 def bibtex_entry_to_record(entry: BibtexEntry) -> NormalizedRecord:
     """Project a BibTeX-like entry into the normalized internal record shape."""
     fields = entry["fields"]

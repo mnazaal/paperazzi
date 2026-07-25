@@ -16,7 +16,7 @@ from pzi.bib_repository import (
     read_bib_file,
     update_bib_entry,
 )
-from pzi.bibtex import NormalizedRecord, record_to_bibtex_entry
+from pzi.bibtex import NormalizedRecord, apply_record_to_entry
 from pzi.config import load_and_resolve_bib
 from pzi.protocols import SearchTranslationFetcher
 from pzi.translation_server import fetch_search_translations
@@ -183,7 +183,7 @@ def _plan_update_for_record(
             change_box["changed_fields"] = _changed_fields(current_record, current_enriched)
             if not change_box["changed_fields"]:
                 return entry  # pragma: no cover — covered by integration/browser tests
-            return record_to_bibtex_entry(current_enriched, entry_type=entry["entry_type"])
+            return apply_record_to_entry(entry, current_enriched)
 
         update_result = update_bib_entry(bib_path, citekey, _apply_update)
         if not update_result["found"]:
