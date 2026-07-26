@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
-from pzi.cli_render import _error_lines
+from pzi import cli_json, exit_codes
+from pzi.cli_render import _error_lines, _render_doctor_result
 from pzi.commands.common import print_lines
 from pzi.config import load_config_file
 from pzi.doctor_service import doctor_check
@@ -21,13 +21,18 @@ def run_doctor_command(args, *, home_dir, config_path, stdout, stderr) -> int:
         result = load_config_file(config_path, home_dir=home_dir)
         if result["config"] is not None:
             print(f"config valid: {result['path']}", file=stdout)
-            return 0
+            return exit_codes.OK
         print_lines(_error_lines("config invalid", result["errors"]), stderr)
-        return 1
+        return exit_codes.ENVIRONMENT
 
     result = doctor_check(config_path=config_path, home_dir=home_dir)
-    print(json.dumps(result, indent=2, default=str), file=stdout)
-    return 0 if result["config_ok"] else 1
+    if getattr(args, "json", False):
+        cli_json.emit_result(result, stdout, command="doctor", items=result.get("bibs") or [])
+    else:
+        print_lines(_render_doctor_result(result), stdout)
+    # A health check has to fail when the health is bad: reporting an
+    # unreachable translation-server and exiting 0 makes it useless as a gate.
+    return exit_codes.OK if _doctor_healthy(result) else exit_codes.ENVIRONMENT
 
 
 def _reinstall_server(*, config_path, home_dir, stdout, stderr) -> int:
@@ -73,3 +78,14 @@ def _reinstall_server(*, config_path, home_dir, stdout, stderr) -> int:
         return 1
     print("translation-server reinstalled. Run `pzi server` to start.", file=stdout)
     return 0
+
+
+def _doctor_healthy(result) -> bool:
+    """True when every probe doctor ran came back healthy."""
+    if not result.get("config_ok"):
+        return False
+    if any(not bib.get("path_exists") for bib in result.get("bibs") or []):
+        return False
+    if result.get("translation_server_url") and not result.get("translation_server_reachable"):
+        return False
+    return True

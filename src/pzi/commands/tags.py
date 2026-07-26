@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable, Mapping
 from typing import Any, TextIO
 
@@ -37,7 +36,7 @@ def run_tag_command(
             citekey=args.citekey,
         )
         if getattr(args, "json", False):
-            print(json.dumps(result, indent=2, default=str), file=stdout)
+            cli_json.emit_result(result, stdout, command="tag list", items=result.get("tags"))
             return 0 if result["status"] == "ok" else 1
         if result["status"] == "ok":
             for tag in result["tags"]:

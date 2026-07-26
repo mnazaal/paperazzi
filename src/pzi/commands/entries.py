@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import json
-
-from pzi import exit_codes
+from pzi import cli_json, exit_codes
 from pzi.bib_service import bib_stats, entry_detail, list_entries
 from pzi.cli_render import _error_lines, _render_bib_stats
 from pzi.commands.common import print_lines, resolve_target
@@ -28,7 +26,7 @@ def _run_list(args, home_dir, config_path, stdout, stderr, bib_selector) -> int:
         sort=args.sort,
     )
     if getattr(args, "json", False):
-        print(json.dumps(result, indent=2, default=str), file=stdout)
+        cli_json.emit_result(result, stdout, command="entries")
         return exit_codes.OK if result["status"] == "ok" else exit_codes.ENVIRONMENT
     if result["status"] == "ok":
         items = result["items"]
@@ -39,7 +37,7 @@ def _run_list(args, home_dir, config_path, stdout, stderr, bib_selector) -> int:
             ck = item["citekey"]
             title = item.get("title", "") or ""
             year_str = str(item["year"]) if item.get("year") else ""
-            authors = item.get("authors", "") or ""
+            authors = "; ".join(item.get("authors") or [])
             # Fixed five tab-separated columns, always. The PDF flag used to be
             # glued onto the authors column without a separator, so awk -F'\t'
             # read it as part of an author name.
@@ -76,8 +74,16 @@ def _run_detail(args, home_dir, config_path, stdout, stderr, bib_selector) -> in
         )
     record = result["record"]
     if getattr(args, "json", False):
-        print(json.dumps(record, indent=2, default=str), file=stdout)
-        return 0
+        # One record still arrives as a one-item envelope, so `.items[]` is the
+        # same jq path as the listing. The service's own `record` key is dropped
+        # rather than duplicated beside `items`.
+        cli_json.emit_result(
+            {k: v for k, v in result.items() if k != "record"},
+            stdout,
+            command="entries",
+            items=[record],
+        )
+        return exit_codes.OK
     print(f"citekey: {record.get('citekey', '')}", file=stdout)
     print(f"title: {record.get('title', '')}", file=stdout)
     year = record.get("year")
@@ -111,7 +117,7 @@ def _run_stats(args, home_dir, config_path, stdout, stderr, bib_selector) -> int
 
     result = bib_stats(bib_path=target["path"], papers_dir=target["papers_dir"])
     if getattr(args, "json", False):
-        print(json.dumps(result, indent=2, default=str), file=stdout)
+        cli_json.emit_result(result, stdout, command="entries --stats", items=[])
         return exit_codes.OK if result["status"] == "ok" else exit_codes.ENVIRONMENT
     if result["status"] == "ok":
         print_lines(_render_bib_stats(result), stdout)

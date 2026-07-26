@@ -352,6 +352,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--failed-only", action="store_true",
         help="retry PDF for all entries with no local PDF (ignores citekey argument)",
     )
+    pdf_retry.add_argument(
+        "--json", action="store_true", help="emit the result as a JSON envelope",
+    )
     pdf_attach = pdf_sub.add_parser("attach", help="Attach a PDF by URL or file path")
     pdf_attach.add_argument("citekey", help="citekey of the entry to attach to")
     pdf_attach.add_argument("source", help="PDF URL or local file path")
@@ -359,6 +362,9 @@ def build_parser() -> argparse.ArgumentParser:
     add_single_target(pdf_attach)
 
     # ── tag ──────────────────────────────────────────────────────────────
+    pdf_attach.add_argument(
+        "--json", action="store_true", help="emit the result as a JSON envelope",
+    )
     tag_parser = subparsers.add_parser("tag", help="Manage tags on BibTeX entries")
     tag_sub = tag_parser.add_subparsers(dest="tag_command", required=True, parser_class=_PziParser)
     tag_add_p = tag_sub.add_parser("add", help="Add tags to an entry")
@@ -457,6 +463,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     update_parser.add_argument("--verbose", action="store_true", help="show metadata diagnostics")
     update_parser.add_argument(
+        "--json", action="store_true", help="emit the result as a JSON envelope",
+    )
+    update_parser.add_argument(
         "--promote", action="store_true",
         help="find published versions of preprints and update/create entries",
     )
@@ -479,6 +488,9 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_parser.add_argument(
         "--reinstall-server", action="store_true",
         help="reinstall the translation-server with the latest pinned versions",
+    )
+    doctor_parser.add_argument(
+        "--json", action="store_true", help="emit the result as a JSON envelope",
     )
 
     # ── server ───────────────────────────────────────────────────────────
@@ -519,6 +531,9 @@ def build_parser() -> argparse.ArgumentParser:
     add_single_target(delete_parser)
     delete_parser.add_argument("--dry-run", action="store_true", help="preview without deleting")
     delete_parser.add_argument("--force", action="store_true", help="skip confirmation prompt")
+    delete_parser.add_argument(
+        "--json", action="store_true", help="emit the result as a JSON envelope",
+    )
     entries_parser = subparsers.add_parser(
         "entries",
         help="List entries, show one by citekey, or show library stats",
@@ -595,6 +610,9 @@ def build_parser() -> argparse.ArgumentParser:
     add_config(merge_parser)
     add_single_target(merge_parser)
     merge_parser.add_argument("--dry-run", action="store_true", help="preview without merging")
+    merge_parser.add_argument(
+        "--json", action="store_true", help="emit the result as a JSON envelope",
+    )
 
     reindex_parser = fix_sub.add_parser(
         "reindex",
@@ -612,6 +630,9 @@ def build_parser() -> argparse.ArgumentParser:
     reindex_parser.add_argument(
         "--rename-citekeys", action="store_true",
         help="rewrite citekeys to match citekey_format (breaks \\cite{} using the old keys)",
+    )
+    reindex_parser.add_argument(
+        "--json", action="store_true", help="emit the result as a JSON envelope",
     )
     reindex_parser.add_argument(
         "--dry-run", action="store_true",
@@ -648,6 +669,9 @@ def build_parser() -> argparse.ArgumentParser:
     import_parser.add_argument("--dry-run", action="store_true", help="preview without importing")
     import_parser.add_argument("--force-new", action="store_true",
                                help="import as new entries even if duplicates are found")
+    import_parser.add_argument(
+        "--json", action="store_true", help="emit the result as a JSON envelope",
+    )
     return parser
 
 

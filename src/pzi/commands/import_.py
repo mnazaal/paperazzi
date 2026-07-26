@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TextIO
 
-from pzi import exit_codes
+from pzi import cli_json, exit_codes
 from pzi.cli_parser import load_text_arg
 from pzi.cli_render import _error_lines
 from pzi.commands.common import print_lines
@@ -39,9 +39,17 @@ def run_import_command(
         force_new=getattr(args, "force_new", False),
     )
 
+    as_json = getattr(args, "json", False)
     if result["status"] == "error":
-        print_lines(_error_lines("import failed", result.get("errors", [])), stderr)
+        if as_json:
+            cli_json.emit_result(result, stdout, command="import")
+        else:
+            print_lines(_error_lines("import failed", result.get("errors", [])), stderr)
         return exit_codes.ENVIRONMENT
+
+    if as_json:
+        cli_json.emit_result(result, stdout, command="import")
+        return exit_codes.OK if result["skipped_errors"] == 0 else exit_codes.PARTIAL
 
     prefix = "DRY RUN: " if getattr(args, "dry_run", False) else ""
     print(f"{prefix}imported {result['imported']}/{result['total_source']} entries", file=stdout)

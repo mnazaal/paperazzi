@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any, TextIO
 
+from pzi import cli_json, exit_codes
 from pzi.cli_parser import usage_error_lines
 from pzi.cli_render import (
     _error_lines,
@@ -46,15 +47,19 @@ def run_update_command(
         print_lines(
             usage_error_lines(("update",), "--replace only applies with --promote"), stderr
         )
-        return 2
+        return exit_codes.USAGE
     mark_resolved = getattr(args, "mark_resolved", False)
     if mark_resolved and not promote:
         print_lines(
             usage_error_lines(("update",), "--mark-resolved only applies with --promote"), stderr
         )
-        return 2
+        return exit_codes.USAGE
 
+    as_json = getattr(args, "json", False)
     ok = True
+    json_items: list[Any] = []
+    json_errors: list[str] = []
+    searched_bibs: list[str] = []
     for target in target_list(args.target):
         if promote:
             result = promote_bib_fn(
@@ -77,6 +82,20 @@ def run_update_command(
             render = _render_bib_update_items
             failure = "update failed"
 
+        if result["status"] != "ok":
+            ok = False
+
+        if as_json:
+            # One document for the whole run, the same shape whether or not
+            # --promote was passed; each item names the library it came from.
+            bib_name = result.get("bib_name")
+            if isinstance(bib_name, str):
+                searched_bibs.append(bib_name)
+            for item in result.get("items") or []:
+                json_items.append({**item, "bib_name": bib_name})
+            json_errors.extend(result.get("errors") or [])
+            continue
+
         if result["status"] == "ok":
             print_lines(render(result), stdout)
             if args.dry_run:
@@ -85,6 +104,19 @@ def run_update_command(
             if args.verbose:
                 print_metadata_diagnostics(result, stdout)
         else:
-            ok = False
             print_lines(_error_lines(failure, result["errors"]), stderr)
-    return 0 if ok else 1
+
+    if as_json:
+        cli_json.emit_result(
+            {
+                "status": "ok" if ok else "error",
+                "bib_name": ", ".join(searched_bibs) if searched_bibs else None,
+                "errors": json_errors,
+                "dry_run": bool(args.dry_run),
+                "promote": bool(promote),
+            },
+            stdout,
+            command="update --promote" if promote else "update",
+            items=json_items,
+        )
+    return exit_codes.OK if ok else exit_codes.ENVIRONMENT

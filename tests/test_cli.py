@@ -1100,7 +1100,7 @@ def test_doctor_config_only_reports_invalid_config(tmp_path: Path) -> None:
         ["doctor", "--config-only", "--config", str(config_path)],
         home_dir=str(tmp_path), stdout=StringIO(), stderr=stderr,
     )
-    assert exit_code == 1
+    assert exit_code == exit_codes.ENVIRONMENT
     assert "config invalid" in stderr.getvalue()
 
 

@@ -6,7 +6,7 @@ import sys
 from collections.abc import Sequence
 from typing import TextIO
 
-from pzi import exit_codes
+from pzi import cli_json, exit_codes
 from pzi.bib_service import delete_entry
 from pzi.cli_parser import usage_error_lines
 from pzi.cli_render import _error_lines, _render_delete_success
@@ -52,11 +52,18 @@ def run_delete_command(args, *, home_dir, config_path, stdout, stderr, bib_selec
         citekey=args.citekey,
         dry_run=args.dry_run,
     )
+    as_json = getattr(args, "json", False)
     if result["status"] == "ok":
-        print(_render_delete_success(result), file=stdout)
+        if as_json:
+            cli_json.emit_result(result, stdout, command="delete", items=[])
+        else:
+            print(_render_delete_success(result), file=stdout)
         backup = result.get("backup_path")
         if isinstance(backup, str):
             print(f"backup saved to {backup}", file=stderr)
         return exit_codes.OK
     code = exit_codes.NOT_FOUND if result.get("reason") == "not_found" else exit_codes.ENVIRONMENT
+    if as_json:
+        cli_json.emit_result(result, stdout, command="delete", items=[])
+        return code
     return _render_errors(result["message"], result["errors"], stderr, code)

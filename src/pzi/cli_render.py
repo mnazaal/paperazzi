@@ -218,3 +218,41 @@ def _render_delete_success(result: Mapping[str, Any]) -> str:
     msg = result["message"]
     pdf = f" (PDF at {result['pdf_path']})" if result.get("pdf_path") else ""
     return f"{prefix}{msg}{pdf}"
+
+
+def _render_doctor_result(result: Mapping[str, Any]) -> list[str]:
+    """Render `pzi doctor` as status lines for a human."""
+    ok = "ok"
+    bad = "FAIL"
+    lines = [f"config: {ok if result.get('config_ok') else bad} ({result.get('config_path')})"]
+    for err in result.get("config_errors", []):
+        lines.append(f"  - {err}")
+
+    for bib in result.get("bibs", []):
+        state = ok if bib.get("path_exists") else "missing"
+        default = " (default)" if bib.get("default") else ""
+        lines.append(f"bib {bib.get('name')}{default}: {state} ({bib.get('path')})")
+
+    ts_url = result.get("translation_server_url")
+    if ts_url:
+        state = ok if result.get("translation_server_reachable") else bad
+        lines.append(f"translation-server: {state} ({ts_url})")
+        probe_error = result.get("translation_probe_error")
+        if probe_error:
+            lines.append(f"  - {probe_error}")
+
+    s2 = result.get("semantic_scholar") or {}
+    if s2:
+        state = ok if s2.get("reachable") else bad
+        lines.append(f"semantic scholar: {state} (key: {s2.get('configured', 'unknown')})")
+        if s2.get("probe_error"):
+            lines.append(f"  - {s2['probe_error']}")
+
+    credentials = result.get("credentials") or {}
+    for name, status in sorted(credentials.items()):
+        lines.append(f"credential {name}: {status}")
+
+    warning = result.get("config_permissions_warning")
+    if warning:
+        lines.append(f"warning: {warning}")
+    return lines

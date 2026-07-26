@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`--json` output is now one envelope for every command**:
+  `{command, status, bib_name, items, errors}`, with command-specific fields
+  (`imported`, `dry_run`, `total`, …) alongside. Previously there were four
+  shapes — `search` emitted a bare array of per-library objects,
+  `entries` an envelope, `entries <citekey>` a bare record, and
+  `add --from-file` an unlabelled summary — so every consumer needed its own jq
+  path. `.items[]` now works everywhere.
+- **`authors` is always a list.** `pzi entries --json` emitted a single
+  joined string while `export --format json` emitted a list, so the same field
+  had two types depending on which command produced it.
+- **`pzi search --json` with several `--target` values emits one document**
+  instead of one object per library; each item carries its own `bib_name`.
+- **`pzi doctor` prints a human-readable summary by default** (`--json` for the
+  machine dump) and **exits non-zero when a probe fails** — it used to print
+  raw JSON to a human and exit 0 with an unreachable translation-server, which
+  made it useless as a health gate.
+
 - **Exit codes now have one meaning each**, documented in the README and
   `pzi --help`. `1` is reserved for "ran successfully and has something to
   report" (no search matches, duplicates found, integrity issues, unverified
@@ -41,6 +58,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   validation.
 
 ### Added
+
+- **`--json` on every command that reports a result**, including the mutating
+  ones: `update` (and `update --promote`), `delete`, `import`, `pdf
+  attach|retry`, `fix merge`, `fix reindex`, `tag add|remove`, and `doctor`.
 
 - **`PZI_CONFIG`** sets the config file path; `--config` still takes precedence.
 - **`pzi import -`** reads BibTeX from stdin, so

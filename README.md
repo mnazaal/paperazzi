@@ -159,7 +159,7 @@ The translation-server runs as a child of `pzi server`, so this one unit covers 
 
 ### CLI reference
 
-Shared flags: every command accepts `[--config PATH]` to point at a config file other than the default; most library commands also accept `[--target <name|path>]` (`search`/`update` accept multiple: `--target a.bib b.bib`); read commands accept `[--json]`.
+Shared flags: every command accepts `[--config PATH]` to point at a config file other than the default; most library commands also accept `[--target <name|path>]` (`search`/`update` accept multiple: `--target a.bib b.bib`); commands that report a result accept `[--json]` (see below).
 
 **Exit codes.** One meaning per code, so a script can branch on the status alone:
 
@@ -175,6 +175,24 @@ Shared flags: every command accepts `[--config PATH]` to point at a config file 
 
 Note that `1` never means "the command failed" — a failure to run is always `5`,
 so `pzi search ... || echo broken` does not fire on an empty result set.
+
+**`--json`.** Every command that reports a result accepts `--json` and emits
+exactly **one** JSON document on stdout — including when it fails, so a script
+never has to scrape stderr to classify an error. The shape is the same
+everywhere:
+
+```json
+{"command": "search", "status": "ok", "bib_name": "ml", "items": [], "errors": []}
+```
+
+so `.items[]` is the only jq path you need. Command-specific fields (`imported`,
+`dry_run`, `total`, …) ride along beside those five keys. `authors` is always a
+list, matching `export --format json`.
+
+```sh
+pzi search --query graph --json | jq -r '.items[].citekey' \
+  | xargs -r -n1 pzi entries --json | jq -r '.items[] | "\(.citekey): \(.title)"'
+```
 
 **Pipes.** Empty results write nothing to stdout; the count, warnings, and
 placeholder notes go to stderr, so `pzi search --query graph | cut -f1 | xargs -r -n1 pzi entries`
@@ -216,7 +234,7 @@ Configured libraries live in your config file (`[[bibs]]` blocks). Choose the de
 
 Without `--target`, commands operate on the configured default library. `--target` may be a configured library name, configured bib path, or direct `.bib` path. Direct `.bib` targets use `<bib-dir>/papers/` for PDFs. Multiple targets are supported only for `search` and `update` (including `update --promote`) with a single flag: `--target a.bib b.bib`.
 
-Read/query commands (`search`, `entries`, `entries <citekey>`, `entries --stats`, `tag list`, `fix clean`, `fix dedupe`) accept `--json` for machine-readable output. `pzi search --json` always prints a JSON **array**, one result object (`{status, bib_name, matches, errors}`) per searched library — even with a single default target — because `search` is one of the two commands that support multiple `--target` values at once.
+`--json` is accepted by every command that reports a result — including the mutating ones (`add`, `update`, `update --promote`, `tag`, `delete`, `import`, `pdf`, `fix clean|dedupe|merge|reindex`) — and always emits one envelope (see the CLI reference above). For `search` and `update`, which accept several `--target` values at once, the run still produces a single document: each item carries the `bib_name` it came from rather than the output splitting per library.
 
 **Shell completion:** `argcomplete` is a base dependency, so tab-completion works once registered for your shell:
 

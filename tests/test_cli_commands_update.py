@@ -2,6 +2,7 @@ from argparse import Namespace
 from io import StringIO
 from pathlib import Path
 
+from pzi import exit_codes
 from pzi.commands.update import run_update_command
 
 
@@ -154,6 +155,6 @@ def test_run_update_command_returns_failure_when_any_target_fails(tmp_path: Path
         update_bib_fn=fake_update_bib,
     )
 
-    assert exit_code == 1
+    assert exit_code == exit_codes.ENVIRONMENT
     assert stdout.getvalue() == "no updates\n"
     assert stderr.getvalue() == "update failed\n- missing bib\n"

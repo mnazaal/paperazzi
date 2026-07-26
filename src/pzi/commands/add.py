@@ -146,7 +146,7 @@ def _capture_and_render(
         return exit_codes.ENVIRONMENT
 
     if getattr(args, "json", False):
-        print(json.dumps(result, indent=2, default=str), file=stdout)
+        cli_json.emit_result(result, stdout, command="add")
         for warning in result["warnings"]:
             print(f"warning: {warning}", file=stderr)
         return 0

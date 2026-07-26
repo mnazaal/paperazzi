@@ -54,7 +54,7 @@ def run_check_command(
                 f.write(json.dumps(item, default=str) + "\n")
 
     if getattr(args, "json", False):
-        print(json.dumps(result, indent=2, default=str), file=stdout)
+        cli_json.emit_result(result, stdout, command="check")
     else:
         print_lines(_render_check_items(result), stdout)
 

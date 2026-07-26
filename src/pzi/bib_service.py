@@ -256,11 +256,16 @@ def entry_detail(
     }
 
 
-def _author_names(record: dict[str, Any]) -> str:
-    """Format author list from a record into a comma-separated string."""
+def _author_names(record: dict[str, Any]) -> list[str]:
+    """Author names from a record, one per entry, as `Family, Given`.
+
+    A list, matching `export --format json` — the entries listing used to emit a
+    single joined string here, so the same field had two types depending on
+    which command produced it.
+    """
     authors = record.get("authors")
     if not isinstance(authors, list) or not authors:
-        return ""
+        return []
     names = []
     for a in authors:
         if isinstance(a, str):
@@ -275,7 +280,7 @@ def _author_names(record: dict[str, Any]) -> str:
             names.append(f"{family}, {given}")
         elif family:
             names.append(family)
-    return "; ".join(names)
+    return names
 
 
 def _first_author_sort_key(record: dict[str, Any]) -> str:

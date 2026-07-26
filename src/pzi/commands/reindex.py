@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pzi import cli_json, exit_codes
 from pzi.cli_render import _error_lines, _render_reindex_result
 from pzi.commands.common import print_lines, resolve_target
 from pzi.reindex_service import reindex_library
@@ -31,9 +32,17 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
         file_path_style=config.get("pdf_file_path_style", "absolute"),
     )
 
+    if getattr(args, "json", False):
+        cli_json.emit_result(
+            result, stdout, command="fix reindex", items=result.get("changed") or [],
+        )
+        if result["status"] != "ok":
+            return exit_codes.ENVIRONMENT
+        return exit_codes.FINDINGS if result.get("errors") else exit_codes.OK
+
     if result["status"] != "ok":
         print_lines(_error_lines("reindex failed", result.get("errors", [])), stderr)
-        return 1
+        return exit_codes.ENVIRONMENT
 
     print_lines(_render_reindex_result(result, dry_run=not apply), stdout)
     if not rename and result.get("changed"):
@@ -42,4 +51,4 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
             "(this rewrites citekeys; see 'pzi reindex --help')",
             file=stdout,
         )
-    return 0 if not result.get("errors") else 1
+    return exit_codes.FINDINGS if result.get("errors") else exit_codes.OK

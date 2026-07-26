@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import json
-
+from pzi import cli_json, exit_codes
 from pzi.cli_render import _error_lines, _render_dedupe_result
 from pzi.commands.common import print_lines, resolve_target
 from pzi.dedupe_service import find_duplicates, merge_duplicates
@@ -18,7 +17,7 @@ def run_dedupe_command(args, *, home_dir, config_path, stdout, stderr, bib_selec
 
     result = find_duplicates(bib_path=target["path"])
     if getattr(args, "json", False):
-        print(json.dumps(result, indent=2, default=str), file=stdout)
+        cli_json.emit_result(result, stdout, command="fix dedupe")
         return 0 if result.get("total_clusters", 0) == 0 else 1
     print_lines(_render_dedupe_result(result), stdout)
     return 0 if result.get("total_clusters", 0) == 0 else 1
@@ -38,8 +37,11 @@ def run_merge_command(args, *, home_dir, config_path, stdout, stderr, bib_select
         dry_run=getattr(args, "dry_run", False),
         file_path_style=config.get("pdf_file_path_style", "absolute"),
     )
+    if getattr(args, "json", False):
+        cli_json.emit_result(result, stdout, command="fix merge", items=[])
+        return exit_codes.OK if result["status"] == "ok" else exit_codes.ENVIRONMENT
     if result["status"] != "ok":
         print_lines(_error_lines(result["message"], []), stderr)
-        return 1
+        return exit_codes.ENVIRONMENT
     print(result["message"], file=stdout)
-    return 0
+    return exit_codes.OK

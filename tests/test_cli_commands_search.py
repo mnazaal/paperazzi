@@ -115,10 +115,16 @@ def test_run_search_command_returns_failure_when_any_target_fails(tmp_path: Path
     assert stderr.getvalue() == "no matches\nsearch failed\n- missing bib\n"
 
 
-def test_run_search_command_json_outputs_one_result_per_target(tmp_path: Path) -> None:
+def test_run_search_command_json_merges_targets_into_one_document(tmp_path: Path) -> None:
+    """Searching several libraries still yields one envelope, not one per target.
+
+    Each match names the library it came from, so a consumer does not branch on
+    how many `--target` values were passed.
+    """
     def fake_search_bib(**kwargs):
         return {
             "status": "ok",
+            "bib_name": kwargs["bib_selector"],
             "matches": [
                 {
                     "citekey": f"{kwargs['bib_selector']}2024",
@@ -146,7 +152,10 @@ def test_run_search_command_json_outputs_one_result_per_target(tmp_path: Path) -
 
     assert exit_code == 0
     payload = json.loads(stdout.getvalue())
-    assert [r["matches"][0]["citekey"] for r in payload] == ["main2024", "ml2024"]
+    assert payload["command"] == "search"
+    assert payload["status"] == "ok"
+    assert [item["citekey"] for item in payload["items"]] == ["main2024", "ml2024"]
+    assert [item["bib_name"] for item in payload["items"]] == ["main", "ml"]
     assert stderr.getvalue() == ""
 
 

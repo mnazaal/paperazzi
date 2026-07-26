@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import json
-
+from pzi import cli_json
 from pzi.clean_service import clean_library, validate_library
 from pzi.cli_render import _error_lines, _render_clean_result
 from pzi.commands.common import print_lines, resolve_target
@@ -25,7 +24,7 @@ def run_clean_command(args, *, home_dir, config_path, stdout, stderr, bib_select
         )
 
     if getattr(args, "json", False):
-        print(json.dumps(result, indent=2, default=str), file=stdout)
+        cli_json.emit_result(result, stdout, command="fix clean")
         if result["status"] != "ok":
             return 1
         return 0 if not result.get("issues") else 1

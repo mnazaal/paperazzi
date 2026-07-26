@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable, Sequence
 from typing import TextIO
 
-from pzi import exit_codes
+from pzi import cli_json, exit_codes
 from pzi.cli_parser import usage_error_lines
 from pzi.cli_render import _error_lines, _render_search_matches
 from pzi.commands.common import print_lines, target_list
@@ -38,7 +37,9 @@ def run_search_command(
     as_json = getattr(args, "json", False)
     ok = True
     found_any = False
-    json_results = []
+    all_matches: list[dict] = []
+    all_errors: list[str] = []
+    searched_bibs: list[str] = []
     for target in target_list(bib_selector):
         result = search_bib_fn(
             config_path=config_path,
@@ -54,7 +55,15 @@ def run_search_command(
         if result.get("matches"):
             found_any = True
         if as_json:
-            json_results.append(result)
+            # One document for the whole run, not one per library: `--target`
+            # may be repeated, and a consumer should not have to branch on how
+            # many were searched. Each match carries its own bib_name.
+            bib_name = result.get("bib_name")
+            if isinstance(bib_name, str):
+                searched_bibs.append(bib_name)
+            for match in result.get("matches") or []:
+                all_matches.append({**match, "bib_name": bib_name})
+            all_errors.extend(result.get("errors") or [])
         elif result["status"] == "ok":
             print_lines(_render_search_matches(result), stdout)
             if not result.get("matches"):
@@ -62,7 +71,17 @@ def run_search_command(
         else:
             print_lines(_error_lines("search failed", result["errors"]), stderr)
     if as_json:
-        print(json.dumps(json_results, indent=2, default=str), file=stdout)
+        cli_json.emit_result(
+            {
+                "status": "ok" if ok else "error",
+                "bib_name": ", ".join(searched_bibs) if searched_bibs else None,
+                "errors": all_errors,
+                "searched_bibs": searched_bibs,
+            },
+            stdout,
+            command="search",
+            items=all_matches,
+        )
     if not ok:
         return exit_codes.ENVIRONMENT
     # grep's convention: nothing matched is a reportable outcome, not an error.
