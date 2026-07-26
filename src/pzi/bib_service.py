@@ -15,7 +15,7 @@ from pzi.bib_repository import (
     validate_library_parseable,
     with_bib_lock,
 )
-from pzi.config import load_and_resolve_bib, load_config_file
+from pzi.config import BibResolutionFailure, load_bib_target, load_config_file
 from pzi.identifiers import is_preprint
 from pzi.pdf_planning import pdf_file_present
 
@@ -132,14 +132,14 @@ def list_entries(
     sort: str = "citekey",
 ) -> EntriesResult:
     """List entries from a BibTeX library with pagination and sorting."""
-    resolved = load_and_resolve_bib(
+    resolved = load_bib_target(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector,
     )
-    if isinstance(resolved, list):
+    if isinstance(resolved, BibResolutionFailure):
         return {
             "status": "error",
             "message": "failed to resolve bib",
-            "errors": resolved,
+            "errors": resolved.errors,
         }
     _config, bib = resolved
     bib_path = bib["path"]
@@ -216,14 +216,14 @@ def entry_detail(
     bib_selector: str | None = None,
 ) -> DetailResult:
     """Return full record detail for a single BibTeX entry by citekey."""
-    resolved = load_and_resolve_bib(
+    resolved = load_bib_target(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector,
     )
-    if isinstance(resolved, list):
+    if isinstance(resolved, BibResolutionFailure):
         return {
             "status": "error",
             "message": "failed to resolve bib",
-            "errors": resolved,
+            "errors": resolved.errors,
             "citekey": citekey,
         }
     _config, bib = resolved

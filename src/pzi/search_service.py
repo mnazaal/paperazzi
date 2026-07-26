@@ -6,7 +6,7 @@ from typing import TypedDict, cast
 
 from pzi.bib_repository import read_bib_file
 from pzi.bibtex import normalize_authors
-from pzi.config import load_and_resolve_bib
+from pzi.config import BibResolutionFailure, load_bib_target
 from pzi.tag_service import normalize_tags
 
 
@@ -49,15 +49,15 @@ def search_bib(
             "errors": ["provide at least one of --query, --author, --year, --tag"],
         }
 
-    resolved = load_and_resolve_bib(
+    resolved = load_bib_target(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector
     )
-    if isinstance(resolved, list):
+    if isinstance(resolved, BibResolutionFailure):
         return {
             "status": "error",
             "bib_name": None,
             "matches": [],
-            "errors": resolved,
+            "errors": resolved.errors,
         }
     _config, bib = resolved
 

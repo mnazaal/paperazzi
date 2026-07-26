@@ -16,6 +16,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from pzi.bibtex import NormalizedRecord
 from pzi.identifiers import detect_preprint_source
+from pzi.protocols import accepts_keyword
 from pzi.url_safety import safe_public_http_url
 
 PdfDiscoveryContext: TypeAlias = dict[str, Any]
@@ -361,11 +362,8 @@ def doi_pdf_step(
 
 
 def _call_pdf_resolver(fn, doi: str, *, contact_email: str | None = None) -> str | None:
-    if contact_email:
-        try:
-            return fn(doi, contact_email=contact_email)
-        except TypeError:
-            return fn(doi)
+    if contact_email and accepts_keyword(fn, "contact_email"):
+        return fn(doi, contact_email=contact_email)
     return fn(doi)
 
 

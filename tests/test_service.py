@@ -639,7 +639,7 @@ default = true
     def fake_fetch_search(query: str, *, server_url: str) -> list[dict[str, object]]:
         raise urllib.error.HTTPError(None, 501, "Not Implemented", {}, None)  # type: ignore[arg-type]
 
-    def fake_crossref(doi: str) -> dict[str, object] | None:
+    def fake_crossref(doi: str, **_: object) -> dict[str, object] | None:
         assert doi == "10.5555/3327546.3327713"
         return {
             "title": "Fast Neural Networks",
@@ -1157,8 +1157,8 @@ default = true
         dry_run=False,
         fetch_search=lambda query, *, server_url: [],
         fetch_web=lambda url, *, server_url: [],
-        fetch_crossref=lambda doi: None,
-        fetch_openalex=lambda doi: None,
+        fetch_crossref=lambda doi, **_: None,
+        fetch_openalex=lambda doi, **_: None,
         fetch_s2=lambda doi: None,
     )
 
@@ -1389,10 +1389,10 @@ default = true
             }
         ]
 
-    def fake_crossref(doi: str) -> object:
+    def fake_crossref(doi: str, **_: object) -> object:
         return None
 
-    def fake_openalex(doi: str) -> object:
+    def fake_openalex(doi: str, **_: object) -> object:
         return None
 
     def fake_s2(doi: str) -> object:

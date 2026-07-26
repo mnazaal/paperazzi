@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from pzi.bib_repository import read_bib_file
-from pzi.config import load_and_resolve_bib
+from pzi.config import BibResolutionFailure, load_bib_target
 from pzi.export_service import export_bibtex, export_csv, export_json, export_ris
 
 # Characters unsafe inside a quoted ``Content-Disposition`` filename: control
@@ -61,13 +61,13 @@ def build_pdf_file_response(
     if not citekey:
         return 400, {"error": "citekey required"}
 
-    resolved = load_and_resolve_bib(
+    resolved = load_bib_target(
         config_path=config_path,
         home_dir=home_dir,
         bib_selector=bib_selector,
     )
-    if isinstance(resolved, list):
-        return 400, {"status": "error", "errors": resolved}
+    if isinstance(resolved, BibResolutionFailure):
+        return 400, {"status": "error", "errors": resolved.errors}
 
     _config, bib = resolved
     read_result = read_bib_file(bib["path"])
@@ -99,13 +99,13 @@ def build_export_bytes_response(
     if fmt not in EXPORT_FORMATS:
         return 400, {"error": f"unsupported format: {fmt}"}
 
-    resolved = load_and_resolve_bib(
+    resolved = load_bib_target(
         config_path=config_path,
         home_dir=home_dir,
         bib_selector=bib_selector,
     )
-    if isinstance(resolved, list):
-        return 400, {"status": "error", "errors": resolved}
+    if isinstance(resolved, BibResolutionFailure):
+        return 400, {"status": "error", "errors": resolved.errors}
 
     _config, bib = resolved
     exporter, extension = EXPORT_FORMATS[fmt]

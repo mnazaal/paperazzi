@@ -6,8 +6,9 @@ import os
 import re
 import tomllib
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TypeAlias, TypedDict
+from typing import Any, Literal, TypeAlias, TypedDict
 from urllib.parse import urlsplit
 
 
@@ -747,14 +748,31 @@ def dump_app_config(config: AppConfig) -> str:
     return "\n".join(lines) + "\n"
 
 
-def load_and_resolve_bib(
+@dataclass(frozen=True)
+class BibResolutionFailure:
+    """Why a config + target could not be resolved.
+
+    *reason* is the structured discriminator callers branch on.  It replaces
+    comparing the returned error list against an exact message string, which
+    made control flow depend on the wording of a diagnostic.
+    """
+
+    reason: Literal["config_invalid", "target_unresolved"]
+    errors: list[str]
+
+
+def load_bib_target(
     *, config_path: str, home_dir: str, bib_selector: str | None
-) -> tuple[AppConfig, BibConfig] | list[str]:
+) -> tuple[AppConfig, BibConfig] | BibResolutionFailure:
+    """Load the config and resolve one library target from it."""
     config_result = load_config_file(config_path, home_dir=home_dir)
     if config_result["config"] is None:
-        return config_result["errors"]
+        return BibResolutionFailure("config_invalid", config_result["errors"])
     config = config_result["config"]
     bib = resolve_library_target(config["bibs"], bib_selector, home_dir=home_dir)
     if bib is None:
-        return ["no matching library target found or selection is ambiguous"]
+        return BibResolutionFailure(
+            "target_unresolved",
+            ["no matching library target found or selection is ambiguous"],
+        )
     return config, bib

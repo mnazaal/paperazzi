@@ -19,6 +19,7 @@ Concrete implementations live in :mod:`pzi.translation_server`,
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Callable
 from typing import Protocol
 
@@ -60,7 +61,12 @@ class MetadataRecordFetcher(Protocol):
     """
 
     def __call__(
-        self, value: str, /, *, contact_email: str | None = ...
+        self,
+        value: str,
+        /,
+        *,
+        contact_email: str | None = ...,
+        errors: list[str] | None = ...,
     ) -> NormalizedRecord | None: ...
 
 
@@ -71,3 +77,23 @@ S2RecordFetcher = Callable[[str], NormalizedRecord | None]
 S2RecordWithErrorFetcher = Callable[[str], tuple[NormalizedRecord | None, str | None]]
 HtmlFetcher = Callable[[str], str | None]
 BinaryFetcher = Callable[[str], tuple[bytes, str | None]]
+
+
+def accepts_keyword(fn: object, name: str) -> bool:
+    """True when *fn* accepts a keyword argument called *name*.
+
+    Used to decide whether an injected seam takes an optional extra (a contact
+    email, a user agent) instead of calling it and catching ``TypeError``. The
+    try/except form could not tell "this fetcher has a narrower signature" from
+    "this fetcher raised TypeError internally", so a real bug inside a provider
+    became a silent retry with fewer arguments and a plausible-looking result.
+    """
+    try:
+        parameters = inspect.signature(fn).parameters  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        # Un-introspectable callable (some builtins/C extensions): assume the
+        # narrow form, which every seam here supports.
+        return False
+    if name in parameters:
+        return True
+    return any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values())

@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from pzi import pdf_service
+from pzi.config import BibResolutionFailure
 
 # ---------------------------------------------------------------------------
 # retry_pdf: successful bib resolution + citekey found + PDF URL present
@@ -16,10 +17,12 @@ from pzi import pdf_service
 
 
 def test_retry_pdf_bib_resolved_error(monkeypatch) -> None:
-    """resolved is a list → error path."""
+    """resolution failed → error path."""
     monkeypatch.setattr(
-        pdf_service, "load_and_resolve_bib",
-        lambda **kw: ["bib load error", "another error"],
+        pdf_service, "load_bib_target",
+        lambda **kw: BibResolutionFailure(
+            "config_invalid", ["bib load error", "another error"]
+        ),
     )
     result = pdf_service.retry_pdf(
         config_path="/f",
@@ -35,7 +38,7 @@ def test_retry_pdf_bib_resolved_error(monkeypatch) -> None:
 def test_retry_pdf_citekey_not_found(monkeypatch) -> None:
     """citekey not in entries → error path."""
     monkeypatch.setattr(
-        pdf_service, "load_and_resolve_bib",
+        pdf_service, "load_bib_target",
         lambda **kw: ({"bibs": []}, {"name": "ml", "path": "/b", "papers_dir": "/p"}),
     )
     monkeypatch.setattr(
@@ -56,7 +59,7 @@ def test_retry_pdf_citekey_not_found(monkeypatch) -> None:
 def test_retry_pdf_no_pdf_url(monkeypatch) -> None:
     """citekey found but no PDF URL on entry → error path."""
     monkeypatch.setattr(
-        pdf_service, "load_and_resolve_bib",
+        pdf_service, "load_bib_target",
         lambda **kw: ({"bibs": []}, {"name": "ml", "path": "/b", "papers_dir": "/p"}),
     )
     monkeypatch.setattr(
@@ -80,7 +83,7 @@ def test_retry_pdf_no_pdf_url(monkeypatch) -> None:
 def test_retry_pdf_fetch_failed(monkeypatch) -> None:
     """PDF URL found but fetch_and_store_pdf returns None → error path."""
     monkeypatch.setattr(
-        pdf_service, "load_and_resolve_bib",
+        pdf_service, "load_bib_target",
         lambda **kw: ({"bibs": []}, {"name": "ml", "path": "/b", "papers_dir": "/p"}),
     )
     monkeypatch.setattr(
@@ -111,7 +114,7 @@ def test_retry_pdf_fetch_failed(monkeypatch) -> None:
 def test_retry_pdf_update_not_found(monkeypatch) -> None:
     """fetch succeeded but update_bib_entry returns found=False → error path."""
     monkeypatch.setattr(
-        pdf_service, "load_and_resolve_bib",
+        pdf_service, "load_bib_target",
         lambda **kw: ({"bibs": []}, {"name": "ml", "path": "/b", "papers_dir": "/p"}),
     )
     monkeypatch.setattr(
@@ -148,7 +151,7 @@ def test_retry_pdf_removes_new_pdf_when_update_disappears(monkeypatch, tmp_path:
     papers_dir = tmp_path / "papers"
     new_pdf = papers_dir / "smith2024.pdf"
     monkeypatch.setattr(
-        pdf_service, "load_and_resolve_bib",
+        pdf_service, "load_bib_target",
         lambda **kw: ({"bibs": []}, {"name": "ml", "path": "/b", "papers_dir": str(papers_dir)}),
     )
     monkeypatch.setattr(
@@ -190,7 +193,7 @@ def test_retry_pdf_removes_new_pdf_when_update_disappears(monkeypatch, tmp_path:
 def test_retry_pdf_success(monkeypatch) -> None:
     """Full happy path: resolved → fetch → update → success."""
     monkeypatch.setattr(
-        pdf_service, "load_and_resolve_bib",
+        pdf_service, "load_bib_target",
         lambda **kw: ({"bibs": []}, {"name": "ml", "path": "/b", "papers_dir": "/p"}),
     )
     monkeypatch.setattr(
@@ -231,8 +234,8 @@ def test_retry_pdf_success(monkeypatch) -> None:
 
 def test_attach_pdf_bib_resolved_error(monkeypatch) -> None:
     monkeypatch.setattr(
-        pdf_service, "load_and_resolve_bib",
-        lambda **kw: ["bib load error"],
+        pdf_service, "load_bib_target",
+        lambda **kw: BibResolutionFailure("config_invalid", ["bib load error"]),
     )
     result = pdf_service.attach_pdf(
         config_path="/f", home_dir="/h", bib_selector=None,
@@ -244,7 +247,7 @@ def test_attach_pdf_bib_resolved_error(monkeypatch) -> None:
 
 def test_attach_pdf_citekey_not_found(monkeypatch) -> None:
     monkeypatch.setattr(
-        pdf_service, "load_and_resolve_bib",
+        pdf_service, "load_bib_target",
         lambda **kw: ({"bibs": []}, {"name": "ml", "path": "/b", "papers_dir": "/p"}),
     )
     monkeypatch.setattr(
@@ -261,7 +264,7 @@ def test_attach_pdf_citekey_not_found(monkeypatch) -> None:
 
 def test_attach_pdf_store_failed(monkeypatch) -> None:
     monkeypatch.setattr(
-        pdf_service, "load_and_resolve_bib",
+        pdf_service, "load_bib_target",
         lambda **kw: ({"bibs": []}, {"name": "ml", "path": "/b", "papers_dir": "/p"}),
     )
     monkeypatch.setattr(
@@ -289,7 +292,7 @@ def test_attach_pdf_store_failed(monkeypatch) -> None:
 
 def test_attach_pdf_update_disappeared(monkeypatch) -> None:
     monkeypatch.setattr(
-        pdf_service, "load_and_resolve_bib",
+        pdf_service, "load_bib_target",
         lambda **kw: ({"bibs": []}, {"name": "ml", "path": "/b", "papers_dir": "/p"}),
     )
     monkeypatch.setattr(
@@ -324,7 +327,7 @@ def test_attach_pdf_removes_new_pdf_when_update_disappears(monkeypatch, tmp_path
     papers_dir = tmp_path / "papers"
     new_pdf = papers_dir / "smith2024.pdf"
     monkeypatch.setattr(
-        pdf_service, "load_and_resolve_bib",
+        pdf_service, "load_bib_target",
         lambda **kw: ({"bibs": []}, {"name": "ml", "path": "/b", "papers_dir": str(papers_dir)}),
     )
     monkeypatch.setattr(
@@ -368,7 +371,7 @@ def test_attach_pdf_removes_new_pdf_when_update_disappears(monkeypatch, tmp_path
 def test_attach_pdf_success_http_source(monkeypatch) -> None:
     """HTTP source → url passed as pdf_url to _entry_with_pdf_fields."""
     monkeypatch.setattr(
-        pdf_service, "load_and_resolve_bib",
+        pdf_service, "load_bib_target",
         lambda **kw: ({"bibs": []}, {"name": "ml", "path": "/b", "papers_dir": "/p"}),
     )
     monkeypatch.setattr(
@@ -403,7 +406,7 @@ def test_attach_pdf_success_http_source(monkeypatch) -> None:
 def test_attach_pdf_success_local_source(monkeypatch) -> None:
     """Local source → no pdf_url in note (not an http URL)."""
     monkeypatch.setattr(
-        pdf_service, "load_and_resolve_bib",
+        pdf_service, "load_bib_target",
         lambda **kw: ({"bibs": []}, {"name": "ml", "path": "/b", "papers_dir": "/p"}),
     )
     monkeypatch.setattr(
@@ -441,8 +444,8 @@ def test_attach_pdf_success_local_source(monkeypatch) -> None:
 
 def test_attach_pdf_bytes_bib_resolved_error(monkeypatch) -> None:
     monkeypatch.setattr(
-        pdf_service, "load_and_resolve_bib",
-        lambda **kw: ["error"],
+        pdf_service, "load_bib_target",
+        lambda **kw: BibResolutionFailure("config_invalid", ["error"]),
     )
     result = pdf_service.attach_pdf_bytes(
         config_path="/f", home_dir="/h", bib_selector=None,
@@ -455,7 +458,7 @@ def test_attach_pdf_bytes_bib_resolved_error(monkeypatch) -> None:
 def test_attach_pdf_bytes_invalid_base64(monkeypatch) -> None:
     """base64 decode raises ValueError → invalid PDF payload."""
     monkeypatch.setattr(
-        pdf_service, "load_and_resolve_bib",
+        pdf_service, "load_bib_target",
         lambda **kw: ({"bibs": []}, {"name": "ml", "path": "/b", "papers_dir": "/p"}),
     )
     result = pdf_service.attach_pdf_bytes(
@@ -471,7 +474,7 @@ def test_attach_pdf_bytes_not_a_pdf(monkeypatch) -> None:
     """Valid base64 but decoded data doesn't start with %PDF-."""
     import base64
     monkeypatch.setattr(
-        pdf_service, "load_and_resolve_bib",
+        pdf_service, "load_bib_target",
         lambda **kw: ({"bibs": []}, {"name": "ml", "path": "/b", "papers_dir": "/p"}),
     )
     result = pdf_service.attach_pdf_bytes(
@@ -489,7 +492,7 @@ def test_attach_pdf_bytes_valid_pdf_calls_attach_data(monkeypatch) -> None:
     """Valid PDF → delegates to _attach_pdf_data."""
     import base64
     monkeypatch.setattr(
-        pdf_service, "load_and_resolve_bib",
+        pdf_service, "load_bib_target",
         lambda **kw: ({"bibs": []}, {"name": "ml", "path": "/b", "papers_dir": "/p"}),
     )
     captured_kwargs = {}
@@ -965,8 +968,8 @@ def test_extract_pdf_metadata_real_pdf(tmp_path: Path) -> None:
 
 def test_retry_failed_pdfs_bib_resolved_error(monkeypatch) -> None:
     monkeypatch.setattr(
-        pdf_service, "load_and_resolve_bib",
-        lambda **kw: ["bib load error"],
+        pdf_service, "load_bib_target",
+        lambda **kw: BibResolutionFailure("config_invalid", ["bib load error"]),
     )
     result = pdf_service.retry_failed_pdfs(
         config_path="/f", home_dir="/h", bib_selector=None,
@@ -978,7 +981,7 @@ def test_retry_failed_pdfs_bib_resolved_error(monkeypatch) -> None:
 def test_retry_failed_pdfs_all_skipped(monkeypatch) -> None:
     """All entries already have PDF or no URL → skipped."""
     monkeypatch.setattr(
-        pdf_service, "load_and_resolve_bib",
+        pdf_service, "load_bib_target",
         lambda **kw: ({"bibs": []}, {"name": "ml", "path": "/b", "papers_dir": "/p"}),
     )
     monkeypatch.setattr(
@@ -1017,7 +1020,7 @@ def test_retry_failed_pdfs_some_retried(
     papers_dir.mkdir(parents=True, exist_ok=True)
 
     monkeypatch.setattr(
-        pdf_service, "load_and_resolve_bib",
+        pdf_service, "load_bib_target",
         lambda **kw: (
             {"bibs": []},
             {"name": "ml", "path": str(tmp_path / "main.bib"), "papers_dir": str(papers_dir)},

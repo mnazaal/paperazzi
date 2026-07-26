@@ -187,3 +187,36 @@ def test_read_limited_skips_reconciliation_for_encoded_bodies() -> None:
         body, {"Content-Length": "8", "Content-Encoding": "gzip"}
     )
     assert _read_limited(response, max_bytes=1_000_000) == body
+
+
+def test_a_typeerror_inside_a_fetcher_is_not_swallowed() -> None:
+    """A bug inside a provider must surface, not trigger a narrower retry.
+
+    The old capability probe called the fetcher and caught `TypeError` to detect
+    a narrower signature, so a genuine TypeError raised *inside* the fetcher was
+    indistinguishable from one raised by the call itself — the provider was
+    silently re-invoked with fewer arguments and its plausible-looking result
+    used.
+    """
+    import pytest
+
+    from pzi.add_planning import _call_metadata_fetcher
+
+    calls: list[dict] = []
+
+    def buggy_fetcher(doi: str, *, contact_email=None, errors=None):
+        calls.append({"contact_email": contact_email})
+        raise TypeError("bug inside the provider")
+
+    with pytest.raises(TypeError, match="bug inside the provider"):
+        _call_metadata_fetcher(buggy_fetcher, "10.1/x", contact_email="a@b.c", errors=[])
+
+    assert len(calls) == 1, "fetcher must not be retried after an internal TypeError"
+
+
+def test_accepts_keyword_detects_narrow_and_wide_seams() -> None:
+    from pzi.protocols import accepts_keyword
+
+    assert accepts_keyword(lambda url, *, user_agent=None: url, "user_agent")
+    assert accepts_keyword(lambda url, **kwargs: url, "user_agent")
+    assert not accepts_keyword(lambda url: url, "user_agent")

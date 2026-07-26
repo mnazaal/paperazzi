@@ -23,7 +23,7 @@ from pzi.bib_service import delete_entry
 from pzi.bibtex import normalize_authors
 from pzi.capture_core import capture_to_bib
 from pzi.capture_models import AuthHints, CaptureInput, CaptureOptions, PageArtifact, PdfCandidate
-from pzi.config import load_and_resolve_bib, load_config_file
+from pzi.config import BibResolutionFailure, load_bib_target, load_config_file
 from pzi.http_payloads import (
     capture_payload,
     inbox_drain_payload,
@@ -435,11 +435,11 @@ def _handle_delete_post(
         return 400, {"error": "force=true required for destructive delete"}
     dry_run = False if force else bool(body.get("dry_run", True))
 
-    resolved = load_and_resolve_bib(
+    resolved = load_bib_target(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector,
     )
-    if isinstance(resolved, list):
-        return 400, {"status": "error", "errors": resolved}
+    if isinstance(resolved, BibResolutionFailure):
+        return 400, {"status": "error", "errors": resolved.errors}
 
     _config, bib = resolved
     result = delete_entry(

@@ -18,6 +18,7 @@ from pzi.bibtex import NormalizedRecord
 from pzi.capture_context import metadata_user_agent
 from pzi.fetch_helpers import fetch_text as _fetch_text
 from pzi.identifiers import normalize_doi
+from pzi.protocols import accepts_keyword
 
 FetchText = Callable[[str], str]
 
@@ -463,11 +464,8 @@ def probe_s2_api(
 def _fetch_text_with_identity(
     fn: FetchText, url: str, *, contact_email: str | None
 ) -> str:
-    if contact_email:
-        try:
-            return fn(url, user_agent=metadata_user_agent(contact_email))  # type: ignore[call-arg]
-        except TypeError:
-            return fn(url)
+    if contact_email and accepts_keyword(fn, "user_agent"):
+        return fn(url, user_agent=metadata_user_agent(contact_email))  # type: ignore[call-arg]
     return fn(url)
 
 

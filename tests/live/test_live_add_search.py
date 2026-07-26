@@ -9,7 +9,7 @@ import pytest
 
 from pzi.add_service import add_input_to_bib
 from pzi.bib_repository import read_bib_file
-from pzi.config import load_and_resolve_bib
+from pzi.config import load_bib_target
 from pzi.search_service import search_bib
 from pzi.tag_service import list_tags
 from pzi.ts_backend import backend_session
@@ -77,7 +77,7 @@ def _persisted_record(config_path: str, citekey: str) -> dict[str, object]:
     *not* the bibliographic metadata — that only lives in the serialized bib.
     Round-tripping through the file is also the honest end-to-end check.
     """
-    resolved = load_and_resolve_bib(
+    resolved = load_bib_target(
         config_path=config_path,
         home_dir=os.path.expanduser("~"),
         bib_selector=None,

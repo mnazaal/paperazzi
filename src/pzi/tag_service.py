@@ -12,7 +12,7 @@ from pzi.bib_repository import (
     update_bib_entry,
 )
 from pzi.bibtex import NormalizedRecord, apply_record_to_entry
-from pzi.config import load_and_resolve_bib
+from pzi.config import BibResolutionFailure, load_bib_target
 
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
@@ -75,16 +75,16 @@ def list_tags(
     bib_selector: str | None,
     citekey: str | None = None,
 ) -> TagListResult:
-    resolved = load_and_resolve_bib(
+    resolved = load_bib_target(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector
     )
-    if isinstance(resolved, list):
+    if isinstance(resolved, BibResolutionFailure):
         return {  # pragma: no cover — covered by integration/browser tests
             "status": "error",
             "bib_name": None,
             "citekey": citekey,
             "tags": [],
-            "errors": resolved,
+            "errors": resolved.errors,
         }
     _config, bib = resolved
     records = read_bib_file(bib["path"])["records"]
@@ -172,10 +172,10 @@ def _mutate_entry_tags(
     mode: Literal["add", "remove"],
     dry_run: bool,
 ) -> TagChangeResult:
-    resolved = load_and_resolve_bib(
+    resolved = load_bib_target(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector
     )
-    if isinstance(resolved, list):
+    if isinstance(resolved, BibResolutionFailure):
         return {
             "status": "error",
             "bib_name": None,
@@ -184,7 +184,7 @@ def _mutate_entry_tags(
             "changed": False,
             "dry_run": dry_run,
             "message": "could not resolve target bib",
-            "errors": resolved,
+            "errors": resolved.errors,
         }
     config, bib = resolved
     read_result = read_bib_file(bib["path"])

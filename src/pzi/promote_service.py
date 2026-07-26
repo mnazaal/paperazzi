@@ -28,7 +28,7 @@ from pzi.bibtex import (
     venue_field_for_entry_type,
 )
 from pzi.capture_context import resolve_contact_email, resolve_optional_value
-from pzi.config import load_and_resolve_bib
+from pzi.config import BibResolutionFailure, load_bib_target
 from pzi.fetch_helpers import build_metadata_fetch_text
 from pzi.format_templates import format_citekey
 from pzi.identifiers import is_preprint, is_preprint_url
@@ -47,6 +47,7 @@ from pzi.protocols import (
     MetadataRecordFetcher,
     S2RecordWithErrorFetcher,
     SearchTranslationFetcher,
+    accepts_keyword,
 )
 from pzi.resolution_match import score_match
 from pzi.tag_service import add_tags
@@ -103,17 +104,17 @@ def promote_bib(
     confidence_threshold: int | None = None,
     mark_resolved: bool = False,
 ) -> PromoteResult:
-    resolved = load_and_resolve_bib(
+    resolved = load_bib_target(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector
     )
-    if isinstance(resolved, list):
+    if isinstance(resolved, BibResolutionFailure):
         return {
             "status": "error",
             "bib_name": None,
             "dry_run": dry_run,
             "keep_preprint": keep_preprint,
             "items": [],
-            "errors": resolved,
+            "errors": resolved.errors,
         }
     config, bib = resolved
     s2_api_key = resolve_optional_value(
@@ -511,11 +512,8 @@ def _default_provider_fn(
 
 
 def _call_provider(fn, value: str, *, contact_email: str | None):
-    if contact_email:
-        try:
-            return fn(value, contact_email=contact_email)
-        except TypeError:
-            return fn(value)
+    if contact_email and accepts_keyword(fn, "contact_email"):
+        return fn(value, contact_email=contact_email)
     return fn(value)
 
 

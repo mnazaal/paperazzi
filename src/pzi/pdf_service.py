@@ -13,7 +13,7 @@ from pzi.bibtex import (
     NormalizedRecord,
     apply_record_to_entry,
 )
-from pzi.config import load_and_resolve_bib
+from pzi.config import BibResolutionFailure, load_bib_target
 from pzi.pdf import remove_new_pdf as _remove_new_pdf
 from pzi.pdf import snapshot_pdf_paths as _snapshot_pdf_paths
 from pzi.pdf import write_pdf_bytes
@@ -51,10 +51,10 @@ def retry_pdf(
     citekey: str,
     fetch_binary: BinaryFetcher | None = None,
 ) -> PdfRetryResult:
-    resolved = load_and_resolve_bib(
+    resolved = load_bib_target(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector
     )
-    if isinstance(resolved, list):
+    if isinstance(resolved, BibResolutionFailure):
         return {
             "status": "error",
             "bib_name": None,
@@ -62,7 +62,7 @@ def retry_pdf(
             "local_pdf_path": None,
             "message": "could not resolve target bib",
             "warnings": [],
-            "errors": resolved,
+            "errors": resolved.errors,
         }
     config, bib = resolved
 
@@ -168,15 +168,15 @@ def retry_failed_pdfs(
 
     Returns a summary result with per-entry success/failure details.
     """
-    resolved = load_and_resolve_bib(
+    resolved = load_bib_target(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector
     )
-    if isinstance(resolved, list):
+    if isinstance(resolved, BibResolutionFailure):
         return {
             "status": "error",
             "bib_name": None,
             "message": "could not resolve target bib",
-            "errors": resolved,
+            "errors": resolved.errors,
         }
     config, bib = resolved
 
@@ -284,10 +284,10 @@ def attach_pdf(
     source: str,
     fetch_binary: BinaryFetcher | None = None,
 ) -> PdfAttachResult:
-    resolved = load_and_resolve_bib(
+    resolved = load_bib_target(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector
     )
-    if isinstance(resolved, list):
+    if isinstance(resolved, BibResolutionFailure):
         return {
             "status": "error",
             "bib_name": None,
@@ -296,7 +296,7 @@ def attach_pdf(
             "source": source,
             "message": "could not resolve target bib",
             "warnings": [],
-            "errors": resolved,
+            "errors": resolved.errors,
         }
     config, bib = resolved
 
@@ -393,10 +393,10 @@ def attach_pdf_bytes(
     pdf_base64: str,
     source_url: str | None,
 ) -> PdfAttachBytesResult:
-    resolved = load_and_resolve_bib(
+    resolved = load_bib_target(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector
     )
-    if isinstance(resolved, list):
+    if isinstance(resolved, BibResolutionFailure):
         return {
             "status": "error",
             "bib_name": None,
@@ -405,7 +405,7 @@ def attach_pdf_bytes(
             "source_url": source_url,
             "message": "could not resolve target bib",
             "warnings": [],
-            "errors": resolved,
+            "errors": resolved.errors,
         }
     config, bib = resolved
 
@@ -455,10 +455,10 @@ def attach_pdf_raw_bytes(
     pdf_bytes: bytes,
     source_url: str | None,
 ) -> PdfAttachBytesResult:
-    resolved = load_and_resolve_bib(
+    resolved = load_bib_target(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector
     )
-    if isinstance(resolved, list):
+    if isinstance(resolved, BibResolutionFailure):
         return {
             "status": "error",
             "bib_name": None,
@@ -467,7 +467,7 @@ def attach_pdf_raw_bytes(
             "source_url": source_url,
             "message": "could not resolve target bib",
             "warnings": [],
-            "errors": resolved,
+            "errors": resolved.errors,
         }
     config, bib = resolved
 

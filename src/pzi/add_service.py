@@ -50,7 +50,7 @@ from pzi.capture_local_pdf import (
     build_add_record_result,
     plan_with_applied_record,
 )
-from pzi.config import BibConfig, load_and_resolve_bib
+from pzi.config import BibConfig, BibResolutionFailure, load_bib_target
 from pzi.format_templates import format_citekey
 from pzi.identifiers import classify_input
 from pzi.pdf import remove_new_pdf as _remove_new_pdf
@@ -78,9 +78,6 @@ _error_result = _add_planning.error_result
 _manual_record_from_overrides = _add_planning.manual_record_from_overrides
 _merge_fetched_record_with_overrides = _add_planning.merge_fetched_record_with_overrides
 _pdf_result_fields = _add_planning.pdf_result_fields
-
-_AMBIGUOUS_BIB_ERROR = "no matching library target found or selection is ambiguous"
-
 
 def describe_invalid_add_input(value: str) -> str | None:
     """Return why *value* is not valid ``pzi add`` input, or ``None`` if it is.
@@ -366,16 +363,20 @@ def add_record_to_bib(
     dry_run: bool,
     force_new: bool = False,
 ) -> AddRecordResult:
-    resolved = load_and_resolve_bib(
+    resolved = load_bib_target(
         config_path=config_path,
         home_dir=home_dir,
         bib_selector=bib_selector,
     )
-    if isinstance(resolved, list):
-        ambiguous = resolved == [_AMBIGUOUS_BIB_ERROR]
+    if isinstance(resolved, BibResolutionFailure):
+        ambiguous = resolved.reason == "target_unresolved"
         return _error_result(
             message="could not resolve target bib" if ambiguous else "failed to load config",
-            errors=["no matching bib found or selection is ambiguous"] if ambiguous else resolved,
+            errors=(
+                ["no matching bib found or selection is ambiguous"]
+                if ambiguous
+                else resolved.errors
+            ),
             dry_run=dry_run,
             warnings=[],
         )
@@ -408,16 +409,16 @@ def _resolve_capture_context(
     browser: str | None = None,
 ) -> tuple[CaptureContext | None, AddRecordResult | None]:
     """Load config, select the bib, and resolve runtime-only capture options."""
-    resolved = load_and_resolve_bib(
+    resolved = load_bib_target(
         config_path=config_path,
         home_dir=home_dir,
         bib_selector=bib_selector,
     )
-    if isinstance(resolved, list):
-        ambiguous = resolved == [_AMBIGUOUS_BIB_ERROR]
+    if isinstance(resolved, BibResolutionFailure):
+        ambiguous = resolved.reason == "target_unresolved"
         return None, _error_result(
             message="could not resolve target bib" if ambiguous else "failed to load config",
-            errors=["no matching bib found"] if ambiguous else resolved,
+            errors=["no matching bib found"] if ambiguous else resolved.errors,
             dry_run=dry_run,
             warnings=[],
         )

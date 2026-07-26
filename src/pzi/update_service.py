@@ -17,7 +17,7 @@ from pzi.bib_repository import (
     update_bib_entry,
 )
 from pzi.bibtex import BibtexEntry, NormalizedRecord, apply_record_to_entry
-from pzi.config import load_and_resolve_bib
+from pzi.config import BibResolutionFailure, load_bib_target
 from pzi.protocols import SearchTranslationFetcher
 from pzi.translation_server import fetch_search_translations
 
@@ -52,16 +52,16 @@ def update_bib(
     dry_run: bool = True,
     fetch_search: SearchTranslationFetcher | None = None,
 ) -> UpdateBibResult:
-    resolved = load_and_resolve_bib(
+    resolved = load_bib_target(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector
     )
-    if isinstance(resolved, list):
+    if isinstance(resolved, BibResolutionFailure):
         return {
             "status": "error",
             "bib_name": None,
             "dry_run": dry_run,
             "items": [],
-            "errors": resolved,
+            "errors": resolved.errors,
         }
     config, bib = resolved
     search_fn = fetch_search or fetch_search_translations

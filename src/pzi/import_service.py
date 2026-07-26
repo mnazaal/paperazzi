@@ -8,7 +8,7 @@ from typing import Any, NotRequired, TypedDict
 from pzi.add_service import add_records_to_bib_batch
 from pzi.bib_repository import parse_bibtex
 from pzi.bibtex import bibtex_entry_to_record
-from pzi.config import load_and_resolve_bib
+from pzi.config import BibResolutionFailure, load_bib_target
 from pzi.fileio import read_text_utf8
 
 
@@ -105,7 +105,7 @@ def import_from_bibtex(
     # Resolve config + target once, then plan/write every record under a single
     # lock with one atomic write (see add_records_to_bib_batch) instead of
     # re-reading config and re-parsing/rewriting the whole .bib per entry.
-    resolved = load_and_resolve_bib(
+    resolved = load_bib_target(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector,
     )
 
@@ -115,11 +115,11 @@ def import_from_bibtex(
     skipped_errors = 0
     errors: list[str] = []
 
-    if isinstance(resolved, list):
+    if isinstance(resolved, BibResolutionFailure):
         # Config/target resolution failed: every record fails identically.
         batch_results: list[dict[str, Any]] = [
             {"status": "error", "citekey": r.get("citekey"),
-             "message": "; ".join(resolved), "errors": resolved}
+             "message": "; ".join(resolved.errors), "errors": resolved.errors}
             for r in records
         ]
     else:

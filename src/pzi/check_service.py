@@ -25,7 +25,7 @@ from typing import Literal, TypedDict
 from pzi.bib_repository import read_bib_file
 from pzi.bibtex import NormalizedRecord
 from pzi.capture_context import resolve_contact_email, resolve_optional_value
-from pzi.config import load_and_resolve_bib
+from pzi.config import BibResolutionFailure, load_bib_target
 from pzi.fetch_helpers import build_metadata_fetch_text
 from pzi.metadata_sources import (
     fetch_crossref_record_by_title,
@@ -256,11 +256,11 @@ def check_bib(
     now_year: int | None = None,
 ) -> CheckResult:
     """Validate every entry in a library against authoritative metadata sources."""
-    resolved = load_and_resolve_bib(
+    resolved = load_bib_target(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector
     )
-    if isinstance(resolved, list):
-        return _error_result(strict, resolved)
+    if isinstance(resolved, BibResolutionFailure):
+        return _error_result(strict, resolved.errors)
 
     config, bib = resolved
     s2_api_key = resolve_optional_value(

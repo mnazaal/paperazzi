@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pzi.config import AppConfig, load_and_resolve_bib
+from pzi.config import AppConfig, BibResolutionFailure, load_bib_target
 
 
 def _dummy_config(tmp_path: Path, default_bib_name: str = "main") -> tuple[str, AppConfig]:
@@ -24,7 +24,7 @@ default = true
     return str(config_path), {"bibs": [], "dummy": True}  # type: ignore[dict-item]
 
 
-def test_load_and_resolve_bib_success(tmp_path: Path) -> None:
+def test_load_bib_target_success(tmp_path: Path) -> None:
     bib_path = tmp_path / "test.bib"
     bib_path.write_text("")
 
@@ -42,7 +42,7 @@ default = true
     config_path = tmp_path / "config.toml"
     config_path.write_text(config_text)
 
-    result = load_and_resolve_bib(
+    result = load_bib_target(
         config_path=str(config_path),
         home_dir=str(tmp_path),
         bib_selector=None,
@@ -53,17 +53,17 @@ default = true
     assert bib["path"] == str(bib_path)
 
 
-def test_load_and_resolve_bib_missing_config_returns_errors(tmp_path: Path) -> None:
-    result = load_and_resolve_bib(
+def test_load_bib_target_missing_config_returns_errors(tmp_path: Path) -> None:
+    result = load_bib_target(
         config_path=str(tmp_path / "nonexistent.toml"),
         home_dir=str(tmp_path),
         bib_selector=None,
     )
-    assert isinstance(result, list)
-    assert len(result) > 0
+    assert isinstance(result, BibResolutionFailure)
+    assert result.errors
 
 
-def test_load_and_resolve_bib_ambiguous_selection_returns_errors(tmp_path: Path) -> None:
+def test_load_bib_target_ambiguous_selection_returns_errors(tmp_path: Path) -> None:
     bib1 = tmp_path / "test1.bib"
     bib2 = tmp_path / "test2.bib"
     bib1.write_text("")
@@ -87,15 +87,17 @@ papers_dir = "{tmp_path}/papers2"
     config_path = tmp_path / "config.toml"
     config_path.write_text(config_text)
 
-    result = load_and_resolve_bib(
+    result = load_bib_target(
         config_path=str(config_path),
         home_dir=str(tmp_path),
         bib_selector=None,
     )
-    assert isinstance(result, list)
+    assert isinstance(result, BibResolutionFailure)
+    # The structured reason is what callers branch on, not the message text.
+    assert result.reason == "target_unresolved"
 
 
-def test_load_and_resolve_bib_by_name(tmp_path: Path) -> None:
+def test_load_bib_target_by_name(tmp_path: Path) -> None:
     bib1 = tmp_path / "test1.bib"
     bib2 = tmp_path / "test2.bib"
     bib1.write_text("")
@@ -119,7 +121,7 @@ papers_dir = "{tmp_path}/papers2"
     config_path = tmp_path / "config.toml"
     config_path.write_text(config_text)
 
-    result = load_and_resolve_bib(
+    result = load_bib_target(
         config_path=str(config_path),
         home_dir=str(tmp_path),
         bib_selector="alt",
@@ -129,13 +131,14 @@ papers_dir = "{tmp_path}/papers2"
     assert bib["name"] == "alt"
 
 
-def test_load_and_resolve_bib_invalid_config(tmp_path: Path) -> None:
+def test_load_bib_target_invalid_config(tmp_path: Path) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text("not toml at all\n=invalid")
 
-    result = load_and_resolve_bib(
+    result = load_bib_target(
         config_path=str(config_path),
         home_dir=str(tmp_path),
         bib_selector=None,
     )
-    assert isinstance(result, list)
+    assert isinstance(result, BibResolutionFailure)
+    assert result.reason == "config_invalid"

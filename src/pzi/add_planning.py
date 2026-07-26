@@ -644,23 +644,12 @@ def _metadata_diagnostic_line(
 def _call_metadata_fetcher(
     fn, doi: str, *, contact_email: str | None, errors: list[str] | None = None
 ):
-    extra = {"errors": errors} if errors is not None else {}
+    # Every fetcher conforms to MetadataRecordFetcher, so call it one way. The
+    # old shape probed with `except TypeError` and retried with fewer arguments,
+    # which silently converted a genuine TypeError *inside* a fetcher into a
+    # plausible-looking fallback result.
     try:
-        if contact_email:
-            try:
-                return fn(doi, contact_email=contact_email, **extra)
-            except TypeError:
-                try:
-                    return fn(doi, contact_email=contact_email)
-                except TypeError:
-                    return fn(doi)
-        elif extra:
-            try:
-                return fn(doi, **extra)
-            except TypeError:
-                return fn(doi)
-        else:
-            return fn(doi)
+        return fn(doi, contact_email=contact_email, errors=errors)
     except urllib.error.HTTPError as exc:
         if errors is not None:
             errors.append(f"HTTP {exc.code}")
