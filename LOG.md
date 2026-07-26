@@ -2,7 +2,45 @@
 
 Newest first. Prepend-only; corrections are new entries, never rewrites.
 
-## 2026-07-26 (latest) — layering: cycles removed, guard blind spots closed
+## 2026-07-26 (latest) — design track items 3 and 4: honest labels, one error channel
+
+**Verdict:** design-track items 1-4 done, item 5 partly. The two most bug-prone
+control-flow idioms in the tree are gone, and no module claims purity over I/O.
+
+**Load-bearing numbers.** Suite **1442 → 1444 passed**, 8 skipped, 20 deselected;
+`ruff` clean, `pyright` 0 errors. Commits `45a3e21`, `003316b`.
+
+**Bib resolution.** `load_and_resolve_bib` → `load_bib_target`, returning a
+frozen `BibResolutionFailure(reason, errors)` instead of `tuple | list[str]`.
+Renaming was the point: 21 call sites had to be visited, and **pyright caught
+three my regex sweep missed** — the type change alone would have let
+`isinstance(resolved, list)` quietly become always-false at those sites.
+
+**Capability probes.** `add_planning`'s is deleted; the other three decide by
+`protocols.accepts_keyword` (signature inspection). The probes existed only to
+tolerate narrow *test doubles*, so production code was accommodating tests —
+those doubles were widened instead. Regression test: a `TypeError` from inside a
+fetcher now propagates rather than causing a silent retry.
+
+**Discovery-step phases.** Scheduling read `step.__name__` against a name set.
+The tests relied on the same reflection, assigning `__name__` *inside* the
+function body — which executes after the scheduler has already read it, so
+`test_parallel_falls_back_to_browser` never actually exercised the browser
+phase. Steps now declare `@discovery_phase(...)` and the tests declare it too.
+
+### Do NOT re-pursue
+
+- **Do not reintroduce `except TypeError` around a fetcher call to detect its
+  signature.** It cannot distinguish a narrow signature from a bug inside the
+  provider. Use `accepts_keyword`.
+- **Do not restore the "Pure ..." docstrings** on `add_planning`,
+  `pdf_discovery`, `pdf_planning` or `bib_serialize`. Each does real I/O; the
+  labels are now accurate about which parts.
+- **Moving `fetch_record_for_input` out of `add_planning` is optional**, not
+  pending work. The mislabelling was the harm and it is fixed; the module move
+  is cosmetic.
+
+## 2026-07-26 — layering: cycles removed, guard blind spots closed
 
 **Verdict:** design-track items 1, 2 done and 5 partly done. Both import cycles
 are gone and the architectural guard now actually covers the tree.

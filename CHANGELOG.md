@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Internal: `config.load_and_resolve_bib` is now `config.load_bib_target`**
+  and returns a `BibResolutionFailure` (carrying a structured `reason`) instead
+  of a bare list of error strings. Affects anything importing it directly.
+
+
 - **`--json` output is now one envelope for every command**:
   `{command, status, bib_name, items, errors}`, with command-specific fields
   (`imported`, `dry_run`, `total`, …) alongside. Previously there were four

@@ -170,21 +170,37 @@ live in the review conversation; each item below is self-contained.
    long-running audit genuinely benefits from streaming. Revisit only if a
    library large enough to make buffering hurt shows up.
 
-3. **Stop labelling effectful modules pure.** `add_planning`'s docstring says
-   "Pure add/capture planning" while `fetch_record_for_input` runs the whole
-   provider network cascade; `pdf_discovery` claims pure steps but does HTTP and
-   launches browsers, and classifies each step's effect phase by string-matching
-   `step.__name__`, so renaming a function silently changes when it runs. Move
-   the fetch orchestration beside `fetch_helpers`; register discovery steps as
-   `(step, phase)` data instead of reflecting on names.
-4. **One error channel per layer.** `load_and_resolve_bib` returns
-   `tuple[AppConfig, BibConfig] | list[str]` and `add_service` detects the
-   ambiguous-selector case by comparing the error list to exact message prose,
-   so rewording a message changes control flow. Separately, `except TypeError`
-   capability probes (`add_planning`, `promote_service`, `metadata_sources`,
-   `pdf_discovery`) swallow real bugs inside fetchers and silently retry with
-   fewer arguments — delete them by conforming providers to the
-   `MetadataRecordFetcher` protocol that already exists for this.
+3. **Stop labelling effectful modules pure.** **Done 2026-07-26.**
+   `pdf_discovery` no longer infers a step's execution phase from its
+   `__name__` — each step declares it with `@discovery_phase`, and `add_service`
+   excludes the `/web` translator by comparing the step object. Four docstrings
+   that advertised purity over I/O were corrected: `add_planning` (its fetch half
+   is the provider network cascade), `pdf_discovery`, `pdf_planning` (two
+   filesystem/config readers) and `bib_serialize` (path resolution follows
+   symlinks).
+
+   **Not done, and optional:** physically moving `fetch_record_for_input` /
+   `build_discovery_context` out of `add_planning` into a fetch-orchestration
+   module. The harm the review named was the mislabelling, which the docstring
+   now states plainly; the ~200-line move is cosmetic layering on top of that.
+   Do it only if the module's size becomes the problem.
+
+4. **One error channel per layer.** **Done 2026-07-26.**
+   `load_and_resolve_bib` is now `load_bib_target`, returning a frozen
+   `BibResolutionFailure` with a structured `reason` instead of
+   `tuple | list[str]`; the rename forced all 21 call sites to be visited and
+   pyright caught the three a regex sweep missed. `add_service` no longer tells
+   the ambiguous-target case apart by comparing the error list to an exact
+   message string.
+
+   The `except TypeError` capability probes are gone. `add_planning`'s is deleted
+   outright (every fetcher conforms to `MetadataRecordFetcher`, which now
+   declares `errors`); the three seams whose shapes genuinely differ decide by
+   signature inspection via `protocols.accepts_keyword`. Test doubles that had
+   relied on the probe were widened rather than kept working by production code.
+   A regression test pins the guarantee: a `TypeError` raised *inside* a fetcher
+   propagates instead of triggering a retry with fewer arguments.
+
 5. **Smaller, mechanical.** **Partly done 2026-07-26.** Done: the preprint
    classifiers moved out of `promote_service` into `identifiers` (removing the
    upward repository-to-service edge), the PDF byte-storage helpers moved from
