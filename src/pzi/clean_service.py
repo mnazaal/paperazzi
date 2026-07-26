@@ -17,6 +17,8 @@ from pzi.bibtex import BibtexEntry
 from pzi.fileio import read_text_utf8
 from pzi.pdf_planning import pdf_file_present
 
+QUARANTINE_DIRNAME = ".orphans"
+
 
 class CleanResult(TypedDict):
     status: str
@@ -108,6 +110,10 @@ def validate_library(
     papers = Path(papers_dir)
     if papers.is_dir():
         for pdf_file in papers.rglob("*.pdf"):
+            # Files already quarantined are not loose orphans; re-detecting them
+            # would keep reporting issues forever after the first --fix run.
+            if QUARANTINE_DIRNAME in pdf_file.relative_to(papers).parts:
+                continue
             real = os.path.realpath(str(pdf_file))
             if real not in referenced_paths:
                 orphan_pdfs.append(str(pdf_file))
@@ -127,6 +133,46 @@ def validate_library(
         "orphan_pdfs": orphan_pdfs,
         "issues": issues,
     }
+
+
+def plan_orphan_quarantine(
+    *,
+    orphan_pdfs: list[str],
+    orphan_dir: str,
+    taken_names: set[str],
+) -> list[dict[str, Any]]:
+    """Choose a free destination under the quarantine directory for each orphan.
+
+    Pure.  The quarantine directory is an archive, so a basename already taken —
+    whether by an earlier run (*taken_names*) or by an earlier orphan in this
+    same batch — gets a numbered suffix rather than overwriting what is stored.
+    """
+    used = set(taken_names)
+    moves: list[dict[str, Any]] = []
+
+    for source in orphan_pdfs:
+        src = Path(source)
+        name = src.name
+        attempt = 1
+        while name in used:
+            name = f"{src.stem}-{attempt}{src.suffix}"
+            attempt += 1
+        used.add(name)
+        moves.append({
+            "type": "move_orphan",
+            "source": str(src),
+            "destination": str(Path(orphan_dir) / name),
+        })
+
+    return moves
+
+
+def _names_in_dir(directory: Path) -> set[str]:
+    """Return the filenames already present in *directory* (empty if absent)."""
+    try:
+        return {child.name for child in directory.iterdir()}
+    except OSError:
+        return set()
 
 
 def clean_library(
@@ -156,24 +202,21 @@ def clean_library(
 
     # --- Move orphan PDFs ---
     if move_orphans and validation["orphan_pdfs"]:
-        orphan_dir = Path(papers_dir) / ".orphans"
-        for pdf_path_str in validation["orphan_pdfs"]:
-            src = Path(pdf_path_str)
-            dst = orphan_dir / src.name
-            action: dict[str, Any] = {
-                "type": "move_orphan",
-                "source": str(src),
-                "destination": str(dst),
-            }
-            if not dry_run:
-                orphan_dir.mkdir(parents=True, exist_ok=True)
+        orphan_dir = Path(papers_dir) / QUARANTINE_DIRNAME
+        actions = plan_orphan_quarantine(
+            orphan_pdfs=validation["orphan_pdfs"],
+            orphan_dir=str(orphan_dir),
+            taken_names=_names_in_dir(orphan_dir),
+        )
+        if not dry_run:
+            orphan_dir.mkdir(parents=True, exist_ok=True)
+            for action in actions:
                 try:
-                    shutil.move(str(src), str(dst))
+                    shutil.move(action["source"], action["destination"])
                     action["done"] = True
                 except OSError as exc:
                     action["done"] = False
                     action["error"] = str(exc)
-            actions.append(action)
 
     validation["actions"] = actions
     return validation

@@ -141,6 +141,55 @@ def test_clean_library_move_orphans_dry_run() -> None:
         assert os.path.exists(orphan)
 
 
+def test_quarantined_pdfs_are_not_reported_as_orphans_again() -> None:
+    # Files already moved into papers_dir/.orphans are quarantined, not loose
+    # orphans.  Re-detecting them makes `pzi fix clean` exit non-zero forever
+    # once anything has been quarantined.
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "requarantine.bib")
+        papers = os.path.join(td, "papers")
+        os.makedirs(papers, exist_ok=True)
+        Path(os.path.join(papers, "stale.pdf")).write_bytes(b"%PDF-1.4\n")
+        _write_bib(
+            bib,
+            '@article{smith2024, title = {Test}, author = {S}, year = {2024}}',
+        )
+
+        clean_library(bib_path=bib, papers_dir=papers, dry_run=False, move_orphans=True)
+        second = clean_library(
+            bib_path=bib, papers_dir=papers, dry_run=False, move_orphans=True
+        )
+
+        assert second["orphan_pdfs"] == []
+        assert not any(i["type"] == "orphan_pdf" for i in second["issues"])
+        assert second.get("actions") == []
+
+
+def test_quarantining_a_second_file_of_the_same_name_keeps_the_first() -> None:
+    # The quarantine directory is an archive: a later orphan sharing a basename
+    # must not overwrite the copy already stored there.
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "collide.bib")
+        papers = os.path.join(td, "papers")
+        os.makedirs(papers, exist_ok=True)
+        orphan = os.path.join(papers, "stale.pdf")
+        Path(orphan).write_bytes(b"%PDF-1.4\nFIRST\n")
+        _write_bib(
+            bib,
+            '@article{smith2024, title = {Test}, author = {S}, year = {2024}}',
+        )
+
+        clean_library(bib_path=bib, papers_dir=papers, dry_run=False, move_orphans=True)
+        # A different file arrives later under the same basename.
+        Path(orphan).write_bytes(b"%PDF-1.4\nSECOND\n")
+        clean_library(bib_path=bib, papers_dir=papers, dry_run=False, move_orphans=True)
+
+        archived = sorted(
+            p.read_bytes() for p in Path(papers, ".orphans").glob("*.pdf")
+        )
+        assert archived == [b"%PDF-1.4\nFIRST\n", b"%PDF-1.4\nSECOND\n"]
+
+
 def test_clean_library_move_orphans_real() -> None:
     with tempfile.TemporaryDirectory() as td:
         bib = os.path.join(td, "orphan3.bib")

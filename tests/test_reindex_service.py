@@ -152,6 +152,94 @@ def test_reindex_renames_pdf_real() -> None:
         assert os.path.exists(os.path.join(papers, f"{new_citekey}.pdf"))
 
 
+def test_reindex_renames_the_entrys_own_pdf_not_a_stray_namesake() -> None:
+    # The PDF to rename comes from the entry's file= field.  A stray file that
+    # happens to be named <old_citekey>.pdf belongs to nobody and must be left
+    # alone; renaming it would attach the wrong PDF and orphan the real one.
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "stray.bib")
+        papers = os.path.join(td, "papers")
+        os.makedirs(papers, exist_ok=True)
+        real_pdf = os.path.join(papers, "real-paper.pdf")
+        Path(real_pdf).write_bytes(b"%PDF-1.4\nREAL\n")
+        stray_pdf = os.path.join(papers, "oldkey.pdf")
+        Path(stray_pdf).write_bytes(b"%PDF-1.4\nSTRAY\n")
+        _write_bib(
+            bib,
+            '@article{oldkey, title = {New Test}, author = {Doe, John}, year = {2025},'
+            f' file = {{{real_pdf}}}}}',
+        )
+
+        result = reindex_library(bib_path=bib, papers_dir=papers, dry_run=False)
+
+        new_citekey = result["changed"][0]["new_citekey"]
+        new_pdf = os.path.join(papers, f"{new_citekey}.pdf")
+        assert Path(new_pdf).read_bytes() == b"%PDF-1.4\nREAL\n"
+        assert Path(stray_pdf).read_bytes() == b"%PDF-1.4\nSTRAY\n"
+        assert new_pdf in Path(bib).read_text()
+
+
+def test_reindex_rolls_back_renamed_pdfs_when_the_bib_write_fails() -> None:
+    # PDFs are renamed and the bib is written as one operation.  If the write
+    # fails, every rename must be undone, or the library is left with file=
+    # fields pointing at paths that no longer exist.
+    import pytest
+
+    from pzi import reindex_service
+
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "rollback.bib")
+        papers = os.path.join(td, "papers")
+        os.makedirs(papers, exist_ok=True)
+        old_pdf = os.path.join(papers, "oldkey.pdf")
+        Path(old_pdf).write_bytes(b"%PDF-1.4\n")
+        source = (
+            '@article{oldkey, title = {New Test}, author = {Doe, John}, year = {2025},'
+            f' file = {{{old_pdf}}}}}'
+        )
+        _write_bib(bib, source)
+
+        def _boom(*args, **kwargs):
+            raise ValueError("bib changed underneath us")
+
+        original = reindex_service.rewrite_entries_in_order_locked
+        reindex_service.rewrite_entries_in_order_locked = _boom
+        try:
+            with pytest.raises(ValueError):
+                reindex_library(bib_path=bib, papers_dir=papers, dry_run=False)
+        finally:
+            reindex_service.rewrite_entries_in_order_locked = original
+
+        assert Path(old_pdf).read_bytes() == b"%PDF-1.4\n"
+        assert Path(bib).read_text() == source
+
+
+def test_reindex_refuses_to_overwrite_an_existing_pdf_at_the_new_path() -> None:
+    # os.rename replaces the destination silently; a file already sitting at the
+    # planned path must survive, with the collision reported.
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "clobber.bib")
+        papers = os.path.join(td, "papers")
+        os.makedirs(papers, exist_ok=True)
+        real_pdf = os.path.join(papers, "real-paper.pdf")
+        Path(real_pdf).write_bytes(b"%PDF-1.4\nREAL\n")
+        _write_bib(
+            bib,
+            '@article{oldkey, title = {New Test}, author = {Doe, John}, year = {2025},'
+            f' file = {{{real_pdf}}}}}',
+        )
+        # Occupy the path the rename would target.
+        planned = os.path.join(papers, "doe2025new.pdf")
+        Path(planned).write_bytes(b"%PDF-1.4\nOTHER\n")
+
+        result = reindex_library(bib_path=bib, papers_dir=papers, dry_run=False)
+
+        assert result["changed"][0]["new_citekey"] == "doe2025new"
+        assert Path(planned).read_bytes() == b"%PDF-1.4\nOTHER\n"
+        assert Path(real_pdf).read_bytes() == b"%PDF-1.4\nREAL\n"
+        assert result["errors"]
+
+
 def test_reindex_collision_avoids_duplicate() -> None:
     with tempfile.TemporaryDirectory() as td:
         bib = os.path.join(td, "collide.bib")

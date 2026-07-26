@@ -198,8 +198,11 @@ def _render_reindex_result(result: Mapping[str, Any], dry_run: bool) -> list[str
     if changed:
         lines.append(f"{prefix}changed citekeys ({len(changed)}):")
         for ch in changed:
-            pdf_note = " [PDF renamed]" if ch.get("renamed_pdf") else ""
-            lines.append(f"  {ch['old_citekey']} → {ch['new_citekey']}{pdf_note}")
+            lines.append(f"  {ch['old_citekey']} → {ch['new_citekey']}")
+            # Name the PDF being moved: a rename that picks up the wrong file is
+            # only visible in a dry run if the paths are shown.
+            if ch.get("renamed_pdf") and ch.get("old_pdf"):
+                lines.append(f"    PDF: {ch['old_pdf']} → {ch['new_pdf']}")
     else:
         lines.append("no citekey changes needed")
     for err in result.get("errors", []):

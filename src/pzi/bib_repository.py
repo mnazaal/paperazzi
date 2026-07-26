@@ -741,7 +741,7 @@ def merge_bib_entries(
         }
 
 
-def rewrite_entries_in_order(
+def rewrite_entries_in_order_locked(
     path: str,
     entries: list[BibtexEntry],
     *,
@@ -749,28 +749,31 @@ def rewrite_entries_in_order(
 ) -> list[BibtexEntry]:
     """Rewrite all entries in their existing order, preserving non-entry blocks.
 
+    **The caller must already hold the bib lock.**  Reindex renames PDFs on disk
+    and rewrites the bib as one operation, so it takes the lock for the whole
+    sequence; locking again here would nest.
+
     Requires *entries* to be in the same order and count as the on-disk entry
-    blocks (positional replace, which also supports citekey renames).  Used by
-    reindex; comment positions, ``@string``, and ``@preamble`` are preserved.
+    blocks (positional replace, which also supports citekey renames).  Comment
+    positions, ``@string``, and ``@preamble`` are preserved.
     """
-    with with_bib_lock(path):
-        source = _read_bib_source(path)
-        library = _parse_bib_library(source)
-        _validate_library_parseable(library)
-        existing_entries, _records = _library_to_entries_records(library, path)
-        if len(entries) != len(existing_entries):
-            raise ValueError(
-                "rewrite_entries_in_order requires the same number of entries "
-                f"as on disk (got {len(entries)}, expected {len(existing_entries)})"
-            )
-        _validate_bibtex_roundtrip(entries)
-        new_library = _update_library_blocks(
-            library, entries, path, file_path_style=file_path_style
+    source = _read_bib_source(path)
+    library = _parse_bib_library(source)
+    _validate_library_parseable(library)
+    existing_entries, _records = _library_to_entries_records(library, path)
+    if len(entries) != len(existing_entries):
+        raise ValueError(
+            "rewrite_entries_in_order requires the same number of entries "
+            f"as on disk (got {len(entries)}, expected {len(existing_entries)})"
         )
-        new_source = _serialize_library(new_library)
-        if new_source != source:
-            _write_bib_text_atomic(path, new_source)
-        return entries
+    _validate_bibtex_roundtrip(entries)
+    new_library = _update_library_blocks(
+        library, entries, path, file_path_style=file_path_style
+    )
+    new_source = _serialize_library(new_library)
+    if new_source != source:
+        _write_bib_text_atomic(path, new_source)
+    return entries
 
 
 # Public aliases for helpers consumed across modules — callers should not reach
