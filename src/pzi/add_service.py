@@ -55,7 +55,11 @@ from pzi.format_templates import format_citekey
 from pzi.identifiers import classify_input
 from pzi.pdf import remove_new_pdf as _remove_new_pdf
 from pzi.pdf import snapshot_pdf_paths as _snapshot_pdf_paths
-from pzi.pdf_discovery import DEFAULT_DISCOVERY_STEPS, apply_pdf_discovery
+from pzi.pdf_discovery import (
+    DEFAULT_DISCOVERY_STEPS,
+    apply_pdf_discovery,
+    web_attachment_step,
+)
 from pzi.pdf_planning import is_pdf_bytes, plan_pdf_path
 from pzi.protocols import (
     BinaryFetcher,
@@ -302,10 +306,10 @@ def add_input_to_bib(
                 # The translation server is unreachable here, so skip the step
                 # that depends on its /web attachments; everything else still
                 # runs against the shared discovery context.
-                [
-                    step for step in DEFAULT_DISCOVERY_STEPS
-                    if step.__name__ != "web_attachment_step"
-                ],
+                # Compare the step object, not its name: this path already
+                # fetched the landing page, so re-running the /web translator
+                # would repeat that work.
+                [step for step in DEFAULT_DISCOVERY_STEPS if step is not web_attachment_step],
                 build_discovery_context(
                     raw_value=value,
                     server_url=config["translation_server_url"],

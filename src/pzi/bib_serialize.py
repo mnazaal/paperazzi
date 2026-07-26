@@ -1,4 +1,7 @@
-"""Pure BibTeX serialization: text↔model↔dict conversion and injection-safety.
+"""BibTeX serialization: text↔model↔dict conversion and injection-safety.
+
+Pure except for ``file``-field handling, which resolves paths (and so follows
+symlinks on disk) so stored references stay comparable.
 
 This is the serialization layer underneath :mod:`pzi.bib_repository`: it parses
 BibTeX source into the internal entry dicts, serializes them back

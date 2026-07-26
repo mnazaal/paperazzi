@@ -1,4 +1,16 @@
-"""Pure add/capture planning and metadata fetching helpers."""
+"""Add/capture planning and metadata fetching.
+
+Two halves, deliberately named apart because they differ in kind:
+
+- **Planning** (record merging, citekey choice, diagnostics, result shaping) is
+  pure computation over its arguments.
+- **Fetching** (``fetch_record_for_input``, ``build_discovery_context``) is the
+  provider cascade: it makes network calls through injected fetchers, defaulting
+  to the live Crossref/OpenAlex/Semantic Scholar ones.
+
+The module docstring used to claim the whole thing was pure, so a test that
+exercised "planning" could reach the network without saying so.
+"""
 
 from __future__ import annotations
 

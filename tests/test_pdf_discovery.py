@@ -9,6 +9,7 @@ from pzi.pdf_discovery import (
     apply_pdf_discovery_parallel,
     arxiv_step,
     browser_pdf_step,
+    discovery_phase,
     doi_pdf_step,
     pdf_url_candidates_step,
     translation_attachment_step,
@@ -363,8 +364,8 @@ def test_parallel_stops_when_pure_step_finds_pdf() -> None:
     record: dict[str, object] = {"title": "Paper"}
     context: PdfDiscoveryContext = {}
 
+    @discovery_phase("pure")
     def arxiv_like(r, c):
-        arxiv_like.__name__ = "arxiv_step"
         updated = dict(r)
         updated["pdf_url"] = "https://arxiv.org/pdf/1234.pdf"
         return updated
@@ -378,12 +379,12 @@ def test_parallel_falls_back_to_browser() -> None:
     record: dict[str, object] = {"title": "Paper"}
     context: PdfDiscoveryContext = {}
 
+    @discovery_phase("http")
     def http_step(r, c):
-        http_step.__name__ = "web_attachment_step"
         return r  # no-op
 
+    @discovery_phase("browser")
     def browser_like(r, c):
-        browser_like.__name__ = "browser_pdf_step"
         updated = dict(r)
         updated["pdf_url"] = "https://example.com/browser.pdf"
         return updated
@@ -404,15 +405,15 @@ def test_parallel_winner_is_by_step_priority_not_completion() -> None:
     record: dict[str, object] = {"title": "Paper"}
     context: PdfDiscoveryContext = {}
 
-    def slow_high_priority(r, c):
-        slow_high_priority.__name__ = "web_attachment_step"  # earlier in the list
+    @discovery_phase("http")
+    def slow_high_priority(r, c):  # earlier in the list
         time.sleep(0.05)
         updated = dict(r)
         updated["pdf_url"] = "https://high.example.com/pdf"
         return updated
 
-    def fast_low_priority(r, c):
-        fast_low_priority.__name__ = "doi_pdf_step"  # later in the list, returns first
+    @discovery_phase("http")
+    def fast_low_priority(r, c):  # later in the list, returns first
         updated = dict(r)
         updated["pdf_url"] = "https://low.example.com/pdf"
         return updated
@@ -428,12 +429,12 @@ def test_parallel_handles_http_step_exceptions() -> None:
     record: dict[str, object] = {"title": "Paper"}
     context: PdfDiscoveryContext = {}
 
+    @discovery_phase("http")
     def failing_http(r, c):
-        failing_http.__name__ = "web_attachment_step"
         raise RuntimeError("network error")
 
+    @discovery_phase("browser")
     def working_browser(r, c):
-        working_browser.__name__ = "browser_pdf_step"
         updated = dict(r)
         updated["pdf_url"] = "https://example.com/browser.pdf"
         return updated

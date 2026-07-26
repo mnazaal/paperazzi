@@ -1,7 +1,13 @@
-"""Pure, composable PDF URL discovery pipeline.
+"""Composable PDF URL discovery pipeline.
 
-Each step is a pure function  (record, context) -> record.
-Steps are composed into a fallback chain that runs until pdf_url is found.
+Each step has the same shape — ``(record, context) -> record`` — and steps are
+composed into a fallback chain that runs until ``pdf_url`` is found.
+
+**Steps are not all pure.** Each declares its execution phase with
+:func:`discovery_phase`: ``"pure"`` steps only rearrange what the record already
+holds, ``"http"`` steps make network calls (and are run concurrently), and the
+``"browser"`` step launches a headless browser as the last resort. The phase is
+data on the step, never inferred from its name.
 
 Also includes PDF candidate extraction helpers.
 """
@@ -11,7 +17,7 @@ from __future__ import annotations
 import re as _re
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any, TypeAlias, cast
+from typing import Any, Literal, TypeAlias, cast
 from urllib.parse import urlsplit, urlunsplit
 
 from pzi.bibtex import NormalizedRecord
@@ -70,6 +76,35 @@ def pdf_candidates_from_record(
 # ---------------------------------------------------------------------------
 
 
+
+DiscoveryPhase = Literal["pure", "http", "browser"]
+
+# Phase 2 (parallel HTTP) is the default: a step that does not declare itself is
+# assumed to touch the network, which is the safe assumption for scheduling.
+_DEFAULT_PHASE: DiscoveryPhase = "http"
+
+
+def discovery_phase(phase: DiscoveryPhase):
+    """Declare which execution phase a discovery step belongs to.
+
+    The phase is data attached to the step, not inferred from its ``__name__``.
+    The old scheduler string-matched function names, so renaming a step silently
+    moved it to a different phase — pure steps would start doing network work in
+    the parallel pool, and the browser fallback could stop running last.
+    """
+
+    def mark(step: PdfDiscoveryStep) -> PdfDiscoveryStep:
+        step.discovery_phase = phase  # type: ignore[attr-defined]
+        return step
+
+    return mark
+
+
+def phase_of(step: PdfDiscoveryStep) -> DiscoveryPhase:
+    """Return the declared phase of *step* (``"http"`` when undeclared)."""
+    return getattr(step, "discovery_phase", _DEFAULT_PHASE)
+
+
 def apply_pdf_discovery(
     record: NormalizedRecord,
     steps: list[PdfDiscoveryStep],
@@ -106,24 +141,17 @@ def apply_pdf_discovery_parallel(
     ``max_workers`` controls the thread pool size for parallel HTTP steps.
     """
     # Phase 1: run pure/fast steps sequentially
-    pure_step_names = {
-        "arxiv_step", "preprint_pdf_step", "translation_attachment_step",
-        "pdf_url_candidates_step",
-    }
     for step in steps:
         if record.get("pdf_url"):
             return record
-        if step.__name__ in pure_step_names:
+        if phase_of(step) == "pure":
             record = step(record, context)
 
     if record.get("pdf_url"):
         return record
 
     # Phase 2: run HTTP steps in parallel
-    http_steps = [
-        step for step in steps
-        if step.__name__ not in pure_step_names and step.__name__ != "browser_pdf_step"
-    ]
+    http_steps = [step for step in steps if phase_of(step) == "http"]
     if http_steps:
         from concurrent.futures import ThreadPoolExecutor
 
@@ -151,12 +179,13 @@ def apply_pdf_discovery_parallel(
     for step in steps:
         if record.get("pdf_url"):
             return record
-        if step.__name__ == "browser_pdf_step":
+        if phase_of(step) == "browser":
             record = step(record, context)
 
     return record
 
 
+@discovery_phase("pure")
 def translation_attachment_step(
     record: NormalizedRecord, context: PdfDiscoveryContext
 ) -> NormalizedRecord:
@@ -184,6 +213,7 @@ def translation_attachment_step(
     return record
 
 
+@discovery_phase("pure")
 def pdf_url_candidates_step(
     record: NormalizedRecord, context: PdfDiscoveryContext
 ) -> NormalizedRecord:
@@ -214,6 +244,7 @@ def _existing_pdf_path(value: str) -> bool:
     return path.is_file() and path.suffix.lower() == ".pdf"
 
 
+@discovery_phase("http")
 def web_attachment_step(
     record: NormalizedRecord, context: PdfDiscoveryContext
 ) -> NormalizedRecord:
@@ -272,6 +303,7 @@ def web_attachment_step(
     return record
 
 
+@discovery_phase("browser")
 def browser_pdf_step(
     record: NormalizedRecord, context: PdfDiscoveryContext
 ) -> NormalizedRecord:
@@ -312,6 +344,7 @@ def browser_pdf_step(
     return record
 
 
+@discovery_phase("http")
 def doi_pdf_step(
     record: NormalizedRecord, context: PdfDiscoveryContext
 ) -> NormalizedRecord:
@@ -367,6 +400,7 @@ def _call_pdf_resolver(fn, doi: str, *, contact_email: str | None = None) -> str
     return fn(doi)
 
 
+@discovery_phase("http")
 def unpaywall_step(
     record: NormalizedRecord, context: PdfDiscoveryContext
 ) -> NormalizedRecord:
@@ -389,6 +423,7 @@ def unpaywall_step(
     return record
 
 
+@discovery_phase("pure")
 def arxiv_step(
     record: NormalizedRecord, context: PdfDiscoveryContext
 ) -> NormalizedRecord:
@@ -407,6 +442,7 @@ def arxiv_step(
     return cast(NormalizedRecord, updated)
 
 
+@discovery_phase("pure")
 def preprint_pdf_step(
     record: NormalizedRecord, context: PdfDiscoveryContext
 ) -> NormalizedRecord:

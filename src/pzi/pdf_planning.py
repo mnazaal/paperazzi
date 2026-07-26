@@ -1,8 +1,12 @@
-"""Pure PDF acquisition planning helpers — content-type checks, path planning,
-and filename matching.
+"""PDF acquisition planning helpers — content-type checks, path planning, and
+filename matching.
 
-Atomic PDF byte writes (real filesystem I/O) live in :mod:`pzi.pdf` instead —
-see ``write_pdf_bytes`` there.
+Almost all of it is pure computation over its arguments. Two exceptions, called
+out because the rest of the module reads as pure: ``pdf_file_present`` stats the
+filesystem, and ``needs_desktop_browser_fallback`` reads the config defaults.
+
+Atomic PDF byte writes live in :mod:`pzi.pdf_download`, beside the downloads
+that use them — see ``write_pdf_bytes`` there.
 """
 
 from __future__ import annotations
