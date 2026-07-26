@@ -60,6 +60,7 @@ CORE: frozenset[str] = frozenset(
         # Config / error / IO primitives
         "config",
         "errors",
+        "exit_codes",
         "fileio",
         # HTTP / network utilities (no browser, no front-end)
         "fetch_helpers",

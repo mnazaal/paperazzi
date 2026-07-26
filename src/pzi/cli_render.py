@@ -39,7 +39,9 @@ def _render_search_matches(result: Mapping[str, Any]) -> list[str]:
         # holds actual author names in the same tab-separated position — a bare
         # "[authors]" here would read as an author name, not a matched field.
         lines.append(f"{match['citekey']}\t{year}\t{title}\t[matched: {fields}]")
-    return lines or ["no matches"]
+    # No placeholder line: an empty result means empty stdout, so the output
+    # pipes cleanly into xargs/awk. The runner reports "no matches" on stderr.
+    return lines
 
 
 _CHECK_SYMBOL = {"verified": "✓", "could_not_verify": "?", "problematic": "✗"}

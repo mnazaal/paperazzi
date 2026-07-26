@@ -7,6 +7,7 @@ import pytest
 
 import pzi.cli as cli
 import pzi.commands.export as export_command
+from pzi import exit_codes
 from pzi.capture_models import CaptureInput, CaptureOptions, PdfCandidate
 from pzi.cli import run_cli
 from pzi.cli_parser import (
@@ -1182,7 +1183,7 @@ def test_negative_numeric_argument_is_rejected(tmp_path: Path) -> None:
 
 
 def test_run_cli_converts_oserror_to_clean_error(tmp_path: Path, monkeypatch) -> None:
-    """An unexpected OSError in a command becomes `error: …` + exit 1, not a traceback."""
+    """An unexpected OSError becomes `error: …` + the environment exit code."""
     config_path = tmp_path / "config.toml"
     config_path.write_text(f'[[bibs]]\nname="ml"\npath="{tmp_path / "x.bib"}"\ndefault=true\n')
 
@@ -1197,7 +1198,7 @@ def test_run_cli_converts_oserror_to_clean_error(tmp_path: Path, monkeypatch) ->
         stdout=StringIO(),
         stderr=stderr,
     )
-    assert exit_code == 1
+    assert exit_code == exit_codes.ENVIRONMENT
     # Friendly: no "[Errno 13]" noise, just the OS message + path.
     assert stderr.getvalue() == f"error: Permission denied: {tmp_path / 'x.bib'}\n"
 
@@ -1214,7 +1215,7 @@ def test_non_utf8_bib_gives_friendly_message(tmp_path: Path) -> None:
         stdout=StringIO(),
         stderr=stderr,
     )
-    assert exit_code == 1
+    assert exit_code == exit_codes.ENVIRONMENT
     # Names the offending file so multi-bib users know which one to fix.
     assert stderr.getvalue() == f"error: {bib_path} is not valid UTF-8 text\n"
 
@@ -1300,6 +1301,6 @@ def test_run_cli_reports_concurrent_edit_without_traceback(monkeypatch) -> None:
         stderr=stderr,
     )
 
-    assert exit_code == 1
+    assert exit_code == exit_codes.ENVIRONMENT
     assert "modified externally" in stderr.getvalue()
     assert "retry" in stderr.getvalue()

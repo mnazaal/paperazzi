@@ -7,6 +7,7 @@ import sys
 from collections.abc import Callable, Sequence
 from typing import TextIO, TypedDict
 
+from pzi import exit_codes
 from pzi.bib_repository import ConcurrentEditError
 from pzi.cli_parser import build_parser, set_error_stream
 from pzi.commands.add import run_add_command as _run_add
@@ -105,7 +106,14 @@ def run_cli(
         return exc.code if isinstance(exc.code, int) else 1
 
     effective_home = home_dir or os.path.expanduser("~")
-    config_path: str = getattr(args, "config", None) or default_config_path(effective_home)
+    # Precedence: --config flag, then PZI_CONFIG, then the XDG default. The env
+    # var is what lets a cron job or systemd unit point at an alternate library
+    # without threading --config through every invocation.
+    config_path: str = (
+        getattr(args, "config", None)
+        or os.environ.get("PZI_CONFIG")
+        or default_config_path(effective_home)
+    )
 
     if args.command is None:
         parser.print_help(file=out)
@@ -180,21 +188,23 @@ def run_cli(
                 "retry the command",
                 file=err,
             )
-            return 1
+            return exit_codes.ENVIRONMENT
         except PziError as exc:
             # Carries a message already phrased for the user (e.g. naming the
-            # bib file that is not valid UTF-8).
-            print(f"error: {exc}", file=err)
-            return 1
+            # bib file that is not valid UTF-8) and the exit code to report.
+            print(f"error: {exc.message}", file=err)
+            for detail in exc.details:
+                print(f"  - {detail}", file=err)
+            return exc.code
         except (OSError, UnicodeDecodeError) as exc:
             # Expected environmental failures (permission denied, disk full, a
             # file that is not valid UTF-8, …) become a clean diagnostic
             # instead of a raw traceback.  Genuine bugs still propagate.
             print(f"error: {_friendly_error(exc)}", file=err)
-            return 1
+            return exit_codes.ENVIRONMENT
 
     print(f"unknown command: {args.command}", file=err)
-    return 2
+    return exit_codes.USAGE
 
 
 def main() -> int:
@@ -202,7 +212,7 @@ def main() -> int:
         return run_cli(sys.argv[1:])
     except KeyboardInterrupt:
         print("interrupted", file=sys.stderr)
-        return 130
+        return exit_codes.INTERRUPTED
     except BrokenPipeError:
         # Output consumer closed the pipe (e.g. `pzi entries | head`).  Redirect
         # stdout to devnull so the interpreter's final flush cannot re-raise on
@@ -212,7 +222,7 @@ def main() -> int:
             os.dup2(devnull, sys.stdout.fileno())
         except (OSError, ValueError):
             pass  # stdout may have no real fd (e.g. already closed, or captured)
-        return 141
+        return exit_codes.BROKEN_PIPE
 
 
 if __name__ == "__main__":

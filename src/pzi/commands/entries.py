@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 
+from pzi import exit_codes
 from pzi.bib_service import bib_stats, entry_detail, list_entries
 from pzi.cli_render import _error_lines, _render_bib_stats
-from pzi.commands.common import print_lines, resolve_target_or_error
+from pzi.commands.common import print_lines, resolve_target
 
 
 def run_entries_command(args, *, home_dir, config_path, stdout, stderr, bib_selector) -> int:
@@ -28,23 +29,22 @@ def _run_list(args, home_dir, config_path, stdout, stderr, bib_selector) -> int:
     )
     if getattr(args, "json", False):
         print(json.dumps(result, indent=2, default=str), file=stdout)
-        return 0 if result["status"] == "ok" else 1
+        return exit_codes.OK if result["status"] == "ok" else exit_codes.ENVIRONMENT
     if result["status"] == "ok":
         items = result["items"]
         if not items:
-            print("(no entries)", file=stdout)
+            print("(no entries)", file=stderr)
             return 0
         for item in items:
             ck = item["citekey"]
             title = item.get("title", "") or ""
             year_str = str(item["year"]) if item.get("year") else ""
-            authors = item.get("authors", "")
-            pdf_marker = " [PDF]" if item.get("has_pdf") else ""
-            line = f"{ck}\t{year_str}\t{title}"
-            if authors:
-                line += f"\t{authors}"
-            line += pdf_marker
-            print(line, file=stdout)
+            authors = item.get("authors", "") or ""
+            # Fixed five tab-separated columns, always. The PDF flag used to be
+            # glued onto the authors column without a separator, so awk -F'\t'
+            # read it as part of an author name.
+            has_pdf = "pdf" if item.get("has_pdf") else ""
+            print(f"{ck}\t{year_str}\t{title}\t{authors}\t{has_pdf}", file=stdout)
         total = result["total"]
         offset = result["offset"]
         limit = result["limit"]
@@ -57,7 +57,7 @@ def _run_list(args, home_dir, config_path, stdout, stderr, bib_selector) -> int:
         )
         return 0
     print_lines(_error_lines("failed to list entries", result["errors"]), stderr)
-    return 1
+    return exit_codes.ENVIRONMENT
 
 
 def _run_detail(args, home_dir, config_path, stdout, stderr, bib_selector) -> int:
@@ -69,7 +69,11 @@ def _run_detail(args, home_dir, config_path, stdout, stderr, bib_selector) -> in
     )
     if result["status"] != "ok":
         print_lines(_error_lines(result["message"], result["errors"]), stderr)
-        return 1
+        return (
+            exit_codes.NOT_FOUND
+            if result.get("reason") == "not_found"
+            else exit_codes.ENVIRONMENT
+        )
     record = result["record"]
     if getattr(args, "json", False):
         print(json.dumps(record, indent=2, default=str), file=stdout)
@@ -101,22 +105,19 @@ def _run_detail(args, home_dir, config_path, stdout, stderr, bib_selector) -> in
 
 
 def _run_stats(args, home_dir, config_path, stdout, stderr, bib_selector) -> int:
-    resolved = resolve_target_or_error(
-        config_path=config_path, home_dir=home_dir, bib_selector=bib_selector, stderr=stderr,
+    _config, target = resolve_target(
+        config_path=config_path, home_dir=home_dir, bib_selector=bib_selector,
     )
-    if resolved is None:
-        return 1
-    _config, target = resolved
 
     result = bib_stats(bib_path=target["path"], papers_dir=target["papers_dir"])
     if getattr(args, "json", False):
         print(json.dumps(result, indent=2, default=str), file=stdout)
-        return 0 if result["status"] == "ok" else 1
+        return exit_codes.OK if result["status"] == "ok" else exit_codes.ENVIRONMENT
     if result["status"] == "ok":
         print_lines(_render_bib_stats(result), stdout)
         return 0
     print_lines(_error_lines("stats failed", result["errors"]), stderr)
-    return 1
+    return exit_codes.ENVIRONMENT
 
 
 def _author_name(author: object) -> str:

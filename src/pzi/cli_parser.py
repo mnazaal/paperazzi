@@ -175,6 +175,24 @@ def _top_level_epilog() -> str:
         lines.append(title.upper())
         lines.extend(f"  {name.ljust(width)}  {desc}" for name, desc in cmds)
         lines.append("")
+    lines.append("EXIT CODES")
+    lines.extend(
+        f"  {code}  {meaning}"
+        for code, meaning in (
+            (0, "success"),
+            (1, "ran fine, has something to report (no search matches,"),
+            (" ", "   duplicates found, integrity issues, unverified citations)"),
+            (2, "usage error"),
+            (3, "entry not found"),
+            (4, "batch partly failed (some items imported, some did not)"),
+            (5, "could not run (bad config, unknown --target, locked bib,"),
+            (" ", "   permission denied, service unreachable)"),
+        )
+    )
+    lines.append("")
+    lines.append("ENVIRONMENT")
+    lines.append("  PZI_CONFIG  config file path (--config wins over it)")
+    lines.append("")
     lines.append("Run 'pzi <command> --help' for details on a command.")
     return "\n".join(lines)
 

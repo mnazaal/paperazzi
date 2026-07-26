@@ -67,6 +67,9 @@ class DeleteEntryResult(TypedDict):
     bib_path: str
     message: str
     errors: list[str]
+    # Structured failure kind, so callers pick an exit code without matching on
+    # the message text.
+    reason: NotRequired[str]
     dry_run: NotRequired[bool]
     title: NotRequired[str]
     pdf_path: NotRequired[str | None]
@@ -238,6 +241,7 @@ def entry_detail(
             "citekey": citekey,
             "bib_name": bib["name"],
             "message": f"entry not found: {citekey}",
+            "reason": "not_found",
             "errors": [f"no entry with citekey {citekey}"],
         }
 
@@ -332,6 +336,7 @@ def delete_entry(
             "citekey": citekey,
             "bib_path": bib_path,
             "message": f"entry not found: {citekey}",
+            "reason": "not_found",
             "errors": [f"no entry with citekey {citekey}"],
         }
 
@@ -362,6 +367,7 @@ def delete_entry(
             "citekey": citekey,
             "bib_path": bib_path,
             "message": f"entry not found: {citekey}",
+            "reason": "not_found",
             "errors": [f"no entry with citekey {citekey}"],
         }
 

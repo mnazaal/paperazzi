@@ -5,8 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, TextIO
 
-from pzi.cli_render import _error_lines
+from pzi import exit_codes
 from pzi.config import BibConfig, load_config_file, resolve_library_target
+from pzi.errors import PziError
 
 
 def print_lines(lines: Sequence[str], out: TextIO) -> None:
@@ -15,22 +16,27 @@ def print_lines(lines: Sequence[str], out: TextIO) -> None:
         print(line, file=out)
 
 
-def resolve_target_or_error(
-    *, config_path: str, home_dir: str, bib_selector: str | None, stderr: TextIO,
-) -> tuple[dict[str, Any], BibConfig] | None:
-    """Load config and resolve a single library target, printing errors on failure.
+def resolve_target(
+    *, config_path: str, home_dir: str, bib_selector: str | None,
+) -> tuple[dict[str, Any], BibConfig]:
+    """Load config and resolve a single library target.
 
-    Returns ``(config, target)`` or ``None`` (after printing the error).  Shared by
-    the library-maintenance command runners so each one resolves identically.
+    Raises :class:`PziError`, which the CLI boundary renders.  Both failures are
+    environment failures: the config is what defines the set of libraries, so a
+    ``--target`` matching none of them means the config does not describe the
+    library asked for.  ``NOT_FOUND`` stays reserved for a missing *entry*,
+    which is the distinction a script branches on.  Shared by the
+    library-maintenance command runners so each one resolves, and fails,
+    identically.
     """
     cfg = load_config_file(config_path, home_dir=home_dir)
     if cfg["config"] is None:
-        print_lines(_error_lines("failed to load config", cfg["errors"]), stderr)
-        return None
+        raise PziError(
+            "failed to load config", code=exit_codes.ENVIRONMENT, details=cfg["errors"],
+        )
     target = resolve_library_target(cfg["config"]["bibs"], bib_selector, home_dir=home_dir)
     if target is None:
-        print_lines(_error_lines("bib not found", []), stderr)
-        return None
+        raise PziError("bib not found", code=exit_codes.ENVIRONMENT)
     return cfg["config"], target
 
 

@@ -5,20 +5,16 @@ from __future__ import annotations
 import json
 
 from pzi.cli_render import _error_lines, _render_dedupe_result
-from pzi.commands.common import print_lines, resolve_target_or_error
+from pzi.commands.common import print_lines, resolve_target
 from pzi.dedupe_service import find_duplicates, merge_duplicates
 
 
 def run_dedupe_command(args, *, home_dir, config_path, stdout, stderr, bib_selector) -> int:
-    resolved = resolve_target_or_error(
+    _config, target = resolve_target(
         config_path=config_path,
         home_dir=home_dir,
         bib_selector=bib_selector,
-        stderr=stderr,
     )
-    if resolved is None:
-        return 1
-    _config, target = resolved
 
     result = find_duplicates(bib_path=target["path"])
     if getattr(args, "json", False):
@@ -29,15 +25,11 @@ def run_dedupe_command(args, *, home_dir, config_path, stdout, stderr, bib_selec
 
 
 def run_merge_command(args, *, home_dir, config_path, stdout, stderr, bib_selector) -> int:
-    resolved = resolve_target_or_error(
+    config, target = resolve_target(
         config_path=config_path,
         home_dir=home_dir,
         bib_selector=bib_selector,
-        stderr=stderr,
     )
-    if resolved is None:
-        return 1
-    config, target = resolved
 
     result = merge_duplicates(
         bib_path=target["path"],

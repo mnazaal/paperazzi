@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TextIO
 
+from pzi import exit_codes
+from pzi.cli_parser import load_text_arg
 from pzi.cli_render import _error_lines
 from pzi.commands.common import print_lines
 from pzi.import_service import import_from_bibtex
@@ -20,14 +22,18 @@ def run_import_command(
     bib_selector,
 ) -> int:
     source = args.source
-    if not Path(source).exists():
+    # `-` reads BibTeX from stdin, closing the `pzi export | pzi import -` pipe;
+    # the same marker `add --from-file` already accepts.
+    source_text = load_text_arg(source) if source == "-" else None
+    if source_text is None and not Path(source).exists():
         print(f"error: source file not found: {source}", file=stderr)
-        return 1
+        return exit_codes.NOT_FOUND
 
     result = import_from_bibtex(
         config_path=config_path,
         home_dir=home_dir,
-        source_path=source,
+        source_path="<stdin>" if source == "-" else source,
+        source_text=source_text,
         bib_selector=bib_selector,
         dry_run=getattr(args, "dry_run", False),
         force_new=getattr(args, "force_new", False),
@@ -35,7 +41,7 @@ def run_import_command(
 
     if result["status"] == "error":
         print_lines(_error_lines("import failed", result.get("errors", [])), stderr)
-        return 1
+        return exit_codes.ENVIRONMENT
 
     prefix = "DRY RUN: " if getattr(args, "dry_run", False) else ""
     print(f"{prefix}imported {result['imported']}/{result['total_source']} entries", file=stdout)
@@ -52,4 +58,6 @@ def run_import_command(
         for err in result["errors"]:
             print(f"  ! {err}", file=stderr)
 
-    return 0 if result["skipped_errors"] == 0 else 1
+    # Some entries imported and some failed is a partial result, distinct from
+    # the whole command failing.
+    return exit_codes.OK if result["skipped_errors"] == 0 else exit_codes.PARTIAL

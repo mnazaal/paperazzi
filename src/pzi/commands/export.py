@@ -6,19 +6,16 @@ from pathlib import Path
 from typing import TextIO
 
 from pzi.cli_render import _error_lines
-from pzi.commands.common import print_lines, resolve_target_or_error
+from pzi.commands.common import print_lines, resolve_target
 from pzi.export_service import export_bibtex, export_csv, export_json, export_ris
 
 
 def run_export_command(
     args, *, home_dir, config_path, stdout: TextIO, stderr: TextIO, bib_selector
 ) -> int:
-    resolved = resolve_target_or_error(
-        config_path=config_path, home_dir=home_dir, bib_selector=bib_selector, stderr=stderr,
+    _config, target = resolve_target(
+        config_path=config_path, home_dir=home_dir, bib_selector=bib_selector,
     )
-    if resolved is None:
-        return 1
-    _config, target = resolved
 
     exporters = {
         "bibtex": export_bibtex,

@@ -161,6 +161,28 @@ The translation-server runs as a child of `pzi server`, so this one unit covers 
 
 Shared flags: every command accepts `[--config PATH]` to point at a config file other than the default; most library commands also accept `[--target <name|path>]` (`search`/`update` accept multiple: `--target a.bib b.bib`); read commands accept `[--json]`.
 
+**Exit codes.** One meaning per code, so a script can branch on the status alone:
+
+| Code | Meaning |
+|---|---|
+| 0 | Success |
+| 1 | Ran fine and has something to report: no search matches, duplicate clusters found, integrity issues, entries `check` could not verify |
+| 2 | Usage error (unknown command, bad or missing arguments) |
+| 3 | Entry not found (unknown citekey) |
+| 4 | Batch partly failed — some items succeeded, some did not (`add --from-file`, `import`) |
+| 5 | Could not run: unreadable or invalid config, unknown `--target`, externally modified bib, permission denied, unreachable service |
+| 130 / 141 | Interrupted (SIGINT) / downstream pipe closed (SIGPIPE) |
+
+Note that `1` never means "the command failed" — a failure to run is always `5`,
+so `pzi search ... || echo broken` does not fire on an empty result set.
+
+**Pipes.** Empty results write nothing to stdout; the count, warnings, and
+placeholder notes go to stderr, so `pzi search --query graph | cut -f1 | xargs -r -n1 pzi entries`
+is safe. `pzi entries` writes five tab-separated columns
+(citekey, year, title, authors, `pdf` when a PDF is attached).
+`pzi import -` reads BibTeX from stdin, so `pzi export --target a | pzi import - --target b`
+moves entries between libraries.
+
 ```sh
 pzi init [--force] [--setup --bib PATH] [--papers-dir PATH] [--name NAME] [--browser chromium|firefox]
 pzi add <doi|url|pdf> [--tags t1,t2] [--dry-run] [--citekey KEY] [--verbose] [--strict-metadata]
@@ -296,6 +318,7 @@ Expected coverage for common sources. ✅ = works out-of-box. ⚠️ = needs con
 
 | Variable | Effect |
 |----------|--------|
+| `PZI_CONFIG` | Config file path. `--config` takes precedence; otherwise this, then the XDG default |
 | `PZI_SKIP_AUTO_START` | Set to `1` to skip auto-starting the translation-server (for CI/testing) |
 | `PZI_BROWSER_PDF_CMD` | Override the `browser_pdf_cmd` config value |
 | `PZI_BROWSER` | Preferred **desktop** browser for the manual "open and watch Downloads/" PDF fallback: `firefox` or `chromium` (default: `firefox`). Independent of `pzi init --browser`/`browser_engine`, which picks the **headless** Playwright browser used for automated capture (default: `chromium`) |

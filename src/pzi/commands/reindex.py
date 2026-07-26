@@ -3,17 +3,14 @@
 from __future__ import annotations
 
 from pzi.cli_render import _error_lines, _render_reindex_result
-from pzi.commands.common import print_lines, resolve_target_or_error
+from pzi.commands.common import print_lines, resolve_target
 from pzi.reindex_service import reindex_library
 
 
 def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_selector) -> int:
-    resolved = resolve_target_or_error(
-        config_path=config_path, home_dir=home_dir, bib_selector=bib_selector, stderr=stderr,
+    config, target = resolve_target(
+        config_path=config_path, home_dir=home_dir, bib_selector=bib_selector,
     )
-    if resolved is None:
-        return 1
-    config, target = resolved
 
     rename = getattr(args, "rename_citekeys", False)
     # Default is a read-only audit: keep citekeys stable unless explicitly asked.

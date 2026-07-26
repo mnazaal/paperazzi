@@ -6,16 +6,13 @@ import json
 
 from pzi.clean_service import clean_library, validate_library
 from pzi.cli_render import _error_lines, _render_clean_result
-from pzi.commands.common import print_lines, resolve_target_or_error
+from pzi.commands.common import print_lines, resolve_target
 
 
 def run_clean_command(args, *, home_dir, config_path, stdout, stderr, bib_selector) -> int:
-    resolved = resolve_target_or_error(
-        config_path=config_path, home_dir=home_dir, bib_selector=bib_selector, stderr=stderr,
+    _config, target = resolve_target(
+        config_path=config_path, home_dir=home_dir, bib_selector=bib_selector,
     )
-    if resolved is None:
-        return 1
-    _config, target = resolved
 
     if args.fix:
         result = clean_library(

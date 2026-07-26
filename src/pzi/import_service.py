@@ -30,17 +30,21 @@ def import_from_bibtex(
     config_path: str,
     home_dir: str,
     source_path: str,
+    source_text: str | None = None,
     bib_selector: str | None = None,
     dry_run: bool = False,
     force_new: bool = False,
 ) -> ImportResult:
     """Import entries from a BibTeX file into the configured target library.
 
-    Deduplicates against the target library using DOI/arXiv ID/URL matching.
-    Returns a dict with import status, per-entry results, and summary counts.
+    Pass *source_text* to import already-read BibTeX (the CLI does this for
+    ``pzi import -``, reading stdin); *source_path* is then only a label for
+    messages. Deduplicates against the target library using DOI/arXiv ID/URL
+    matching. Returns a dict with import status, per-entry results, and summary
+    counts.
     """
     source = Path(source_path)
-    if not source.exists():
+    if source_text is None and not source.exists():
         return {
             "status": "error",
             "source_path": source_path,
@@ -54,7 +58,7 @@ def import_from_bibtex(
         }
 
     # Parse source
-    text = read_text_utf8(source)
+    text = source_text if source_text is not None else read_text_utf8(source)
     try:
         source_entries = parse_bibtex(text)
     except Exception as exc:

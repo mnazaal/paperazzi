@@ -56,7 +56,8 @@ def test_render_tag_mutation_success_uses_none_for_empty_tags() -> None:
 
 
 def test_render_search_matches_formats_matches_and_empty_result() -> None:
-    assert _render_search_matches({"matches": []}) == ["no matches"]
+    # No matches renders nothing: empty stdout keeps the output pipeable.
+    assert _render_search_matches({"matches": []}) == []
     assert _render_search_matches(
         {
             "matches": [

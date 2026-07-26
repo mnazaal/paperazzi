@@ -6,6 +6,7 @@ import json
 from collections.abc import Callable, Sequence
 from typing import TextIO
 
+from pzi import exit_codes
 from pzi.cli_parser import usage_error_lines
 from pzi.cli_render import _error_lines, _render_search_matches
 from pzi.commands.common import print_lines, target_list
@@ -32,10 +33,11 @@ def run_search_command(
             ),
             stderr,
         )
-        return 2
+        return exit_codes.USAGE
 
     as_json = getattr(args, "json", False)
     ok = True
+    found_any = False
     json_results = []
     for target in target_list(bib_selector):
         result = search_bib_fn(
@@ -49,12 +51,19 @@ def run_search_command(
         )
         if result["status"] != "ok":
             ok = False
+        if result.get("matches"):
+            found_any = True
         if as_json:
             json_results.append(result)
         elif result["status"] == "ok":
             print_lines(_render_search_matches(result), stdout)
+            if not result.get("matches"):
+                print("no matches", file=stderr)
         else:
             print_lines(_error_lines("search failed", result["errors"]), stderr)
     if as_json:
         print(json.dumps(json_results, indent=2, default=str), file=stdout)
-    return 0 if ok else 1
+    if not ok:
+        return exit_codes.ENVIRONMENT
+    # grep's convention: nothing matched is a reportable outcome, not an error.
+    return exit_codes.OK if found_any else exit_codes.FINDINGS
