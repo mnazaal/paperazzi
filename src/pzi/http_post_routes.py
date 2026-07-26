@@ -23,7 +23,12 @@ from pzi.bib_service import delete_entry
 from pzi.bibtex import normalize_authors
 from pzi.capture_core import capture_to_bib
 from pzi.capture_models import AuthHints, CaptureInput, CaptureOptions, PageArtifact, PdfCandidate
-from pzi.config import BibResolutionFailure, load_bib_target, load_config_file
+from pzi.config import (
+    BibResolutionFailure,
+    is_configured_selector,
+    load_bib_target,
+    load_config_file,
+)
 from pzi.http_payloads import (
     capture_payload,
     inbox_drain_payload,
@@ -253,6 +258,29 @@ class PostRoute:
     handler: PostHandler
 
 
+def _reject_unconfigured_bib(
+    body: Any, config_path: str, home_dir: str
+) -> tuple[int, dict[str, Any]] | None:
+    """Reject a request naming a library the config does not declare."""
+    if not isinstance(body, dict):
+        return None
+    selector = body.get("bib")
+    if not isinstance(selector, str) or not selector.strip():
+        return None
+    config_result = load_config_file(config_path, home_dir=home_dir)
+    config = config_result["config"]
+    if config is None:
+        return None  # the handler will report the config failure itself
+    if is_configured_selector(config.get("bibs") or [], selector, home_dir=home_dir):
+        return None
+    return 400, {
+        "error": (
+            "bib must name a library configured in config.toml "
+            "(a direct .bib path is CLI-only)"
+        )
+    }
+
+
 def process_post_request(
     path: str,
     body: Any,
@@ -284,6 +312,14 @@ def process_post_request(
     )
     parsed = urlsplit(path)
     p = parsed.path
+
+    # Confine every request to the configured libraries before any handler runs.
+    # `bib` accepts a direct .bib path on the CLI as a convenience; honouring
+    # that over HTTP would let any request reaching the API create and write a
+    # library anywhere the user can write.
+    rejection = _reject_unconfigured_bib(body, config_path, home_dir)
+    if rejection is not None:
+        return rejection
 
     for route in POST_ROUTES:
         if p == route.path:

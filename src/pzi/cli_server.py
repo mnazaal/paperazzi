@@ -6,6 +6,7 @@ lifecycle is owned by `ts_backend.backend_session`, not this module.
 
 from __future__ import annotations
 
+import ipaddress
 from typing import Any, Literal, TypeAlias, TypedDict
 
 from pzi.http_security import (
@@ -26,6 +27,11 @@ class ServerPlanOk(TypedDict):
     host: str
     port: int
     security: HttpSecurityConfig
+    # Whether requests will be checked against a token. Surfaced so the operator
+    # can see it at startup: a token that resolves from a different data home
+    # (a differing XDG_DATA_HOME between `pzi init` and the server) comes back
+    # as None, and the server would otherwise start silently unauthenticated.
+    auth_enabled: bool
 
 
 ServerPlan: TypeAlias = ServerPlanOk | ServerPlanError
@@ -58,6 +64,17 @@ def build_server_plan(
     if resolved_host is None or resolved_port is None:
         return {"status": "error", "message": "failed to load config"}
 
+    if _is_wildcard_bind(resolved_host):
+        return {
+            "status": "error",
+            "message": (
+                f"refusing to serve on the wildcard address {resolved_host}: the "
+                "Host check that guards against DNS rebinding has no bind address "
+                "to match, so every request would be rejected. Bind to a specific "
+                "address (127.0.0.1 for local use, or the LAN address to share)."
+            ),
+        }
+
     if auth_token is None and config is not None:
         auth_token = config.get("api_auth_token")
     if not auth_token and not loopback_bind_host(resolved_host):
@@ -83,4 +100,16 @@ def build_server_plan(
         "host": resolved_host,
         "port": resolved_port,
         "security": security,
+        "auth_enabled": bool(auth_token),
     }
+
+
+def _is_wildcard_bind(host: str) -> bool:
+    """True for addresses that bind every interface (0.0.0.0, ::, and friends)."""
+    candidate = host.strip().strip("[]").lower()
+    if candidate in {"*", "0.0.0.0", "::"}:
+        return True
+    try:
+        return ipaddress.ip_address(candidate).is_unspecified
+    except ValueError:
+        return False

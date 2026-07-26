@@ -38,8 +38,21 @@ def run_server_command(args, *, home_dir, config_path, stdout, stderr) -> int:
     port = plan["port"]
     stop_after = getattr(args, "stop_after", None)
 
+    auth_enabled = plan["auth_enabled"]
+
     def _serve() -> None:
         print(f"serving on {host}:{port}", file=stdout)
+        # State the auth posture explicitly. A token configured under a
+        # different data home resolves to None, and without this line a server
+        # running unauthenticated looks exactly like one that is not.
+        if auth_enabled:
+            print("auth: enabled (token required)", file=stderr)
+        else:
+            print(
+                "auth: DISABLED — no api_auth_token resolved; "
+                "any local process can use this API",
+                file=stderr,
+            )
         stdout.flush()
         run_server(
             config_path=config_path,

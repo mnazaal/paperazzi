@@ -674,7 +674,10 @@ def test_post_capture_emits_pdf_request_and_stores_attach_session(monkeypatch) -
     monkeypatch.setattr(
         http_post_routes,
         "load_config_file",
-        lambda config_path, home_dir: {"config": {}},
+        lambda config_path, home_dir: {
+            "config": {"bibs": [{"name": "main", "path": "/tmp/main.bib",
+                                 "papers_dir": "/tmp/papers", "default": True}]}
+        },
     )
     monkeypatch.setattr(
         http_post_routes,
@@ -916,3 +919,64 @@ def test_post_attach_bytes_with_request_id_requires_valid_attach_token(monkeypat
     assert ok_body["status"] == "ok"
     assert called["kwargs"]["citekey"] == "smith2024"
     assert store.get("req-1") is None
+
+
+def test_http_refuses_a_bib_path_that_is_not_a_configured_library(monkeypatch) -> None:
+    """`bib` over HTTP must name a configured library, never an arbitrary path.
+
+    On the CLI a direct `.bib` path is a documented convenience. Honouring it
+    over HTTP let any request reaching the API — the extension, or any local
+    process while auth is off — make pzi create and write a library anywhere the
+    user can write.
+    """
+    monkeypatch.setattr(
+        http_post_routes,
+        "load_config_file",
+        lambda config_path, home_dir: {
+            "config": {"bibs": [{"name": "main", "path": "/tmp/main.bib",
+                                 "papers_dir": "/tmp/papers", "default": True}]}
+        },
+    )
+
+    status, body = http_post_routes.process_post_request(
+        "/capture",
+        {"url": "https://example.com/paper", "bib": "/tmp/attacker-chosen.bib"},
+        "/tmp/c.toml",
+        "/tmp",
+    )
+
+    assert status == 400
+    assert "configured" in body["error"]
+
+
+def test_http_still_accepts_a_configured_library_by_name_or_path(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        http_post_routes,
+        "load_config_file",
+        lambda config_path, home_dir: {
+            "config": {"bibs": [{"name": "main", "path": "/tmp/main.bib",
+                                 "papers_dir": "/tmp/papers", "default": True}]}
+        },
+    )
+    def _boom(*args, **kwargs):
+        raise AssertionError("reached the service")
+
+    monkeypatch.setattr(http_post_routes, "capture_to_bib", _boom)
+
+    # Getting as far as the service is the property under test: a configured
+    # library, named either way, must not be rejected by the confinement check.
+    for selector in ("main", "/tmp/main.bib"):
+        try:
+            http_post_routes.process_post_request(
+                "/capture",
+                {"url": "https://example.com/paper", "bib": selector},
+                "/tmp/c.toml",
+                "/tmp",
+            )
+            captured[selector] = "not-rejected"
+        except AssertionError as exc:
+            captured[selector] = "not-rejected" if "reached the service" in str(exc) else "?"
+
+    assert captured == {"main": "not-rejected", "/tmp/main.bib": "not-rejected"}

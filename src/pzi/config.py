@@ -469,6 +469,28 @@ def resolve_bib(bibs: list[BibConfig], selector: str | None) -> BibConfig | None
     return None
 
 
+def is_configured_selector(
+    bibs: list[BibConfig], selector: str | None, *, home_dir: str
+) -> bool:
+    """True when *selector* names a library the config already declares.
+
+    The HTTP API confines requests to configured libraries with this: on the CLI
+    a direct ``.bib`` path is a deliberate convenience, but over HTTP it would
+    let any request that reaches the API — the extension, or any local process
+    when auth is off — make pzi create and write a library anywhere the user can
+    write.
+    """
+    if selector is None:
+        return True
+    normalized_selector = selector.strip()
+    normalized_path = _normalize_path(normalized_selector, home_dir=home_dir)
+    return any(
+        bib["name"] == normalized_selector
+        or _normalize_path(bib["path"], home_dir=home_dir) == normalized_path
+        for bib in bibs
+    )
+
+
 def resolve_library_target(
     bibs: list[BibConfig], selector: str | None, *, home_dir: str
 ) -> BibConfig | None:
