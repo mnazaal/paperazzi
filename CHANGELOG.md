@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0b3] - 2026-07-26
+
 ### Changed
 
 - **Internal: `config.load_and_resolve_bib` is now `config.load_bib_target`**
@@ -454,6 +456,7 @@ First public beta.
 - No sync, group libraries, or desktop reader (by design).
 - Not yet on PyPI; install from GitHub for now.
 
-[Unreleased]: https://github.com/mnazaal/paperazzi/compare/v0.1.0b2...HEAD
+[Unreleased]: https://github.com/mnazaal/paperazzi/compare/v0.1.0b3...HEAD
+[0.1.0b3]: https://github.com/mnazaal/paperazzi/compare/v0.1.0b2...v0.1.0b3
 [0.1.0b2]: https://github.com/mnazaal/paperazzi/compare/v0.1.0b1...v0.1.0b2
 [0.1.0b1]: https://github.com/mnazaal/paperazzi/releases/tag/v0.1.0b1
