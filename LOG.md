@@ -2,6 +2,55 @@
 
 Newest first. Prepend-only; corrections are new entries, never rewrites.
 
+## 2026-07-26 (later) — design track: write-plan contract + CLI machine interface
+
+**Verdict:** design-track items 1 and part of 2 are done. `WritePlan` now means
+one thing at both sinks, and the CLI has an exit-code vocabulary, pipe-safe
+stdout, and `--json` that survives failure. The `--json` envelope unification is
+the open remainder.
+
+**Load-bearing numbers.** Suite **1433 → 1437 passed**, 8 skipped, 20 deselected;
+`ruff` clean, `pyright` 0 errors. Commits `7e15231`, `8229b5c`, `ecca0fb`.
+
+**Write-plan contract.** `apply_write_plan` replaced while
+`BatchWriteSession.apply_plan` merged; both now apply `plan["entry"]` verbatim
+and update plans are merged at construction. Behaviour-preserving for writes —
+after the step-4 venue fix a double merge was already idempotent — so the guard
+is a contract test (unmodelled fields survive a batch update), not a bug repro.
+The real user-visible win was elsewhere: the two dry-run preview callers built
+bare projections, so `pzi update --dry-run` reported it would delete `pages`
+and `publisher` and retype `@article` to `@unpublished`. Neither happens.
+
+**Two gaps that only the real CLI showed**, both after unit tests were green:
+- `pzi tag add --json` was rejected by the parser — the flag existed only on
+  `tag list`, so the runner change was unreachable. Unit tests passed because
+  they build a `Namespace` directly.
+- A README pipeline example used `-q`, which is not a flag; the "successful"
+  verification run was `xargs` invoking `pzi entries` with no argument on empty
+  input. Always run the documented command verbatim.
+
+### Do NOT re-pursue
+
+- **Do not reintroduce a merge inside either sink.** The merge belongs at plan
+  construction; merging at the sink is what gave one plan type two meanings, and
+  merging inside `apply_write_plan` specifically breaks the updater-callback
+  contract (tried 2026-07-25).
+- **Exit code 1 is not "failure".** It means "ran fine, has something to
+  report" (no search matches, duplicates found, integrity issues). A command
+  that could not run exits 5. Do not "simplify" a failure path back to 1.
+- **An unmatched `--target` is exit 5, not 3.** Config defines the set of
+  libraries, so naming one that does not exist is a misconfiguration. `3` is
+  reserved for a missing *entry*, which is the distinction scripts branch on.
+  The two `--target` paths disagreed at first (3 vs 5); they must not diverge
+  again.
+
+### Next session entry point
+
+`PLAN.md` design track item 2, the open half: one JSON envelope across all
+commands, `--json` on the mutating commands (`update --promote` first), NDJSON
+on stdout, and `pzi doctor`'s human-by-default rendering. Then item 3
+(mislabelled pure modules) and item 4 (error channels).
+
 ## 2026-07-26 — review + steps 3b and 4: no command is known-unsafe any more
 
 **Verdict:** `pzi fix reindex` and `pzi fix clean --fix` are cleared, and every

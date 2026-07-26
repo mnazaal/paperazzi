@@ -35,7 +35,8 @@ improvements — recorded under "Design track" below.
    note-stamping updater) were closed with step 3. Still lossy by design:
    `_rebase_insert_plan_against_current:565`, and the dry-run preview callers
    `update_service:197` / the update-in-place branch of `promote_service`
-   (misleading diff, not a bad write).
+   (misleading diff, not a bad write) — **both closed 2026-07-26** with the
+   write-plan contract unification (design track item 1).
 2. **PDF integrity.** Done, with one deliberate narrowing. Implemented:
    Content-Length reconciliation in `_read_limited` (the silent truncation case
    — `HTTPResponse.read(amt)` clips and returns short rather than raising), and
@@ -144,24 +145,34 @@ Not defects; the owner's two stated directions for the tool (functional
 programming, UNIX philosophy). Ordered by value-to-blast-radius. Full findings
 live in the review conversation; each item below is self-contained.
 
-1. **Unify the write-plan contract.** `apply_write_plan` replaces the on-disk
-   entry, `BatchWriteSession.apply_plan` merges onto it — one `WritePlan` type
-   with two opposite meanings, documented only in comments, and already the
-   cause of one silent field-deletion bug. Make every plan constructor emit
-   pre-merged entries (pass `existing_entries`/`session.entries` at
-   construction, including `add_service`'s batch path) and make both sinks
-   replace. Do not fix it by merging inside `apply_write_plan` — that was tried
-   and breaks the updater-callback contract (see LOG 2026-07-25).
-2. **CLI machine interface, as one breaking batch.** `--json` exists only on
-   read commands, disappears on error paths (the runner returns before the JSON
-   branch), and ships four envelope shapes; `authors` is a string in
-   `entries --json` and a list in `export --format json`. Exit code 1 means
-   "not found", "hard error", "partial failure", and "findings present"
-   indistinguishably. Plan: one envelope on every command including failures,
-   NDJSON on stdout, a documented exit-code table, and stdout chatter moved to
-   stderr (`no matches`, `(no entries)`, the `[PDF]` marker glued to the authors
-   column, the reindex advisory). Also: non-tty `pzi delete` without `--force`
-   reads EOF, cancels, and exits 0 — it should exit 2.
+1. **Unify the write-plan contract.** **Done 2026-07-26.** Both sinks apply
+   `plan["entry"]` verbatim; every update plan is merged at construction. This
+   also made `pzi update --dry-run` and `pzi update --promote --dry-run` honest —
+   their preview plans were bare projections, so they reported deleting every
+   unmodelled field and retyping `@article` to `@unpublished`, writes neither
+   run performs. Remaining bare-projection constructors: none.
+2. **CLI machine interface.** **Partly done 2026-07-26.** Landed: an exit-code
+   vocabulary (`pzi/exit_codes.py`) documented in README and `pzi --help`, with
+   `1` reserved for "ran fine, has something to report" so a failure to run is
+   never `1`; target resolution raising `PziError` with its code instead of a
+   printed `None` sentinel; stdout hygiene (empty results write nothing, `pzi
+   entries` emits five fixed tab-separated columns instead of gluing a `[PDF]`
+   marker onto the authors column); `pzi delete` refusing to prompt when stdin
+   is not a tty; `PZI_CONFIG`; `pzi import -`; and `--json` surviving the error
+   path for `add`/`tag`/`check`, plus `--json` on `tag add|remove`.
+
+   **Still open — the envelope work.** `--json` is still missing from `update`
+   (including `--promote`, the richest output), `delete`, `import`, `pdf`, and
+   `fix merge|reindex`. The shapes still disagree: `search --json` is an array
+   of envelopes, `entries --json` an envelope object, `entries <citekey> --json`
+   a bare record, and `authors` is a joined string in `entries` but a list in
+   `export --format json`. Target: one envelope
+   (`{status, command, bib_name, items, errors}`) on every command, records
+   shaped like `export --format json`, NDJSON on stdout so
+   `jq -r .citekey | xargs` is a one-liner, and `check --jsonl -` meaning stdout.
+   `pzi doctor` also still prints JSON by default with no human rendering, and
+   exits 0 even when a probe fails.
+
 3. **Stop labelling effectful modules pure.** `add_planning`'s docstring says
    "Pure add/capture planning" while `fetch_record_for_input` runs the whole
    provider network cascade; `pdf_discovery` claims pure steps but does HTTP and

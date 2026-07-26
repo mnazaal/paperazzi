@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Exit codes now have one meaning each**, documented in the README and
+  `pzi --help`. `1` is reserved for "ran successfully and has something to
+  report" (no search matches, duplicates found, integrity issues, unverified
+  citations), so a command that *could not run* never exits `1` — that is `5`
+  (bad config, unknown `--target`, locked bib, permission denied). `2` stays
+  usage, `3` is a missing entry, `4` is a partly-failed batch. Scripts that
+  treated any non-zero as failure still work; scripts that treated `1` as
+  failure need updating.
+- **`pzi search` with no matches exits `1` and writes nothing to stdout** (it
+  printed `no matches` on stdout and exited `0`). The note moved to stderr.
+- **`pzi entries` writes five fixed tab-separated columns** — citekey, year,
+  title, authors, and `pdf` when a PDF is attached. The PDF marker used to be
+  appended to the authors column without a separator, so `awk -F'\t'` read it as
+  part of an author's name. The authors column is also no longer omitted when
+  empty, so the column count is stable.
+- **`pzi delete` refuses to prompt when stdin is not a terminal**, exiting `2`
+  instead of reading EOF, cancelling, and reporting success.
+- **`--json` now also emits JSON when the command fails** (`add`, `tag`,
+  `check`), instead of printing prose to stderr and no JSON at all.
+
 - **`promote_confidence_threshold` is now a 0-100 match score; the default moves
   from `3` to `60`.** The promotion gate used to score a handful of coarse
   features (title exact/substring, capped author overlap, year proximity) on an
@@ -19,6 +39,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   score. **A `promote_confidence_threshold` set in `config.toml` must be
   restated on the new scale**; values above 100 are now rejected at config
   validation.
+
+### Added
+
+- **`PZI_CONFIG`** sets the config file path; `--config` still takes precedence.
+- **`pzi import -`** reads BibTeX from stdin, so
+  `pzi export --target a | pzi import - --target b` needs no temp file.
+- **`--json` on `pzi tag add` and `pzi tag remove`** (previously only `tag list`).
 
 ### Fixed
 
