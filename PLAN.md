@@ -201,19 +201,23 @@ live in the review conversation; each item below is self-contained.
    A regression test pins the guarantee: a `TypeError` raised *inside* a fetcher
    propagates instead of triggering a retry with fewer arguments.
 
-5. **Smaller, mechanical.** **Partly done 2026-07-26.** Done: the preprint
-   classifiers moved out of `promote_service` into `identifiers` (removing the
-   upward repository-to-service edge), the PDF byte-storage helpers moved from
-   `pdf` into `pdf_download` (removing the other cycle), and
-   `tests/test_layer_boundaries.py` now scans recursively — all 19 `commands/`
-   modules are classified FRONTEND instead of being invisible — plus a cycle
-   test that covers function-level imports, checked against a reintroduced cycle
-   so it cannot pass vacuously.
-
-   **Still open:** diagnostics smuggled out of the fetch seam via `nonlocal`
-   closure mutation (`add_service`) and a `change_box` dict (`update_service`);
-   the seven `PZI_*` env vars read deep inside `pdf.py` rather than resolved once
-   in `capture_context`.
+5. **Smaller, mechanical.** **Done 2026-07-26.**
+   - Preprint classifiers moved from `promote_service` to `identifiers`, and the
+     PDF byte-storage helpers from `pdf` to `pdf_download` — the two import
+     cycles are gone.
+   - `tests/test_layer_boundaries.py` scans recursively (all 19 `commands/`
+     modules are classified FRONTEND instead of invisible) and has a cycle test
+     that covers function-level imports, checked against a reintroduced cycle.
+   - The hidden data channels are closed: `add_service` no longer wraps the
+     fetcher seams to assign `nonlocal` diagnostics (`fetch_record_for_input`
+     returns the translation results it fetched), and `update_service` no longer
+     mutates a captured `change_box` (`update_bib_entry` returns the pre-update
+     record so the service diffs two values). Nothing covered add's diagnostics
+     path, so a test was added and confirmed to fail when the computation is
+     disabled.
+   - The five `PZI_*` PDF-fallback variables are resolved once into a frozen
+     `PdfFallbackSettings` at the fallback entry point instead of being read from
+     `os.environ` wherever each helper needed them. Names and defaults unchanged.
 
 Explicitly **not** doing: converting `NormalizedRecord` to a frozen dataclass.
 Every module would change for modest payoff; the frozen types in

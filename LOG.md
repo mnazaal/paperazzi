@@ -2,7 +2,53 @@
 
 Newest first. Prepend-only; corrections are new entries, never rewrites.
 
-## 2026-07-26 (latest) — design track items 3 and 4: honest labels, one error channel
+## 2026-07-26 (latest) — design track complete: hidden channels and env reads closed
+
+**Verdict:** the whole design track (items 1-5) is done. PLAN.md's original
+steps 5-7 (DOI normalization, server hardening, extension) remain — those are
+the security/quality items from the audit, untouched by this track.
+
+**Load-bearing numbers.** Suite **1444 → 1446 passed**, 8 skipped, 20 deselected;
+`ruff` clean, `pyright` 0 errors. Commits `d9e1c21`, `825c17d`.
+
+**Two hidden data channels closed.** `add_service` wrapped the injected fetcher
+seams so it could assign diagnostics to `nonlocal` variables — invisible in the
+signatures, and a retry re-invoking a fetcher silently overwrote them.
+`fetch_record_for_input` now returns the translation results (a 3-tuple) and the
+diagnostics are computed where consumed. `update_service` mutated a captured
+`change_box` dict inside its updater callback; `update_bib_entry` now returns
+`previous_record` so the service diffs two values.
+
+**Nothing covered add's diagnostics path.** The green suite would not have caught
+a regression, so a test was added *and* confirmed to fail when the computation is
+disabled. Verified the reported `changed_fields` still use record-level names
+(`venue`, not `journal`) after the update_service change — the BibTeX round trip
+could have renamed them.
+
+**PDF fallback knobs.** Five `PZI_*` variables were read wherever each helper
+needed them, deep in the chain. Now one frozen `PdfFallbackSettings` resolved at
+the entry point — one parameter rather than seven threaded params. Names and
+defaults unchanged, so README stays accurate.
+
+### Do NOT re-pursue
+
+- **Do not reintroduce a wrapper around the fetcher seams to collect
+  diagnostics.** The seam is for injection; carrying data out of it via closure
+  state is what made a retry silently overwrite the diagnostics.
+- **`update_bib_entry` returns `previous_record` on purpose.** It is what lets a
+  caller report what changed without the callback mutating captured state. Do not
+  "simplify" it away.
+- **Do not read `PZI_*` PDF-fallback variables outside
+  `PdfFallbackSettings.from_environment`.** That is the one place they resolve.
+
+### Next session entry point
+
+`PLAN.md` steps 5-7: identity normalization (DOI case/trailing-slash/nested-path
+in `normalize_doi` + `extract_identities`), then server hardening, then the
+browser extension (its manifest-version defect is what blocks a `0.1.0b3`
+release of the extension zips).
+
+## 2026-07-26 — design track items 3 and 4: honest labels, one error channel
 
 **Verdict:** design-track items 1-4 done, item 5 partly. The two most bug-prone
 control-flow idioms in the tree are gone, and no module claims purity over I/O.
