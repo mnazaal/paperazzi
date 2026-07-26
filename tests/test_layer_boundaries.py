@@ -123,6 +123,7 @@ SERVICE: frozenset[str] = frozenset(
 FRONTEND: frozenset[str] = frozenset(
     {
         "cli",
+        "cli_json",
         "cli_parser",
         "cli_render",
         "cli_server",

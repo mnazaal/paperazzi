@@ -6,6 +6,7 @@ import json
 from collections.abc import Callable, Mapping
 from typing import Any, TextIO
 
+from pzi import cli_json, exit_codes
 from pzi.cli_render import _error_lines, _render_tag_mutation_success
 from pzi.commands.common import print_lines
 from pzi.tag_service import add_tags, list_tags, parse_tag_csv, remove_tags
@@ -56,7 +57,17 @@ def run_tag_command(
         dry_run=args.dry_run,
     )
     if result["status"] == "ok":
-        print(_render_tag_mutation_success(result), file=stdout)
-        return 0
-    print_lines(_error_lines(result["message"], result["errors"]), stderr)
-    return 1
+        if getattr(args, "json", False):
+            cli_json.emit(result, stdout)
+        else:
+            print(_render_tag_mutation_success(result), file=stdout)
+        return exit_codes.OK
+    if getattr(args, "json", False):
+        cli_json.emit(result, stdout)
+    else:
+        print_lines(_error_lines(result["message"], result["errors"]), stderr)
+    return (
+        exit_codes.NOT_FOUND
+        if result.get("reason") == "not_found"
+        else exit_codes.ENVIRONMENT
+    )

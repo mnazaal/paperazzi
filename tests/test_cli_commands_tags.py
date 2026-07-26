@@ -3,6 +3,7 @@ from argparse import Namespace
 from io import StringIO
 from pathlib import Path
 
+from pzi import exit_codes
 from pzi.commands.tags import run_tag_command
 
 
@@ -135,6 +136,42 @@ def test_run_tag_command_remove_renders_service_errors(tmp_path: Path) -> None:
         remove_tags_fn=fake_remove_tags,
     )
 
-    assert exit_code == 1
+    assert exit_code == exit_codes.ENVIRONMENT
     assert stdout.getvalue() == ""
     assert stderr.getvalue() == "could not tag\n- missing citekey\n"
+
+
+def test_tag_list_json_still_emits_json_when_the_command_fails(tmp_path) -> None:
+    """Under --json a failure must arrive as JSON on stdout, not prose on stderr.
+
+    Automation that pipes into jq would otherwise need a second, stderr-scraping
+    code path for exactly the cases it most needs to classify.
+    """
+    stdout = StringIO()
+    stderr = StringIO()
+    args = Namespace(
+        tag_command="add", citekey="nosuchkey", tags=["x"], dry_run=False, json=True,
+    )
+
+    def failing_service(**kwargs):
+        return {
+            "status": "error",
+            "message": "entry not found: nosuchkey",
+            "reason": "not_found",
+            "errors": ["no entry with citekey nosuchkey"],
+        }
+
+    exit_code = run_tag_command(
+        args,
+        home_dir=str(tmp_path),
+        config_path=str(tmp_path / "config.toml"),
+        stdout=stdout,
+        stderr=stderr,
+        bib_selector=None,
+        add_tags_fn=failing_service,
+    )
+
+    payload = json.loads(stdout.getvalue())
+    assert payload["status"] == "error"
+    assert payload["errors"] == ["no entry with citekey nosuchkey"]
+    assert exit_code == exit_codes.NOT_FOUND

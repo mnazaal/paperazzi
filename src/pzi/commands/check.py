@@ -6,6 +6,7 @@ import json
 from collections.abc import Callable
 from typing import TextIO
 
+from pzi import cli_json, exit_codes
 from pzi.check_service import CheckResult, check_bib
 from pzi.cli_render import _error_lines, _render_check_items
 from pzi.commands.common import print_lines
@@ -35,8 +36,11 @@ def run_check_command(
     )
 
     if result["status"] != "ok":
-        print_lines(_error_lines("check failed", result["errors"]), stderr)
-        return 1
+        if getattr(args, "json", False):
+            cli_json.emit(result, stdout)
+        else:
+            print_lines(_error_lines("check failed", result["errors"]), stderr)
+        return exit_codes.ENVIRONMENT
 
     report_path: str | None = getattr(args, "report", None)
     if report_path:

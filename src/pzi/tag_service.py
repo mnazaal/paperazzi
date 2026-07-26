@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from typing import Literal, TypedDict, cast
+from typing import Literal, NotRequired, TypedDict, cast
 
 from pzi.bib_repository import (
     find_entry_index,
@@ -63,6 +63,9 @@ class TagChangeResult(TypedDict):
     dry_run: bool
     message: str
     errors: list[str]
+    # Structured failure kind, so callers pick an exit code without matching on
+    # the message text.
+    reason: NotRequired[str]
 
 
 def list_tags(
@@ -197,6 +200,7 @@ def _mutate_entry_tags(
             "changed": False,
             "dry_run": dry_run,
             "message": "citekey not found",
+            "reason": "not_found",
             "errors": [f"citekey not found: {citekey}"],
         }
 
@@ -258,6 +262,7 @@ def _mutate_entry_tags(
                 "changed": False,
                 "dry_run": dry_run,
                 "message": "citekey not found",
+                "reason": "not_found",
                 "errors": [f"citekey not found: {citekey}"],
             }
 

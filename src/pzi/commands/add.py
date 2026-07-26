@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, TextIO
 
+from pzi import cli_json, exit_codes
 from pzi.add_service import describe_invalid_add_input
 from pzi.capture_core import capture_to_bib
 from pzi.capture_models import AuthHints, CaptureInput
@@ -138,8 +139,11 @@ def _capture_and_render(
     )
 
     if result["status"] == "error":
-        print_lines(_error_lines(result["message"], result["errors"]), stderr)
-        return 1
+        if getattr(args, "json", False):
+            cli_json.emit(result, stdout)
+        else:
+            print_lines(_error_lines(result["message"], result["errors"]), stderr)
+        return exit_codes.ENVIRONMENT
 
     if getattr(args, "json", False):
         print(json.dumps(result, indent=2, default=str), file=stdout)

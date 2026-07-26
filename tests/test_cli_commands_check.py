@@ -3,6 +3,7 @@ from argparse import Namespace
 from io import StringIO
 from pathlib import Path
 
+from pzi import exit_codes
 from pzi.commands.check import run_check_command
 
 
@@ -104,7 +105,7 @@ def test_check_writes_report_and_jsonl(tmp_path: Path) -> None:
     assert json.loads(lines[0])["citekey"] == "smith2020"
 
 
-def test_check_service_error_exit_one(tmp_path: Path) -> None:
+def test_check_service_error_exits_environment(tmp_path: Path) -> None:
     err_result = {
         "status": "error",
         "bib_name": None,
@@ -115,5 +116,5 @@ def test_check_service_error_exit_one(tmp_path: Path) -> None:
         "errors": ["no such library"],
     }
     code, _out, err = _run(_args(), lambda **_k: err_result, tmp_path)
-    assert code == 1
+    assert code == exit_codes.ENVIRONMENT
     assert "no such library" in err

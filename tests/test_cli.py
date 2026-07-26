@@ -597,7 +597,7 @@ def test_cli_add_renders_service_errors(tmp_path: Path) -> None:
         stderr=stderr,
     )
 
-    assert exit_code == 1
+    assert exit_code == exit_codes.ENVIRONMENT
     assert stdout.getvalue() == ""
     assert (
         stderr.getvalue() == "failed to load config\n- bibs must be a non-empty list\n"
@@ -623,7 +623,7 @@ def test_cli_tag_add_renders_service_errors(tmp_path: Path) -> None:
         stderr=stderr,
     )
 
-    assert exit_code == 1
+    assert exit_code == exit_codes.ENVIRONMENT
     assert stdout.getvalue() == ""
     assert stderr.getvalue().startswith(
         "could not resolve target bib\n- config file not found:"
