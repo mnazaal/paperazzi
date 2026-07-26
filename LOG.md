@@ -2,6 +2,75 @@
 
 Newest first. Prepend-only; corrections are new entries, never rewrites.
 
+## 2026-07-26 — review + steps 3b and 4: no command is known-unsafe any more
+
+**Verdict:** `pzi fix reindex` and `pzi fix clean --fix` are cleared, and every
+insert path now writes conference papers correctly. Steps 1-4 of `PLAN.md` are
+done; 5-7 remain and are not data-safety blockers.
+
+**Load-bearing numbers.** Suite **1424 → 1433 passed**, 8 skipped, 20 deselected;
+`ruff` clean, `pyright` 0 errors. Nine tests, all confirmed red first.
+
+**Session arc.** A full review first (three parallel read-only tracks:
+functional-programming discipline, UNIX-philosophy CLI surface, architecture and
+daily-use readiness), then implementation of the two remaining safety blockers.
+The review's non-defect findings are now `PLAN.md`'s "Design track"; the
+readiness verdict confirmed every open `PLAN.md` defect was still present at the
+cited lines.
+
+**Both fixed services were restructured into plan/execute rather than patched.**
+They were the only two write services without the plan layer the rest of the
+codebase has, which is why their dry-runs could diverge from their real runs.
+`plan_reindex` and `plan_orphan_quarantine` are pure; execution is a thin loop.
+Each recorded defect then became a consequence of building the plan correctly
+rather than a guard bolted onto the effect.
+
+**Found while fixing, beyond the recorded defects:**
+- **`os.rename` clobbers its destination.** Reindexing onto a path where a PDF
+  already sat destroyed that PDF silently. Now refused and reported.
+- **Fixing the venue projection alone would have deleted venues.**
+  `merge_projected_entry` read the venue only from `projected["journal"]`, so
+  emitting `booktitle` from the projection would have dropped the venue of every
+  proceedings entry it merged. Both halves changed together; the merge test is
+  the guard.
+- **Import dropped the source entry type entirely** — every imported
+  `@inproceedings` became `@article`. `import_service` set
+  `record["entry_type"]` and nothing downstream ever read it (`add_service` does
+  not mention `entry_type` at all). Caught only by running the real CLI: the
+  unit-level projection fix looked complete and the imported entry was still
+  wrong. `entry_type` is now a declared record key honored by
+  `resolve_entry_type`.
+
+**Verified end-to-end through the installed CLI**, not just in tests: reindex
+renamed the entry's own PDF and left a stray namesake alone; a second
+`fix clean --fix` archived a same-named orphan as `oldkey-1.pdf` without
+touching the first; a repeat `fix clean` audit exited 0 instead of looping;
+import wrote `@inproceedings{...booktitle = {NeurIPS}}`.
+
+### Do NOT re-pursue
+
+- **Do not delete `_relocate_venue_for_entry_type`.** `PLAN.md` step 4 expected
+  the projection fix to make it redundant; only its two insert-path call sites
+  were dead. The retype-on-merge case still needs it, as the 2026-07-25
+  adversarial review found — `merge_projected_entry` keeps the venue under the
+  on-disk key by contract, so a promotion that retypes must move it.
+- **Do not populate `entry_type` in `bibtex_entry_to_record`.** Records read out
+  of the library must not carry it: `resolve_entry_type` would then hand
+  promotion the preprint's own `@misc`/`@unpublished` type back and defeat the
+  retyping that promotion exists to do. Only sources that genuinely declare a
+  type (an imported `.bib`) set the key.
+- **`rewrite_entries_in_order` is now `rewrite_entries_in_order_locked` and does
+  not lock.** Reindex holds one exclusive lock across the PDF renames and the
+  bib write; the old shape re-took the lock for the write, which is the window
+  where a concurrent `pzi add` changed the entry count.
+
+### Next session entry point
+
+`PLAN.md` "Design track", item 1: unify the write-plan contract (all plan
+constructors pre-merge, both sinks replace). Item 2, the CLI machine interface,
+is independent and can go first if daily scripted use matters more than
+internals.
+
 ## 2026-07-25 — step 3a: promote_service destructive write paths
 
 **Verdict:** all five recorded `promote_service` defects reproduced and fixed,

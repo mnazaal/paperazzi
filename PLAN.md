@@ -23,6 +23,10 @@ Approved 2026-07-25. Rationale: one architectural fix closes ~7 reported
 findings; PDF integrity is the other silent-corruption class; the rest is
 ranked by blast radius.
 
+Steps 1-4 are done (2026-07-26); 5-7 remain. A follow-up review on 2026-07-26
+added a second, non-defect track — functional-programming and UNIX-philosophy
+improvements — recorded under "Design track" below.
+
 1. **Record projection.** Done — `bibtex.apply_record_to_entry` /
    `merge_projected_entry`, wired into `tag_service`, `update_service`,
    `plan_bib_write` (update branch, guarded on snapshot consistency),
@@ -85,38 +89,46 @@ ranked by blast radius.
      block anywhere in the `.bib` triggers it, because the insert path skips
      `_validate_library_parseable` (only the update path calls it).
 
-   `reindex_service` — **open, next up**:
-   - `:83-104` **wrong PDF attached.** `old_pdf_path` comes from
-     `plan_pdf_path(citekey=old_citekey)` instead of `record["local_pdf_path"]`,
-     so a stray `<old_citekey>.pdf` is renamed onto the entry and the real PDF
-     is orphaned. `--dry-run` cannot reveal it: `:111-112` computes
-     `old_pdf`/`new_pdf` and `cli_render.py:201` discards them, printing a bare
-     `" [PDF renamed]"`.
-   - `:96-117` **no rollback.** PDFs are renamed inside the loop, the bib is
-     written after; if `rewrite_entries_in_order` raises, every renamed entry's
-     `file =` dangles. Realistic trigger is not disk failure but the shared lock
-     being released after the read (`:40-41`) and re-taken for the write, so a
-     concurrent `pzi add` changes the entry count.
+   `reindex_service` — **done 2026-07-26**, restructured into plan/execute
+   (`plan_reindex` is pure; `reindex_library` executes). Both recorded defects
+   fixed, plus one found while fixing:
+   - **wrong PDF attached** — the move now comes from `record["local_pdf_path"]`,
+     never from `plan_pdf_path(citekey=old_citekey)`.
+   - **no rollback** — renames and the bib write share one exclusive lock
+     (`rewrite_entries_in_order` became `rewrite_entries_in_order_locked`,
+     caller-locks), and a failed write undoes every rename.
+   - **new: `os.rename` clobbered the destination.** A PDF already sitting at
+     the planned path was silently replaced; the rename is now refused and
+     reported.
+   `cli_render` prints the PDF paths, so a wrong move is visible in `--dry-run`.
 
-   `clean_service` — **open**:
-   - `:110` `papers.rglob("*.pdf")` descends into `papers_dir/.orphans`, so
-     quarantined files are re-detected forever and plain `pzi fix clean` exits 1
-     permanently once anything has been quarantined. `:162`/`:171` compute
-     `dst = orphan_dir / src.name` and `shutil.move` overwrites silently, so the
-     **second** `--fix` run destroys the archived original on a basename
-     collision.
-4. **Proceedings venue key on every insert path.** Found during the step-3
-   adversarial review, not by the original audit. `record_to_bibtex_entry`
-   always emits the venue as `journal`, so `plan_bib_write` with a resolved
-   type of `inproceedings`/`incollection` produces
-   `@inproceedings{... journal = {...}}` — bibliographically wrong and broken
-   for styles that require `booktitle`. Verified directly:
-   `plan_bib_write({...'venue': 'GraphConf'}, [], entry_type='inproceedings')`
-   returns fields `{'title', 'journal', 'doi'}`. Affects `pzi add`, import, and
-   capture for every conference paper; `promote_service` works around it locally
-   with `_relocate_venue_for_entry_type`, which should be deleted once the
-   projection is fixed at the source. Needs its own characterization tests
-   across the insert paths — the fix touches every entry pzi writes.
+   `clean_service` — **done 2026-07-26**. Quarantine planning is pure
+   (`plan_orphan_quarantine`); execution is the `shutil.move` loop.
+   - `.orphans` is excluded from the orphan scan, so quarantined files are no
+     longer re-detected forever.
+   - A basename already taken in the archive gets a numbered suffix
+     (`stale-1.pdf`) instead of overwriting what is stored.
+4. **Proceedings venue key on every insert path.** **Done 2026-07-26.**
+   `record_to_bibtex_entry` now picks the venue field from the entry type
+   (`venue_field_for_entry_type`, the single source of truth for which types
+   take `booktitle`). Two things the plan did not anticipate:
+   - **`merge_projected_entry` had to change with it.** It read the venue from
+     `projected["journal"]` alone, so fixing only the projection would have
+     *deleted* the venue of every proceedings entry it merged. It now reads
+     either home and still writes back to the key the on-disk entry used.
+   - **`_relocate_venue_for_entry_type` stays.** The plan expected to delete it;
+     only its two insert-path call sites were dead. The retype-on-merge case
+     (promotion changing an entry's type) still needs it, exactly as the
+     2026-07-25 adversarial review recorded.
+
+   **Also found here: import dropped the source entry type entirely.**
+   `import_service` set `record["entry_type"]`, but nothing downstream read it —
+   `add_service` never mentions `entry_type` — so every imported
+   `@inproceedings` was written as `@article`. `entry_type` is now a declared
+   `NormalizedRecord` key and `resolve_entry_type` honors it, ranked below a
+   provider's `item_type` (fresh evidence) and above the preprint heuristic.
+   Records parsed out of the library deliberately do **not** carry it, so
+   promotion stays free to retype an entry.
 
 5. **Identity normalization.** DOI case/trailing-slash/nested-path in
    `normalize_doi` + `extract_identities`.
@@ -125,6 +137,58 @@ ranked by blast radius.
    bind Host check.
 7. **Extension.** Manifest version (unblocks the b3 release independently, do
    early), injected-function scope bugs, allowlist boundary, candidate cap.
+
+## Design track — from the 2026-07-26 review
+
+Not defects; the owner's two stated directions for the tool (functional
+programming, UNIX philosophy). Ordered by value-to-blast-radius. Full findings
+live in the review conversation; each item below is self-contained.
+
+1. **Unify the write-plan contract.** `apply_write_plan` replaces the on-disk
+   entry, `BatchWriteSession.apply_plan` merges onto it — one `WritePlan` type
+   with two opposite meanings, documented only in comments, and already the
+   cause of one silent field-deletion bug. Make every plan constructor emit
+   pre-merged entries (pass `existing_entries`/`session.entries` at
+   construction, including `add_service`'s batch path) and make both sinks
+   replace. Do not fix it by merging inside `apply_write_plan` — that was tried
+   and breaks the updater-callback contract (see LOG 2026-07-25).
+2. **CLI machine interface, as one breaking batch.** `--json` exists only on
+   read commands, disappears on error paths (the runner returns before the JSON
+   branch), and ships four envelope shapes; `authors` is a string in
+   `entries --json` and a list in `export --format json`. Exit code 1 means
+   "not found", "hard error", "partial failure", and "findings present"
+   indistinguishably. Plan: one envelope on every command including failures,
+   NDJSON on stdout, a documented exit-code table, and stdout chatter moved to
+   stderr (`no matches`, `(no entries)`, the `[PDF]` marker glued to the authors
+   column, the reindex advisory). Also: non-tty `pzi delete` without `--force`
+   reads EOF, cancels, and exits 0 — it should exit 2.
+3. **Stop labelling effectful modules pure.** `add_planning`'s docstring says
+   "Pure add/capture planning" while `fetch_record_for_input` runs the whole
+   provider network cascade; `pdf_discovery` claims pure steps but does HTTP and
+   launches browsers, and classifies each step's effect phase by string-matching
+   `step.__name__`, so renaming a function silently changes when it runs. Move
+   the fetch orchestration beside `fetch_helpers`; register discovery steps as
+   `(step, phase)` data instead of reflecting on names.
+4. **One error channel per layer.** `load_and_resolve_bib` returns
+   `tuple[AppConfig, BibConfig] | list[str]` and `add_service` detects the
+   ambiguous-selector case by comparing the error list to exact message prose,
+   so rewording a message changes control flow. Separately, `except TypeError`
+   capability probes (`add_planning`, `promote_service`, `metadata_sources`,
+   `pdf_discovery`) swallow real bugs inside fetchers and silently retry with
+   fewer arguments — delete them by conforming providers to the
+   `MetadataRecordFetcher` protocol that already exists for this.
+5. **Smaller, mechanical.** Diagnostics smuggled out of the fetch seam via
+   `nonlocal` closure mutation (`add_service`) and a `change_box` dict
+   (`update_service`); seven `PZI_*` env vars read deep inside `pdf.py` instead
+   of resolved once in `capture_context`; `bib_repository` importing
+   `promote_service` upward just for `detect_preprint_source` (move that pure
+   classifier down — it also dissolves three lazy-import cycles);
+   `tests/test_layer_boundaries.py` globs `src/pzi/*.py` non-recursively, so all
+   of `commands/` is unclassified and unchecked, and it has no cycle detection.
+
+Explicitly **not** doing: converting `NormalizedRecord` to a frozen dataclass.
+Every module would change for modest payoff; the frozen types in
+`capture_models` already cover the boundaries where immutability pays.
 
 ## Tier manifest — signed off 2026-07-25
 
@@ -176,6 +240,8 @@ per-unit cost of the first few is known.
   Four survivors — `ezproxy_host` forwarding, `_validate_bibtex_roundtrip`,
   `entry_type` sanitization, layer-boundary blindness to `commands/` — should be
   closed early, since they are exactly the guards this campaign will lean on.
-- `pzi fix reindex` and `pzi fix clean --fix` are unsafe on a real library until
-  the rest of step 3 lands. `pzi tags`, `pzi update`, and `pzi update --promote`
-  are cleared (steps 1 and 3).
+- **No command is currently known-unsafe against a real library.** Steps 1-4 are
+  done; `pzi fix reindex` and `pzi fix clean --fix` were the last two blockers
+  and are cleared. Steps 5-7 (identity normalization, server hardening,
+  extension) are quality and security work, not data-safety blockers, provided
+  the server keeps its loopback bind and token.

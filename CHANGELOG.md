@@ -22,6 +22,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`pzi fix reindex` renamed the wrong PDF.** The file to rename was derived
+  from the old citekey rather than read from the entry, so an unrelated
+  `<old_citekey>.pdf` sitting in `papers_dir` was renamed onto the entry while
+  the entry's real PDF was left orphaned. The move now comes from the entry's
+  own `file =` field, and `--dry-run` prints both paths so a wrong move is
+  visible before it happens.
+- **`pzi fix reindex` could leave `file =` fields dangling.** PDFs were renamed
+  before the `.bib` was written, under a lock that was released in between; if
+  the write failed (a concurrent `pzi add` changing the entry count is enough),
+  the renames stood while the bib still pointed at the old paths. Renames and
+  the write now share one exclusive lock, and a failed write undoes every
+  rename.
+- **`pzi fix reindex` silently replaced a PDF already at the target path.**
+  `os.rename` overwrites its destination; the rename is now refused and reported
+  as an error instead.
+- **`pzi fix clean` reported quarantined files as orphans forever.** The orphan
+  scan descended into `papers_dir/.orphans`, so after the first `--fix` run the
+  plain audit exited non-zero permanently.
+- **`pzi fix clean --fix` destroyed archived PDFs on a name collision.** A later
+  orphan sharing a basename with one already quarantined overwrote it. The
+  quarantine directory is an archive: a taken name now gets a numbered suffix
+  (`stale-1.pdf`).
+- **Conference papers were written with `journal` instead of `booktitle`.**
+  Every insert path (`add`, `import`, capture, promote) projected the venue as
+  `journal` regardless of entry type, producing `@inproceedings` entries no
+  booktitle-requiring citation style can format.
+- **`pzi import` retyped every entry as `@article`.** The source entry type was
+  read and then dropped before the write, so an imported `@inproceedings`,
+  `@incollection`, or `@book` lost its type.
 - A PDF download cut short mid-transfer is no longer stored as the paper. Two
   cases: a body with a known `Content-Length` that stops early was completely
   silent (`HTTPResponse.read(amt)` clips to the bytes remaining and returns
