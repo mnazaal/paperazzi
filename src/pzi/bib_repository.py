@@ -616,6 +616,7 @@ def update_bib_entry(
 
         current_entry = entries[index]
         current_record = records[index]
+        previous_record = cast(NormalizedRecord, dict(current_record))
         updated_entry = updater(current_entry, current_record)
         updated_record = bibtex_entry_to_record(updated_entry)
         if updated_entry != current_entry:
@@ -643,6 +644,10 @@ def update_bib_entry(
             "entries": entries,
             "entry": updated_entry,
             "record": updated_record,
+            # The record as it was before the callback ran. Callers that need to
+            # report what changed diff this against `record` instead of having
+            # the callback mutate a captured box to smuggle the answer out.
+            "previous_record": previous_record,
         }
 
 

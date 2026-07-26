@@ -337,8 +337,13 @@ def fetch_record_for_input(
     api_auth_token: str | None = None,
     desktop_fallback_hosts: set[str] | None = None,
     pdf_discovery_parallel: bool = False,
-) -> tuple[NormalizedRecord, list[str]]:
+) -> tuple[NormalizedRecord, list[str], list[dict]]:
     provider_errors: list[str] = []
+    # The raw translation-server results, returned so the caller can compute
+    # diagnostics where it consumes them. They used to be reported by having the
+    # caller wrap the injected fetchers and assign to `nonlocal` variables, so a
+    # retry that re-invoked a fetcher silently overwrote the diagnostics.
+    translation_results: list[dict] = []
     kind = classified["kind"]
     normalized = cast(str | None, classified["normalized"])
     fallback = _fallback_record_for_input(
@@ -401,12 +406,18 @@ def fetch_record_for_input(
             lambda: fetch_search(normalized, server_url=server_url),
             errors=provider_errors,
         )
+        translation_results.extend(results or [])
         if results:
             selected = select_best_metadata_result(results, fallback)
             best = dict(merge_record_sources(fallback, selected["record"]))
-            return _with_pdf_discovery(
-                cast(NormalizedRecord, best), translation_attachments=selected.get("attachments")
-            ), provider_errors
+            return (
+                _with_pdf_discovery(
+                    cast(NormalizedRecord, best),
+                    translation_attachments=selected.get("attachments"),
+                ),
+                provider_errors,
+                translation_results,
+            )
 
         meta = _call_metadata_fetcher(
             fetch_crossref or fetch_crossref_record,
@@ -430,7 +441,11 @@ def fetch_record_for_input(
                 )
         if meta is not None:
             best = dict(merge_record_sources(fallback, meta))
-            return _with_pdf_discovery(cast(NormalizedRecord, best)), provider_errors
+            return (
+                _with_pdf_discovery(cast(NormalizedRecord, best)),
+                provider_errors,
+                translation_results,
+            )
 
         raw_as_url = (
             raw_value if urlsplit(raw_value).scheme in {"http", "https"} else None
@@ -442,14 +457,19 @@ def fetch_record_for_input(
                 else fetch_web(raw_as_url, server_url=server_url, cookies=cookies),
                 errors=provider_errors,
             )
+            translation_results.extend(web_results or [])
             if web_results:
                 best = dict(
                     merge_record_sources(fallback, web_results[0]["record"])
                 )
-                return _with_pdf_discovery(
-                    cast(NormalizedRecord, best),
-                    translation_attachments=web_results[0].get("attachments"),
-                ), provider_errors
+                return (
+                    _with_pdf_discovery(
+                        cast(NormalizedRecord, best),
+                        translation_attachments=web_results[0].get("attachments"),
+                    ),
+                    provider_errors,
+                    translation_results,
+                )
 
             if flaresolverr_url is not None:  # pragma: no branch
                 fn = fetch_flaresolverr or (
@@ -460,7 +480,11 @@ def fetch_record_for_input(
                     meta = extract_metadata_from_html(html)
                     if meta is not None:  # pragma: no branch — covered by integration/browser tests
                         best = dict(merge_record_sources(meta, fallback))
-                        return _with_pdf_discovery(cast(NormalizedRecord, best)), provider_errors
+                        return (
+                _with_pdf_discovery(cast(NormalizedRecord, best)),
+                provider_errors,
+                translation_results,
+            )
 
         suffix = (
             " (page may be Cloudflare-protected — configure flaresolverr_url to bypass)"
@@ -476,13 +500,14 @@ def fetch_record_for_input(
             else fetch_web(normalized, server_url=server_url, cookies=cookies),
             errors=provider_errors,
         )
+        translation_results.extend(results or [])
         if results:
             selected = select_best_metadata_result(results, fallback)
             best = dict(selected["record"])
             best = _with_pdf_discovery(
                 cast(NormalizedRecord, best), translation_attachments=selected.get("attachments")
             )
-            return merge_record_sources(fallback, best), provider_errors
+            return merge_record_sources(fallback, best), provider_errors, translation_results
 
         if flaresolverr_url is not None:
             fn = fetch_flaresolverr or (
@@ -493,7 +518,11 @@ def fetch_record_for_input(
                 meta = extract_metadata_from_html(html)
                 if meta is not None:
                     best = dict(merge_record_sources(meta, fallback))
-                    return _with_pdf_discovery(cast(NormalizedRecord, best)), provider_errors
+                    return (
+                _with_pdf_discovery(cast(NormalizedRecord, best)),
+                provider_errors,
+                translation_results,
+            )
 
         raise ValueError(f"translation server returned no results for URL: {normalized}")
 

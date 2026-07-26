@@ -26,7 +26,7 @@ from pzi.translation_server import fetch_web_translations
 
 AddRecordResult: TypeAlias = dict[str, Any]
 FetchPdf = Callable[..., tuple[str | None, str | None, str | None]]
-FetchRecord = Callable[..., tuple[NormalizedRecord, list[str]]]
+FetchRecord = Callable[..., tuple[NormalizedRecord, list[str], list[dict]]]
 FetchSearch = Callable[..., list[dict[str, object]]]
 CopyPdf = Callable[..., tuple[str | None, str | None]]
 EnsureCitekey = Callable[..., NormalizedRecord]
@@ -51,7 +51,7 @@ def local_pdf_base_record(
     doi = extracted.get("doi")
     if isinstance(doi, str) and doi.strip():
         try:
-            record, _provider_errors = fetch_record(
+            record, _provider_errors, _results = fetch_record(
                 raw_value=doi,
                 classified={"kind": "doi", "raw": doi, "normalized": doi},
                 server_url=server_url,

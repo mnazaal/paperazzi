@@ -176,15 +176,15 @@ def _plan_update_for_record(
         cast(NormalizedRecord, dict(candidate)),
     )
     if not dry_run:
-        change_box: dict[str, list[str]] = {"changed_fields": []}
 
         def _apply_update(entry, current_record):
+            # Re-enrich against the record as it is on disk *now*: the snapshot
+            # this run opened with may be stale.
             current_enriched = _conservative_enrich(
                 cast(NormalizedRecord, dict(current_record)),
                 cast(NormalizedRecord, dict(candidate)),
             )
-            change_box["changed_fields"] = _changed_fields(current_record, current_enriched)
-            if not change_box["changed_fields"]:
+            if not _changed_fields(current_record, current_enriched):
                 return entry  # pragma: no cover — covered by integration/browser tests
             return apply_record_to_entry(entry, current_enriched)
 
@@ -192,7 +192,11 @@ def _plan_update_for_record(
         if not update_result["found"]:
             note = "entry disappeared during update"
         else:
-            changed_fields = change_box["changed_fields"]
+            # Diff the returned records rather than having the callback mutate a
+            # captured dict to smuggle the answer back out.
+            changed_fields = _changed_fields(
+                update_result["previous_record"], update_result["record"]
+            )
             applied = bool(changed_fields)
             if not changed_fields:
                 return None  # pragma: no cover — covered by integration/browser tests

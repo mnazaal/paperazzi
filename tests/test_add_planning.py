@@ -408,7 +408,7 @@ def test_safe_api_call_without_errors_stays_silent() -> None:
 
 
 def test_fetch_record_for_input_returns_provider_errors() -> None:
-    """fetch_record_for_input returns (record, errors); errors accumulate across providers."""
+    """fetch_record_for_input returns (record, errors, translation_results)."""
     doi = "10.1/test"
     doi_429 = urllib.error.HTTPError(None, 429, "Too Many Requests", {}, None)  # type: ignore[arg-type]
 
@@ -418,7 +418,7 @@ def test_fetch_record_for_input_returns_provider_errors() -> None:
     def _good_openalex(doi: str, **_: object):
         return {"title": "Test Paper", "doi": doi}
 
-    record, provider_errors = fetch_record_for_input(
+    record, provider_errors, _results = fetch_record_for_input(
         raw_value=doi,
         classified={"kind": "doi", "normalized": doi},
         server_url="http://ts.test",

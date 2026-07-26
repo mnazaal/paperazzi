@@ -166,37 +166,6 @@ def add_input_to_bib(
         raw_value=value,
     )
 
-    def _fetch_search_with_diagnostics(query: str, *, server_url: str):
-        nonlocal metadata_diagnostics, metadata_warnings
-        results = fetch_search(query, server_url=server_url)
-        metadata_warnings = metadata_result_confidence_warnings(
-            cast(list[Mapping[str, Any]], results),
-            fallback_for_diagnostics,
-            min_score=metadata_confidence_min_score,
-        )
-        if len(results) > 1:
-            metadata_diagnostics = metadata_result_diagnostics(
-                cast(list[Mapping[str, Any]], results), fallback_for_diagnostics
-            )
-        return results
-
-    def _fetch_web_with_diagnostics(url: str, *, server_url: str, cookies: str | None = None):
-        nonlocal metadata_diagnostics, metadata_warnings
-        if cookies is None:
-            results = fetch_web(url, server_url=server_url)
-        else:
-            results = fetch_web(url, server_url=server_url, cookies=cookies)
-        metadata_warnings = metadata_result_confidence_warnings(
-            cast(list[Mapping[str, Any]], results),
-            fallback_for_diagnostics,
-            min_score=metadata_confidence_min_score,
-        )
-        if len(results) > 1:
-            metadata_diagnostics = metadata_result_diagnostics(
-                cast(list[Mapping[str, Any]], results), fallback_for_diagnostics
-            )
-        return results
-
     def _add(record: Mapping[str, object]) -> AddRecordResult:
         return add_record_with_bib(
             bib=bib,
@@ -253,12 +222,12 @@ def add_input_to_bib(
         )
 
     try:
-        fetched_record, _fetched_provider_errors = fetch_record_for_input(
+        fetched_record, _fetched_provider_errors, translation_results = fetch_record_for_input(
             raw_value=value,
             classified=classified,
             server_url=config["translation_server_url"],
-            fetch_web=_fetch_web_with_diagnostics,
-            fetch_search=_fetch_search_with_diagnostics,
+            fetch_web=fetch_web,
+            fetch_search=fetch_search,
             contact_email=contact_email,
             unpaywall_email=unpaywall_email,
             s2_api_key=s2_api_key,
@@ -277,6 +246,19 @@ def add_input_to_bib(
             pdf_discovery_parallel=config.get("pdf_discovery_parallel", False),
         )
         provider_errors.extend(_fetched_provider_errors)
+        # Diagnostics are computed here, where the results are consumed, rather
+        # than inside a wrapper around the injected fetcher seam.
+        if translation_results:
+            metadata_warnings = metadata_result_confidence_warnings(
+                cast(list[Mapping[str, Any]], translation_results),
+                fallback_for_diagnostics,
+                min_score=metadata_confidence_min_score,
+            )
+            if len(translation_results) > 1:
+                metadata_diagnostics = metadata_result_diagnostics(
+                    cast(list[Mapping[str, Any]], translation_results),
+                    fallback_for_diagnostics,
+                )
         effective_strict = metadata_strict or bool(config.get("metadata_strict", False))
         if effective_strict and provider_errors:
             return _error_result(

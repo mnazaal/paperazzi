@@ -1658,3 +1658,60 @@ def test_add_input_to_bib_strict_metadata_makes_provider_error_fatal(
 
     assert result["status"] == "error"
     assert "strict-metadata" in result.get("message", "")
+
+
+def test_add_reports_metadata_diagnostics_when_several_candidates_returned(
+    tmp_path: Path, dead_port
+) -> None:
+    """Ambiguous metadata must still be reported on the add result.
+
+    The diagnostics used to be produced inside a wrapper around the injected
+    fetcher that assigned to `nonlocal` variables; they are now computed from the
+    results `fetch_record_for_input` returns. Nothing covered this path, so this
+    pins it.
+    """
+    config_path = tmp_path / "config.toml"
+    bib_path = tmp_path / "library.bib"
+    config_path.write_text(
+        f"""
+translation_server_url = "http://127.0.0.1:{dead_port}"
+
+[[bibs]]
+name = "ml"
+path = "{bib_path}"
+default = true
+""".strip()
+    )
+
+    def two_candidates(query, *, server_url):
+        return [
+            {
+                "item_type": "journalArticle",
+                "record": {"title": "Graph Parsers", "doi": "10.1145/3368089.3409741",
+                           "year": 2024},
+                "attachments": [],
+            },
+            {
+                "item_type": "journalArticle",
+                "record": {"title": "Something Else Entirely", "doi": "10.1145/9999999.8888888",
+                           "year": 1999},
+                "attachments": [],
+            },
+        ]
+
+    result = add_input_to_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        value="10.1145/3368089.3409741",
+        record_overrides={},
+        bib_selector=None,
+        dry_run=True,
+        fetch_search=two_candidates,
+        fetch_web=lambda url, *, server_url: [],
+        fetch_crossref=lambda doi, **_: None,
+        fetch_openalex=lambda doi, **_: None,
+        fetch_s2=lambda doi: None,
+    )
+
+    assert result["status"] == "ok"
+    assert result["metadata_diagnostics"], "several candidates must be reported"
