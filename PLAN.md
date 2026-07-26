@@ -151,27 +151,24 @@ live in the review conversation; each item below is self-contained.
    their preview plans were bare projections, so they reported deleting every
    unmodelled field and retyping `@article` to `@unpublished`, writes neither
    run performs. Remaining bare-projection constructors: none.
-2. **CLI machine interface.** **Partly done 2026-07-26.** Landed: an exit-code
+2. **CLI machine interface.** **Done 2026-07-26.** Landed: an exit-code
    vocabulary (`pzi/exit_codes.py`) documented in README and `pzi --help`, with
    `1` reserved for "ran fine, has something to report" so a failure to run is
-   never `1`; target resolution raising `PziError` with its code instead of a
-   printed `None` sentinel; stdout hygiene (empty results write nothing, `pzi
-   entries` emits five fixed tab-separated columns instead of gluing a `[PDF]`
-   marker onto the authors column); `pzi delete` refusing to prompt when stdin
-   is not a tty; `PZI_CONFIG`; `pzi import -`; and `--json` surviving the error
-   path for `add`/`tag`/`check`, plus `--json` on `tag add|remove`.
+   never `1`; target resolution raising `PziError` with its code; stdout hygiene
+   (empty results write nothing; `pzi entries` emits five fixed tab-separated
+   columns); `pzi delete` refusing to prompt when stdin is not a tty;
+   `PZI_CONFIG`; `pzi import -`; `check --jsonl -` streaming NDJSON to stdout;
+   and one JSON envelope (`{command, status, bib_name, items, errors}`) on every
+   command that reports a result — including the mutating ones, and including
+   failure paths. `authors` is a list everywhere. `doctor` renders for humans by
+   default and exits non-zero when a probe fails.
 
-   **Still open — the envelope work.** `--json` is still missing from `update`
-   (including `--promote`, the richest output), `delete`, `import`, `pdf`, and
-   `fix merge|reindex`. The shapes still disagree: `search --json` is an array
-   of envelopes, `entries --json` an envelope object, `entries <citekey> --json`
-   a bare record, and `authors` is a joined string in `entries` but a list in
-   `export --format json`. Target: one envelope
-   (`{status, command, bib_name, items, errors}`) on every command, records
-   shaped like `export --format json`, NDJSON on stdout so
-   `jq -r .citekey | xargs` is a one-liner, and `check --jsonl -` meaning stdout.
-   `pzi doctor` also still prints JSON by default with no human rendering, and
-   exits 0 even when a probe fails.
+   **Deliberately not done: a separate NDJSON mode for every command.** The
+   review proposed it so `jq -r .citekey | xargs` would be a one-liner; with the
+   envelope that is already `jq -r '.items[].citekey'`, so a second output mode
+   would be new surface buying nothing. `check --jsonl -` exists because a
+   long-running audit genuinely benefits from streaming. Revisit only if a
+   library large enough to make buffering hurt shows up.
 
 3. **Stop labelling effectful modules pure.** `add_planning`'s docstring says
    "Pure add/capture planning" while `fetch_record_for_input` runs the whole

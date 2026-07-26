@@ -2,7 +2,41 @@
 
 Newest first. Prepend-only; corrections are new entries, never rewrites.
 
-## 2026-07-26 (later) — design track: write-plan contract + CLI machine interface
+## 2026-07-26 (latest) — design track item 2 finished: the JSON envelope
+
+**Verdict:** design-track items 1 and 2 are done. Every command that reports a
+result emits one envelope, on success and on failure, and `pzi doctor` is a
+usable health gate. Items 3-5 remain.
+
+**Load-bearing numbers.** Suite **1437 → 1441 passed**, 8 skipped, 20 deselected;
+`ruff` clean, `pyright` 0 errors. Commit `4303744`.
+
+**Shape.** `{command, status, bib_name, items, errors}` plus whatever else the
+service reported. `cli_json.build_envelope` normalizes whichever key held the
+list (`matches`/`results`/`bibs` → `items`), so services did not have to change.
+`authors` became a list in `bib_service._author_names`, matching
+`export --format json`; the entries table joins it for display.
+
+**Verified against the installed CLI**, all twelve `--json` commands: each
+returns a document carrying all five keys, with `delete nosuchkey` → 3 and
+`doctor` with an unreachable translation-server → 5. The documented pipeline
+`pzi search --json | jq -r '.items[].citekey' | xargs -r -n1 pzi entries --json`
+runs clean.
+
+**A verification harness bug worth remembering:** the first sweep reported ten of
+twelve commands failing with exit 2. The cause was the harness, not the code —
+zsh does not word-split unquoted parameters, so `pzi $cmd --json` passed
+`"entries jones2023attn"` as a single command name. Check the harness before
+believing a broad failure.
+
+### Do NOT re-pursue
+
+- **Do not add a separate NDJSON mode per command.** The review proposed it; the
+  envelope already gives `jq -r '.items[].citekey'`, so it would be new surface
+  buying nothing. `check --jsonl -` stays because a long audit benefits from
+  streaming, and it suppresses the human table so the stream is not corrupted.
+
+## 2026-07-26 (earlier) — design track: write-plan contract + CLI machine interface
 
 **Verdict:** design-track items 1 and part of 2 are done. `WritePlan` now means
 one thing at both sinks, and the CLI has an exit-code vocabulary, pipe-safe

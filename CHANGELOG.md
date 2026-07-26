@@ -59,6 +59,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`pzi check --jsonl -`** streams one JSON object per entry to stdout (the
+  flag previously accepted only a file path); the human table is suppressed so
+  the stream stays parseable.
 - **`--json` on every command that reports a result**, including the mutating
   ones: `update` (and `update --promote`), `delete`, `import`, `pdf
   attach|retry`, `fix merge`, `fix reindex`, `tag add|remove`, and `doctor`.

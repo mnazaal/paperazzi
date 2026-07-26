@@ -432,7 +432,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--report", metavar="PATH", help="write the full result as JSON to PATH"
     )
     check_parser.add_argument(
-        "--jsonl", metavar="PATH", help="write one JSON object per entry to PATH"
+        "--jsonl", metavar="PATH",
+        help="write one JSON object per entry to PATH ('-' for stdout)",
     )
     add_config(check_parser)
     add_single_target(check_parser)

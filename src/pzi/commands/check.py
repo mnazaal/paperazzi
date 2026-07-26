@@ -49,14 +49,23 @@ def run_check_command(
 
     jsonl_path: str | None = getattr(args, "jsonl", None)
     if jsonl_path:
-        with open(jsonl_path, "w", encoding="utf-8") as f:
-            for item in result["items"]:
-                f.write(json.dumps(item, default=str) + "\n")
+        lines = [json.dumps(item, default=str) for item in result["items"]]
+        if jsonl_path == "-":
+            # `-` means stdout, the same marker the capture inputs already use,
+            # so the stream can be piped straight into jq.
+            for line in lines:
+                print(line, file=stdout)
+        else:
+            with open(jsonl_path, "w", encoding="utf-8") as f:
+                for line in lines:
+                    f.write(line + "\n")
 
     if getattr(args, "json", False):
         cli_json.emit_result(result, stdout, command="check")
-    else:
+    elif jsonl_path != "-":
+        # Streaming NDJSON to stdout already occupied it; adding the human
+        # table would corrupt the stream.
         print_lines(_render_check_items(result), stdout)
 
     problematic = result["counts"]["problematic"]
-    return 1 if (strict and problematic) else 0
+    return exit_codes.FINDINGS if (strict and problematic) else exit_codes.OK
