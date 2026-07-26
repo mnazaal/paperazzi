@@ -801,3 +801,58 @@ Covers: empty venue string, arxiv_id without year, record with year but
 no venue/doi, arxiv_id present with no doi, etc.
 """
 
+
+
+def test_update_dry_run_diff_does_not_claim_it_will_delete_unmodelled_fields(
+    tmp_path: Path,
+) -> None:
+    """`pzi update --dry-run` must preview the write the real run would make.
+
+    The preview plan used to be a bare projection of the record, so the diff
+    showed every field the record model does not carry (`pages`, `publisher`)
+    being deleted — a write the real run never performs.
+    """
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text(
+        "@article{smith2024graph,\n"
+        "  title = {Graph Parsers},\n"
+        "  year = {2024},\n"
+        "  eprint = {2401.12345},\n"
+        "  archiveprefix = {arXiv},\n"
+        "  pages = {1--12},\n"
+        "  publisher = {ACM}\n"
+        "}\n"
+    )
+    config_path = _write_config(tmp_path, bib_path)
+
+    def _search(query: str, *, server_url: str) -> list[dict]:
+        return [
+            {
+                "item_type": "journalArticle",
+                "record": {
+                    "title": "Graph Parsers",
+                    "venue": "CVPR",
+                    "doi": "10.1/foo",
+                    "year": 2024,
+                },
+                "attachments": [],
+            }
+        ]
+
+    result = update_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        dry_run=True,
+        fetch_search=_search,
+    )
+
+    diff = result["items"][0].get("diff", "")
+    added = [line for line in diff.splitlines() if line.startswith("+")]
+    # The post-write state keeps the fields the record model does not carry...
+    assert any("pages = {1--12}" in line for line in added)
+    assert any("publisher = {ACM}" in line for line in added)
+    # ...and does not retype the entry: the bare projection used to resolve
+    # @unpublished from the record's arxiv_id and show that as the outcome.
+    assert not any(line.startswith("+@unpublished") for line in added)
+    assert any("journal = {CVPR}" in line for line in added)

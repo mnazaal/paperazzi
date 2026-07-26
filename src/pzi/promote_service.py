@@ -854,17 +854,25 @@ def _plan_note_update(
             "action": "update",
             "index": index,
             "record": updated,
-            # A bare projection, deliberately *not* merged onto the on-disk
-            # entry: `BatchWriteSession.apply_plan` merges the plan itself, and
-            # the two write paths disagree here — `apply_write_plan` replaces, so
-            # plans headed there must arrive pre-merged. Merging twice sends
-            # `venue` through the record's single key a second time, so a
-            # `booktitle` reads back as an absent `journal` and is deleted.
-            "entry": record_to_bibtex_entry(
-                updated, entry_type=session.entries[index]["entry_type"]
+            # Pre-merged onto the entry on disk, like every other update plan:
+            # both sinks apply `plan["entry"]` verbatim, so a bare projection
+            # here would drop every field the record model does not carry.
+            "entry": merge_projected_entry(
+                session.entries[index],
+                record_to_bibtex_entry(
+                    updated, entry_type=session.entries[index]["entry_type"]
+                ),
             ),
             "changed_fields": ["note"],
         }
+    return None
+
+
+def _entry_for_citekey(bib_path: str, citekey: str) -> BibtexEntry | None:
+    """Return the on-disk entry for *citekey*, or None when it is not there."""
+    for entry in read_bib_file(bib_path)["entries"]:
+        if entry["citekey"] == citekey:
+            return entry
     return None
 
 
@@ -889,7 +897,15 @@ def _handle_update_in_place(
     pdf_attached = False
     diff: str | None = None
     if dry_run:
-        plan = plan_bib_write(updated, [preprint_record])
+        # Pre-merge against the preprint's entry on disk, or the preview shows
+        # the write as deleting every unmodelled field and retyping the entry —
+        # neither of which the real run does.
+        preprint_entry = _entry_for_citekey(bib_path, preprint_ck)
+        plan = plan_bib_write(
+            updated,
+            [preprint_record],
+            existing_entries=[preprint_entry] if preprint_entry is not None else None,
+        )
         diff = preview_write_plan(bib_path, plan)["diff"]
     else:
         existing_pdf_paths = _snapshot_pdf_paths(papers_dir)

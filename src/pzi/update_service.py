@@ -16,7 +16,7 @@ from pzi.bib_repository import (
     read_bib_file,
     update_bib_entry,
 )
-from pzi.bibtex import NormalizedRecord, apply_record_to_entry
+from pzi.bibtex import BibtexEntry, NormalizedRecord, apply_record_to_entry
 from pzi.config import load_and_resolve_bib
 from pzi.protocols import SearchTranslationFetcher
 from pzi.translation_server import fetch_search_translations
@@ -68,6 +68,7 @@ def update_bib(
     metadata_confidence_min_score = int(config.get("metadata_confidence_min_score", 0))
     read_result = read_bib_file(bib["path"])
     records = read_result["records"]
+    entries = read_result["entries"]
 
     items: list[UpdatePlanItem] = []
 
@@ -88,6 +89,7 @@ def update_bib(
                 server_url=str(config["translation_server_url"]),
                 search_fn=search_fn,
                 records=cast("list[NormalizedRecord]", records),
+                entries=entries,
                 dry_run=dry_run,
                 metadata_confidence_min_score=metadata_confidence_min_score,
             )
@@ -119,6 +121,7 @@ def _plan_update_for_record(
     server_url: str,
     search_fn: SearchTranslationFetcher,
     records: list[NormalizedRecord],
+    entries: list[BibtexEntry],
     dry_run: bool,
     metadata_confidence_min_score: int,
 ) -> UpdatePlanItem | None:
@@ -194,7 +197,9 @@ def _plan_update_for_record(
             if not changed_fields:
                 return None  # pragma: no cover — covered by integration/browser tests
     else:
-        plan = plan_bib_write(enriched, records)
+        # Pre-merged against the entries on disk so the preview shows the write
+        # the real run would make, not the bare projection's field deletions.
+        plan = plan_bib_write(enriched, records, existing_entries=entries)
         diff = preview_write_plan(bib_path, plan)["diff"]
 
     item: UpdatePlanItem = {

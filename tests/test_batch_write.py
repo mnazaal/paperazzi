@@ -23,7 +23,7 @@ from unittest.mock import patch
 import pytest
 
 from pzi.add_service import add_records_to_bib_batch
-from pzi.bib_repository import BatchWriteSession
+from pzi.bib_repository import BatchWriteSession, batch_write_session, plan_bib_write
 from pzi.bibtex import NormalizedRecord
 from pzi.similarity import build_identity_index, find_exact_match
 
@@ -158,6 +158,48 @@ def test_apply_plan_update_without_index_raises() -> None:
     bad["index"] = None
     with pytest.raises(RuntimeError, match="concrete index"):
         session.apply_plan(cast(Any, bad))
+
+
+def test_batch_update_keeps_fields_the_record_model_does_not_carry(
+    tmp_path: Path,
+) -> None:
+    """A batch update must not drop `pages`/`publisher`/`booktitle` and friends.
+
+    Both write sinks apply a plan's entry verbatim, so every update plan has to
+    arrive already merged onto the entry on disk. This is the guard on that
+    contract: build the plan the way the batch path does and check the
+    unmodelled fields survive a round trip through the session.
+    """
+    bib_path = tmp_path / "lib.bib"
+    bib_path.write_text(
+        "@inproceedings{smith2024graph,\n"
+        "  title = {Graph Parsers},\n"
+        "  doi = {10.1/graph},\n"
+        "  booktitle = {GraphConf},\n"
+        "  pages = {1--12},\n"
+        "  publisher = {ACM}\n"
+        "}\n"
+    )
+
+    with batch_write_session(str(bib_path)) as session:
+        incoming = cast(
+            NormalizedRecord,
+            {"citekey": "smith2024graph", "doi": "10.1/graph", "title": "Graph Parsers"},
+        )
+        plan = plan_bib_write(
+            incoming,
+            session.records,
+            index=session.index,
+            existing_entries=session.entries,
+        )
+        assert plan["action"] == "update"
+        session.apply_plan(plan)
+
+    written = bib_path.read_text()
+    assert "pages = {1--12}" in written
+    assert "publisher = {ACM}" in written
+    assert "booktitle = {GraphConf}" in written
+    assert "@inproceedings{smith2024graph" in written
 
 
 # ---------------------------------------------------------------------------

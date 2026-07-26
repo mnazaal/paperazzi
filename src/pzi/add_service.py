@@ -681,6 +681,7 @@ def add_records_to_bib_batch(
                     )
                     plan = plan_bib_write(
                         typed, existing_records, force_new=force_new, index=index,
+                        existing_entries=session.entries,
                     )
                     validate_bibtex_roundtrip([plan["entry"]])
                 except Exception as exc:

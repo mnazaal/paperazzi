@@ -128,7 +128,13 @@ UpdateBibEntryResult: TypeAlias = dict[str, Any]
 
 
 def apply_write_plan(entries: list[BibtexEntry], plan: WritePlan) -> list[BibtexEntry]:
-    """Apply an insert/update write plan to parsed BibTeX entries."""
+    """Apply an insert/update write plan to parsed BibTeX entries.
+
+    ``plan["entry"]`` is authoritative and replaces the entry at
+    ``plan["index"]``.  :meth:`BatchWriteSession.apply_plan` does the same, so a
+    plan means one thing wherever it is applied — the merge onto the on-disk
+    entry belongs at plan *construction* (see :func:`plan_bib_write`).
+    """
     updated_entries = list(entries)
     if plan["action"] == "insert":
         updated_entries.append(plan["entry"])
@@ -138,9 +144,6 @@ def apply_write_plan(entries: list[BibtexEntry], plan: WritePlan) -> list[Bibtex
     if index is None:
         raise ValueError("update plan must include an index")
         # pragma: no cover — covered by integration/browser tests
-    # plan["entry"] is authoritative here: callers reaching this either built it
-    # from an updater callback (which already merged onto the on-disk entry) or
-    # via plan_bib_write, which merges when given existing_entries.
     updated_entries[index] = plan["entry"]
     return updated_entries
 
@@ -409,7 +412,12 @@ class BatchWriteSession:
             # enrichment mid-batch), and a stale key would otherwise cause the
             # next record sharing that identity to register a false exact-match.
             self._remove_from_index(self.records[idx], idx)
-            self.entries[idx] = merge_projected_entry(self.entries[idx], plan["entry"])
+            # `plan["entry"]` is authoritative, exactly as in `apply_write_plan`:
+            # update plans arrive already merged onto the entry on disk (see
+            # `plan_bib_write`'s `existing_entries`). Merging here as well would
+            # give one plan type two different meanings depending on which sink
+            # consumed it.
+            self.entries[idx] = plan["entry"]
             self.records[idx] = planned_record
         for identity in extract_identities(planned_record):
             self.index.setdefault((identity["kind"], identity["value"]), []).append(position)
@@ -861,10 +869,11 @@ def plan_bib_write(
     to avoid rebuilding it on each call in the write path.
 
     *existing_entries* is the parsed entry list matching *existing_records*.
-    Pass it whenever it is available: an update plan built without it carries a
-    bare projection of the record, so applying it drops every BibTeX field the
-    record model does not carry (``volume``, ``pages``, ``publisher``, ...) and
-    rewrites ``booktitle`` as ``journal``.
+    **Pass it whenever the plan may become an update.** Both write sinks apply
+    ``plan["entry"]`` verbatim, so the merge onto the on-disk entry happens here
+    or not at all: a plan built without it carries a bare projection of the
+    record, and applying that drops every BibTeX field the record model does not
+    carry (``volume``, ``pages``, ``publisher``, ...).
     """
     if entry_type == "article":
         entry_type = resolve_entry_type(incoming_record)
