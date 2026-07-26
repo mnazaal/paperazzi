@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import json
-import os
 import sys
 import time as _time
 import urllib.error
@@ -16,6 +15,7 @@ from urllib.parse import quote
 from pzi.fetch_helpers import fetch_text as _fetch_text
 from pzi.pdf_download import fetch_and_store_pdf, write_pdf_bytes
 from pzi.pdf_planning import (
+    PdfFallbackSettings,
     PdfRecord,
     build_browser_pdf_command,
     choose_firefox_profile,
@@ -48,15 +48,6 @@ def _wait_for_stable_file(path: Path, *, stable_seconds: float = 0.35) -> bool:
     return first.st_size == second.st_size and first.st_mtime == second.st_mtime
 
 
-def _desktop_browser_timeout(raw: str | None) -> int:
-    if raw is None:
-        return 300
-    try:
-        return max(30, int(raw))
-    except ValueError:
-        return 300
-
-
 def fetch_pdf_via_desktop_browser_download(
     *,
     url: str,
@@ -65,16 +56,16 @@ def fetch_pdf_via_desktop_browser_download(
     record: PdfRecord | None = None,
     filename_format: str | None = None,
     timeout: int | None = None,
+    settings: PdfFallbackSettings | None = None,
 ) -> tuple[str | None, str | None]:
     """Open URL in user's browser and import newly downloaded matching PDF."""
-    if os.environ.get("PZI_DISABLE_DESKTOP_BROWSER_FALLBACK"):
+    settings = settings or PdfFallbackSettings.from_environment()
+    if settings.disable_desktop_browser:
         return None, None
 
-    download_dir = Path(
-        os.environ.get("PZI_DOWNLOAD_DIR", str(Path.home() / "Downloads"))
-    ).expanduser()
+    download_dir = settings.download_dir
     download_dir.mkdir(parents=True, exist_ok=True)
-    timeout = timeout or _desktop_browser_timeout(os.environ.get("PZI_DESKTOP_BROWSER_TIMEOUT"))
+    timeout = timeout or settings.desktop_timeout
     started_at = _time.time()
     existing_downloads = set(download_dir.glob("*.pdf"))
 
@@ -176,8 +167,15 @@ def fetch_and_store_pdf_with_fallbacks(
     api_auth_token: str | None = None,
     desktop_fallback_hosts: set[str] | None = None,
     ezproxy_host: str | None = None,
+    settings: PdfFallbackSettings | None = None,
 ) -> tuple[str | None, str | None, str | None]:
-    """Download PDF with direct, server-browser, browser-hook, and FlareSolverr fallbacks."""
+    """Download PDF with direct, server-browser, browser-hook, and FlareSolverr fallbacks.
+
+    *settings* carries the fallback knobs (download directory, timeouts, browser
+    choice). It is resolved from the environment once here when not supplied,
+    rather than each helper reading ``os.environ`` at the moment it needs a value.
+    """
+    settings = settings or PdfFallbackSettings.from_environment()
 
     result = fetch_and_store_pdf(
         url=url,
@@ -220,7 +218,7 @@ def fetch_and_store_pdf_with_fallbacks(
     if (
         effective_browser_pdf_cmd
         and browser_hook
-        and not os.environ.get("PZI_SKIP_BROWSER_HOOK")
+        and not settings.skip_browser_hook
         and not extension_capture
     ):
         from pzi.browser_pdf import download_pdf_with_browser
@@ -304,10 +302,13 @@ def _needs_desktop_browser_fallback(
     return needs_desktop_browser_fallback(url, hosts=desktop_fallback_hosts)
 
 
-def _auto_browser_pdf_cmd(browser: str | None = None) -> str:
-    env_cmd = os.environ.get("PZI_BROWSER_PDF_CMD")
-    env_profile = os.environ.get("PZI_BROWSER_PROFILE")
-    env_browser = os.environ.get("PZI_BROWSER", "firefox")
+def _auto_browser_pdf_cmd(
+    browser: str | None = None, settings: PdfFallbackSettings | None = None
+) -> str:
+    settings = settings or PdfFallbackSettings.from_environment()
+    env_cmd = settings.browser_pdf_cmd
+    env_profile = settings.browser_profile
+    env_browser = settings.browser
     requested_browser = browser
     firefox_profile = None
     chrome_profile = None

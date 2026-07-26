@@ -15,6 +15,7 @@ import configparser
 import os
 import shlex
 from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -298,3 +299,49 @@ def choose_firefox_profile(
         path for path in dirs if "default" in path.name.lower() or "." in path.name
     ]
     return sorted(fallback_dirs)[0] if fallback_dirs else None
+
+
+@dataclass(frozen=True)
+class PdfFallbackSettings:
+    """Runtime knobs for the PDF fallback chain, resolved once per acquisition.
+
+    These were read from ``os.environ`` at the point of use, deep inside the
+    fallback chain, so the effective configuration could not be reconstructed
+    from the values a run was given and tests had to steer core behavior by
+    mutating the process environment. Resolve one of these at the entry point
+    and pass it down instead.
+    """
+
+    disable_desktop_browser: bool = False
+    download_dir: Path = Path.home() / "Downloads"
+    desktop_timeout: int = 300
+    skip_browser_hook: bool = False
+    browser_pdf_cmd: str | None = None
+    browser_profile: str | None = None
+    browser: str = "firefox"
+
+    @classmethod
+    def from_environment(cls, env: Mapping[str, str] | None = None) -> PdfFallbackSettings:
+        """Build settings from *env* (defaults to the process environment)."""
+        source = os.environ if env is None else env
+        return cls(
+            disable_desktop_browser=bool(source.get("PZI_DISABLE_DESKTOP_BROWSER_FALLBACK")),
+            download_dir=Path(
+                source.get("PZI_DOWNLOAD_DIR", str(Path.home() / "Downloads"))
+            ).expanduser(),
+            desktop_timeout=_desktop_timeout(source.get("PZI_DESKTOP_BROWSER_TIMEOUT")),
+            skip_browser_hook=bool(source.get("PZI_SKIP_BROWSER_HOOK")),
+            browser_pdf_cmd=source.get("PZI_BROWSER_PDF_CMD"),
+            browser_profile=source.get("PZI_BROWSER_PROFILE"),
+            browser=source.get("PZI_BROWSER", "firefox") or "firefox",
+        )
+
+
+def _desktop_timeout(raw: str | None) -> int:
+    """Seconds to wait for a desktop-browser download (default 300, floor 30)."""
+    if raw is None:
+        return 300
+    try:
+        return max(30, int(raw))
+    except ValueError:
+        return 300
