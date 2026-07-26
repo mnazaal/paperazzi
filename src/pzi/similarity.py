@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from typing import Any, Literal, TypeAlias
 
 from pzi.bibtex import NormalizedRecord, normalize_authors
+from pzi.identifiers import normalize_doi
 
 # ---------------------------------------------------------------------------
 # Type aliases
@@ -28,9 +29,14 @@ MatchableRecord = NormalizedRecord
 
 
 def extract_identities(record: MatchableRecord) -> list[Identity]:
-    """Extract exact-match identities from one normalized record."""
+    """Extract exact-match identities from one normalized record.
+
+    The DOI is canonicalized first. Comparing stored DOIs verbatim meant a
+    library holding ``10.1145/abc`` did not match an incoming ``10.1145/ABC`` or
+    ``10.1145/abc/``, so re-capturing a paper wrote a second entry for it.
+    """
     candidates: list[tuple[IdentityKind, str | None]] = [
-        ("doi", record.get("doi")),
+        ("doi", _canonical_doi(record.get("doi"))),
         ("arxiv", record.get("arxiv_id")),
         ("url", record.get("canonical_url")),
     ]
@@ -41,6 +47,18 @@ def extract_identities(record: MatchableRecord) -> list[Identity]:
         if isinstance(value, str) and value.strip()
     ]
     return _deduplicate_identities(identities)
+
+
+def _canonical_doi(value: object) -> str | None:
+    """Canonical form of a stored DOI, for identity comparison.
+
+    Falls back to a case-folded strip when the value is not DOI-shaped, so a
+    hand-edited or malformed field still matches itself rather than dropping out
+    of the index entirely.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return normalize_doi(value) or value.strip().lower()
 
 
 def build_identity_index(

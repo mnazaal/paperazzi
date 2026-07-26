@@ -40,7 +40,8 @@ ARXIV_PDF_PATTERN = re.compile(
 def normalize_doi(value: str) -> str | None:
     """Return a canonical DOI string, or None if the input is not DOI-like.
 
-    The suffix stops at ``?``/``#``: doi.org forwards a query string to the
+    Case is folded and a trailing slash dropped, since neither distinguishes
+    two DOIs. The suffix stops at ``?``/``#``: doi.org forwards a query string to the
     resolved target rather than treating it as part of the DOI, so a pasted
     ``doi.org`` link with tracking params (``?utm_source=...``) or an anchor
     must not have that cruft folded into the stored identifier.
@@ -53,6 +54,10 @@ def normalize_doi(value: str) -> str | None:
     doi = match.group(1).strip()
     doi = re.sub(r"\s+", "", doi)
     doi = doi.rstrip(".,;:)]}")
+    # A trailing slash is not part of the DOI: `10.1145/abc/` and `10.1145/abc`
+    # are the same paper, and treating them as different identities made a
+    # re-capture create a duplicate entry.
+    doi = doi.rstrip("/")
     return doi.lower()
 
 

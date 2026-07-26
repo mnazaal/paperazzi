@@ -78,3 +78,31 @@ def test_find_exact_match_returns_none_when_absent() -> None:
         )
         is None
     )
+
+
+def test_doi_identities_are_normalized_so_variants_are_one_paper() -> None:
+    """Case and trailing-slash variants of a DOI must be the same identity.
+
+    extract_identities used the record's DOI verbatim, so a library holding
+    `10.1145/abc` did not match an incoming `10.1145/ABC` — the capture became a
+    second entry for the same paper.
+    """
+    from pzi.similarity import extract_identities, find_exact_match
+
+    identities = extract_identities({"doi": "10.1145/ABC"})
+    assert identities == [{"kind": "doi", "value": "10.1145/abc"}]
+
+    existing = [{"citekey": "a2024", "doi": "10.1145/abc"}]
+    assert find_exact_match({"doi": "10.1145/ABC"}, existing) == 0
+    assert find_exact_match({"doi": "10.1145/abc/"}, existing) == 0
+    assert find_exact_match({"doi": "https://doi.org/10.1145/ABC"}, existing) == 0
+    assert find_exact_match({"doi": "10.1145/different"}, existing) is None
+
+
+def test_unparseable_doi_still_indexes_consistently() -> None:
+    """A stored value normalize_doi cannot parse must still match itself."""
+    from pzi.similarity import extract_identities
+
+    assert extract_identities({"doi": "  Not-A-Doi  "}) == [
+        {"kind": "doi", "value": "not-a-doi"}
+    ]

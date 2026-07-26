@@ -157,3 +157,15 @@ def test_classify_input_arxiv_non_id_path_is_plain_url() -> None:
     result = classify_input("https://arxiv.org/list/cs.LG/recent")
     assert result["kind"] == "url"
     assert normalize_url("http://[::1]:8080/x") == "http://[::1]:8080/x"
+
+
+def test_normalize_doi_strips_a_trailing_slash() -> None:
+    # A trailing slash is not part of the DOI, so the two forms are one paper.
+    assert normalize_doi("10.1145/abc/") == normalize_doi("10.1145/abc")
+    assert normalize_doi("https://doi.org/10.1145/abc/") == "10.1145/abc"
+
+
+def test_normalize_doi_is_case_insensitive_across_forms() -> None:
+    # DOIs are case-insensitive by spec.
+    assert normalize_doi("10.1145/ABC") == normalize_doi("10.1145/abc")
+    assert normalize_doi("https://DOI.ORG/10.1145/AbC") == "10.1145/abc"
