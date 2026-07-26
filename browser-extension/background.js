@@ -44,6 +44,7 @@ import {
 import {
   scanDomForPdfUrls,
   extractPdfUrlCandidates,
+  MAX_PDF_URL_CANDIDATES,
   clickPdfDiscovery,
   buildPdfCandidates,
   isBotBypassWhitelisted,
@@ -61,7 +62,13 @@ export { cookieHeaderForUrl };
 export { extractIeeeXploreMetadata };
 export { detectAndExtractSearchResults, captureSearchResults } from "./background/search.js";
 export { startPdfObserver, collectPdfObserverEvents };
-export { scanDomForPdfUrls, clickPdfDiscovery, isBotBypassWhitelisted };
+export {
+  scanDomForPdfUrls,
+  extractPdfUrlCandidates,
+  MAX_PDF_URL_CANDIDATES,
+  clickPdfDiscovery,
+  isBotBypassWhitelisted,
+};
 export { botBypassPdfUrl };
 
 export async function captureCurrentTab({ tags = [], bib = null, dryRun = false, tabId = null, tabUrl = null, forceNew = false } = {}) {

@@ -1243,3 +1243,128 @@ console.log(JSON.stringify({
     )
 
     assert result["module_loaded"] is True
+
+
+def test_dom_scan_runs_in_the_page_world_without_module_scope(tmp_path: Path) -> None:
+    """An injected function may not reference the service worker's module scope.
+
+    chrome.scripting.executeScript serialises the function and runs it in the
+    page, where a module-level helper does not exist — so `func: () =>
+    scanDomForPdfUrls(document)` threw ReferenceError inside the page, the
+    rejection was swallowed by the surrounding catch, and DOM-based PDF discovery
+    silently never contributed a candidate.
+
+    This stub rebuilds the function from its source via `new Function`, which is
+    what makes module scope unreachable, exactly as the browser does.
+    """
+    result = _run_background_module(
+        r'''
+globalThis.chrome = {
+  storage: {
+    local: { get: async () => ({}) },
+    session: { get: async () => ({}), set: () => {} },
+  },
+  runtime: { onInstalled: { addListener: () => {} } },
+  tabs: { query: async () => [] },
+  scripting: {
+    executeScript: async (opts) => {
+      globalThis.document = {
+        baseURI: "https://journal.example.com/article/1",
+        querySelectorAll: (selector) => {
+          if (selector.includes("citation_pdf_url")) {
+            return [{ getAttribute: () => "https://journal.example.com/article/1.pdf" }];
+          }
+          return [];
+        },
+      };
+      const rebuilt = new Function("return (" + opts.func.toString() + ")")();
+      return [{ result: rebuilt(...(opts.args || [])) }];
+    },
+  },
+};
+
+const { extractPdfUrlCandidates } = await import("./background.mjs");
+const candidates = await extractPdfUrlCandidates(11, "https://journal.example.com/article/1");
+console.log(JSON.stringify({ candidates }));
+''',
+        tmp_path,
+    )
+    assert "https://journal.example.com/article/1.pdf" in result["candidates"]
+
+
+def test_bot_bypass_allowlist_matches_on_domain_boundaries(tmp_path: Path) -> None:
+    """A look-alike domain must not clear the bot-bypass allowlist.
+
+    The check was `hostname.endsWith(domain)`, which has no domain boundary:
+    `evil-nature.com` ends with `nature.com`, so an attacker-chosen host could
+    reach the hidden-iframe bypass machinery. Only the domain itself and its
+    subdomains should match.
+    """
+    result = _run_background_module(
+        r'''
+globalThis.chrome = {
+  storage: { local: { get: async () => ({}) }, session: { get: async () => ({}), set: () => {} } },
+  runtime: { onInstalled: { addListener: () => {} } },
+  tabs: { query: async () => [] },
+  scripting: { executeScript: async () => [{ result: null }] },
+};
+const { isBotBypassWhitelisted } = await import("./background.mjs");
+console.log(JSON.stringify({
+  exact: isBotBypassWhitelisted("https://nature.com/articles/1.pdf"),
+  subdomain: isBotBypassWhitelisted("https://www.nature.com/articles/1.pdf"),
+  lookalike_prefix: isBotBypassWhitelisted("https://evil-nature.com/x.pdf"),
+  lookalike_concat: isBotBypassWhitelisted("https://notsagepub.com/x.pdf"),
+  unrelated: isBotBypassWhitelisted("https://example.com/x.pdf"),
+}));
+''',
+        tmp_path,
+    )
+    assert result["exact"] is True
+    assert result["subdomain"] is True
+    assert result["lookalike_prefix"] is False
+    assert result["lookalike_concat"] is False
+    assert result["unrelated"] is False
+
+
+def test_pdf_candidates_are_capped_to_what_the_server_accepts(tmp_path: Path) -> None:
+    """A link-heavy page must not make the whole capture fail.
+
+    The server rejects a capture outright when `pdf_url_candidates` exceeds
+    MAX_PDF_URL_CANDIDATES (20), so an uncapped client list turns a page with
+    many PDF-ish links into a failed capture rather than a successful one that
+    tried the best candidates.
+    """
+    result = _run_background_module(
+        r'''
+globalThis.chrome = {
+  storage: { local: { get: async () => ({}) }, session: { get: async () => ({}), set: () => {} } },
+  runtime: { onInstalled: { addListener: () => {} } },
+  tabs: { query: async () => [] },
+  scripting: {
+    executeScript: async (opts) => {
+      globalThis.document = {
+        baseURI: "https://journal.example.com/list",
+        querySelectorAll: (selector) => {
+          if (selector.includes("a[href]")) {
+            return Array.from({ length: 60 }, (_v, i) => ({
+              href: "https://journal.example.com/paper-" + i + ".pdf",
+              getAttribute: () => null,
+              textContent: "PDF",
+            }));
+          }
+          return [];
+        },
+      };
+      const rebuilt = new Function("return (" + opts.func.toString() + ")")();
+      return [{ result: rebuilt(...(opts.args || [])) }];
+    },
+  },
+};
+const { extractPdfUrlCandidates, MAX_PDF_URL_CANDIDATES } = await import("./background.mjs");
+const candidates = await extractPdfUrlCandidates(11, "https://journal.example.com/list");
+console.log(JSON.stringify({ count: candidates.length, cap: MAX_PDF_URL_CANDIDATES }));
+''',
+        tmp_path,
+    )
+    assert result["cap"] == 20, "client cap must match the server's limit"
+    assert result["count"] == 20

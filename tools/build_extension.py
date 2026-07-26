@@ -17,6 +17,7 @@ Outputs:
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import sys
 import tomllib
@@ -54,9 +55,57 @@ def _load_project_version(path: Path | None = None) -> str:
     return version
 
 
+# PEP 440 pre-release phase -> the block it occupies in the 4th version
+# component. Ordered so alpha < beta < rc < final, and a final release sits
+# above every pre-release of the same X.Y.Z.
+_PRERELEASE_BLOCK = {"a": 1000, "b": 2000, "rc": 3000}
+_FINAL_BLOCK = 9999
+
+_PEP440_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:(a|b|rc)(\d+))?$")
+
+
+def extension_version(project_version: str) -> str:
+    """Translate a PEP 440 version into one browsers accept.
+
+    Chrome and AMO require 1-4 dot-separated integers in 0-65535, so the
+    project's ``0.1.0b2`` is rejected outright — that is what shipped in the
+    v0.1.0b2 zips and made them uninstallable.
+
+    The pre-release becomes the 4th component, in a block per phase, because
+    browsers compare component-wise: a pre-release has to sort *below* its final
+    release, which simply appending the pre-release number would invert
+    (``0.1.0.2`` > ``0.1.0``). So ``0.1.0b2`` -> ``0.1.0.2002`` and the final
+    ``0.1.0`` -> ``0.1.0.9999``.
+    """
+    match = _PEP440_RE.match(project_version.strip())
+    if match is None:
+        print(
+            f"error: cannot translate version {project_version!r} into an "
+            "extension version (expected X.Y.Z with an optional aN/bN/rcN)",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    major, minor, patch, phase, serial = match.groups()
+    if phase is None:
+        fourth = _FINAL_BLOCK
+    else:
+        fourth = _PRERELEASE_BLOCK[phase] + int(serial)
+        if fourth >= _FINAL_BLOCK:
+            print(
+                f"error: pre-release number {serial} in {project_version!r} is "
+                "too large to order below the final release",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    return f"{major}.{minor}.{patch}.{fourth}"
+
+
 def _manifest_with_version(base: dict[str, Any], version: str) -> dict[str, Any]:
     manifest = dict(base)
-    manifest["version"] = version
+    manifest["version"] = extension_version(version)
+    # Keep the real project version visible to humans; browsers display this
+    # when present and ignore it for update comparisons.
+    manifest["version_name"] = version
     return manifest
 
 

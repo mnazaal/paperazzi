@@ -14,7 +14,12 @@ import {
 // ── DOM PDF scanner (exported for testing) ──────────────────────────────
 // Keep the meta selectors in sync with the injected func in
 // extractPageMetadata (background/metadata.js).
-export function scanDomForPdfUrls(doc) {
+// `doc` defaults to the page's document so this can be handed straight to
+// chrome.scripting.executeScript, which serialises the function and runs it in
+// the page. It must therefore reference nothing from this module's scope — an
+// injected `() => scanDomForPdfUrls(document)` wrapper threw ReferenceError in
+// the page and the surrounding catch swallowed it, so DOM scanning never ran.
+export function scanDomForPdfUrls(doc = document) {
   const out = [];
   const add = (value) => {
     if (typeof value !== "string") return;
@@ -51,10 +56,18 @@ export function scanDomForPdfUrls(doc) {
   return out;
 }
 
+// Mirrors MAX_PDF_URL_CANDIDATES in pzi/http_post_routes.py. The server rejects
+// a whole capture whose candidate list is longer than this, so a page with many
+// PDF-ish links must be capped here rather than failing the capture. Candidates
+// are added in priority order (observer hits, then site extractors, then DOM),
+// so truncating keeps the best ones.
+export const MAX_PDF_URL_CANDIDATES = 20;
+
 export async function extractPdfUrlCandidates(tabId, pageUrl) {
   const candidates = [];
   const addCandidate = (value) => {
     if (typeof value !== "string") return;
+    if (candidates.length >= MAX_PDF_URL_CANDIDATES) return;
     const trimmed = value.trim();
     if (!trimmed || !isSafePublicHttpUrl(trimmed)) return;
     if (!candidates.includes(trimmed)) candidates.push(trimmed);
@@ -82,7 +95,7 @@ export async function extractPdfUrlCandidates(tabId, pageUrl) {
   try {
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId },
-      func: () => scanDomForPdfUrls(document),
+      func: scanDomForPdfUrls,
     });
     if (Array.isArray(result)) {
       for (const candidate of result) addCandidate(candidate);
@@ -435,5 +448,9 @@ const BOT_BYPASS_WHITELISTED_DOMAINS = [
 export function isBotBypassWhitelisted(url) {
   const hostname = tryHostname(url);
   if (!hostname) return false;
-  return BOT_BYPASS_WHITELISTED_DOMAINS.some((d) => hostname.endsWith(d));
+  // Match on a domain boundary: a bare endsWith has none, so `evil-nature.com`
+  // would clear an allowlist entry of `nature.com`.
+  return BOT_BYPASS_WHITELISTED_DOMAINS.some(
+    (d) => hostname === d || hostname.endsWith("." + d)
+  );
 }
