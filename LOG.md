@@ -2,7 +2,38 @@
 
 Newest first. Prepend-only; corrections are new entries, never rewrites.
 
-## 2026-07-26 (latest) — design track item 2 finished: the JSON envelope
+## 2026-07-26 (latest) — layering: cycles removed, guard blind spots closed
+
+**Verdict:** design-track items 1, 2 done and 5 partly done. Both import cycles
+are gone and the architectural guard now actually covers the tree.
+
+**Load-bearing numbers.** Suite **1441 → 1442 passed**, 8 skipped, 20 deselected;
+`ruff` clean, `pyright` 0 errors. Commit `ef5a269`.
+
+**Two moves, each dissolving a cycle.** The preprint classifiers
+(`is_preprint`, `detect_preprint_source`, `is_preprint_url`, the domain tables)
+left `promote_service` for `identifiers`, where the rest of the URL/DOI
+classification lives — `bib_repository`, `bib_service` and `pdf_discovery` all
+needed them, and reaching up into a service meant function-level imports to dodge
+the cycle. The PDF byte-storage helpers (`write_pdf_bytes`,
+`resolve_pdf_destination`) left `pdf` for `pdf_download`, beside the downloads
+that use them, removing the lazy back-import.
+
+**The guard was blind in two ways**, which is why neither cycle was caught:
+`_SRC.glob("*.py")` is non-recursive, so all 19 `commands/` modules were
+unclassified *and* unchecked (a command bypassing the service layer would have
+passed silently), and there was no cycle detection at all. Both fixed; the cycle
+test was checked against a deliberately reintroduced `pdf` <-> `pdf_download`
+edge, so it fails for the right reason rather than passing vacuously.
+
+### Do NOT re-pursue
+
+- **Do not move the preprint classifiers back into `promote_service`.** Three
+  lower-layer modules depend on them; that is what forced the lazy imports.
+- **Do not "simplify" the layer guard's glob back to non-recursive.** The
+  `commands/` blind spot was a real gap noted by mutation testing on 2026-07-25.
+
+## 2026-07-26 — design track item 2 finished: the JSON envelope
 
 **Verdict:** design-track items 1 and 2 are done. Every command that reports a
 result emits one envelope, on success and on failure, and `pzi doctor` is a

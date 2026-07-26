@@ -185,14 +185,19 @@ live in the review conversation; each item below is self-contained.
    `pdf_discovery`) swallow real bugs inside fetchers and silently retry with
    fewer arguments — delete them by conforming providers to the
    `MetadataRecordFetcher` protocol that already exists for this.
-5. **Smaller, mechanical.** Diagnostics smuggled out of the fetch seam via
-   `nonlocal` closure mutation (`add_service`) and a `change_box` dict
-   (`update_service`); seven `PZI_*` env vars read deep inside `pdf.py` instead
-   of resolved once in `capture_context`; `bib_repository` importing
-   `promote_service` upward just for `detect_preprint_source` (move that pure
-   classifier down — it also dissolves three lazy-import cycles);
-   `tests/test_layer_boundaries.py` globs `src/pzi/*.py` non-recursively, so all
-   of `commands/` is unclassified and unchecked, and it has no cycle detection.
+5. **Smaller, mechanical.** **Partly done 2026-07-26.** Done: the preprint
+   classifiers moved out of `promote_service` into `identifiers` (removing the
+   upward repository-to-service edge), the PDF byte-storage helpers moved from
+   `pdf` into `pdf_download` (removing the other cycle), and
+   `tests/test_layer_boundaries.py` now scans recursively — all 19 `commands/`
+   modules are classified FRONTEND instead of being invisible — plus a cycle
+   test that covers function-level imports, checked against a reintroduced cycle
+   so it cannot pass vacuously.
+
+   **Still open:** diagnostics smuggled out of the fetch seam via `nonlocal`
+   closure mutation (`add_service`) and a `change_box` dict (`update_service`);
+   the seven `PZI_*` env vars read deep inside `pdf.py` rather than resolved once
+   in `capture_context`.
 
 Explicitly **not** doing: converting `NormalizedRecord` to a frozen dataclass.
 Every module would change for modest payoff; the frozen types in
