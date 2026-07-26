@@ -134,6 +134,27 @@ FRONTEND: frozenset[str] = frozenset(
         "http_post_routes",
         "http_security",
         "http_status",
+        # Every CLI command runner. These were invisible to this guard until the
+        # module scan became recursive.
+        "commands.add",
+        "commands.check",
+        "commands.clean",
+        "commands.common",
+        "commands.dedupe",
+        "commands.delete",
+        "commands.doctor",
+        "commands.entries",
+        "commands.export",
+        "commands.fix",
+        "commands.import_",
+        "commands.inbox",
+        "commands.init",
+        "commands.pdf",
+        "commands.reindex",
+        "commands.search",
+        "commands.server",
+        "commands.tags",
+        "commands.update",
     }
 )
 
@@ -183,13 +204,31 @@ def _imported_pzi_modules(path: Path) -> set[str]:
     return names
 
 
+def _module_name(path: Path) -> str:
+    """Dotted name of a module file relative to the pzi package."""
+    relative = path.relative_to(_SRC).with_suffix("")
+    return ".".join(relative.parts)
+
+
+def _all_module_paths() -> list[Path]:
+    """Every pzi module file, including subpackages such as `commands/`.
+
+    Recursive on purpose: a non-recursive glob left all of `commands/`
+    unclassified and unchecked, so a command reaching straight past the service
+    layer would have passed silently.
+    """
+    return sorted(
+        path
+        for path in _SRC.rglob("*.py")
+        if path.stem not in ("__init__", "__main__")
+    )
+
+
 def _build_import_graph() -> dict[str, set[str]]:
-    """Parse every pzi/*.py module and return stem → {directly-imported stems}."""
+    """Parse every pzi module and return name → {directly-imported names}."""
     graph: dict[str, set[str]] = {}
-    for path in sorted(_SRC.glob("*.py")):
-        if path.stem in ("__init__", "__main__"):
-            continue
-        graph[path.stem] = _imported_pzi_modules(path)
+    for path in _all_module_paths():
+        graph[_module_name(path)] = _imported_pzi_modules(path)
     return graph
 
 
@@ -216,11 +255,7 @@ def test_all_modules_classified() -> None:
 
     Fails when a new module is added without being classified — no silent drift.
     """
-    all_modules = {
-        p.stem
-        for p in _SRC.glob("*.py")
-        if p.stem not in ("__init__", "__main__")
-    }
+    all_modules = {_module_name(p) for p in _all_module_paths()}
     all_tiers = CORE | PIPELINE | SERVICE | FRONTEND | BROWSER
 
     unclassified = all_modules - all_tiers
@@ -286,3 +321,34 @@ def test_service_no_direct_frontend_imports() -> None:
         "SERVICE modules directly import FRONTEND:\n"
         + "\n".join(f"  {m} → {deps}" for m, deps in sorted(offenders.items()))
     )
+
+
+def test_no_import_cycles() -> None:
+    """No pzi module may participate in an import cycle.
+
+    Function-level imports count: the AST walk sees them wherever they sit, and
+    a lazy import is how a cycle usually hides. Two existed before this guard —
+    `pdf` <-> `pdf_download` (the byte-storage helpers sat on the wrong side of
+    the boundary) and `bib_repository` <-> `promote_service` (the repository
+    reached up into a service for a pure preprint classifier).
+    """
+    graph = _build_import_graph()
+    cycles: list[list[str]] = []
+    # Iterative DFS with an explicit stack, recording the first cycle found per
+    # start node; enough to name the offenders without listing every rotation.
+    for start in sorted(graph):
+        stack: list[tuple[str, list[str]]] = [(start, [start])]
+        seen: set[str] = set()
+        while stack:
+            node, path = stack.pop()
+            for dep in sorted(graph.get(node, ())):
+                if dep == start:
+                    cycles.append([*path, dep])
+                    stack.clear()
+                    break
+                if dep in seen or dep not in graph:
+                    continue
+                seen.add(dep)
+                stack.append((dep, [*path, dep]))
+
+    assert not cycles, "import cycles:\n" + "\n".join(" -> ".join(c) for c in cycles)

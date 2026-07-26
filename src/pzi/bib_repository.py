@@ -39,6 +39,7 @@ from pzi.bibtex import (
     resolve_citekey_collision,
 )
 from pzi.fileio import fsync_parent_dir, read_text_utf8
+from pzi.identifiers import detect_preprint_source
 from pzi.similarity import (
     IdentityKind,
     build_identity_index,
@@ -832,8 +833,6 @@ _ITEM_TYPE_TO_ENTRY_TYPE: dict[str, str] = {
 
 def resolve_entry_type(record: NormalizedRecord) -> str:
     """Determine BibTeX entry type from record metadata."""
-    from pzi.promote_service import detect_preprint_source
-
     item_type = record.get("item_type")
     if isinstance(item_type, str) and item_type.strip():
         mapped = _ITEM_TYPE_TO_ENTRY_TYPE.get(item_type.strip())

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from typing import Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -214,3 +215,119 @@ def _extract_year_from_str(value: str) -> int | None:
     """Extract a four-digit year string from a date string, or None."""
     match = _YEAR_PATTERN.search(value)
     return int(match.group(0)) if match else None
+
+
+# ---------------------------------------------------------------------------
+# Preprint classification
+# ---------------------------------------------------------------------------
+# Pure classifiers, kept here rather than in promote_service: bib_repository,
+# bib_service and pdf_discovery all need them, and reaching up into a service
+# for a lookup table forced function-level imports to dodge an import cycle.
+
+_PREPRINT_DOMAINS = frozenset({
+    # Life sciences / medicine
+    "arxiv.org",
+    "biorxiv.org",
+    "medrxiv.org",
+    # Chemistry
+    "chemrxiv.org",
+    # Psychology / social sciences
+    "psyarxiv.com",
+    "socarxiv.org",
+    # Engineering / physical sciences
+    "engrxiv.org",
+    "techrxiv.org",
+    "eartharxiv.org",
+    # Multidisciplinary
+    "ecoevorxiv.org",
+    "researchsquare.com",
+    "preprints.org",
+    "osf.io",
+    "zenodo.org",
+    "authorea.com",
+    "advance.sagepub.com",
+    "papers.ssrn.com",
+    # Regional / institutional
+    "hal.archives-ouvertes.fr",
+    "hal.science",
+    "peerj.com",
+})
+
+
+def is_preprint(record: Mapping[str, object]) -> bool:
+    """Return True when the record looks like a preprint."""
+    venue = record.get("venue")
+    if not isinstance(venue, str) or not venue.strip():
+        return True
+    if record.get("arxiv_id"):
+        return True
+    if is_preprint_url(record.get("source_url")):
+        return True
+    if is_preprint_url(record.get("canonical_url")):
+        return True
+    return False
+
+
+_DOMAIN_TO_SOURCE: dict[str, str] = {
+    # Life sciences / medicine
+    "arxiv.org": "arXiv",
+    "biorxiv.org": "bioRxiv",
+    "medrxiv.org": "medRxiv",
+    # Chemistry
+    "chemrxiv.org": "ChemRxiv",
+    # Psychology / social sciences
+    "psyarxiv.com": "PsyArXiv",
+    "socarxiv.org": "SocArXiv",
+    "papers.ssrn.com": "SSRN",
+    # Engineering / physical sciences
+    "engrxiv.org": "engrXiv",
+    "techrxiv.org": "TechRxiv",
+    "eartharxiv.org": "EarthArXiv",
+    # Multidisciplinary
+    "ecoevorxiv.org": "EcoEvoRxiv",
+    "researchsquare.com": "Research Square",
+    "preprints.org": "Preprints.org",
+    "osf.io": "OSF",
+    "zenodo.org": "Zenodo",
+    "authorea.com": "Authorea",
+    "advance.sagepub.com": "SAGE Advance",
+    # Regional / institutional
+    "hal.archives-ouvertes.fr": "HAL",
+    "hal.science": "HAL",
+    "peerj.com": "PeerJ",
+}
+
+
+def detect_preprint_source(record: Mapping[str, object]) -> str | None:
+    """Identify the preprint server, if any."""
+    arxiv_id = record.get("arxiv_id")
+    if isinstance(arxiv_id, str) and arxiv_id.strip():
+        return "arXiv"
+
+    for url_field in ("source_url", "canonical_url"):
+        domain = _url_domain(record.get(url_field))
+        if domain is not None and domain in _DOMAIN_TO_SOURCE:
+            return _DOMAIN_TO_SOURCE[domain]
+    return None
+
+
+def is_preprint_url(value: object) -> bool:
+    """True when *value* is a URL on a known preprint server."""
+    domain = _url_domain(value)
+    return domain in _PREPRINT_DOMAINS if domain is not None else False
+
+
+def _url_domain(value: object) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parts = urlsplit(value.strip())
+    except ValueError:  # pragma: no cover — covered by integration/browser tests
+        return None  # pragma: no cover — covered by integration/browser tests
+    host = parts.hostname
+    if host is None:
+        return None
+    host = host.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host

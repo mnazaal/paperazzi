@@ -16,8 +16,8 @@ from pzi.bib_repository import (
     with_bib_lock,
 )
 from pzi.config import load_and_resolve_bib, load_config_file
+from pzi.identifiers import is_preprint
 from pzi.pdf_planning import pdf_file_present
-from pzi.promote_service import is_preprint
 
 BibInfo: TypeAlias = dict[str, Any]
 

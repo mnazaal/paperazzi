@@ -15,6 +15,7 @@ from typing import Any, TypeAlias, cast
 from urllib.parse import urlsplit, urlunsplit
 
 from pzi.bibtex import NormalizedRecord
+from pzi.identifiers import detect_preprint_source
 from pzi.url_safety import safe_public_http_url
 
 PdfDiscoveryContext: TypeAlias = dict[str, Any]
@@ -412,7 +413,6 @@ def preprint_pdf_step(
     record: NormalizedRecord, context: PdfDiscoveryContext
 ) -> NormalizedRecord:
     """Build PDF URL for known preprint servers from source/canonical URL."""
-    from pzi.promote_service import detect_preprint_source
 
     landing_url = (
         record.get("source_url")

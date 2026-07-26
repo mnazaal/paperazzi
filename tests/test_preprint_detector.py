@@ -1,6 +1,6 @@
 import pytest
 
-from pzi.promote_service import detect_preprint_source, is_preprint
+from pzi.identifiers import detect_preprint_source, is_preprint
 
 
 @pytest.mark.parametrize(

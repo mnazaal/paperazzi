@@ -6,7 +6,6 @@ import functools
 from collections.abc import Callable, Mapping
 from typing import Any, NotRequired, TypedDict, cast
 from urllib.error import HTTPError
-from urllib.parse import urlsplit
 
 from pzi.bib_repository import (
     BatchWriteSession,
@@ -32,6 +31,7 @@ from pzi.capture_context import resolve_contact_email, resolve_optional_value
 from pzi.config import load_and_resolve_bib
 from pzi.fetch_helpers import build_metadata_fetch_text
 from pzi.format_templates import format_citekey
+from pzi.identifiers import is_preprint, is_preprint_url
 from pzi.metadata_sources import (
     fetch_crossref_record_by_title,
     fetch_dblp_record_by_title,
@@ -1029,7 +1029,7 @@ def _merge_published_metadata(
     for url_field in ("canonical_url", "source_url"):
         if candidate.get(url_field):
             continue
-        if _url_domain_on_preprint(merged.get(url_field)):
+        if is_preprint_url(merged.get(url_field)):
             merged.pop(url_field, None)
     return cast(NormalizedRecord, merged)
 
@@ -1056,115 +1056,3 @@ def _generate_citekey_for_candidate(
          "year": cast(int | None, record.get("year"))},
         existing_citekeys,
     )
-
-
-# ---------------------------------------------------------------------------
-# Preprint classification helpers (merged from preprint_detector.py)
-# ---------------------------------------------------------------------------
-
-_PREPRINT_DOMAINS = frozenset({
-    # Life sciences / medicine
-    "arxiv.org",
-    "biorxiv.org",
-    "medrxiv.org",
-    # Chemistry
-    "chemrxiv.org",
-    # Psychology / social sciences
-    "psyarxiv.com",
-    "socarxiv.org",
-    # Engineering / physical sciences
-    "engrxiv.org",
-    "techrxiv.org",
-    "eartharxiv.org",
-    # Multidisciplinary
-    "ecoevorxiv.org",
-    "researchsquare.com",
-    "preprints.org",
-    "osf.io",
-    "zenodo.org",
-    "authorea.com",
-    "advance.sagepub.com",
-    "papers.ssrn.com",
-    # Regional / institutional
-    "hal.archives-ouvertes.fr",
-    "hal.science",
-    "peerj.com",
-})
-
-
-def is_preprint(record: Mapping[str, object]) -> bool:
-    """Return True when the record looks like a preprint."""
-    venue = record.get("venue")
-    if not isinstance(venue, str) or not venue.strip():
-        return True
-    if record.get("arxiv_id"):
-        return True
-    if _url_domain_on_preprint(record.get("source_url")):
-        return True
-    if _url_domain_on_preprint(record.get("canonical_url")):
-        return True
-    return False
-
-
-_DOMAIN_TO_SOURCE: dict[str, str] = {
-    # Life sciences / medicine
-    "arxiv.org": "arXiv",
-    "biorxiv.org": "bioRxiv",
-    "medrxiv.org": "medRxiv",
-    # Chemistry
-    "chemrxiv.org": "ChemRxiv",
-    # Psychology / social sciences
-    "psyarxiv.com": "PsyArXiv",
-    "socarxiv.org": "SocArXiv",
-    "papers.ssrn.com": "SSRN",
-    # Engineering / physical sciences
-    "engrxiv.org": "engrXiv",
-    "techrxiv.org": "TechRxiv",
-    "eartharxiv.org": "EarthArXiv",
-    # Multidisciplinary
-    "ecoevorxiv.org": "EcoEvoRxiv",
-    "researchsquare.com": "Research Square",
-    "preprints.org": "Preprints.org",
-    "osf.io": "OSF",
-    "zenodo.org": "Zenodo",
-    "authorea.com": "Authorea",
-    "advance.sagepub.com": "SAGE Advance",
-    # Regional / institutional
-    "hal.archives-ouvertes.fr": "HAL",
-    "hal.science": "HAL",
-    "peerj.com": "PeerJ",
-}
-
-
-def detect_preprint_source(record: Mapping[str, object]) -> str | None:
-    """Identify the preprint server, if any."""
-    arxiv_id = record.get("arxiv_id")
-    if isinstance(arxiv_id, str) and arxiv_id.strip():
-        return "arXiv"
-
-    for url_field in ("source_url", "canonical_url"):
-        domain = _url_domain(record.get(url_field))
-        if domain is not None and domain in _DOMAIN_TO_SOURCE:
-            return _DOMAIN_TO_SOURCE[domain]
-    return None
-
-
-def _url_domain_on_preprint(value: object) -> bool:
-    domain = _url_domain(value)
-    return domain in _PREPRINT_DOMAINS if domain is not None else False
-
-
-def _url_domain(value: object) -> str | None:
-    if not isinstance(value, str) or not value.strip():
-        return None
-    try:
-        parts = urlsplit(value.strip())
-    except ValueError:  # pragma: no cover — covered by integration/browser tests
-        return None  # pragma: no cover — covered by integration/browser tests
-    host = parts.hostname
-    if host is None:
-        return None
-    host = host.lower()
-    if host.startswith("www."):
-        host = host[4:]
-    return host
