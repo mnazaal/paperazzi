@@ -43,6 +43,37 @@ def test_record_to_bibtex_entry_maps_core_fields() -> None:
     }
 
 
+def test_record_to_bibtex_entry_puts_venue_in_booktitle_for_proceedings() -> None:
+    # A conference paper's venue is its `booktitle`; emitting `journal` for an
+    # @inproceedings is bibliographically wrong and breaks styles that require
+    # booktitle.
+    entry = record_to_bibtex_entry(
+        {"citekey": "smith2024graph", "title": "Graph Parsers", "venue": "GraphConf"},
+        entry_type="inproceedings",
+    )
+
+    assert entry["fields"]["booktitle"] == "GraphConf"
+    assert "journal" not in entry["fields"]
+
+
+def test_apply_record_to_entry_keeps_a_proceedings_venue_in_booktitle() -> None:
+    # The projection now emits `booktitle` for proceedings types, so the merge
+    # must read the venue from either home — reading only `journal` would drop
+    # the venue of every @inproceedings entry it touched.
+    entry = {
+        "entry_type": "inproceedings",
+        "citekey": "smith2024graph",
+        "fields": {"title": "Graph Parsers", "booktitle": "GraphConf"},
+    }
+
+    merged = apply_record_to_entry(
+        entry, {"citekey": "smith2024graph", "title": "Graph Parsers", "venue": "GraphConf"}
+    )
+
+    assert merged["fields"]["booktitle"] == "GraphConf"
+    assert "journal" not in merged["fields"]
+
+
 def test_record_to_bibtex_entry_keeps_note_and_auxiliary_urls_in_own_fields() -> None:
     # Regression: note, pdf_url, and abstract_url used to be packed into one
     # `note` field with " | " delimiters and "PDF:"/"Abstract:" labels — a

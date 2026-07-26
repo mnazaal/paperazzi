@@ -26,6 +26,7 @@ from pzi.bibtex import (
     merge_projected_entry,
     normalize_authors,
     record_to_bibtex_entry,
+    venue_field_for_entry_type,
 )
 from pzi.capture_context import resolve_contact_email, resolve_optional_value
 from pzi.config import load_and_resolve_bib
@@ -758,7 +759,6 @@ def _handle_keep_preprint(
         # Same `force_new` as the real write, so the preview shows the insert
         # the run will actually perform rather than a spurious in-place update.
         plan = plan_bib_write(published, records, force_new=True)
-        _relocate_venue_for_entry_type(plan["entry"])
         diff = preview_write_plan(bib_path, plan)["diff"]
     else:
         try:
@@ -775,10 +775,6 @@ def _handle_keep_preprint(
     )
 
 
-# BibTeX entry types whose venue belongs in `booktitle` rather than `journal`.
-_PROCEEDINGS_ENTRY_TYPES = frozenset({"inproceedings", "incollection", "conference"})
-
-
 def _relocate_venue_for_entry_type(entry: BibtexEntry) -> BibtexEntry:
     """Move the venue to the key *entry*'s type expects.
 
@@ -788,9 +784,13 @@ def _relocate_venue_for_entry_type(entry: BibtexEntry) -> BibtexEntry:
     itself changes, so the venue's home has to follow it — otherwise a workshop
     paper promoted to a journal ends up an `@article` whose journal name sits in
     `booktitle`. Mutates and returns *entry*, whose ``fields`` the callers own.
+
+    Only the retype-on-merge path needs this: fresh inserts go through
+    `record_to_bibtex_entry`, which already picks the venue key from the entry
+    type.
     """
     fields = entry["fields"]
-    wanted = "booktitle" if entry["entry_type"] in _PROCEEDINGS_ENTRY_TYPES else "journal"
+    wanted = venue_field_for_entry_type(entry["entry_type"])
     stale = "journal" if wanted == "booktitle" else "booktitle"
     # Only relocate when the target is free: an entry carrying both keys is
     # already ambiguous, and dropping either would lose a venue.
@@ -831,9 +831,6 @@ def _write_published_fork(
         # candidate was already checked against the library by
         # `_find_duplicate_citekey`, so there is nothing legitimate to match.
         plan = plan_bib_write(published, session.records, force_new=True)
-        # The projection always emits the venue as `journal`; a candidate that
-        # resolves to a proceedings type needs it under `booktitle`.
-        _relocate_venue_for_entry_type(plan["entry"])
         session.apply_plan(plan)
         note_plan = _plan_note_update(
             session, preprint_ck, f"Published version: {published_ck}"

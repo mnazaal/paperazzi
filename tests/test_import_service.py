@@ -49,6 +49,28 @@ MULTI_BIB = (
 )
 
 
+def test_import_keeps_the_source_entry_type_and_booktitle() -> None:
+    # Importing must not retype a conference paper as @article: the source file
+    # states what the entry is, and the venue belongs in booktitle for it.
+    with tempfile.TemporaryDirectory() as td:
+        cp, bp, pd = _setup_config(td)
+        Path(bp).write_text("")
+        src = os.path.join(td, "conference.bib")
+        Path(src).write_text(
+            '@inproceedings{jones2023attn, title = {Attention Revisited},\n'
+            '  author = {Jones, Ada}, year = {2023}, booktitle = {NeurIPS},\n'
+            '  doi = {10.1000/xyz}}\n'
+        )
+
+        result = import_from_bibtex(config_path=cp, home_dir=td, source_path=src)
+
+        assert result["imported"] == 1
+        written = Path(bp).read_text()
+        assert "@inproceedings{jones2023attn" in written
+        assert "booktitle = {NeurIPS}" in written
+        assert "journal" not in written
+
+
 def test_import_source_not_found() -> None:
     with tempfile.TemporaryDirectory() as td:
         cp, bp, pd = _setup_config(td)

@@ -32,6 +32,11 @@ class NormalizedRecord(TypedDict, total=False):
     tags: list[str]
     note: str | None
     item_type: str | None
+    # BibTeX entry type stated by the source the record came from (an imported
+    # .bib says `@inproceedings` outright).  Set only by callers that have such
+    # a source; records parsed out of the library deliberately do not carry it,
+    # so promotion stays free to retype an entry.
+    entry_type: str
 
     # --- Fallback keys from browser page metadata or user overrides ---
     fallback_title: str | None
@@ -60,6 +65,15 @@ class BibtexEntry(TypedDict):
     entry_type: str
     citekey: str
     fields: dict[str, str]
+
+
+# Entry types whose venue belongs in `booktitle` rather than `journal`.
+PROCEEDINGS_ENTRY_TYPES = frozenset({"inproceedings", "incollection", "conference"})
+
+
+def venue_field_for_entry_type(entry_type: str) -> str:
+    """Return the BibTeX field a record's ``venue`` belongs in for *entry_type*."""
+    return "booktitle" if entry_type in PROCEEDINGS_ENTRY_TYPES else "journal"
 
 
 class ClassifiedInput(TypedDict):
@@ -95,7 +109,7 @@ def record_to_bibtex_entry(
 
     venue = _empty_to_none(record.get("venue"))
     if venue is not None:
-        fields["journal"] = venue
+        fields[venue_field_for_entry_type(entry_type)] = venue
 
     doi = _empty_to_none(record.get("doi"))
     if doi is not None:
@@ -198,7 +212,10 @@ def merge_projected_entry(entry: BibtexEntry, projected_entry: BibtexEntry) -> B
     # entry already used: rewriting a proceedings entry's `booktitle` as
     # `journal` is bibliographically wrong and breaks styles that require it.
     venue_key = "booktitle" if "booktitle" in existing and "journal" not in existing else "journal"
-    venue = projected.get("journal")
+    # The projection puts the venue under whichever key *its* entry type calls
+    # for, so read both homes: looking only at `journal` would drop the venue of
+    # every proceedings entry merged here.
+    venue = projected.get("journal") or projected.get("booktitle")
     if venue is not None:
         fields[venue_key] = venue
     else:

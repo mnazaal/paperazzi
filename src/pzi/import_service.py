@@ -95,7 +95,7 @@ def import_from_bibtex(
             continue
         seen_citekeys.add(citekey)
         record = bibtex_entry_to_record(entry)
-        record["entry_type"] = entry.get("entry_type", "article")  # type: ignore[typeddict-unknown-key]
+        record["entry_type"] = entry.get("entry_type", "article")
         records.append(record)  # type: ignore[arg-type]
 
     # Resolve config + target once, then plan/write every record under a single

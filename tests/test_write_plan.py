@@ -1,6 +1,21 @@
 from pzi.bib_repository import plan_bib_write
 
 
+def test_plan_bib_write_puts_a_conference_venue_in_booktitle() -> None:
+    # Every insert path (add, import, capture, promote) plans through here, so a
+    # venue emitted as `journal` would make each of them write an
+    # @inproceedings entry that no booktitle-requiring style can format.
+    plan = plan_bib_write(
+        {"citekey": "smith2024graph", "title": "Graph Parsers", "venue": "GraphConf"},
+        [],
+        entry_type="inproceedings",
+    )
+
+    assert plan["entry"]["entry_type"] == "inproceedings"
+    assert plan["entry"]["fields"]["booktitle"] == "GraphConf"
+    assert "journal" not in plan["entry"]["fields"]
+
+
 def test_plan_bib_write_returns_insert_for_new_record() -> None:
     plan = plan_bib_write(
         {

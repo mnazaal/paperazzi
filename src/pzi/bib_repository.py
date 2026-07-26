@@ -832,6 +832,13 @@ def resolve_entry_type(record: NormalizedRecord) -> str:
         if mapped is not None:
             return mapped
 
+    # A source that states its own BibTeX type (an imported .bib) outranks the
+    # heuristics below, but not a provider's `item_type` above: that is fresh
+    # evidence about what the work is, where this is only what some file said.
+    declared = record.get("entry_type")
+    if isinstance(declared, str) and declared.strip():
+        return declared.strip()
+
     if detect_preprint_source(record) is not None:
         return "unpublished"
 
