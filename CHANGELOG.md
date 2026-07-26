@@ -76,7 +76,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `pzi export --target a | pzi import - --target b` needs no temp file.
 - **`--json` on `pzi tag add` and `pzi tag remove`** (previously only `tag list`).
 
+### Security
+
+- **The HTTP API no longer accepts an arbitrary `.bib` path in `bib`.** A direct
+  path is a CLI convenience; over the API it let any request that reached it
+  make pzi create and write a library anywhere the user can write. Requests are
+  confined to libraries declared in `config.toml` (by name or configured path).
+- **Binding to a wildcard address (`0.0.0.0`, `::`) is refused.** It started the
+  server and then rejected every request, because the Host check that guards
+  against DNS rebinding had no bind address to match. Bind to a specific address.
+- **`pzi server` states whether auth is enabled at startup.** A token resolves
+  from the data home, so a differing `XDG_DATA_HOME` between `pzi init` and the
+  server silently yielded no token and served the API unauthenticated.
+- **`pzi init` creates `config.toml` with mode `0600`** — it may hold a plaintext
+  `api_auth_token` and `*_cmd` hooks that pzi executes.
+- **The extension's bot-bypass allowlist now matches on a domain boundary.**
+  `evil-nature.com` cleared an allowlist entry of `nature.com`.
+
 ### Fixed
+
+- **The browser extension is installable again.** The manifest carried the PEP
+  440 project version verbatim (`0.1.0b2`), which Chrome and AMO reject, so the
+  v0.1.0b2 zips could not be installed. The version is translated to
+  dot-separated integers, with pre-releases ordered below the final release.
+- **DOM-based PDF discovery never ran.** The injected function referenced a
+  service-worker module name that does not exist in the page, so it threw and
+  the failure was swallowed.
+- **A page with many PDF links no longer fails the whole capture.** Candidates
+  are capped client-side at the limit the server enforces.
+- **Re-capturing a paper with a differently-cased or trailing-slash DOI no
+  longer creates a duplicate entry.** DOI identities are canonicalized before
+  comparison.
 
 - **`pzi fix reindex` renamed the wrong PDF.** The file to rename was derived
   from the old citekey rather than read from the entry, so an unrelated

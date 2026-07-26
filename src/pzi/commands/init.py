@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.resources
+import os
 from pathlib import Path
 from typing import TextIO
 
@@ -36,8 +37,17 @@ def run_init_command(
         template = importlib.resources.files("pzi").joinpath("config.template.toml")
         with importlib.resources.as_file(template) as src:
             content = Path(src).read_text()
-    dest.write_text(content)
-    print(f"created {dest}", file=stdout)
+    # Owner-only from creation: config.toml may carry an api_auth_token in
+    # plaintext and *_cmd hooks that pzi executes, so it should never be briefly
+    # group/world-readable. chmod after the write also tightens a pre-existing
+    # file being overwritten with --force.
+    fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, content.encode("utf-8"))
+    finally:
+        os.close(fd)
+    os.chmod(dest, 0o600)
+    print(f"created {dest} (mode 0600)", file=stdout)
 
     if args.setup and token_path is not None:
         print(

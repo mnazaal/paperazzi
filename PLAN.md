@@ -131,13 +131,39 @@ improvements — recorded under "Design track" below.
    Records parsed out of the library deliberately do **not** carry it, so
    promotion stays free to retype an entry.
 
-5. **Identity normalization.** DOI case/trailing-slash/nested-path in
-   `normalize_doi` + `extract_identities`.
-6. **Security.** `bib` selector confinement, attach-session enforcement,
-   XDG token divergence + auth-state visibility, `config.toml` mode, wildcard
-   bind Host check.
-7. **Extension.** Manifest version (unblocks the b3 release independently, do
-   early), injected-function scope bugs, allowlist boundary, candidate cap.
+5. **Identity normalization.** **Done 2026-07-26.** `normalize_doi` strips a
+   trailing slash (it already folded case), and `extract_identities`
+   canonicalizes the DOI before indexing — comparing stored DOIs verbatim meant
+   `10.1145/abc` did not match an incoming `10.1145/ABC`, so re-capture wrote a
+   duplicate. A value `normalize_doi` cannot parse falls back to a case-folded
+   strip so it still matches itself. Verified through the CLI.
+6. **Security.** **Done 2026-07-26.**
+   - **`bib` selector confinement.** A direct `.bib` path is a CLI convenience;
+     over HTTP it let any request reaching the API create and write a library
+     anywhere the user can write. POST requests are confined to configured
+     libraries, checked once at the dispatch point so a new route cannot miss it.
+   - **Wildcard bind.** `0.0.0.0` started the server and then rejected every
+     request (the DNS-rebinding Host check has no bind address to match), so it
+     is refused up front with an actionable message.
+   - **Auth-state visibility.** The server now states whether a token is
+     required at startup: a differing `XDG_DATA_HOME` between `pzi init` and the
+     server resolves the token to None, and an unauthenticated API looked
+     identical to an authenticated one.
+   - **`config.toml` mode.** `pzi init` creates it `0600`; it was written with
+     the default umask, so pzi created a file `pzi doctor` then warned about.
+   - **Attach-session enforcement — verified already correct**, not changed:
+     single-use, expiry, `compare_digest` on the token, citekey/bib match, size
+     cap, `%PDF-` magic check and a source-URL allowlist, invoked on both attach
+     routes.
+7. **Extension.** **Done 2026-07-26.** The manifest carried the PEP 440 version
+   verbatim, so the b2 zips were uninstallable; it is now translated
+   (`0.1.0b2` -> `0.1.0.2002`) with the pre-release in the 4th component so it
+   still sorts below the final release, and the PEP 440 string is kept as
+   `version_name`. Also fixed: DOM PDF discovery never ran (the injected
+   function referenced a service-worker module name that does not exist in the
+   page), the bot-bypass allowlist matched without a domain boundary
+   (`evil-nature.com` cleared `nature.com`), and PDF candidates are capped
+   client-side at the server's limit, which rejects an over-long list outright.
 
 ## Design track — from the 2026-07-26 review
 

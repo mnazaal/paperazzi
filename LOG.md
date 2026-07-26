@@ -2,7 +2,52 @@
 
 Newest first. Prepend-only; corrections are new entries, never rewrites.
 
-## 2026-07-26 (latest) — design track complete: hidden channels and env reads closed
+## 2026-07-26 (latest) — steps 5, 6, 7 done: the whole PLAN backlog is closed
+
+**Verdict:** every remediation step and every design-track item is done. The
+extension is installable again, so a `0.1.0b3` can supersede the broken b2.
+
+**Load-bearing numbers.** Suite **1446 → 1465 passed**, 8 skipped, 20 deselected;
+`ruff` clean, `pyright` 0 errors. Commits `82602e4`, `3a7a030`, `159c2c5`, and
+the config-mode fix.
+
+**The most serious find was not in the recorded list.** `bib` accepted a direct
+`.bib` path over HTTP exactly as it does on the CLI, so any request reaching the
+API — the extension, or any local process while auth is off — could make pzi
+create and write a library anywhere the user can write. Confinement is enforced
+once at the POST dispatch point rather than per route, so a new route cannot
+miss it.
+
+**Extension defects, all confirmed by running the code.** DOM-based PDF
+discovery had never worked: the injected function was
+`() => scanDomForPdfUrls(document)`, but `executeScript` serialises the function
+and runs it in the page where that module name does not exist, so it threw
+ReferenceError and the surrounding catch swallowed it. The test for it rebuilds
+the function from source via `new Function` — the existing stubs call
+`opts.func()` directly, which keeps module scope in view and cannot catch this.
+
+**Verified rather than assumed:** attach-session enforcement was already
+correct (single-use, expiry, `compare_digest`, citekey/bib match, size cap,
+`%PDF-` magic, source allowlist, invoked on both routes) and was left alone.
+
+### Do NOT re-pursue
+
+- **Do not make the extension version a plain copy of the project version, and
+  do not append the pre-release number.** Browsers take only integers, and
+  `0.1.0.2` would sort *above* `0.1.0`, making a beta look newer than its final.
+- **Do not accept a wildcard bind by relaxing the Host check.** That check is
+  the DNS-rebinding guard; with no bind address to match, relaxing it removes
+  the protection. Bind to a specific address instead.
+- **Do not let `bib` name an arbitrary path over HTTP.** The CLI convenience is
+  deliberate; the API confinement is deliberate too.
+
+### Next session entry point
+
+Nothing is blocked. Optional follow-ups: cut `0.1.0b3` (bump `[project].version`,
+rebuild the extension zips, CHANGELOG already reads as a release note), and
+start moving `git audit-coverage` off 0% by reviewing the write-path core.
+
+## 2026-07-26 — design track complete: hidden channels and env reads closed
 
 **Verdict:** the whole design track (items 1-5) is done. PLAN.md's original
 steps 5-7 (DOI normalization, server hardening, extension) remain — those are

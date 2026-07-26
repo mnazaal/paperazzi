@@ -1304,3 +1304,25 @@ def test_run_cli_reports_concurrent_edit_without_traceback(monkeypatch) -> None:
     assert exit_code == exit_codes.ENVIRONMENT
     assert "modified externally" in stderr.getvalue()
     assert "retry" in stderr.getvalue()
+
+
+def test_init_creates_config_owner_only(tmp_path: Path) -> None:
+    """config.toml may hold a plaintext token and *_cmd hooks pzi executes.
+
+    It was written with the default umask mode, so on a typical system it landed
+    group/world-readable and `pzi doctor` then warned about the file pzi itself
+    had just created.
+    """
+    import stat
+
+    config_path = tmp_path / "config.toml"
+    exit_code = run_cli(
+        ["init", "--config", str(config_path)],
+        home_dir=str(tmp_path),
+        stdout=StringIO(),
+        stderr=StringIO(),
+    )
+
+    assert exit_code == 0
+    mode = stat.S_IMODE(config_path.stat().st_mode)
+    assert mode == 0o600, f"expected 0600, got {oct(mode)}"
