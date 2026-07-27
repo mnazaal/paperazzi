@@ -175,3 +175,75 @@ def test_merge_duplicates_drops_a_keeps_b_and_preserves_comments() -> None:
         # Non-entry blocks survive the merge (comment-preserving write path).
         assert "% library comment" in text
         assert "@string{acm" in text
+
+
+# === fuzzy near-duplicates (self-match regression) ===
+
+_FUZZY_PAIR = (
+    '@article{smith2024graph, title={Graph Neural Networks for Molecular'
+    ' Property Prediction}, author={Smith, Jane and Doe, John}, year={2024},'
+    ' doi={10.1000/aaa}}\n'
+    '@article{smith2024graphnets, title={Graph Neural Networks for Molecular'
+    ' Property Predictions}, author={Smith, Jane and Doe, John}, year={2024},'
+    ' doi={10.1000/bbb}}'
+)
+
+
+def test_find_duplicates_reports_fuzzy_near_duplicate() -> None:
+    """Near-duplicates with distinct DOIs are reported by the fuzzy pass.
+
+    Regression: the record was passed inside its own candidate corpus, and
+    ``compute_similarity_hint`` returns only the single best match — a record
+    always scores highest against itself, so the self-match won and was then
+    discarded, leaving the fuzzy pass silent for every library.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "fuzzy.bib")
+        _write_bib(bib, _FUZZY_PAIR)
+
+        result = find_duplicates(bib_path=bib)
+
+        # Distinct DOIs, so the exact-identity pass cannot see them.
+        assert result["exact_duplicates"] == []
+        assert len(result["fuzzy_candidates"]) == 1
+        candidate = result["fuzzy_candidates"][0]
+        assert {candidate["citekey"], candidate["hint"]} == {
+            "smith2024graph",
+            "smith2024graphnets",
+        }
+
+
+def test_find_duplicates_reports_each_fuzzy_pair_once() -> None:
+    """A near-duplicate pair yields one row, not one per direction."""
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "fuzzy_once.bib")
+        _write_bib(bib, _FUZZY_PAIR)
+
+        result = find_duplicates(bib_path=bib)
+
+        pairs = [
+            {c["citekey"], c["hint"]} for c in result["fuzzy_candidates"]
+        ]
+        assert pairs == [{"smith2024graph", "smith2024graphnets"}]
+
+
+def test_find_duplicates_still_silent_on_unrelated_entries() -> None:
+    """The self-exclusion must not invent matches between unrelated entries."""
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "unrelated.bib")
+        _write_bib(
+            bib,
+            (
+                '@article{smith2024, title={Graph Neural Networks for Molecular'
+                ' Property Prediction}, author={Smith, J}, year={2024},'
+                ' doi={10.1000/a}}\n'
+                '@article{jones2023, title={A Survey of Distributed Consensus'
+                ' Protocols}, author={Jones, K}, year={2023},'
+                ' doi={10.1000/b}}'
+            ),
+        )
+
+        result = find_duplicates(bib_path=bib)
+
+        assert result["exact_duplicates"] == []
+        assert result["fuzzy_candidates"] == []

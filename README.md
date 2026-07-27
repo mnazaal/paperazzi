@@ -166,7 +166,7 @@ Shared flags: every command accepts `[--config PATH]` to point at a config file 
 | Code | Meaning |
 |---|---|
 | 0 | Success |
-| 1 | Ran fine and has something to report: no search matches, duplicate clusters found, integrity issues, entries `check` could not verify |
+| 1 | Ran fine and has something to report: no search matches, duplicates or fuzzy near-duplicates found, integrity issues, entries `check` could not verify |
 | 2 | Usage error (unknown command, bad or missing arguments) |
 | 3 | Entry not found (unknown citekey) |
 | 4 | Batch partly failed — some items succeeded, some did not (`add --from-file`, `import`) |

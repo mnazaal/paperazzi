@@ -16,11 +16,15 @@ def run_dedupe_command(args, *, home_dir, config_path, stdout, stderr, bib_selec
     )
 
     result = find_duplicates(bib_path=target["path"])
+    # `total_clusters` counts exact clusters only, so it cannot stand in for
+    # "has something to report" — a library whose sole finding is a fuzzy
+    # near-duplicate still owes the caller exit 1.
+    findings = result.get("total_clusters", 0) + len(result.get("fuzzy_candidates", []))
     if getattr(args, "json", False):
         cli_json.emit_result(result, stdout, command="fix dedupe")
-        return 0 if result.get("total_clusters", 0) == 0 else 1
+        return 0 if findings == 0 else 1
     print_lines(_render_dedupe_result(result), stdout)
-    return 0 if result.get("total_clusters", 0) == 0 else 1
+    return 0 if findings == 0 else 1
 
 
 def run_merge_command(args, *, home_dir, config_path, stdout, stderr, bib_selector) -> int:

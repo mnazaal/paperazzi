@@ -91,19 +91,34 @@ def find_duplicates(
 
     # --- Fuzzy near-duplicates ---
     fuzzy_candidates: list[dict[str, Any]] = []
+    seen_pairs: set[frozenset[str]] = set()
     for i, record in enumerate(records):
         if i in seen_positions:
             continue
+        citekey = record.get("citekey", "")
+        # The record must be kept out of its own candidate corpus:
+        # `compute_similarity_hint` returns only the single *best* match, and a
+        # record always scores highest against itself (identical title tokens,
+        # full author overlap).  Passing the whole list therefore made the
+        # self-match win every time, and discarding it afterwards left the
+        # fuzzy pass permanently silent.
+        others = [other for j, other in enumerate(records) if j != i]
         hint = compute_similarity_hint(
-            record, records,  # type: ignore[arg-type]
+            record, others,  # type: ignore[arg-type]
             title_threshold=title_threshold,
             year_window=year_window,
         )
-        if hint and hint != record.get("citekey"):
-            fuzzy_candidates.append({
-                "citekey": record.get("citekey", ""),
-                "hint": hint,
-            })
+        if not hint or hint == citekey:
+            continue
+        # Both members of a pair point at each other; report the pair once.
+        pair = frozenset({citekey, hint})
+        if pair in seen_pairs:
+            continue
+        seen_pairs.add(pair)
+        fuzzy_candidates.append({
+            "citekey": citekey,
+            "hint": hint,
+        })
 
     return {
         "status": "ok",

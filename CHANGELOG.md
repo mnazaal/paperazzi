@@ -20,6 +20,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`pzi fix dedupe` never reported a single fuzzy near-duplicate.**
+  `find_duplicates` passed each record inside its own candidate corpus, but
+  `compute_similarity_hint` returns only the single *best* match and a record
+  always scores highest against itself (identical title tokens, full author
+  overlap). The self-match therefore won every time and was discarded by the
+  `hint != citekey` guard immediately after, so the fuzzy pass was silent for
+  every library — the exact-identity pass (DOI / arXiv id / canonical URL) was
+  doing all the work. Near-duplicates that carry *different* DOIs, which is
+  exactly what the fuzzy pass exists to catch, were invisible. The record is
+  now excluded from its own corpus, and a pair is reported once rather than
+  once per direction. No test covered `fuzzy_candidates` at all, which is why a
+  green suite never caught it.
+- **`pzi fix dedupe` exited 0 when its only finding was fuzzy.** The exit code
+  was derived from `total_clusters`, which counts exact clusters only. Per the
+  documented vocabulary, `1` means "ran fine, has something to report", so a
+  library whose sole finding is a near-duplicate now exits `1`. Scripts
+  branching on the exit code will see runs flip from `0` to `1` once real
+  near-duplicates are detected. `total_clusters` keeps its exact-only meaning.
 - **The layering guard could not see `from pzi import <module>`.**
   `tests/test_layer_boundaries.py` parsed `import pzi.x`, `from pzi.x import y`
   and both relative forms, but package-level imports fell through its

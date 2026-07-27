@@ -120,6 +120,52 @@ def test_compute_similarity_hint_picks_best_match() -> None:
     assert hint == "smith2024graph"
 
 
+def test_compute_similarity_hint_rejects_title_match_with_no_shared_authors() -> None:
+    """A merely-similar title needs author support; 0.85 is the bar without it."""
+    existing = [
+        {
+            "citekey": "nguyen2024estimation",
+            "title": "Graph Neural Networks for Molecular Property Estimation",
+            "authors": ["Nguyen, Linh"],
+            "year": 2024,
+        },
+    ]
+    hint = compute_similarity_hint(
+        {
+            "citekey": "smith2024prediction",
+            "title": "Graph Neural Networks for Molecular Property Prediction",
+            "authors": ["Smith, Jane"],
+            "year": 2024,
+        },
+        existing,
+    )
+    # Jaccard is 0.75 here — over the 0.6 title threshold, under the 0.85 the
+    # scorer demands when no author is shared.
+    assert hint is None
+
+
+def test_compute_similarity_hint_accepts_strong_title_match_without_authors() -> None:
+    """Above 0.85, title similarity alone carries the match."""
+    existing = [
+        {
+            "citekey": "nguyen2024revisited",
+            "title": "Graph Neural Networks for Molecular Property Prediction Revisited",
+            "authors": ["Nguyen, Linh"],
+            "year": 2024,
+        },
+    ]
+    hint = compute_similarity_hint(
+        {
+            "citekey": "smith2024prediction",
+            "title": "Graph Neural Networks for Molecular Property Prediction",
+            "authors": ["Smith, Jane"],
+            "year": 2024,
+        },
+        existing,
+    )
+    assert hint == "nguyen2024revisited"
+
+
 def test_compute_similarity_hint_respects_year_window() -> None:
     existing = [
         {
