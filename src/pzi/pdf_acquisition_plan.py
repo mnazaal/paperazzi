@@ -1,4 +1,22 @@
-"""Pure PDF acquisition planning for browser-mediated PDF capture."""
+"""Pure PDF acquisition planning for browser-mediated PDF capture.
+
+Sole caller: ``_maybe_add_pdf_request`` in :mod:`pzi.http_post_routes`, on the
+``POST /capture`` path, when a capture succeeded but the server could not
+fetch the PDF itself — the resulting plan is handed to the browser extension
+to execute in the user's logged-in session.
+
+The single caller is deliberate rather than incidental: the publisher gateway
+table below is policy that changes whenever a publisher moves a URL, and
+keeping it out of the route handler is what lets
+``tests/test_pdf_acquisition_plan.py`` exercise every publisher pattern
+directly — no HTTP request, body parsing, or auth in the way. Inlining it
+would bury ~230 lines of matching rules in an 860-line routing module and
+turn each new publisher into a route-level test.
+
+Tiered CORE (see ``tests/test_layer_boundaries.py``) because it imports
+nothing from pzi at all; that its only consumer today is a front-end module
+does not make it front-end code.
+"""
 
 from __future__ import annotations
 
