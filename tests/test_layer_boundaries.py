@@ -175,11 +175,16 @@ BROWSER: frozenset[str] = frozenset(
 
 
 def _imported_pzi_modules(path: Path) -> set[str]:
-    """Return pzi-internal module stems imported directly by *path*.
+    """Return candidate pzi-internal module stems imported directly by *path*.
 
-    Handles both absolute (``from pzi.foo import …``) and relative
-    (``from . import foo`` / ``from .foo import …``) forms so a back-edge
-    introduced via a relative import is caught the same as an absolute one.
+    Handles absolute (``from pzi.foo import …``), package-level
+    (``from pzi import foo``) and relative (``from . import foo`` /
+    ``from .foo import …``) forms so a back-edge is caught whichever way it is
+    written.  The package-level and bare-relative forms cannot be told apart
+    from a re-exported function or type at this level (``from pzi import
+    cli_version_text`` parses identically to ``from pzi import http_api``), so
+    the names they yield are candidates; :func:`_build_import_graph` drops the
+    ones that are not real modules.
     """
     tree = ast.parse(path.read_text(encoding="utf-8"))
     names: set[str] = set()
@@ -192,6 +197,10 @@ def _imported_pzi_modules(path: Path) -> set[str]:
             if node.level == 0 and node.module:
                 if node.module.startswith("pzi."):
                     names.add(node.module.removeprefix("pzi."))
+                elif node.module == "pzi":
+                    # ``from pzi import foo`` — the names *are* the stems.
+                    for alias in node.names:
+                        names.add(alias.name)
             elif node.level > 0:
                 # Relative import inside the pzi package.
                 if node.module:
@@ -225,10 +234,17 @@ def _all_module_paths() -> list[Path]:
 
 
 def _build_import_graph() -> dict[str, set[str]]:
-    """Parse every pzi module and return name → {directly-imported names}."""
+    """Parse every pzi module and return name → {directly-imported modules}.
+
+    Candidate names that do not correspond to a real module file are dropped:
+    ``from pzi import cli_version_text`` names a re-exported function, not an
+    edge, and leaving it in would put a phantom node in the graph.
+    """
+    paths = _all_module_paths()
+    known = {_module_name(path) for path in paths}
     graph: dict[str, set[str]] = {}
-    for path in _all_module_paths():
-        graph[_module_name(path)] = _imported_pzi_modules(path)
+    for path in paths:
+        graph[_module_name(path)] = _imported_pzi_modules(path) & known
     return graph
 
 
@@ -352,3 +368,44 @@ def test_no_import_cycles() -> None:
                 stack.append((dep, [*path, dep]))
 
     assert not cycles, "import cycles:\n" + "\n".join(" -> ".join(c) for c in cycles)
+
+
+# ---------------------------------------------------------------------------
+# Guard the guard: the extractor above is what every check on this page trusts,
+# so an edge form it cannot see disables all of them silently.
+# ---------------------------------------------------------------------------
+
+
+def test_extractor_sees_package_level_import(tmp_path: Path) -> None:
+    """``from pzi import http_api`` is an edge, not an opaque name.
+
+    This form was invisible for 22 import sites: it parses with ``level == 0``
+    and ``module == "pzi"``, which fails the ``startswith("pzi.")`` test, so the
+    edge was dropped and every tier check below waved it through. All 22 were
+    legal, which is exactly why nothing failed.
+    """
+    module = tmp_path / "sample.py"
+    module.write_text("from pzi import http_api, exit_codes\n", encoding="utf-8")
+    assert _imported_pzi_modules(module) == {"http_api", "exit_codes"}
+
+
+def test_graph_contains_package_level_edges() -> None:
+    """The real graph carries edges only ever written as ``from pzi import X``.
+
+    ``commands/init.py:10`` is the case with no absolute-form twin elsewhere in
+    the file, so it is zero if the extractor regresses.
+    """
+    graph = _build_import_graph()
+    assert "setup_service" in graph["commands.init"]
+    assert "exit_codes" in graph["errors"]
+
+
+def test_graph_drops_reexported_non_modules() -> None:
+    """``from pzi import cli_version_text`` names a function, not a module.
+
+    Left in, it would seed the graph with phantom nodes that no tier claims and
+    ``test_all_modules_classified`` never sees.
+    """
+    graph = _build_import_graph()
+    assert "cli_version_text" not in graph["ts_backend"]
+    assert "cli_version_text" not in graph

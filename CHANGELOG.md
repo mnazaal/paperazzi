@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The layering guard could not see `from pzi import <module>`.**
+  `tests/test_layer_boundaries.py` parsed `import pzi.x`, `from pzi.x import y`
+  and both relative forms, but package-level imports fell through its
+  `startswith("pzi.")` check, so 22 import edges — including
+  `commands/init.py` → `setup_service` and `errors.py` → `exit_codes`, which
+  are written *only* that way — were invisible to all five architectural
+  checks. Every one of them was legal, which is why nothing ever failed; a
+  future core-module import of a front-end would have passed just as quietly.
+  The extractor now reads that form, and the graph drops candidate names that
+  are re-exported functions rather than modules.
+
 ## [0.1.0b3] - 2026-07-26
 
 ### Changed
