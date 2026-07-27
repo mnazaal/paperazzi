@@ -30,6 +30,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   future core-module import of a front-end would have passed just as quietly.
   The extractor now reads that form, and the graph drops candidate names that
   are re-exported functions rather than modules.
+- **`update --promote` carried a stale confidence-threshold fallback.**
+  `promote_service` read `config.get("promote_confidence_threshold", 3)`, a
+  leftover from before the move to `score_match`'s 0-100 scale, where the
+  documented default is 60 — on the current scale a threshold of 3 is
+  effectively no gate at all. It was unreachable (`AppConfig` is a total
+  `TypedDict`, so the loader always supplies the key, and a config omitting it
+  resolves to 60), so no run was ever affected; the fallback is now gone in
+  favour of a plain subscript, and the default itself is a named constant
+  (`config.DEFAULT_PROMOTE_CONFIDENCE_THRESHOLD`) rather than the literal `60`
+  repeated across the loader and the validator.
 - **`NormalizedRecord.similarity_hint` was declared but never written.** The
   fuzzy dedup hint went into `note` prose only. The field now carries the
   matched citekey, which is what the new duplicate warning reads. It is not

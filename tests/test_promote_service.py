@@ -880,6 +880,51 @@ def test_promote_rejects_a_candidate_matching_on_authors_alone(tmp_path):
     assert "10.9/beetle" not in bib_path.read_text()
 
 
+def test_promote_applies_the_configured_default_threshold(tmp_path):
+    """With no threshold in config, the gate is 60 — the loader's default.
+
+    `promote_service` used to carry its own fallback of 3, left over from the
+    pre-`score_match` feature-count scale. It was unreachable (`AppConfig` is a
+    total TypedDict, so the loader always supplies the key), but a re-introduced
+    independent default would reopen the gate to near-anything.
+
+    The candidate below scores exactly 50: same title, disjoint authors, which
+    `score_match` flags `chimeric` — the classic fabricated-author citation.
+    50 is above 3 and below 60, so it is promoted under the stale fallback and
+    skipped under the real default. That band is the point of this test.
+    """
+    bib_path = tmp_path / "ml.bib"
+    config_path = _write_config(tmp_path, bib_path)  # no promote_confidence_threshold
+    _seed_bib_with_preprint(tmp_path, bib_path, config_path)
+
+    def fake_search(query: str, *, server_url: str):
+        return [
+            {
+                "item_type": "journalArticle",
+                "record": {
+                    "title": "Graph Parsers",
+                    "venue": "Journal of Parsing",
+                    "doi": "10.9/jop",
+                    "year": 2024,
+                    "authors": ["Doe, John"],
+                },
+                "attachments": [],
+            }
+        ]
+
+    result = promote_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        dry_run=False,
+        fetch_search=fake_search,
+    )
+
+    assert result["items"][0]["action"] == "skip"
+    assert result["items"][0]["note"] == "low confidence (50 < 60)"
+    assert "10.9/jop" not in bib_path.read_text(), "nothing may be written"
+
+
 def test_promote_does_not_blank_fields_the_candidate_left_none(tmp_path):
     """A candidate key explicitly set to ``None`` must not clear a populated
     field — ``_openreview_normalize`` always emits ``doi: None``."""

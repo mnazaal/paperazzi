@@ -124,8 +124,12 @@ def promote_bib(
     contact_email = resolve_contact_email(config)
     effective_flaresolverr_url = flaresolverr_url or config.get("flaresolverr_url")
     effective_browser_pdf_cmd = browser_pdf_cmd or config.get("browser_pdf_cmd")
+    # Subscript, not `.get(..., default)`: `AppConfig` is a total TypedDict, so
+    # the loader always supplies this. The old fallback of 3 predated the move
+    # to `score_match`'s 0-100 scale (where the default is 60) and would have
+    # meant an effectively open gate had it ever been reachable.
     effective_confidence_threshold = (
-        int(config.get("promote_confidence_threshold", 3))
+        config["promote_confidence_threshold"]
         if confidence_threshold is None
         else confidence_threshold
     )
