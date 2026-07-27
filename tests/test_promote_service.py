@@ -772,7 +772,7 @@ def test_promote_unexpected_error_isolated_per_record(tmp_path, monkeypatch):
     assert "doi = {10.9/beta}" in bib_path.read_text()
 
 
-# === destructive write paths (2026-07 audit, PLAN.md step 3) ===
+# === destructive write paths (2026-07 audit) ===
 
 
 def _preprint_bib_text(extra_fields: str = "") -> str:

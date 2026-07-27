@@ -18,3 +18,7 @@ dist/
 *.egg-info/
 
 .lean-ctx/
+
+# Personal dev-workflow docs: agent session plan/log, not project documentation.
+PLAN.md
+LOG.md
