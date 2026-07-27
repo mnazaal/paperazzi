@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`pzi add` now warns when it inserts a probable duplicate.** A capture with
+  no DOI and no arXiv id cannot exact-match an existing entry, so it inserts a
+  second one; the fuzzy near-duplicate match was recorded only in the new
+  entry's `note` field, which meant the terminal output looked identical to a
+  clean capture. It now also prints ``warning: possibly a duplicate of
+  <citekey> — compare them with `pzi fix dedupe` `` to stderr, and carries it
+  in the `warnings` list of `--json` output. Applies to single and bulk
+  (`--from-file`, `inbox`) capture alike.
+
 ### Fixed
 
 - **The layering guard could not see `from pzi import <module>`.**
@@ -19,6 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   future core-module import of a front-end would have passed just as quietly.
   The extractor now reads that form, and the graph drops candidate names that
   are re-exported functions rather than modules.
+- **`NormalizedRecord.similarity_hint` was declared but never written.** The
+  fuzzy dedup hint went into `note` prose only. The field now carries the
+  matched citekey, which is what the new duplicate warning reads. It is not
+  serialized into BibTeX (`record_to_bibtex_entry` projects an explicit
+  allowlist), so `.bib` output is unchanged apart from the existing note.
 
 ## [0.1.0b3] - 2026-07-26
 

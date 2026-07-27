@@ -12,6 +12,7 @@ from pzi.add_planning import (
     minimum_metadata_diagnostics,
     pdf_result_fields,
     safe_api_call,
+    similarity_hint_warnings,
     split_record_overrides,
 )
 from pzi.format_templates import format_citekey, format_pdf_filename, render_zotero_template
@@ -145,6 +146,81 @@ def test_attach_similarity_hint_leaves_exact_match_unchanged() -> None:
     result = attach_similarity_hint(record, [record])
 
     assert result is record
+
+
+# --- Near-duplicate hint: note text, structured field, and the warning -------
+
+_EXISTING_NEAR_DUPLICATE = {
+    "citekey": "smith2024graph",
+    "title": "A Study of Graph Parsers",
+    "authors": ["Smith, Jane"],
+    "year": 2024,
+    "canonical_url": "https://example.org/paper",
+}
+
+
+def _incoming_near_duplicate(**overrides: object) -> dict[str, object]:
+    """Same paper, different URL and no shared identifier — the insert case."""
+    record: dict[str, object] = {
+        "citekey": "smith2024graph-2",
+        "title": "A Study of Graph Parsers",
+        "authors": ["Smith, Jane"],
+        "year": 2024,
+        "canonical_url": "https://example.org/paper/",
+    }
+    record.update(overrides)
+    return record
+
+
+def test_attach_similarity_hint_records_citekey_structurally() -> None:
+    """The hint lands in a typed field, not only in the note prose."""
+    result = attach_similarity_hint(
+        _incoming_near_duplicate(), [_EXISTING_NEAR_DUPLICATE]
+    )
+
+    assert result["similarity_hint"] == "smith2024graph"
+    assert result["note"] == "Possibly similar to smith2024graph"
+
+
+def test_attach_similarity_hint_appends_to_an_existing_note() -> None:
+    result = attach_similarity_hint(
+        _incoming_near_duplicate(note="Read this one first"),
+        [_EXISTING_NEAR_DUPLICATE],
+    )
+
+    assert result["note"] == "Read this one first; Possibly similar to smith2024graph"
+    assert result["similarity_hint"] == "smith2024graph"
+
+
+def test_attach_similarity_hint_does_not_duplicate_note_but_still_flags() -> None:
+    """Re-capturing an already-hinted entry still warns.
+
+    The note must not grow a second copy of the same sentence, but suppressing
+    the note is not a reason to suppress the warning.
+    """
+    result = attach_similarity_hint(
+        _incoming_near_duplicate(note="Possibly similar to smith2024graph"),
+        [_EXISTING_NEAR_DUPLICATE],
+    )
+
+    assert result["note"] == "Possibly similar to smith2024graph"
+    assert result["similarity_hint"] == "smith2024graph"
+
+
+def test_similarity_hint_warnings_surfaces_the_citekey() -> None:
+    hinted = attach_similarity_hint(
+        _incoming_near_duplicate(), [_EXISTING_NEAR_DUPLICATE]
+    )
+
+    assert similarity_hint_warnings(hinted) == [
+        "possibly a duplicate of smith2024graph — compare them with `pzi fix dedupe`"
+    ]
+
+
+def test_similarity_hint_warnings_silent_without_a_hint() -> None:
+    assert similarity_hint_warnings({"citekey": "smith2024graph"}) == []
+    assert similarity_hint_warnings({"similarity_hint": None}) == []
+    assert similarity_hint_warnings({"similarity_hint": "  "}) == []
 
 
 RECORD = {

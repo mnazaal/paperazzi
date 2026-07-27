@@ -531,7 +531,7 @@ def add_record_with_bib(
     result: AddRecordResult = build_add_record_result(
         bib=bib,
         plan=plan,
-        warnings=warnings,
+        warnings=[*warnings, *_add_planning.similarity_hint_warnings(record_with_hint)],
         dry_run=dry_run,
     )
 
@@ -690,7 +690,13 @@ def add_records_to_bib_batch(
                         batch_pdfs.append(record_pdf)
                     session.apply_plan(plan)
                 results.append(build_add_record_result(
-                    bib=bib, plan=plan, warnings=warnings, dry_run=dry_run,
+                    bib=bib,
+                    plan=plan,
+                    warnings=[
+                        *warnings,
+                        *_add_planning.similarity_hint_warnings(typed),
+                    ],
+                    dry_run=dry_run,
                 ))
 
     except Exception:

@@ -1715,3 +1715,48 @@ default = true
 
     assert result["status"] == "ok"
     assert result["metadata_diagnostics"], "several candidates must be reported"
+
+
+def test_near_duplicate_insert_warns_and_notes_the_existing_entry(tmp_path: Path) -> None:
+    """A same-paper capture with no shared identifier inserts, but says so.
+
+    No DOI and no arXiv id on either side, and the two canonical URLs differ by
+    a trailing slash, so exact-identity matching cannot fire and the write is an
+    insert. The near-duplicate was previously recorded only in the new entry's
+    ``note`` field, which meant the terminal output was indistinguishable from a
+    clean capture.
+    """
+    bib_path = tmp_path / "library.bib"
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    bib_path.write_text(
+        "@article{smith2024graph,\n"
+        "  title = {A Study of Graph Parsers},\n"
+        "  author = {Smith, Jane},\n"
+        "  year = {2024},\n"
+        "  url = {https://example.org/paper},\n"
+        "}\n"
+    )
+    bib = {"name": "main", "path": str(bib_path), "papers_dir": str(papers), "default": True}
+
+    result = add_record_with_bib(
+        bib=cast(dict, bib),
+        record={
+            "title": "A Study of Graph Parsers",
+            "authors": ["Smith, Jane"],
+            "year": 2024,
+            "canonical_url": "https://example.org/paper/",
+        },
+        dry_run=False,
+    )
+
+    assert result["status"] == "ok"
+    assert result["action"] == "insert", "no shared identifier — cannot exact-match"
+    assert result["warnings"] == [
+        "possibly a duplicate of smith2024graph — compare them with `pzi fix dedupe`"
+    ]
+
+    text = bib_path.read_text()
+    assert text.count("@article{") == 2, "the duplicate is still written"
+    assert "Possibly similar to smith2024graph" in text, "note records it in the bib"
+    assert "similarity_hint" not in text, "the structural field must not leak into BibTeX"

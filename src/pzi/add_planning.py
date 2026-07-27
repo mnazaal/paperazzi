@@ -242,16 +242,33 @@ def attach_similarity_hint(
 
     hint_text = f"Possibly similar to {hint_citekey}"
     existing_note = record.get("note")
-    if isinstance(existing_note, str) and existing_note.strip():
-        if hint_text in existing_note:
-            return record
-        combined = f"{existing_note.strip()}; {hint_text}"
-    else:
-        combined = hint_text
-
     updated = dict(record)
-    updated["note"] = combined
+    # Record the match structurally as well as in the note. The note is what
+    # survives into the .bib; ``similarity_hint`` is what lets the caller warn
+    # the user without re-parsing prose out of the note field.
+    updated["similarity_hint"] = hint_citekey
+    if isinstance(existing_note, str) and existing_note.strip():
+        # Re-capturing an already-hinted entry must not append the hint twice,
+        # but it still deserves the warning — so set the field either way.
+        if hint_text not in existing_note:
+            updated["note"] = f"{existing_note.strip()}; {hint_text}"
+    else:
+        updated["note"] = hint_text
     return cast(NormalizedRecord, updated)
+
+
+def similarity_hint_warnings(record: Mapping[str, object]) -> list[str]:
+    """User-facing warnings for a fuzzy near-duplicate, if one was hinted.
+
+    :func:`attach_similarity_hint` only writes the match into the entry's
+    ``note`` field, so a near-duplicate was discoverable solely by reading the
+    ``.bib`` afterwards or running ``pzi fix dedupe`` — a capture that quietly
+    doubled an entry looked identical to a clean one.
+    """
+    hint = record.get("similarity_hint")
+    if not isinstance(hint, str) or not hint.strip():
+        return []
+    return [f"possibly a duplicate of {hint} — compare them with `pzi fix dedupe`"]
 
 
 # ---------------------------------------------------------------------------
