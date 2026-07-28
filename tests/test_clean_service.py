@@ -55,14 +55,42 @@ def test_validate_library_duplicate_citekeys() -> None:
             ),
         )
         result = validate_library(bib_path=bib, papers_dir=papers)
-        assert result["status"] == "ok"
-        # bibtexparser v2 detects duplicates; at least 1 entry parsed, duplicate caught by parse
-        assert result["total_entries"] >= 1
-        # Duplicate citekeys appear as parse issues in bibtexparser v2
-        issues = result["issues"]
-        assert any(
-            i["type"] in ("duplicate_citekey", "parse_error") for i in issues
+        # bibtexparser v2 reports a duplicate key as a failed block and keeps
+        # only the first, so the duplicate never reaches the `duplicate_citekey`
+        # check — it arrives as a parse error, and the library is not fully
+        # readable.
+        assert result["status"] == "error"
+        assert [i["type"] for i in result["issues"]] == ["parse_error"]
+
+
+def test_clean_fix_does_not_quarantine_the_pdf_of_a_dropped_duplicate() -> None:
+    """The dropped half of a duplicate-citekey pair still owns its PDF.
+
+    Only the first block of a duplicated key survives parsing, so the second
+    one's PDF is referenced by nothing the parser can see — the same way an
+    unparseable entry's is.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "dup_pdf.bib")
+        papers = os.path.join(td, "papers")
+        os.makedirs(papers, exist_ok=True)
+        first_pdf = os.path.join(papers, "smith2024.pdf")
+        second_pdf = os.path.join(papers, "smith2024-2.pdf")
+        Path(first_pdf).write_bytes(b"%PDF-1.4\n")
+        Path(second_pdf).write_bytes(b"%PDF-1.4\n")
+        _write_bib(
+            bib,
+            f'@article{{smith2024, title = {{A}}, file = {{{first_pdf}}}}}\n'
+            f'@article{{smith2024, title = {{B}}, file = {{{second_pdf}}}}}\n',
         )
+
+        result = clean_library(
+            bib_path=bib, papers_dir=papers, dry_run=False, move_orphans=True,
+        )
+
+        assert result["status"] == "error"
+        assert os.path.exists(second_pdf)
+        assert not os.path.exists(os.path.join(papers, ".orphans"))
 
 
 def test_validate_library_missing_pdf() -> None:
@@ -211,3 +239,62 @@ def test_clean_library_move_orphans_real() -> None:
         # Orphan should be moved
         assert not os.path.exists(orphan)
         assert os.path.exists(os.path.join(papers, ".orphans", "stale.pdf"))
+
+
+def test_validate_library_reports_a_wholly_corrupt_bib_as_an_error() -> None:
+    """A bib the parser cannot read must not be reported as a clean, empty one.
+
+    The lenient reader drops unparseable blocks rather than raising, so a fully
+    corrupt file yields zero entries — indistinguishable from an empty library
+    unless the parse is checked explicitly.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "corrupt.bib")
+        papers = os.path.join(td, "papers")
+        os.makedirs(papers, exist_ok=True)
+        _write_bib(bib, "@article{broken2024,\n  title = {Unclosed brace\n")
+
+        result = validate_library(bib_path=bib, papers_dir=papers)
+
+        assert result["status"] == "error"
+        assert [i["type"] for i in result["issues"]] == ["parse_error"]
+
+
+def test_clean_fix_does_not_quarantine_pdfs_of_unparseable_entries() -> None:
+    """A malformed entry's PDF is not an orphan — the parser just could not see it.
+
+    Dropped entries contribute no referenced paths, so their PDFs look unclaimed.
+    Moving one to `.orphans/` leaves the entry's own `file =` dangling, which is
+    data loss caused by the repair tool.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "partial.bib")
+        papers = os.path.join(td, "papers")
+        os.makedirs(papers, exist_ok=True)
+        good_pdf = os.path.join(papers, "good2024.pdf")
+        broken_pdf = os.path.join(papers, "broken2024.pdf")
+        Path(good_pdf).write_bytes(b"%PDF-1.4\n")
+        Path(broken_pdf).write_bytes(b"%PDF-1.4\n")
+        _write_bib(
+            bib,
+            "@article{good2024,\n"
+            "  title = {A Good One},\n"
+            f"  file = {{{good_pdf}}},\n"
+            "}\n"
+            "\n"
+            "@article{broken2024,\n"
+            "  title = {Missing closing brace\n"
+            f"  file = {{{broken_pdf}}},\n"
+            "}\n",
+        )
+
+        result = clean_library(
+            bib_path=bib, papers_dir=papers, dry_run=False, move_orphans=True,
+        )
+
+        assert result["status"] == "error"
+        assert result.get("actions") == []
+        # Neither PDF was moved.
+        assert os.path.exists(broken_pdf)
+        assert os.path.exists(good_pdf)
+        assert not os.path.exists(os.path.join(papers, ".orphans"))

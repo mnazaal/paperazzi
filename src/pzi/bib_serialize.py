@@ -20,7 +20,10 @@ from pathlib import Path
 
 from bibtexparser.entrypoint import parse_string, write_string
 from bibtexparser.library import Library
-from bibtexparser.middlewares.enclosing import RemoveEnclosingMiddleware
+from bibtexparser.middlewares.enclosing import (
+    AddEnclosingMiddleware,
+    RemoveEnclosingMiddleware,
+)
 from bibtexparser.model import Entry as BibtexEntryV2
 from bibtexparser.model import Field
 from bibtexparser.writer import BibtexFormat
@@ -124,10 +127,41 @@ def _library_to_entries_records(
 
 
 def _serialize_library(library: Library) -> str:
-    """Serialize a v2 Library to BibTeX text."""
+    """Serialize a v2 Library to BibTeX text, preserving original enclosings.
+
+    ``_parse_bib_library`` strips enclosings with ``RemoveEnclosingMiddleware``,
+    which records what it removed (including ``no-enclosing`` for a bare
+    ``@string`` macro reference) on each block. The writer's *default* unparse
+    stack discards that record and braces everything, which turns
+    ``journal = jmlr`` into ``journal = {jmlr}`` — the ``@string`` block survives
+    but every reference to it is severed. Reusing the recorded enclosing writes
+    those fields back exactly as they were found.
+
+    This only helps blocks that still carry the parser's record. Entries a write
+    plan rebuilt (see ``_bibtex_entry_to_library_entry``) carry none, so they
+    fall back to ``default_enclosing`` and are brace-wrapped. That is also what
+    keeps ``_safe_field_value``'s injection guard meaningful: every value this
+    code composes is enclosed, and only text read verbatim off disk is written
+    back bare.
+
+    The rebuilt entry therefore still loses its own macro references — the
+    record model reaches it via ``parse_bibtex``, which resolves ``@string``,
+    so it is written back expanded. Scope is one entry per write instead of the
+    whole file; see ``tests/test_bib_stability.py``.
+    """
     fmt = BibtexFormat()
     fmt.indent = "  "
-    return write_string(library, bibtex_format=fmt)
+    return write_string(
+        library,
+        unparse_stack=[
+            AddEnclosingMiddleware(
+                default_enclosing="{",
+                reuse_previous_enclosing=True,
+                enclose_integers=True,
+            )
+        ],
+        bibtex_format=fmt,
+    )
 
 
 def _validate_bibtex_roundtrip(entries: list[BibtexEntry]) -> None:

@@ -52,6 +52,40 @@ def validate_library(
     entries: list[BibtexEntry] = raw["entries"]
     records = raw["records"]
 
+    # Parse-check before anything else, and before the empty-library shortcut.
+    # `read_bib_file_raw` is lenient: it drops blocks it cannot parse instead of
+    # raising, so a malformed file arrives here looking like a short — or
+    # entirely empty — library. Checking after the shortcut meant a wholly
+    # corrupt bib reported "ok, 0 entries, no issues" and exited 0. Worse, a
+    # partially corrupt one let `--fix` quarantine the PDFs of every dropped
+    # entry: a dropped entry contributes no referenced path, so its PDF looks
+    # orphaned, and moving it leaves the entry's `file =` dangling.
+    if Path(bib_path).exists():
+        try:
+            from bibtexparser.entrypoint import parse_string as _parse
+            text = read_text_utf8(bib_path)
+            library = _parse(text)
+            validate_library_parseable(library)
+        except ValueError as exc:
+            # Every count below is derived from the entries the lenient parser
+            # kept, so all of them would understate a file we cannot fully read.
+            # Report the parse failure alone rather than alongside numbers that
+            # invite acting on it.
+            return {
+                "status": "error",
+                "bib_path": bib_path,
+                "papers_dir": papers_dir,
+                "total_entries": len(entries),
+                "duplicate_citekeys": [],
+                "missing_pdfs": [],
+                "orphan_pdfs": [],
+                "issues": [{
+                    "severity": "error",
+                    "type": "parse_error",
+                    "message": str(exc),
+                }],
+            }
+
     if not entries:
         return {
             "status": "ok",
@@ -63,18 +97,6 @@ def validate_library(
             "orphan_pdfs": [],
             "issues": [],
         }
-
-    try:
-        from bibtexparser.entrypoint import parse_string as _parse
-        text = read_text_utf8(bib_path)
-        library = _parse(text)
-        validate_library_parseable(library)
-    except ValueError as exc:
-        issues.append({
-            "severity": "error",
-            "type": "parse_error",
-            "message": str(exc),
-        })
 
     # --- Duplicate citekeys ---
     citekey_counts = Counter(entry["citekey"] for entry in entries)

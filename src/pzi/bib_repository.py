@@ -7,9 +7,10 @@ import difflib
 import hashlib
 import os
 import tempfile
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Collection, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from pathlib import Path
 from typing import Any, Literal, NotRequired, TypeAlias, TypedDict, cast
 
@@ -253,9 +254,25 @@ def _update_library_blocks(
     bib_path: str,
     *,
     file_path_style: str = "absolute",
+    touched_indices: Collection[int] | None = None,
 ) -> Library:
     """Replace entry blocks in a Library with updated entries, preserving
     comments, strings, and preambles.
+
+    *touched_indices* lists the positions the caller actually modified; every
+    other position keeps its **original block object** rather than a projection
+    rebuilt from the internal entry dict. Rebuilding them was lossy in two ways:
+    it dropped the parser's record of each field's original enclosing —
+    severing every ``@string`` macro reference in the file (see
+    ``_serialize_library``) — and it reformatted the entire library on every
+    one-entry write.
+
+    ``None`` means *every* position is touched, which rebuilds the whole
+    library. That is the right answer only for callers that genuinely rewrite
+    all entries (``rewrite_entries_in_order_locked``); a caller that passes it
+    out of convenience reintroduces both losses above. An empty collection is
+    therefore meaningfully different from ``None``: it says "touch nothing",
+    which is what a pure insert does.
     """
     new_entry_blocks: list[BibtexEntryV2] = [
         _bibtex_entry_to_library_entry(e, bib_path, file_path_style=file_path_style)
@@ -267,6 +284,7 @@ def _update_library_blocks(
     # positionally (not by citekey) precisely so that an update which *renames*
     # a citekey still maps to its original block instead of being lost.
     new_blocks: list = []
+    position = 0
     for block in library.blocks:
         if isinstance(block, BibtexEntryV2):
             # Each existing entry block must have a corresponding updated entry;
@@ -276,7 +294,10 @@ def _update_library_blocks(
                     "internal error: fewer updated entries than existing blocks "
                     "while rendering BibTeX write plan"
                 )
-            new_blocks.append(new_entry_blocks.pop(0))
+            rebuilt = new_entry_blocks.pop(0)
+            keep_original = touched_indices is not None and position not in touched_indices
+            new_blocks.append(block if keep_original else rebuilt)
+            position += 1
         else:
             new_blocks.append(block)
     # Append any remaining new entries (inserts beyond original count).
@@ -300,11 +321,20 @@ def _render_write_plan(
     if plan["action"] == "update":
         _validate_update_plan_against_current(records, plan)
     if plan["action"] == "insert":
-        plan = _rebase_insert_plan_against_current(records, plan)
+        plan = _rebase_insert_plan_against_current(records, entries, plan)
 
     updated_entries = apply_write_plan(entries, plan)
+    # Read the action *after* the rebase above, which can turn an insert into an
+    # update against an existing block. An insert touches no existing block, so
+    # the empty set is the honest answer for it — not `None`, which would mean
+    # "rebuild everything".
+    updated_index = plan["index"] if plan["action"] == "update" else None
     updated_library = _update_library_blocks(
-        library, updated_entries, path, file_path_style=file_path_style
+        library,
+        updated_entries,
+        path,
+        file_path_style=file_path_style,
+        touched_indices=set() if updated_index is None else {updated_index},
     )
     return _serialize_library(updated_library)
 
@@ -342,7 +372,7 @@ def execute_write_plan(
         if plan["action"] == "update":
             _validate_update_plan_against_current(records, plan)
         if plan["action"] == "insert":
-            plan = _rebase_insert_plan_against_current(records, plan)
+            plan = _rebase_insert_plan_against_current(records, entries, plan)
 
         updated_entries = apply_write_plan(entries, plan)
         _validate_bibtex_roundtrip(updated_entries)
@@ -391,6 +421,10 @@ class BatchWriteSession:
     entries: list[BibtexEntry]
     records: list[NormalizedRecord]
     index: dict[tuple[IdentityKind, str], list[int]]
+    #: Positions this batch has written, for `_update_library_blocks` — every
+    #: other block is kept verbatim so the batch does not reformat the library
+    #: or sever `@string` references in entries it never looked at.
+    touched: set[int] = dataclass_field(default_factory=set)
 
     def apply_plan(self, plan: WritePlan) -> None:
         """Fold one write plan into the in-memory state, keeping entries,
@@ -420,6 +454,7 @@ class BatchWriteSession:
             # consumed it.
             self.entries[idx] = plan["entry"]
             self.records[idx] = planned_record
+        self.touched.add(position)
         for identity in extract_identities(planned_record):
             self.index.setdefault((identity["kind"], identity["value"]), []).append(position)
         _invariant(
@@ -487,7 +522,11 @@ def batch_write_session(
         session.check_consistency()
         _validate_bibtex_roundtrip(session.entries)
         new_library = _update_library_blocks(
-            library, session.entries, path, file_path_style=file_path_style
+            library,
+            session.entries,
+            path,
+            file_path_style=file_path_style,
+            touched_indices=session.touched,
         )
         new_source = _serialize_library(new_library)
         if new_source != source:
@@ -506,7 +545,7 @@ def preview_write_plan(path: str, plan: WritePlan) -> dict[str, Any]:
         if plan["action"] == "update":
             _validate_update_plan_against_current(records, plan)
         if plan["action"] == "insert":
-            plan = _rebase_insert_plan_against_current(records, plan)
+            plan = _rebase_insert_plan_against_current(records, entries, plan)
 
         updated_entries = apply_write_plan(entries, plan)
         _validate_bibtex_roundtrip(updated_entries)
@@ -547,7 +586,9 @@ def _validate_update_plan_against_current(
 
 
 def _rebase_insert_plan_against_current(
-    current_records: list[NormalizedRecord], plan: WritePlan
+    current_records: list[NormalizedRecord],
+    current_entries: list[BibtexEntry],
+    plan: WritePlan,
 ) -> WritePlan:
     planned_record = plan.get("record")
     if not isinstance(planned_record, dict):
@@ -567,12 +608,26 @@ def _rebase_insert_plan_against_current(
         )
         merged_record = merge_decision["merged"]
         entry_type = plan.get("entry", {}).get("entry_type", "article")
+        # Merge onto the entry on disk, the way `plan_bib_write` does. Applying a
+        # bare projection of the merged record would drop every field the record
+        # model does not carry (`volume`, `pages`, `publisher`, ...) and retype
+        # the entry to whatever the stale plan assumed — turning the race this
+        # rebase exists to absorb into silent data loss. Unlike there, no
+        # snapshot-skew guard is needed: every caller derives both lists from one
+        # `_library_to_entries_records` call.
+        _invariant(
+            len(current_entries) == len(current_records),
+            "rebase entry and record snapshots disagree",
+        )
         return {
             **plan,
             "action": "update",
             "index": match_index,
             "record": merged_record,
-            "entry": record_to_bibtex_entry(merged_record, entry_type=entry_type),
+            "entry": merge_projected_entry(
+                current_entries[match_index],
+                record_to_bibtex_entry(merged_record, entry_type=entry_type),
+            ),
             "changed_fields": merge_decision["changed_fields"],
         }
 
@@ -781,6 +836,8 @@ def rewrite_entries_in_order_locked(
             f"as on disk (got {len(entries)}, expected {len(existing_entries)})"
         )
     _validate_bibtex_roundtrip(entries)
+    # No `touched_indices`: reindex rewrites the `file` field of every entry, so
+    # every block really is touched and rebuilding all of them is correct here.
     new_library = _update_library_blocks(
         library, entries, path, file_path_style=file_path_style
     )

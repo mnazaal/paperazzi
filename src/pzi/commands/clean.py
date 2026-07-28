@@ -30,7 +30,10 @@ def run_clean_command(args, *, home_dir, config_path, stdout, stderr, bib_select
         return 0 if not result.get("issues") else 1
 
     if result["status"] != "ok":
-        print_lines(_error_lines("clean failed", [result.get("message", "")]), stderr)
+        # `CleanResult` carries no "message" key — the detail lives in the
+        # issues list, which is where the parse error is recorded.
+        details = [str(issue.get("message", "")) for issue in result.get("issues", [])]
+        print_lines(_error_lines("clean failed", details or ["unparseable library"]), stderr)
         return 1
 
     print_lines(_render_clean_result(result, dry_run=args.dry_run or not args.fix), stdout)

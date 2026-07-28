@@ -10,6 +10,7 @@ from pzi.bib_repository import (
     execute_write_plan,
     parse_bib_library,
     parse_bibtex,
+    plan_bib_write,
     read_bib_file,
     serialize_bibtex,
     update_bib_entry,
@@ -584,3 +585,56 @@ def test_read_bib_file_preserves_valid_entries_around_a_malformed_block(
     citekeys = [r["citekey"] for r in result["records"]]
     assert citekeys == ["good2024one", "good2024two"]
     assert "Ünïcödé" in result["records"][0]["title"]
+
+
+def test_execute_write_plan_rebase_keeps_on_disk_entry_type_and_fields(
+    tmp_path: Path,
+) -> None:
+    """Rebasing a stale insert onto a now-present entry must merge, not overwrite.
+
+    This is the race the rebase exists for: the plan was built from a snapshot
+    taken before another writer committed the same paper. Rebasing it to an
+    update must keep the on-disk entry's type and its unmodelled fields, exactly
+    as a plan built against the current snapshot would.
+    """
+    path = tmp_path / "library.bib"
+    path.write_text(
+        """
+@inproceedings{smith2024graph,
+  title = {Graph Parsers},
+  author = {Smith, Ada},
+  year = {2024},
+  booktitle = {Proceedings of Things},
+  volume = {12},
+  pages = {1--10},
+  publisher = {ACM},
+  doi = {10.1/foo},
+}
+""".strip()
+    )
+
+    # Planned against an empty snapshot: the other writer's entry is not visible.
+    plan = plan_bib_write(
+        {
+            "citekey": "smith2024graph",
+            "title": "Graph Parsers",
+            "authors": ["Smith, Ada"],
+            "year": 2024,
+            "venue": "Proceedings of Things",
+            "doi": "10.1/foo",
+        },
+        [],
+    )
+    assert plan["action"] == "insert"
+    assert plan["entry"]["entry_type"] == "article"
+
+    updated = execute_write_plan(str(path), plan)
+
+    assert len(updated) == 1
+    entry = updated[0]
+    assert entry["entry_type"] == "inproceedings"
+    assert entry["fields"]["booktitle"] == "Proceedings of Things"
+    assert "journal" not in entry["fields"]
+    assert entry["fields"]["volume"] == "12"
+    assert entry["fields"]["pages"] == "1--10"
+    assert entry["fields"]["publisher"] == "ACM"
