@@ -27,6 +27,7 @@ from pzi.bib_serialize import (
     _serialize_library,
     _validate_bibtex_roundtrip,
     _validate_library_parseable,
+    merge_preserving_unchanged_source,
     parse_bibtex,
     serialize_bibtex,
 )
@@ -283,6 +284,10 @@ def _update_library_blocks(
     # order as the on-disk entry blocks, with inserts trailing. We replace
     # positionally (not by citekey) precisely so that an update which *renames*
     # a citekey still maps to its original block instead of being lost.
+    # `@string` definitions, for deciding whether a rebuilt field value is just
+    # the resolved form of the macro reference already on disk.
+    strings = {definition.key: definition.value for definition in library.strings}
+
     new_blocks: list = []
     position = 0
     for block in library.blocks:
@@ -296,7 +301,10 @@ def _update_library_blocks(
                 )
             rebuilt = new_entry_blocks.pop(0)
             keep_original = touched_indices is not None and position not in touched_indices
-            new_blocks.append(block if keep_original else rebuilt)
+            new_blocks.append(
+                block if keep_original
+                else merge_preserving_unchanged_source(block, rebuilt, strings)
+            )
             position += 1
         else:
             new_blocks.append(block)

@@ -63,6 +63,38 @@ def test_tag_add_preserves_comments_macros_and_other_entries() -> None:
         assert "keywords = {ml}" in text
 
 
+def test_tag_add_keeps_the_edited_entry_macro_reference() -> None:
+    """The service layer plans from resolved records; the write must not expand.
+
+    `tag_service` sources its record from `read_bib_file`, whose parse stack
+    resolves `@string`, then applies it to an entry parsed by a stack that does
+    not. Tagging an entry therefore rewrote its unrelated `journal = acm` as the
+    macro's full definition — the entry's own reference, silently expanded.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        cp, bib, _ = _config(td)
+        Path(bib).write_text(
+            "@string{acm = {Association for Computing Machinery}}\n\n"
+            "@article{smith2024,\n"
+            "  title = {Deep Learning},\n"
+            "  author = {Smith, John},\n"
+            "  journal = acm,\n"
+            "  year = {2024},\n"
+            "}\n"
+        )
+
+        result = add_tags(
+            config_path=cp, home_dir=td, bib_selector=None,
+            citekey="smith2024", tags=["ml"],
+        )
+
+        assert result["status"] == "ok" and result["changed"]
+        text = Path(bib).read_text()
+        assert "keywords = {ml}" in text
+        assert "journal = acm," in text
+        assert "Association for Computing Machinery}" not in text.split("@article", 1)[1]
+
+
 def test_tag_remove_preserves_comments_and_macros() -> None:
     with tempfile.TemporaryDirectory() as td:
         cp, bib, _ = _config(td)

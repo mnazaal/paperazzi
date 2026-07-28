@@ -16,6 +16,7 @@ those stay in :mod:`pzi.bib_repository`, which re-exports the names here.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from pathlib import Path
 
 from bibtexparser.entrypoint import parse_string, write_string
@@ -144,10 +145,9 @@ def _serialize_library(library: Library) -> str:
     code composes is enclosed, and only text read verbatim off disk is written
     back bare.
 
-    The rebuilt entry therefore still loses its own macro references — the
-    record model reaches it via ``parse_bibtex``, which resolves ``@string``,
-    so it is written back expanded. Scope is one entry per write instead of the
-    whole file; see ``tests/test_bib_stability.py``.
+    A rebuilt entry keeps the source text of the fields a write did not change,
+    via :func:`merge_preserving_unchanged_source`, so its own untouched macro
+    references survive too.
     """
     fmt = BibtexFormat()
     fmt.indent = "  "
@@ -173,6 +173,90 @@ def _validate_bibtex_roundtrip(entries: list[BibtexEntry]) -> None:
         raise ValueError(
             f"write plan produces invalid BibTeX: {exc}"
         ) from exc
+
+
+def merge_preserving_unchanged_source(
+    original: BibtexEntryV2,
+    rebuilt: BibtexEntryV2,
+    strings: Mapping[str, str],
+) -> BibtexEntryV2:
+    """Take *rebuilt*, but keep *original*'s source text where nothing changed.
+
+    A rebuilt block comes from the internal record model, which carries neither
+    enclosings nor ``@string`` references: the record was read through
+    ``parse_bibtex``, whose parse stack *resolves* macros. Writing it back
+    verbatim rewrites ``journal = jmlr`` as the expanded literal, and turns an
+    unresolved concatenation like ``acm # { Press}`` into a brace-quoted string
+    that no longer concatenates — for fields the write never intended to touch.
+
+    A field is treated as unchanged when *original*'s source text, resolved the
+    way ``parse_bibtex`` would resolve it, equals *rebuilt*'s value. That test
+    is self-verifying: if a plan changed a field, the rebuilt value necessarily
+    differs from the resolved original and the rebuilt field wins. It
+    deliberately does **not** consult ``changed_fields`` — trusting a plan's own
+    account of what it changed would turn an under-reported field into silent
+    data loss, where a wrong comparison here can only cost fidelity.
+
+    Fields are emitted in *rebuilt*'s order, and *rebuilt* owns which fields
+    exist at all, so a plan can still add and remove them.
+    """
+    original_fields = {field.key: field for field in original.fields}
+    original_enclosing = original.parser_metadata.get("removed_enclosing", {})
+    if not isinstance(original_enclosing, dict):  # pragma: no cover — defensive
+        original_enclosing = {}
+
+    fields: list[Field] = []
+    preserved_enclosing: dict[str, str] = {}
+    for field in rebuilt.fields:
+        source_field = original_fields.get(field.key)
+        if source_field is None:
+            fields.append(field)
+            continue
+        enclosing = original_enclosing.get(field.key)
+        if field.value not in _unchanged_forms(source_field.value, enclosing, strings):
+            fields.append(field)
+            continue
+        fields.append(source_field)
+        if isinstance(enclosing, str):
+            preserved_enclosing[field.key] = enclosing
+
+    merged = BibtexEntryV2(
+        entry_type=rebuilt.entry_type, key=rebuilt.key, fields=fields,
+    )
+    # `parser_metadata` is bibtexparser's own (experimental) channel for this;
+    # `_serialize_library`'s AddEnclosingMiddleware reads exactly this key to
+    # decide which fields to write back unenclosed. Only preserved fields get an
+    # entry, so every rebuilt value falls through to the default `{` enclosing.
+    if preserved_enclosing:
+        merged.parser_metadata["removed_enclosing"] = preserved_enclosing
+    return merged
+
+
+def _unchanged_forms(
+    value: str, enclosing: object, strings: Mapping[str, str]
+) -> frozenset[str]:
+    """Every value a caller could hold that means "this field is as on disk".
+
+    Two parse stacks feed write plans and they disagree about macros, so both
+    readings have to count as unchanged:
+
+    - ``parse_bibtex`` (``read_bib_file``, and so every service that plans from
+      records) *resolves* a bare ``@string`` reference, yielding the definition.
+    - ``_parse_bib_library`` (``update_bib_entry``, ``merge_bib_entries``) does
+      not, yielding the macro name as written.
+
+    The write path cannot adopt the resolving stack — resolution also erases the
+    reference from blocks it never touches, which is the loss this whole
+    mechanism exists to prevent — so the ambiguity is absorbed here instead.
+
+    The one case this reads wrong: a plan that deliberately sets a field to the
+    literal text of a macro name defined in the same file keeps the reference
+    rather than becoming a string. Only a bare single-name reference resolves at
+    all, matching bibtexparser, which leaves ``acm # { Press}`` as raw text.
+    """
+    if enclosing != "no-enclosing":
+        return frozenset({value})
+    return frozenset({value, strings.get(value.strip(), value)})
 
 
 def _library_entry_to_bibtex_entry(entry: BibtexEntryV2) -> BibtexEntry:

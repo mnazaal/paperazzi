@@ -8,12 +8,10 @@ fidelity — comments, string *definitions*, ``@string`` macro *references*,
 preamble blocks, and field values survive roundtrip without loss or
 expansion.
 
-Macro references are guaranteed for entries a write plan does not touch. The
-one entry a plan rewrites is re-serialized from the internal record model,
-which carries no enclosings, so that entry's own references do not survive —
-see ``test_update_severs_macros_only_in_the_entry_it_touches``. That is the
-narrowed residue of the old behavior, in which any write severed the macro
-references of every entry in the file.
+Macro references survive a write, in the entries a plan touches as well as
+those it does not: a rebuilt block keeps the source text of every field whose
+value the plan did not change. Only the fields a write actually rewrites are
+re-serialized from the record model.
 """
 
 from pathlib import Path
@@ -412,21 +410,12 @@ def test_write_plan_update_keeps_macro_references_in_other_entries(
     assert "journal = {jmlr}" not in other_block
 
 
-def test_update_severs_macros_only_in_the_entry_it_touches(tmp_path: Path) -> None:
-    """Pins the known residue: the edited entry loses its macro references.
+def test_update_keeps_macro_references_in_the_entry_it_touches(tmp_path: Path) -> None:
+    """Editing one field of an entry leaves that entry's *other* fields verbatim.
 
-    The entry a write rebuilds is serialized from the internal record model,
-    which carries no enclosings, so its own ``journal = jmlr`` comes back as the
-    literal ``{jmlr}``. The blast radius is one entry — every other entry, and
-    the ``@string`` definition itself, keep their references. Narrowing this
-    further means teaching the touched-entry rebuild to keep the original field
-    text for fields the plan did not change.
-
-    (Through the service layer the same field comes back *expanded* rather than
-    flattened, because ``tag_service`` sources its record from
-    ``read_bib_file`` — bibtexparser's default stack, which resolves ``@string``
-    — while ``update_bib_entry`` parses with a stack that does not. Unifying
-    those two parses is a separate change.)
+    The rebuilt block comes from the record model, which carries no enclosings,
+    so writing it back wholesale replaced `journal = jmlr` with a literal. Only
+    the field the write actually changed should be re-serialized.
     """
     bib_path = tmp_path / "test.bib"
     bib_path.write_text(
@@ -462,9 +451,46 @@ def test_update_severs_macros_only_in_the_entry_it_touches(tmp_path: Path) -> No
     other_block = after.split("@article{other2022", 1)[1]
     assert "journal = jmlr," in other_block
 
-    # The touched entry's reference is severed — the residue this test pins.
+    # The touched entry keeps its own reference, and gains only the new field.
     touched_block = after.split("@article{smith2024", 1)[1].split("@article{other2022", 1)[0]
-    assert "journal = {jmlr}" in touched_block
+    assert "journal = jmlr," in touched_block
+    assert "journal = {jmlr}" not in touched_block
+    assert "keywords = {reading}" in touched_block
+
+
+def test_update_keeps_an_unresolved_concatenation_intact(tmp_path: Path) -> None:
+    """`publisher = acm # { Press}` must not be brace-quoted into a literal.
+
+    bibtexparser resolves a bare macro reference but leaves a concatenation as
+    raw text, so it reaches the record model looking like an ordinary value.
+    Writing it back enclosed would produce `{acm # { Press}}` — no longer a
+    concatenation, and no longer referring to the macro.
+    """
+    bib_path = tmp_path / "test.bib"
+    bib_path.write_text(
+        r"""@string{acm = {ACM}}
+
+@article{smith2024,
+  author = {John Smith},
+  publisher = acm # { Press},
+  year = {2024},
+}
+"""
+    )
+
+    update_bib_entry(
+        str(bib_path),
+        "smith2024",
+        lambda entry, record: {
+            "entry_type": entry["entry_type"],
+            "citekey": entry["citekey"],
+            "fields": {**entry["fields"], "keywords": "reading"},
+        },
+    )
+    after = bib_path.read_text()
+
+    assert "publisher = acm # { Press}," in after
+    assert "publisher = {acm" not in after
 
 
 def test_write_plan_update_still_encloses_rewritten_values(tmp_path: Path) -> None:
