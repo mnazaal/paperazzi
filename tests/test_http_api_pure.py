@@ -598,6 +598,44 @@ def test_post_delete_with_force_and_no_dry_run_flag_really_deletes(
     assert "delete2024" not in bib_path.read_text()
 
 
+def test_capture_body_jsonld_does_not_clobber_citation_authors_or_year() -> None:
+    """JSON-LD is documented as a fallback for absent citation_* meta.
+
+    It was applied after the citation_* fields and overwrote them, so a page
+    carrying both had its citation_author and citation_publication_date
+    replaced by whatever its JSON-LD blob said.
+    """
+    overrides = http_post_routes.record_overrides_from_capture_body({
+        "embedded_authors": ["Vaswani, Ashish", "Shazeer, Noam"],
+        "embedded_year": "2017",
+        "embedded_jsonld_authors": ["Someone Else"],
+        "embedded_jsonld_year": "1999",
+    })
+
+    assert overrides["fallback_authors"] == "Vaswani, Ashish and Shazeer, Noam"
+    assert overrides["fallback_year"] == "2017"
+
+
+def test_capture_body_jsonld_still_fills_in_when_citation_meta_is_absent() -> None:
+    overrides = http_post_routes.record_overrides_from_capture_body({
+        "embedded_jsonld_authors": ["Ada Lovelace"],
+        "embedded_jsonld_year": "1843",
+    })
+
+    assert overrides["fallback_authors"] == "Ada Lovelace"
+    assert overrides["fallback_year"] == "1843"
+
+
+def test_capture_body_jsonld_title_still_beats_og_title() -> None:
+    """Title has no citation_* source, so JSON-LD must keep winning there."""
+    overrides = http_post_routes.record_overrides_from_capture_body({
+        "embedded_og_title": "OG Title",
+        "embedded_jsonld_title": "JSON-LD Title",
+    })
+
+    assert overrides["fallback_title"] == "JSON-LD Title"
+
+
 def test_build_http_security_config_strips_token_and_origins() -> None:
     security = build_http_security_config(
         auth_token="  secret  ",

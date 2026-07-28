@@ -48,7 +48,11 @@ def fetch_crossref_record(
 
 
 def fetch_crossref_record_by_title(
-    title: str, *, contact_email: str | None = None, fetch_text: FetchText | None = None
+    title: str,
+    *,
+    contact_email: str | None = None,
+    fetch_text: FetchText | None = None,
+    errors: list[str] | None = None,
 ) -> NormalizedRecord | None:
     """Return first normalized Crossref search result for a title, or None."""
     if not title.strip():
@@ -56,7 +60,7 @@ def fetch_crossref_record_by_title(
     fn = fetch_text or _fetch_text
     data = _api_json(
         f"https://api.crossref.org/works?query.title={quote(title.strip(), safe='')}&rows=1",
-        fn=fn, contact_email=contact_email)
+        fn=fn, contact_email=contact_email, errors=errors)
     if not isinstance(data, dict):
         return None
     message = data.get("message")
@@ -209,7 +213,11 @@ def fetch_openalex_record(
 
 
 def fetch_openalex_record_by_title(
-    title: str, *, contact_email: str | None = None, fetch_text: FetchText | None = None
+    title: str,
+    *,
+    contact_email: str | None = None,
+    fetch_text: FetchText | None = None,
+    errors: list[str] | None = None,
 ) -> NormalizedRecord | None:
     """Return first normalized OpenAlex search result for a title, or None."""
     if not title.strip():
@@ -218,7 +226,7 @@ def fetch_openalex_record_by_title(
     url = f"https://api.openalex.org/works?search={quote(title.strip(), safe='')}&per-page=1"
     if contact_email:
         url = f"{url}&mailto={quote(contact_email, safe='')}"
-    data = _api_json_direct(url, fn)
+    data = _api_json_direct(url, fn, errors=errors)
     if not isinstance(data, dict):
         return None
     results = data.get("results")
@@ -324,6 +332,7 @@ def fetch_semantic_scholar_record_by_title(
     *,
     api_key: str | None = None,
     fetch_text: FetchText | None = None,
+    errors: list[str] | None = None,
 ) -> NormalizedRecord | None:
     """Return first Semantic Scholar search result for a title, or None."""
     stripped = title.strip()
@@ -335,7 +344,7 @@ def fetch_semantic_scholar_record_by_title(
         "https://api.semanticscholar.org/graph/v1/paper/search?"
         f"query={quote(stripped, safe='')}&limit=1&fields={fields}"
     )
-    data = _api_json_direct(url, fn)
+    data = _api_json_direct(url, fn, errors=errors)
     if not isinstance(data, dict) or "error" in data or "message" in data:
         return None
     papers = data.get("data")
@@ -514,7 +523,11 @@ def _api_json_direct(
 
 
 def fetch_dblp_record_by_title(
-    title: str, *, contact_email: str | None = None, fetch_text: FetchText | None = None
+    title: str,
+    *,
+    contact_email: str | None = None,
+    fetch_text: FetchText | None = None,
+    errors: list[str] | None = None,
 ) -> NormalizedRecord | None:
     """Return the first normalized DBLP publication match for a title, or None.
 
@@ -526,7 +539,7 @@ def fetch_dblp_record_by_title(
         return None
     fn = fetch_text or _fetch_text
     url = f"https://dblp.org/search/publ/api?q={quote(title.strip(), safe='')}&format=json&h=1"
-    info = _dblp_first_hit(_api_json_direct(url, fn))
+    info = _dblp_first_hit(_api_json_direct(url, fn, errors=errors))
     return _dblp_normalize(info) if info is not None else None
 
 
@@ -612,7 +625,11 @@ def _dblp_normalize(info: dict[str, object]) -> NormalizedRecord:
 
 
 def fetch_openreview_record_by_title(
-    title: str, *, contact_email: str | None = None, fetch_text: FetchText | None = None
+    title: str,
+    *,
+    contact_email: str | None = None,
+    fetch_text: FetchText | None = None,
+    errors: list[str] | None = None,
 ) -> NormalizedRecord | None:
     """Return the first normalized OpenReview note matching a title, or None.
 
@@ -627,7 +644,7 @@ def fetch_openreview_record_by_title(
         "https://api.openreview.net/notes/search?"
         f"term={quote(title.strip(), safe='')}&limit=1&content=all"
     )
-    note = _openreview_first_note(_api_json_direct(url, fn))
+    note = _openreview_first_note(_api_json_direct(url, fn, errors=errors))
     return _openreview_normalize(note) if note is not None else None
 
 

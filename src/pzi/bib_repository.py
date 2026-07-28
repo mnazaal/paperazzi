@@ -28,9 +28,10 @@ from pzi.bib_serialize import (
     _validate_bibtex_roundtrip,
     _validate_library_parseable,
     merge_preserving_unchanged_source,
-    parse_bibtex,
+    parse_bibtex_with_failures,
     serialize_bibtex,
 )
+from pzi.bib_serialize import parse_bibtex as _parse_bibtex
 from pzi.bibtex import (
     BibtexEntry,
     NormalizedRecord,
@@ -159,16 +160,27 @@ def read_bib_file(path: str) -> ReadBibResult:
 
 def _read_bib_file_raw(path: str) -> ReadBibResult:
     """Read BibTeX file without acquiring a lock (caller must lock)."""
+    result, _failures = _read_bib_file_raw_with_failures(path)
+    return result
+
+
+def _read_bib_file_raw_with_failures(path: str) -> tuple[ReadBibResult, list[str]]:
+    """Read a BibTeX file, also reporting entries the parser had to drop.
+
+    Callers that present the read as complete — an export billed as a backup, an
+    import reporting how many records it took — must not treat a lenient parse
+    as a total one. Caller must hold the lock.
+    """
     file_path = Path(path)
     if not file_path.exists():
-        return {"entries": [], "records": []}
+        return {"entries": [], "records": []}, []
 
     text = read_text_utf8(path)
-    entries = parse_bibtex(text)
+    entries, failures = parse_bibtex_with_failures(text)
     records: list[NormalizedRecord] = [bibtex_entry_to_record(entry) for entry in entries]
     for record, entry in zip(records, entries):
         _resolve_file_field(record, entry, path)
-    return {"entries": entries, "records": records}
+    return {"entries": entries, "records": records}, failures
 
 
 def _resolve_write_target(path: str) -> Path:
@@ -870,6 +882,8 @@ def rewrite_entries_in_order_locked(
 # Public aliases for helpers consumed across modules — callers should not reach
 # for the underscore-private names.
 read_bib_file_raw = _read_bib_file_raw
+read_bib_file_raw_with_failures = _read_bib_file_raw_with_failures
+parse_bibtex = _parse_bibtex
 parse_bib_library = _parse_bib_library
 validate_library_parseable = _validate_library_parseable
 find_entry_index = _find_entry_index

@@ -235,6 +235,68 @@ def test_batch_import_equivalent_to_repeated_single_writes(tmp_path) -> None:
     assert single_path.read_text() == batch_path.read_text()
 
 
+def test_import_reports_source_blocks_the_parser_dropped(tmp_path) -> None:
+    """Unreadable source entries must not vanish from a successful-looking import.
+
+    The old `except` around the parse was dead code — v2 collects malformed
+    blocks rather than raising — so an import of a partly-broken file reported
+    `imported N/N` and exited 0, having silently skipped the rest.
+    """
+    d = tmp_path / "lib"
+    (d / "papers").mkdir(parents=True)
+    bib_path = d / "library.bib"
+    bib_path.write_text("")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'[[bibs]]\nname = "main"\npath = "{bib_path}"\n'
+        f'papers_dir = "{d / "papers"}"\ndefault = true\n'
+    )
+    source = tmp_path / "source.bib"
+    source.write_text(
+        "@article{good2024, title = {Good}, author = {A}, year = {2024}}\n\n"
+        "@article{broken2024,\n  title = {Unclosed\n  year = {2024},\n}\n"
+    )
+
+    result = import_from_bibtex(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        source_path=str(source),
+        bib_selector=None,
+        dry_run=False,
+    )
+
+    assert result["imported"] == 1
+    # The unreadable block is counted, not quietly excluded from the total.
+    assert result["total_source"] == 2
+    assert result["skipped_errors"] == 1
+    assert any("unparseable" in err.lower() for err in result["errors"])
+
+
+def test_import_of_a_wholly_unparseable_source_is_an_error(tmp_path) -> None:
+    d = tmp_path / "lib"
+    (d / "papers").mkdir(parents=True)
+    bib_path = d / "library.bib"
+    bib_path.write_text("")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'[[bibs]]\nname = "main"\npath = "{bib_path}"\n'
+        f'papers_dir = "{d / "papers"}"\ndefault = true\n'
+    )
+    source = tmp_path / "source.bib"
+    source.write_text("@article{broken2024,\n  title = {Unclosed\n")
+
+    result = import_from_bibtex(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        source_path=str(source),
+        bib_selector=None,
+        dry_run=False,
+    )
+
+    assert result["status"] == "error"
+    assert result["errors"]
+
+
 def test_batch_import_dry_run_predicts_the_actions_the_real_run_takes(tmp_path) -> None:
     """A preview that does not see its own earlier records predicts the wrong plan.
 

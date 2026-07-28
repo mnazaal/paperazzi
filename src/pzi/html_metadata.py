@@ -97,6 +97,33 @@ def _from_citation_meta(meta: dict[str, list[str]]) -> NormalizedRecord:
     return record
 
 
+def _json_ld_authors(raw: object) -> list[str]:
+    """Author names from a schema.org ``author``, which may be one or many.
+
+    A single-author page writes ``"author": {"@type": "Person", "name": "..."}``
+    rather than a list. A bare dict *is* iterable — over its keys — so looping
+    without normalizing first harvested ``"@type"`` and ``"name"`` and wrote
+    those into the library as the paper's authors.
+    """
+    items: list[object]
+    if isinstance(raw, dict | str):
+        items = [raw]
+    elif isinstance(raw, list):
+        items = list(raw)
+    else:
+        items = []
+
+    authors: list[str] = []
+    for item in items:
+        if isinstance(item, dict):
+            name = item.get("name")
+            if isinstance(name, str) and name.strip():
+                authors.append(name.strip())
+        elif isinstance(item, str) and item.strip():
+            authors.append(item.strip())
+    return authors
+
+
 def _from_json_ld(json_ld: list[object]) -> NormalizedRecord:
     for item in json_ld:
         if not isinstance(item, dict):
@@ -106,14 +133,7 @@ def _from_json_ld(json_ld: list[object]) -> NormalizedRecord:
             continue
 
         title = item.get("name") or item.get("headline")
-        authors: list[str] = []
-        for a in item.get("author") or []:
-            if isinstance(a, dict):
-                name = a.get("name")  # pragma: no branch — covered by integration/browser tests
-                if isinstance(name, str):  # pragma: no branch
-                    authors.append(name)
-            elif isinstance(a, str):  # pragma: no cover — covered by integration/browser tests
-                authors.append(a)
+        authors = _json_ld_authors(item.get("author"))
 
         date = item.get("datePublished") or item.get("dateCreated")
         year = _extract_year_from_str(str(date)) if date else None

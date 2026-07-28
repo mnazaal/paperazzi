@@ -104,6 +104,37 @@ def _parse_bib_library(raw_text: str) -> Library:
     return parse_string(raw_text, parse_stack=[RemoveEnclosingMiddleware()])
 
 
+def describe_failed_blocks(library: Library) -> list[str]:
+    """One message per block bibtexparser could not turn into an entry.
+
+    v2 *collects* these rather than raising, so any caller that reads only
+    ``library.entries`` loses them without a signal. Duplicate citekeys land
+    here too: the parser keeps the first block and files every later one as a
+    failure, so it is equally an entry the caller never sees.
+    """
+    messages: list[str] = []
+    for block in library.failed_blocks:
+        line = getattr(block, "start_line", None)
+        where = f" at line {line + 1}" if isinstance(line, int) else ""
+        key = getattr(block, "key", None)
+        if isinstance(key, str) and key:
+            messages.append(
+                f"duplicate citekey {key!r}{where}: only the first occurrence is read"
+            )
+            continue
+        detail = str(getattr(block, "error", "") or "").strip().splitlines()
+        suffix = f": {detail[0]}" if detail else ""
+        messages.append(f"unparseable BibTeX block{where}{suffix}")
+    return messages
+
+
+def parse_bibtex_with_failures(text: str) -> tuple[list[BibtexEntry], list[str]]:
+    """Parse BibTeX text, returning entries and a message per dropped block."""
+    library = parse_string(text)
+    entries = [_library_entry_to_bibtex_entry(entry) for entry in library.entries]
+    return entries, describe_failed_blocks(library)
+
+
 def _validate_library_parseable(library: Library) -> None:
     """Raise ValueError if the library has unparseable blocks."""
     if not library.failed_blocks:

@@ -7,7 +7,12 @@ import io
 import json as _json
 from typing import Any, TypedDict
 
-from pzi.bib_repository import read_bib_file_raw, serialize_bibtex, with_bib_lock
+from pzi.bib_repository import (
+    ReadBibResult,
+    read_bib_file_raw_with_failures,
+    serialize_bibtex,
+    with_bib_lock,
+)
 
 
 class ExportResult(TypedDict):
@@ -72,27 +77,40 @@ def _normalize_tags(tags: object) -> str:
     return ""
 
 
+def _read_for_export(bib_path: str) -> tuple[ReadBibResult, list[str]]:
+    with with_bib_lock(bib_path, shared=True):
+        return read_bib_file_raw_with_failures(bib_path)
+
+
+def _export_status(dropped: list[str]) -> str:
+    """An export that silently omits entries is not an ``ok`` export.
+
+    These commands are the documented way to back a library up, so losing
+    entries to a lenient parse has to be loud: the caller compares counts, or
+    keeps the file, believing it holds everything.
+    """
+    return "ok" if not dropped else "error"
+
+
 def export_bibtex(bib_path: str) -> ExportResult:
     """Export a BibTeX library as formatted BibTeX text string."""
-    with with_bib_lock(bib_path, shared=True):
-        raw = read_bib_file_raw(bib_path)
+    raw, dropped = _read_for_export(bib_path)
     entries = raw["entries"]
     bibtex_str = serialize_bibtex(entries)
     return {
-        "status": "ok",
+        "status": _export_status(dropped),
         "bib_path": bib_path,
         "total_entries": len(entries),
         "format": "bibtex",
         "content": bibtex_str,
         "content_type": "application/x-bibtex",
-        "errors": [],
+        "errors": dropped,
     }
 
 
 def export_json(bib_path: str) -> ExportResult:
     """Export a BibTeX library as formatted JSON string."""
-    with with_bib_lock(bib_path, shared=True):
-        raw = read_bib_file_raw(bib_path)
+    raw, dropped = _read_for_export(bib_path)
     records = raw["records"]
     # Include entry_type from corresponding entry
     entries = raw["entries"]
@@ -104,20 +122,19 @@ def export_json(bib_path: str) -> ExportResult:
         json_records.append(item)
     json_str = _json.dumps(json_records, indent=2, default=str, ensure_ascii=False)
     return {
-        "status": "ok",
+        "status": _export_status(dropped),
         "bib_path": bib_path,
         "total_entries": len(records),
         "format": "json",
         "content": json_str,
         "content_type": "application/json",
-        "errors": [],
+        "errors": dropped,
     }
 
 
 def export_csv(bib_path: str) -> ExportResult:
     """Export a BibTeX library as CSV string."""
-    with with_bib_lock(bib_path, shared=True):
-        raw = read_bib_file_raw(bib_path)
+    raw, dropped = _read_for_export(bib_path)
     records = raw["records"]
     entries = raw["entries"]
 
@@ -145,20 +162,19 @@ def export_csv(bib_path: str) -> ExportResult:
         writer.writerow(row)
 
     return {
-        "status": "ok",
+        "status": _export_status(dropped),
         "bib_path": bib_path,
         "total_entries": len(records),
         "format": "csv",
         "content": buf.getvalue(),
         "content_type": "text/csv",
-        "errors": [],
+        "errors": dropped,
     }
 
 
 def export_ris(bib_path: str) -> ExportResult:
     """Export a BibTeX library as RIS formatted text string."""
-    with with_bib_lock(bib_path, shared=True):
-        raw = read_bib_file_raw(bib_path)
+    raw, dropped = _read_for_export(bib_path)
     records = raw["records"]
     entries = raw["entries"]
 
@@ -226,11 +242,11 @@ def export_ris(bib_path: str) -> ExportResult:
 
     ris_str = "\n".join(lines)
     return {
-        "status": "ok",
+        "status": _export_status(dropped),
         "bib_path": bib_path,
         "total_entries": len(records),
         "format": "ris",
         "content": ris_str,
         "content_type": "application/x-research-info-systems",
-        "errors": [],
+        "errors": dropped,
     }

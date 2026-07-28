@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Mapping
-from typing import Literal, TypedDict
+from typing import Literal, NotRequired, TypedDict
 
 from pzi.bib_repository import read_bib_file
 from pzi.bibtex import NormalizedRecord
@@ -65,7 +65,12 @@ class CheckItem(TypedDict):
     confidence_score: int
     flags: list[str]
     mismatches: list[str]
+    #: Sources that answered. A source that failed is *not* listed here — the
+    #: distinction between "consulted and did not know it" and "never reached"
+    #: is the whole difference between a fabricated reference and a bad network.
     sources_checked: list[str]
+    #: One message per source that could not be consulted.
+    source_errors: NotRequired[list[str]]
 
 
 class CheckResult(TypedDict):
@@ -80,7 +85,7 @@ class CheckResult(TypedDict):
 
 # Title-search providers in throughput-aware order: polite-pool DOI sources
 # first, CS/ML authorities next, the keyless S2 fallback last.
-_Provider = tuple[str, Callable[..., NormalizedRecord | None]]
+_Provider = tuple[str, Callable[[str, list[str]], NormalizedRecord | None]]
 
 
 def _providers(
@@ -93,16 +98,24 @@ def _providers(
     def bind(name: str, base: Callable[..., NormalizedRecord | None]) -> _Provider:
         override = overrides.get(name)
         if override is not None:
-            return (name, override)
+            # Injected fetchers (tests, callers) take only a title; they perform
+            # no I/O, so they have nothing to report on the errors channel.
+            return (name, lambda title, _errors: override(title))
         return (
             name,
-            lambda title: base(title, contact_email=contact_email, fetch_text=fetch_text),
+            lambda title, errors: base(
+                title, contact_email=contact_email, fetch_text=fetch_text, errors=errors
+            ),
         )
 
     s2_override = overrides.get("s2")
-    s2_fn = s2_override or (
-        lambda title: fetch_semantic_scholar_record_by_title(
-            title, api_key=s2_api_key, fetch_text=fetch_text
+    s2_fn = (
+        (lambda title, _errors: s2_override(title))
+        if s2_override is not None
+        else (
+            lambda title, errors: fetch_semantic_scholar_record_by_title(
+                title, api_key=s2_api_key, fetch_text=fetch_text, errors=errors
+            )
         )
     )
     return [
@@ -147,11 +160,27 @@ def _verify_entry(
         }
 
     sources_checked: list[str] = []
+    source_errors: list[str] = []
     scored: list[tuple[str, MatchScore]] = []
     for name, fetch in providers:
+        provider_errors: list[str] = []
         try:
-            candidate = fetch(title)
-        except Exception:
+            candidate = fetch(title, provider_errors)
+        except (OSError, ValueError) as exc:
+            # The documented failure modes of the fetchers: transport and decode.
+            source_errors.append(f"{name}: {exc}")
+            continue
+        except Exception as exc:  # noqa: BLE001 — a provider bug must not abort the run
+            source_errors.append(f"{name}: unexpected {type(exc).__name__}: {exc}")
+            continue
+        if provider_errors:
+            # Reached the call but got no answer — a network or API failure, which
+            # says nothing about the entry. Recording it as a *checked* source is
+            # what let an offline run report every entry as unverifiable with all
+            # sources checked and no errors: indistinguishable from the sources
+            # having been consulted and none of them knowing the paper, which is
+            # the fabricated-reference signal this command exists to raise.
+            source_errors.append(f"{name}: {provider_errors[0]}")
             continue
         sources_checked.append(name)
         if candidate is None:
@@ -172,6 +201,7 @@ def _verify_entry(
         strict=strict,
         base_flags=base_flags,
         base_mismatches=base_mismatches,
+        source_errors=source_errors,
     )
 
 
@@ -183,17 +213,27 @@ def _verdict_from_scores(
     strict: bool,
     base_flags: list[str],
     base_mismatches: list[str],
+    source_errors: list[str] | None = None,
 ) -> CheckItem:
+    errors = list(source_errors or [])
     if not scored:
         # Nothing matched anywhere: abstain (not a clean pass), unless a base
         # defect (impossible year) already condemns it.
+        if not sources_checked and errors:
+            # Nothing answered at all. Saying "no source could confirm this" here
+            # would read as evidence against the entry when the truth is that the
+            # run never reached a source.
+            reason = "no source could be reached (see source_errors)"
+        else:
+            reason = "no source could confirm this reference"
         return {
             "citekey": citekey,
             "verdict": "problematic" if base_flags else "could_not_verify",
             "confidence_score": 0,
             "flags": base_flags,
-            "mismatches": base_mismatches or ["no source could confirm this reference"],
+            "mismatches": base_mismatches or [reason],
             "sources_checked": sources_checked,
+            "source_errors": errors,
         }
 
     best_name, best = max(scored, key=lambda item: item[1]["score"])
@@ -220,6 +260,7 @@ def _verdict_from_scores(
         "flags": flags,
         "mismatches": mismatches or contributions,
         "sources_checked": sources_checked,
+        "source_errors": errors,
     }
 
 
@@ -293,6 +334,18 @@ def check_bib(
         counts[item["verdict"]] += 1
         items.append(item)
 
+    # Summarize per-source failures once for the run rather than repeating the
+    # same "connection refused" under every entry. A `check` that reached no
+    # source has audited nothing, and must not read as a clean bill of health.
+    failed_sources = sorted({
+        error.split(":", 1)[0]
+        for item in items
+        for error in item.get("source_errors", [])
+    })
+    run_errors = [
+        f"{name}: unreachable for some or all entries" for name in failed_sources
+    ]
+
     return {
         "status": "ok",
         "bib_name": bib["name"],
@@ -300,7 +353,7 @@ def check_bib(
         "total": len(items),
         "counts": counts,
         "items": items,
-        "errors": [],
+        "errors": run_errors,
     }
 
 

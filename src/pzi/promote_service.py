@@ -412,22 +412,20 @@ def _find_published_candidate_with_diagnostics(
     crossref_fn = fetch_crossref or _default_provider_fn(
         fetch_crossref_record_by_title, metadata_fetch_text
     )
-    try:
-        candidate = _call_provider(crossref_fn, title, contact_email=contact_email)
-    except (OSError, ValueError):
-        provider_errors.append("crossref")
-        candidate = None
+    candidate = _try_provider(
+        crossref_fn, title, name="crossref",
+        contact_email=contact_email, provider_errors=provider_errors,
+    )
     if candidate is not None and candidate.get("venue"):
         provider_candidates.append(cast(NormalizedRecord, dict(candidate)))
 
     openalex_fn = fetch_openalex or _default_provider_fn(
         fetch_openalex_record_by_title, metadata_fetch_text
     )
-    try:
-        candidate = _call_provider(openalex_fn, title, contact_email=contact_email)
-    except (OSError, ValueError):
-        provider_errors.append("openalex")
-        candidate = None
+    candidate = _try_provider(
+        openalex_fn, title, name="openalex",
+        contact_email=contact_email, provider_errors=provider_errors,
+    )
     if candidate is not None and candidate.get("venue"):
         provider_candidates.append(cast(NormalizedRecord, dict(candidate)))
 
@@ -435,22 +433,20 @@ def _find_published_candidate_with_diagnostics(
     # confirm published proceedings versions that the DOI-based sources above
     # often leave unresolved.  Queried after the polite-pool providers.
     dblp_fn = fetch_dblp or _default_provider_fn(fetch_dblp_record_by_title, metadata_fetch_text)
-    try:
-        candidate = _call_provider(dblp_fn, title, contact_email=contact_email)
-    except (OSError, ValueError):
-        provider_errors.append("dblp")
-        candidate = None
+    candidate = _try_provider(
+        dblp_fn, title, name="dblp",
+        contact_email=contact_email, provider_errors=provider_errors,
+    )
     if candidate is not None and candidate.get("venue"):
         provider_candidates.append(cast(NormalizedRecord, dict(candidate)))
 
     openreview_fn = fetch_openreview or _default_provider_fn(
         fetch_openreview_record_by_title, metadata_fetch_text
     )
-    try:
-        candidate = _call_provider(openreview_fn, title, contact_email=contact_email)
-    except (OSError, ValueError):
-        provider_errors.append("openreview")
-        candidate = None
+    candidate = _try_provider(
+        openreview_fn, title, name="openreview",
+        contact_email=contact_email, provider_errors=provider_errors,
+    )
     if candidate is not None and candidate.get("venue"):
         provider_candidates.append(cast(NormalizedRecord, dict(candidate)))
 
@@ -518,10 +514,44 @@ def _default_provider_fn(
     return functools.partial(base_fn, fetch_text=fetch_text)
 
 
-def _call_provider(fn, value: str, *, contact_email: str | None):
+def _call_provider(fn, value: str, *, contact_email: str | None, errors=None):
+    kwargs: dict[str, Any] = {}
     if contact_email and accepts_keyword(fn, "contact_email"):
-        return fn(value, contact_email=contact_email)
-    return fn(value)
+        kwargs["contact_email"] = contact_email
+    # The real fetchers catch transport failures internally and return None, so
+    # the errors channel is the only thing that separates "no match" from "never
+    # reached". Injected fetchers need not accept it.
+    if errors is not None and accepts_keyword(fn, "errors"):
+        kwargs["errors"] = errors
+    return fn(value, **kwargs)
+
+
+def _try_provider(
+    fn,
+    title: str,
+    *,
+    name: str,
+    contact_email: str | None,
+    provider_errors: list[str],
+) -> NormalizedRecord | None:
+    """Query one title-search provider, recording why it produced nothing.
+
+    A provider that could not be reached must not be silently equivalent to one
+    that answered "unknown": the first leaves the preprint unpromoted for a
+    fixable reason, and only a recorded error says which.
+    """
+    errors: list[str] = []
+    try:
+        candidate = _call_provider(
+            fn, title, contact_email=contact_email, errors=errors
+        )
+    except (OSError, ValueError) as exc:
+        provider_errors.append(f"{name} ({exc})")
+        return None
+    if errors:
+        provider_errors.append(f"{name} ({errors[0]})")
+        return None
+    return candidate
 
 
 def _build_query(record: NormalizedRecord) -> str:

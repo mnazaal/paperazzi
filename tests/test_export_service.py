@@ -168,3 +168,51 @@ def test_normalize_tags_handles_list_string_and_other() -> None:
     assert _normalize_tags(["ml", "graphs"]) == "ml, graphs"
     assert _normalize_tags("ml,graphs") == "ml,graphs"
     assert _normalize_tags(None) == ""
+
+
+def test_export_reports_entries_the_parser_dropped() -> None:
+    """An export that silently omits entries is not a backup.
+
+    bibtexparser v2 collects unreadable blocks instead of raising, so every
+    exporter used to return the entries that happened to parse with
+    `status: ok` and no errors — losing the rest with exit 0.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "test.bib")
+        _write_bib(
+            bib,
+            "@article{good2024, title = {Good}, author = {A}, year = {2024}}\n\n"
+            "@article{broken2024,\n  title = {Unclosed\n  year = {2024},\n}\n",
+        )
+
+        for export in (export_bibtex, export_json, export_csv, export_ris):
+            result = export(bib)
+            assert result["status"] == "error", export.__name__
+            assert result["errors"], export.__name__
+            assert "unparseable" in result["errors"][0].lower(), export.__name__
+
+
+def test_export_reports_a_duplicate_citekey_as_a_dropped_entry() -> None:
+    """Only the first block of a duplicated key parses; the second is lost too."""
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "test.bib")
+        _write_bib(
+            bib,
+            "@article{dup2024, title = {A}}\n@article{dup2024, title = {B}}\n",
+        )
+
+        result = export_bibtex(bib)
+
+        assert result["status"] == "error"
+        assert any("duplicate citekey" in err for err in result["errors"])
+
+
+def test_export_of_a_clean_library_stays_ok() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "test.bib")
+        _write_bib(bib, '@article{good2024, title = {Good}, year = {2024}}')
+
+        result = export_bibtex(bib)
+
+        assert result["status"] == "ok"
+        assert result["errors"] == []

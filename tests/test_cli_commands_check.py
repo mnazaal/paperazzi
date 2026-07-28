@@ -118,3 +118,47 @@ def test_check_service_error_exits_environment(tmp_path: Path) -> None:
     code, _out, err = _run(_args(), lambda **_k: err_result, tmp_path)
     assert code == exit_codes.ENVIRONMENT
     assert "no such library" in err
+
+
+def _offline_result():
+    """What `check_bib` returns when no metadata source could be reached."""
+    return {
+        "status": "ok",
+        "bib_name": "main",
+        "strict": False,
+        "total": 1,
+        "counts": {"verified": 0, "could_not_verify": 1, "problematic": 0},
+        "items": [
+            {
+                "citekey": "smith2020",
+                "verdict": "could_not_verify",
+                "confidence_score": 0,
+                "flags": [],
+                "mismatches": ["no source could be reached (see source_errors)"],
+                "sources_checked": [],
+                "source_errors": ["crossref: connection refused"],
+            }
+        ],
+        "errors": ["crossref: unreachable for some or all entries"],
+    }
+
+
+def test_check_reports_unreachable_sources_on_stderr(tmp_path):
+    code, _stdout, stderr = _run(
+        _args(), lambda **_kw: _offline_result(), tmp_path
+    )
+
+    assert "metadata sources unavailable" in stderr
+    assert "crossref" in stderr
+    # Nothing was audited, so a clean exit would misreport the library.
+    assert code == exit_codes.ENVIRONMENT
+
+
+def test_check_still_exits_ok_when_some_source_answered(tmp_path):
+    result = _offline_result()
+    result["items"][0]["sources_checked"] = ["openalex"]
+
+    code, _stdout, stderr = _run(_args(), lambda **_kw: result, tmp_path)
+
+    assert "metadata sources unavailable" in stderr
+    assert code == exit_codes.OK

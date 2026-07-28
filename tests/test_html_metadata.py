@@ -97,3 +97,57 @@ def test_malformed_json_ld_silently_skipped():
     )
     result = extract_metadata_from_html(html)
     assert result is None  # no usable metadata extracted
+
+
+SINGLE_AUTHOR_JSON_LD_HTML = """
+<html><head>
+<script type="application/ld+json">
+{
+  "@type": "ScholarlyArticle",
+  "name": "A Single-Author Paper",
+  "author": {"@type": "Person", "name": "Ada Lovelace"},
+  "datePublished": "2024-03-01"
+}
+</script>
+</head><body></body></html>
+"""
+
+
+def test_json_ld_single_author_object_is_not_iterated_as_a_dict():
+    """schema.org allows one author object instead of a list.
+
+    A bare dict is iterable — over its keys — so the old loop harvested
+    "@type" and "name" and wrote those into the library as the author names.
+    """
+    record = extract_metadata_from_html(SINGLE_AUTHOR_JSON_LD_HTML)
+
+    assert record["authors"] == ["Ada Lovelace"]
+    assert "@type" not in record["authors"]
+
+
+def test_json_ld_bare_string_author_is_accepted():
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@type": "ScholarlyArticle", "name": "P", "author": "Ada Lovelace"}
+    </script>
+    </head><body></body></html>
+    """
+
+    assert extract_metadata_from_html(html)["authors"] == ["Ada Lovelace"]
+
+
+def test_json_ld_author_list_of_objects_still_works():
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@type": "ScholarlyArticle", "name": "P",
+     "author": [{"@type": "Person", "name": "Ada Lovelace"},
+                {"@type": "Person", "name": "Grace Hopper"}]}
+    </script>
+    </head><body></body></html>
+    """
+
+    assert extract_metadata_from_html(html)["authors"] == [
+        "Ada Lovelace", "Grace Hopper",
+    ]

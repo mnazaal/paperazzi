@@ -93,14 +93,23 @@ def record_overrides_from_capture_body(body: dict[str, Any]) -> dict[str, object
     _maybe_set_fallback_str(body, "embedded_issn", record_overrides, "fallback_issn")
     _maybe_set_fallback_str(body, "embedded_isbn", record_overrides, "fallback_isbn")
     _maybe_set_fallback_str(body, "embedded_pdf_url", record_overrides, "fallback_pdf_url")
-    # JSON-LD / OG fallbacks — used when citation_* meta is absent
-    # Order: OG first, then JSON-LD (JSON-LD is more reliable, wins if both present)
+    # JSON-LD / OG fallbacks — used when citation_* meta is absent.
+    # Order: OG first, then JSON-LD (JSON-LD is more reliable, wins if both present).
+    # Where a field also has a citation_* source above, JSON-LD yields to it
+    # instead of overwriting — otherwise "used when citation_* is absent" was
+    # exactly backwards, and a page carrying both had its citation_author and
+    # citation_publication_date replaced by whatever its JSON-LD blob claimed.
     _maybe_set_fallback_str(body, "embedded_og_title", record_overrides, "fallback_title")
     _maybe_validate_authors_str(
-        body, "embedded_jsonld_authors", record_overrides, "fallback_authors"
+        body, "embedded_jsonld_authors", record_overrides, "fallback_authors",
+        overwrite=False,
     )
+    # Title has no citation_* source — its only competitors are the page <title>
+    # and OG, both of which JSON-LD is meant to beat.
     _maybe_set_fallback_str(body, "embedded_jsonld_title", record_overrides, "fallback_title")
-    _maybe_set_fallback_str(body, "embedded_jsonld_year", record_overrides, "fallback_year")
+    _maybe_set_fallback_str(
+        body, "embedded_jsonld_year", record_overrides, "fallback_year", overwrite=False,
+    )
     # Promote trusted browser-parsed fields from fallback_* to normal overrides.
     trusted_fields = body.get("trusted_fields")
     if isinstance(trusted_fields, list):
@@ -172,18 +181,36 @@ def capture_options_from_http_body(
 
 
 def _maybe_set_fallback_str(
-    body: dict[str, Any], body_key: str, overrides: dict[str, object], record_key: str
+    body: dict[str, Any],
+    body_key: str,
+    overrides: dict[str, object],
+    record_key: str,
+    *,
+    overwrite: bool = True,
 ) -> None:
-    """Set a fallback override from a string body field, if valid."""
+    """Set a fallback override from a string body field, if valid.
+
+    ``overwrite=False`` yields to a value a higher-precedence source already
+    set, rather than replacing it.
+    """
+    if not overwrite and record_key in overrides:
+        return
     value = body.get(body_key)
     if isinstance(value, str) and value.strip():
         overrides[record_key] = value.strip()
 
 
 def _maybe_validate_authors_str(
-    body: dict[str, Any], body_key: str, overrides: dict[str, object], record_key: str
+    body: dict[str, Any],
+    body_key: str,
+    overrides: dict[str, object],
+    record_key: str,
+    *,
+    overwrite: bool = True,
 ) -> None:
     """Convert author list to ' and '-separated string, if all entries are strings."""
+    if not overwrite and record_key in overrides:
+        return
     raw = body.get(body_key)
     if not isinstance(raw, list) or not raw:
         return

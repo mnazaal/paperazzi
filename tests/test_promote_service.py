@@ -1113,3 +1113,43 @@ def test_promote_keep_preprint_writes_nothing_when_library_is_malformed(tmp_path
 
     assert result["summary"]["created"] == 0
     assert bib_path.read_text() == before
+
+
+def test_promote_reports_unreachable_providers_not_just_no_candidate(
+    tmp_path, monkeypatch
+):
+    """A provider that could not be reached must not read as "no published version".
+
+    The real title-search fetchers catch transport errors internally and return
+    None, so promote's `except (OSError, ValueError)` around them could only
+    ever fire for injected test fetchers. Offline, every provider returned None
+    and the entry was skipped with a bare "no published candidate found" — a
+    fixable outage presented as a settled answer.
+    """
+    bib_path = tmp_path / "ml.bib"
+    config_path = _write_config(tmp_path, bib_path)
+    _seed_bib_with_preprint(tmp_path, bib_path, config_path)
+
+    def _offline_fetch_text(*_args, **_kwargs):
+        def _raise(_url: str) -> str:
+            raise OSError("connection refused")
+
+        return _raise
+
+    monkeypatch.setattr(
+        promote_service, "build_metadata_fetch_text", _offline_fetch_text
+    )
+
+    result = promote_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        dry_run=True,
+        fetch_search=lambda *_a, **_kw: [],
+    )
+
+    assert result["status"] == "ok"
+    note = result["items"][0]["note"]
+    assert "provider errors" in note
+    assert "crossref" in note
+    assert result["summary"]["provider_errors"] > 0

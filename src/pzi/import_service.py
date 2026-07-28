@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, NotRequired, TypedDict
 
 from pzi.add_service import add_records_to_bib_batch
-from pzi.bib_repository import parse_bibtex
+from pzi.bib_repository import parse_bibtex_with_failures
 from pzi.bibtex import bibtex_entry_to_record
 from pzi.config import BibResolutionFailure, load_bib_target
 from pzi.fileio import read_text_utf8
@@ -59,14 +59,18 @@ def import_from_bibtex(
 
     # Parse source
     text = source_text if source_text is not None else read_text_utf8(source)
-    try:
-        source_entries = parse_bibtex(text)
-    except Exception as exc:
+    # bibtexparser v2 does not raise on a malformed block — it collects it and
+    # returns the rest, so the old `try/except` here could never fire and every
+    # unreadable entry vanished from an import that reported success. Import the
+    # blocks that parsed and account for the ones that did not.
+    source_entries, dropped_blocks = parse_bibtex_with_failures(text)
+
+    if not source_entries and dropped_blocks:
         return {
             "status": "error",
             "source_path": source_path,
             "message": "failed to parse source BibTeX",
-            "errors": [str(exc)],
+            "errors": dropped_blocks,
             "total_source": 0,
             "imported": 0,
             "skipped_duplicates": 0,
@@ -112,8 +116,11 @@ def import_from_bibtex(
     results: list[dict[str, Any]] = []
     imported = 0
     skipped_dupes = 0
-    skipped_errors = 0
-    errors: list[str] = []
+    # A block the parser could not read is a source entry that did not make it
+    # in, which is what `skipped_errors` counts — and what makes the command
+    # exit PARTIAL rather than claiming a clean import.
+    skipped_errors = len(dropped_blocks)
+    errors: list[str] = list(dropped_blocks)
 
     if isinstance(resolved, BibResolutionFailure):
         # Config/target resolution failed: every record fails identically.
@@ -192,7 +199,9 @@ def import_from_bibtex(
             f"{', ' + str(skipped_errors) + ' errors' if skipped_errors else ''}"
         ),
         "errors": errors,
-        "total_source": len(source_entries),
+        # Count the unreadable blocks too: `imported N/total` must not compare
+        # against a total that already quietly excluded them.
+        "total_source": len(source_entries) + len(dropped_blocks),
         "skipped_in_source": skipped_in_source,
         "imported": imported,
         "skipped_duplicates": skipped_dupes,

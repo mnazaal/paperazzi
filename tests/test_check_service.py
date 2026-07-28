@@ -294,3 +294,91 @@ def test_strict_uses_higher_bar(tmp_path):
     # Strict must never be more lenient than default for the same entry.
     verdicts = {"verified": 2, "could_not_verify": 1, "problematic": 1}
     assert verdicts[strict["verdict"]] >= verdicts[lenient["verdict"]] or strict["verdict"] == lenient["verdict"]
+
+
+def test_offline_run_reports_unreachable_sources_rather_than_silent_abstention(
+    tmp_path, monkeypatch
+):
+    """Network-down must not look identical to "no source knows this paper".
+
+    With every provider unreachable, `check` used to list all five as
+    `sources_checked`, report `could_not_verify`, and carry no errors — the
+    same output shape as a genuinely unconfirmable (possibly fabricated)
+    reference, which is the finding this command exists to surface.
+    """
+    config_path = _setup(
+        tmp_path,
+        citekey="vaswani2017",
+        title="Attention Is All You Need",
+        authors=["Vaswani, Ashish"],
+        year=2017,
+    )
+
+    def _offline_fetch_text(*_args, **_kwargs):
+        def _raise(_url: str) -> str:
+            raise OSError("connection refused")
+
+        return _raise
+
+    monkeypatch.setattr(
+        "pzi.check_service.build_metadata_fetch_text", _offline_fetch_text
+    )
+
+    result = check_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        now_year=2026,
+    )
+
+    item = result["items"][0]
+    assert item["verdict"] == "could_not_verify"
+    # No source answered, so none may be claimed as checked.
+    assert item["sources_checked"] == []
+    assert item["source_errors"], "provider failures must be recorded"
+    assert any("connection refused" in err for err in item["source_errors"])
+    assert "no source could be reached" in item["mismatches"][0]
+    # And the run says so once, rather than only per entry.
+    assert result["errors"]
+
+
+def test_a_source_that_answers_is_still_checked_when_another_fails(tmp_path):
+    """One dead provider must not erase the ones that did answer."""
+    config_path = _setup(
+        tmp_path,
+        citekey="vaswani2017",
+        title="Attention Is All You Need",
+        authors=["Vaswani, Ashish", "Shazeer, Noam"],
+        year=2017,
+    )
+
+    def openalex(_title, **_kw):
+        return {
+            "title": "Attention Is All You Need",
+            "authors": ["Ashish Vaswani", "Noam Shazeer"],
+            "year": 2017,
+            "venue": "NeurIPS",
+        }
+
+    def exploding(_title, **_kw):
+        raise OSError("connection refused")
+
+    # crossref is queried first, so it must be the failing one — a confirming
+    # crossref would short-circuit the loop before any later provider runs.
+    result = check_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        fetch_crossref=exploding,
+        fetch_openalex=openalex,
+        fetch_dblp=_no_source,
+        fetch_openreview=_no_source,
+        fetch_s2=_no_source,
+        now_year=2026,
+    )
+
+    item = result["items"][0]
+    assert item["verdict"] == "verified"
+    assert "openalex" in item["sources_checked"]
+    assert "crossref" not in item["sources_checked"]
+    assert any("crossref" in err for err in item["source_errors"])
