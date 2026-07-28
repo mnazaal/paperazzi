@@ -19,6 +19,7 @@ from pzi.bib_repository import merge_bib_entries
 from pzi.bib_service import delete_entry
 from pzi.pdf_service import attach_pdf
 from pzi.tag_service import add_tags, remove_tags
+from pzi.update_service import update_bib
 
 _PRESERVE_BIB = (
     "% library header comment\n"
@@ -81,6 +82,47 @@ def test_tag_remove_preserves_comments_and_macros() -> None:
         assert "% library header comment" in text
         assert "@string{acm" in text
         assert "keywords = {ml}" in text
+
+
+def test_update_preview_and_write_both_honor_relative_file_path_style() -> None:
+    """`pzi update` ignored `pdf_file_path_style` in both its preview and write.
+
+    `preview_write_plan` took no style at all, and `update_service` never read
+    the setting — so a library configured for relative paths got a diff full of
+    absolute ones, and then had absolute ones written into it.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        cp, bib, papers = _config(td, pdf_file_path_style="relative")
+        pdf_abs = os.path.join(papers, "smith2024.pdf")
+        Path(pdf_abs).write_bytes(b"%PDF-1.4\n")
+        Path(bib).write_text(
+            f"@article{{smith2024, title = {{Graph Parsers}}, author = {{Smith, J}}, "
+            f"file = {{{pdf_abs}}}}}\n"
+        )
+
+        def _search(query: str, *, server_url: str) -> list[dict[str, Any]]:
+            return [{
+                "item_type": "journalArticle",
+                "record": {
+                    "title": "Graph Parsers", "venue": "CVPR",
+                    "doi": "10.1/foo", "year": 2024, "authors": ["Smith, J"],
+                },
+                "attachments": [],
+            }]
+
+        preview = update_bib(
+            config_path=cp, home_dir=td, bib_selector=None,
+            dry_run=True, fetch_search=_search,
+        )
+        diff = preview["items"][0]["diff"]
+        added = [line for line in diff.splitlines() if line.startswith("+")]
+        assert any("file = {papers/smith2024.pdf}" in line for line in added), diff
+
+        update_bib(
+            config_path=cp, home_dir=td, bib_selector=None,
+            dry_run=False, fetch_search=_search,
+        )
+        assert "file = {papers/smith2024.pdf}" in Path(bib).read_text()
 
 
 def test_tag_add_honors_relative_file_path_style() -> None:

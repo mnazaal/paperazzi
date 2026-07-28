@@ -536,7 +536,9 @@ def add_record_with_bib(
     )
 
     if dry_run:
-        result["diff"] = preview_write_plan(bib["path"], plan)["diff"]
+        result["diff"] = preview_write_plan(
+            bib["path"], plan, file_path_style=file_path_style
+        )["diff"]
 
     return result
 
@@ -680,15 +682,20 @@ def add_records_to_bib_batch(
                     ))
                     continue
 
-                if not dry_run:
+                if not dry_run and record_pdf is not None:
                     # Register before apply_plan: if apply_plan raises an
                     # internal invariant error, or if the commit-time checks
                     # (check_consistency / roundtrip) raise after the loop, the
                     # outer handler removes this PDF. On a clean commit the
                     # outer except is not triggered, so no spurious cleanup.
-                    if record_pdf is not None:
-                        batch_pdfs.append(record_pdf)
-                    session.apply_plan(plan)
+                    batch_pdfs.append(record_pdf)
+                # Apply in dry-run too. The session is pure in-memory state and
+                # was opened with `write=not dry_run`, so nothing reaches disk
+                # either way — while skipping it left record K blind to records
+                # 1..K-1, contradicting this function's own contract above.
+                # A preview of two records sharing an identity then reported
+                # two inserts where the real run does insert-then-update.
+                session.apply_plan(plan)
                 results.append(build_add_record_result(
                     bib=bib,
                     plan=plan,

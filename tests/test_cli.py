@@ -469,6 +469,27 @@ def test_add_from_file_writes_failures_and_exits_nonzero(tmp_path: Path, monkeyp
     assert "could not resolve" in stderr.getvalue()
 
 
+def test_add_from_file_dry_run_writes_no_failures_file(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """`--dry-run` prints "nothing will be written" — the failures file counts."""
+    import pzi.commands.add as add_module
+
+    monkeypatch.setattr(add_module, "capture_to_bib", _fake_capture_factory())
+    urls = tmp_path / "urls.txt"
+    urls.write_text("https://x/good1\nhttps://x/bad1\n")
+    stdout, stderr = StringIO(), StringIO()
+
+    exit_code = run_cli(
+        ["add", "--from-file", str(urls), "--dry-run", "--delay", "0",
+         "--config", str(_batch_config(tmp_path))],
+        home_dir=str(tmp_path), stdout=stdout, stderr=stderr, fetch_web=_fake_fetch_web,
+    )
+
+    assert exit_code == 1  # a failure still reports as one
+    assert not (tmp_path / "urls.failed.txt").exists()
+
+
 def test_add_requires_value_or_from_file(tmp_path: Path) -> None:
     stderr = StringIO()
     exit_code = run_cli(["add"], home_dir=str(tmp_path), stdout=StringIO(), stderr=stderr)

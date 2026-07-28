@@ -554,6 +554,50 @@ def test_post_delete_requires_force_for_destructive_delete(tmp_path: Path) -> No
     assert "delete2024" in bib_path.read_text()
 
 
+def test_post_delete_honors_explicit_dry_run_even_with_force(tmp_path: Path) -> None:
+    """An explicit `dry_run: true` is a request for a preview, force or not.
+
+    `force` exists to authorize a destructive delete, not to demand one. Letting
+    it override the flag turned a caller's preview into a real deletion.
+    """
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text("@article{delete2024,\n  title = {Delete Me}\n}\n")
+    cpath = tmp_path / "config.toml"
+    cpath.write_text(f'[[bibs]]\nname="ml"\npath="{bib_path}"\ndefault=true\n')
+
+    status, body = http_post_routes.process_post_request(
+        "/delete",
+        {"citekey": "delete2024", "force": True, "dry_run": True},
+        str(cpath),
+        str(tmp_path),
+    )
+
+    assert status == 200
+    assert body["dry_run"] is True
+    assert "delete2024" in bib_path.read_text()
+
+
+def test_post_delete_with_force_and_no_dry_run_flag_really_deletes(
+    tmp_path: Path,
+) -> None:
+    """Force alone still means "delete it" — the fix above must not break that."""
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text("@article{delete2024,\n  title = {Delete Me}\n}\n")
+    cpath = tmp_path / "config.toml"
+    cpath.write_text(f'[[bibs]]\nname="ml"\npath="{bib_path}"\ndefault=true\n')
+
+    status, body = http_post_routes.process_post_request(
+        "/delete",
+        {"citekey": "delete2024", "force": True},
+        str(cpath),
+        str(tmp_path),
+    )
+
+    assert status == 200
+    assert body["dry_run"] is False
+    assert "delete2024" not in bib_path.read_text()
+
+
 def test_build_http_security_config_strips_token_and_origins() -> None:
     security = build_http_security_config(
         auth_token="  secret  ",

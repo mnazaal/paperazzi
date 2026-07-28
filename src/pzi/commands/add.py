@@ -233,7 +233,13 @@ def _run_batch(
         _stream_line(index, total, value, result, bucket, stderr)
         items.append({"value": value, "status": result["status"], "result": result})
 
-    failures_path = _write_failures(failures, args, from_file) if failures else None
+    # `--dry-run` announces "nothing will be written" above, and the failures
+    # file is written content like any other.
+    failures_path = (
+        _write_failures(failures, args, from_file)
+        if failures and not args.dry_run
+        else None
+    )
 
     if getattr(args, "json", False):
         print(

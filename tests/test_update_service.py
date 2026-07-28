@@ -281,6 +281,65 @@ def test_update_bib_no_changed_fields_skipped(tmp_path: Path) -> None:
     assert len(result["items"]) == 0
 
 
+def test_update_dry_run_previews_an_edit_not_an_insert(tmp_path: Path) -> None:
+    """The preview must target the entry the real run edits: the one by citekey.
+
+    An entry with no DOI/arXiv/URL has no identity keys at all, so matching the
+    enriched record by *identity* — as the preview used to — found nothing and
+    planned an insert, predicting a duplicate entry for the very case this
+    command exists to handle. The real run resolves by citekey and edits in
+    place. The diff must show the edit, and the file must be unchanged.
+    """
+    bib_path = tmp_path / "ml.bib"
+    config_path = _write_config(tmp_path, bib_path)
+    add_record_to_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        record={
+            "citekey": "smith2024graph",
+            "title": "Graph Parsers",
+            "authors": ["Smith, Jane"],
+        },
+        bib_selector=None,
+        dry_run=False,
+    )
+    before = bib_path.read_text()
+    assert "10.1/foo" not in before
+
+    def _search(query: str, *, server_url: str) -> list[dict]:
+        return [
+            {
+                "item_type": "journalArticle",
+                "record": {
+                    "title": "Graph Parsers",
+                    "venue": "CVPR",
+                    "doi": "10.1/foo",
+                    "year": 2024,
+                    "authors": ["Smith, Jane"],
+                },
+                "attachments": [],
+            }
+        ]
+
+    result = update_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        dry_run=True,
+        fetch_search=_search,
+    )
+
+    assert len(result["items"]) == 1
+    diff = result["items"][0]["diff"]
+    # An insert would append a second @article block; an edit adds fields to the
+    # existing one. Exactly one entry header must survive in the diff's result.
+    assert diff.count("@article{") <= 1
+    assert "+  doi = {10.1/foo}" in diff
+    assert "smith2024graph-2" not in diff
+    # And the preview wrote nothing.
+    assert bib_path.read_text() == before
+
+
 def test_update_bib_applies_changes_when_not_dry_run(tmp_path: Path) -> None:
     """Dry-run=False actually writes to the bib file."""
     bib_path = tmp_path / "ml.bib"

@@ -235,6 +235,52 @@ def test_batch_import_equivalent_to_repeated_single_writes(tmp_path) -> None:
     assert single_path.read_text() == batch_path.read_text()
 
 
+def test_batch_import_dry_run_predicts_the_actions_the_real_run_takes(tmp_path) -> None:
+    """A preview that does not see its own earlier records predicts the wrong plan.
+
+    Dry-run skipped `session.apply_plan`, so record K was matched against the
+    library alone instead of the library plus records 1..K-1 — contradicting the
+    batch path's documented contract. Two records sharing a DOI were both
+    previewed as inserts where the real run inserts then updates.
+    """
+    from pzi.add_service import add_records_to_bib_batch
+
+    d = tmp_path / "lib"
+    (d / "papers").mkdir(parents=True)
+    bib_path = d / "library.bib"
+    bib_path.write_text("")
+    bib = {"name": "main", "path": str(bib_path),
+           "papers_dir": str(d / "papers"), "default": True}
+
+    records: list[dict[str, object]] = [
+        {"citekey": "alpha", "title": "Alpha Paper",
+         "authors": ["Brown, B"], "year": 2021, "doi": "10.1/alpha"},
+        {"citekey": "alphadup", "title": "Alpha Paper Revised",
+         "authors": ["Brown, B"], "year": 2021, "doi": "10.1/alpha"},
+        {"citekey": "beta", "title": "Beta Paper",
+         "authors": ["Clark, C"], "year": 2022, "doi": "10.1/beta"},
+    ]
+
+    predicted = [
+        r["action"]
+        for r in add_records_to_bib_batch(
+            bib=bib, records=[dict(r) for r in records], dry_run=True,
+        )
+    ]
+    # The preview wrote nothing, so the real run starts from the same state.
+    assert bib_path.read_text() == ""
+
+    actual = [
+        r["action"]
+        for r in add_records_to_bib_batch(
+            bib=bib, records=[dict(r) for r in records], dry_run=False,
+        )
+    ]
+
+    assert predicted == actual
+    assert actual == ["insert", "update", "insert"]
+
+
 def test_batch_import_parity_for_citekey_collision_and_pdf_reuse(tmp_path) -> None:
     """Bulk and repeated-single paths must agree on the trickier cases too:
     a citekey collision between two *distinct* papers (suffix, not dedup) and

@@ -124,6 +124,7 @@ def promote_bib(
     contact_email = resolve_contact_email(config)
     effective_flaresolverr_url = flaresolverr_url or config.get("flaresolverr_url")
     effective_browser_pdf_cmd = browser_pdf_cmd or config.get("browser_pdf_cmd")
+    file_path_style = str(config.get("pdf_file_path_style", "absolute"))
     # Subscript, not `.get(..., default)`: `AppConfig` is a total TypedDict, so
     # the loader always supplies this. The old fallback of 3 predated the move
     # to `score_match`'s 0-100 scale (where the default is 60) and would have
@@ -256,6 +257,7 @@ def promote_bib(
                     existing_citekeys=existing_citekeys,
                     dry_run=dry_run,
                     citekey_format=config.get("citekey_format"),
+                    file_path_style=file_path_style,
                     **pdf_kwargs,
                 )
             else:
@@ -264,6 +266,7 @@ def promote_bib(
                     preprint_record=record,
                     candidate=candidate,
                     dry_run=dry_run,
+                    file_path_style=file_path_style,
                     **pdf_kwargs,
                 )
         except Exception as exc:  # noqa: BLE001 — one failing entry must not abort the run
@@ -722,6 +725,7 @@ def _handle_keep_preprint(
     pdf_filename_format: str | None = None,
     citekey_format: str | None = None,
     browser_hook: bool = True,
+    file_path_style: str = "absolute",
 ) -> PromoteItem:
     preprint_ck = cast(str, preprint_record.get("citekey", ""))
 
@@ -761,10 +765,15 @@ def _handle_keep_preprint(
         # Same `force_new` as the real write, so the preview shows the insert
         # the run will actually perform rather than a spurious in-place update.
         plan = plan_bib_write(published, records, force_new=True)
-        diff = preview_write_plan(bib_path, plan)["diff"]
+        diff = preview_write_plan(
+            bib_path, plan, file_path_style=file_path_style
+        )["diff"]
     else:
         try:
-            _write_published_fork(bib_path, published, preprint_ck, published_ck)
+            _write_published_fork(
+                bib_path, published, preprint_ck, published_ck,
+                file_path_style=file_path_style,
+            )
         except Exception:
             _remove_new_pdf(_local_pdf_path(published), existing_pdf_paths)
             raise
@@ -806,6 +815,8 @@ def _write_published_fork(
     published: NormalizedRecord,
     preprint_ck: str,
     published_ck: str,
+    *,
+    file_path_style: str = "absolute",
 ) -> None:
     """Insert the published entry and cross-reference the preprint, atomically.
 
@@ -816,7 +827,7 @@ def _write_published_fork(
     published entry committed (with a ``file =`` pointing at the PDF the
     rollback had just deleted) behind a reported ``created 0``.
     """
-    with batch_write_session(bib_path) as session:
+    with batch_write_session(bib_path, file_path_style=file_path_style) as session:
         # `published_ck` was generated against the snapshot read at the top of
         # the run, but this session re-reads under the lock. `execute_write_plan`
         # caught that drift with its own ConcurrentEditError; a batch session
@@ -890,6 +901,7 @@ def _handle_update_in_place(
     browser_pdf_cmd: str | None,
     pdf_filename_format: str | None = None,
     browser_hook: bool = True,
+    file_path_style: str = "absolute",
 ) -> PromoteItem:
     preprint_ck = cast(str, preprint_record.get("citekey", ""))
 
@@ -908,7 +920,9 @@ def _handle_update_in_place(
             [preprint_record],
             existing_entries=[preprint_entry] if preprint_entry is not None else None,
         )
-        diff = preview_write_plan(bib_path, plan)["diff"]
+        diff = preview_write_plan(
+            bib_path, plan, file_path_style=file_path_style
+        )["diff"]
     else:
         existing_pdf_paths = _snapshot_pdf_paths(papers_dir)
         updated, pdf_attached = _maybe_attach_pdf(
@@ -941,7 +955,9 @@ def _handle_update_in_place(
                 _relocate_venue_for_entry_type(merged)
             return merged
 
-        update_result = update_bib_entry(bib_path, preprint_ck, _updater)
+        update_result = update_bib_entry(
+            bib_path, preprint_ck, _updater, file_path_style=file_path_style
+        )
         if update_result.get("found") is not True:
             _remove_new_pdf(_local_pdf_path(updated), existing_pdf_paths)
             return _promote_item(

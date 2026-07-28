@@ -533,8 +533,18 @@ def batch_write_session(
             _write_bib_text_atomic(path, new_source)
 
 
-def preview_write_plan(path: str, plan: WritePlan) -> dict[str, Any]:
-    """Preview a write plan without mutating the BibTeX file."""
+def preview_write_plan(
+    path: str,
+    plan: WritePlan,
+    *,
+    file_path_style: str = "absolute",
+) -> dict[str, Any]:
+    """Preview a write plan without mutating the BibTeX file.
+
+    *file_path_style* must match what the corresponding
+    :func:`execute_write_plan` will use, or the diff shows `file` paths in a
+    style the real write would not produce.
+    """
     with with_bib_lock(path, shared=True):
         source = _read_bib_source(path)
         library = _parse_bib_library(source)
@@ -550,7 +560,9 @@ def preview_write_plan(path: str, plan: WritePlan) -> dict[str, Any]:
         updated_entries = apply_write_plan(entries, plan)
         _validate_bibtex_roundtrip(updated_entries)
 
-        new_source = _render_write_plan(path, source, plan)
+        new_source = _render_write_plan(
+            path, source, plan, file_path_style=file_path_style
+        )
         return {
             "changed": source != new_source,
             "diff": _source_diff(source, new_source, path),

@@ -11,12 +11,17 @@ from pzi.add_planning import (
     select_best_metadata_result,
 )
 from pzi.bib_repository import (
-    plan_bib_write,
+    WritePlan,
     preview_write_plan,
     read_bib_file,
     update_bib_entry,
 )
-from pzi.bibtex import BibtexEntry, NormalizedRecord, apply_record_to_entry
+from pzi.bibtex import (
+    BibtexEntry,
+    NormalizedRecord,
+    apply_record_to_entry,
+    bibtex_entry_to_record,
+)
 from pzi.config import BibResolutionFailure, load_bib_target
 from pzi.protocols import SearchTranslationFetcher
 from pzi.translation_server import fetch_search_translations
@@ -66,6 +71,7 @@ def update_bib(
     config, bib = resolved
     search_fn = fetch_search or fetch_search_translations
     metadata_confidence_min_score = int(config.get("metadata_confidence_min_score", 0))
+    file_path_style = str(config.get("pdf_file_path_style", "absolute"))
     read_result = read_bib_file(bib["path"])
     records = read_result["records"]
     entries = read_result["entries"]
@@ -92,6 +98,7 @@ def update_bib(
                 entries=entries,
                 dry_run=dry_run,
                 metadata_confidence_min_score=metadata_confidence_min_score,
+                file_path_style=file_path_style,
             )
         except Exception as exc:  # noqa: BLE001 — one bad record must not abort the run
             failed: UpdatePlanItem = {
@@ -124,6 +131,7 @@ def _plan_update_for_record(
     entries: list[BibtexEntry],
     dry_run: bool,
     metadata_confidence_min_score: int,
+    file_path_style: str = "absolute",
 ) -> UpdatePlanItem | None:
     """Plan (and, unless *dry_run*, apply) one record's metadata enrichment.
 
@@ -188,7 +196,9 @@ def _plan_update_for_record(
                 return entry  # pragma: no cover — covered by integration/browser tests
             return apply_record_to_entry(entry, current_enriched)
 
-        update_result = update_bib_entry(bib_path, citekey, _apply_update)
+        update_result = update_bib_entry(
+            bib_path, citekey, _apply_update, file_path_style=file_path_style
+        )
         if not update_result["found"]:
             note = "entry disappeared during update"
         else:
@@ -201,10 +211,33 @@ def _plan_update_for_record(
             if not changed_fields:
                 return None  # pragma: no cover — covered by integration/browser tests
     else:
-        # Pre-merged against the entries on disk so the preview shows the write
-        # the real run would make, not the bare projection's field deletions.
-        plan = plan_bib_write(enriched, records, existing_entries=entries)
-        diff = preview_write_plan(bib_path, plan)["diff"]
+        # Target the entry the real run will target. `update_bib_entry` above
+        # resolves by *citekey*; `plan_bib_write` resolves by *identity*. Those
+        # disagree precisely when enrichment supplies an identifier the library
+        # does not carry yet — the ordinary case for this command — and the
+        # preview then reported an insert for an entry the real run edits in
+        # place.
+        position = next(
+            (i for i, on_disk in enumerate(records) if on_disk.get("citekey") == citekey),
+            None,
+        )
+        if position is None:  # pragma: no cover — the caller sourced citekey from records
+            note = "entry disappeared during update"
+        else:
+            # Mirror `_apply_update`: project onto the entry on disk, so the
+            # preview shows the same merge the write would perform rather than
+            # a bare projection that drops unmodelled fields.
+            updated_entry = apply_record_to_entry(entries[position], enriched)
+            plan: WritePlan = {
+                "action": "update",
+                "index": position,
+                "record": bibtex_entry_to_record(updated_entry),
+                "entry": updated_entry,
+                "changed_fields": changed_fields,
+            }
+            diff = preview_write_plan(
+                bib_path, plan, file_path_style=file_path_style
+            )["diff"]
 
     item: UpdatePlanItem = {
         "citekey": citekey,

@@ -469,7 +469,11 @@ def _handle_delete_post(
     raw_dry_run = body.get("dry_run")
     if raw_dry_run is False and not force:
         return 400, {"error": "force=true required for destructive delete"}
-    dry_run = False if force else bool(body.get("dry_run", True))
+    # `force` decides the *default*, never overrides an explicit request: asking
+    # for `dry_run: true` and getting a real delete is the one outcome this
+    # endpoint must never produce. Without force the default stays a preview;
+    # with it, the default is the delete the caller came for.
+    dry_run = bool(body.get("dry_run", not force))
 
     resolved = load_bib_target(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector,
