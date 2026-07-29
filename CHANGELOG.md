@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`pzi pdf retry` and `pzi pdf attach` now run the full PDF fallback chain** —
+  direct, server browser, `browser_pdf_cmd` hook, FlareSolverr, then the
+  desktop-download watcher — the same one `pzi add` has always used. They
+  previously made a single direct request while their failure message told you
+  to "configure `browser_pdf_cmd`", machinery that code path never invoked.
+
 - **`pzi check` now detects two more fabricated-citation signals.** Both were
   already half-wired: `doi_mismatch` was listed among the flags that make an
   entry `problematic`, but nothing ever emitted it because `score_match` never
@@ -23,6 +29,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     "Yao, Denny" scored identically to "Yao, Shunyu" — the fingerprint of a
     citation that borrows a real surname. Initials, added middle names, and
     transliteration differences are still treated as the same person.
+
+### Changed
+
+- **`pzi pdf retry <citekey> --failed-only` is now a usage error (exit 2).** The
+  citekey was previously accepted and discarded; that was documented, but doing
+  something other than what was typed is worse than refusing.
+- **`pzi entries --limit 0` is now a usage error** instead of being silently
+  clamped to 1 and reported back as `"limit": 1`. The 500 ceiling is documented
+  in `--limit`'s help. `--offset 0` is unchanged and still valid.
+- **Writes parse the `.bib` once instead of twice** (a `--dry-run` followed by a
+  write parsed it four times). No behaviour change; the round-trip validation
+  now covers the exact entry list that gets serialized.
+
+### Fixed
+
+- **Boolean environment variables no longer invert.** `bool("0")` is `True`, so
+  `PZI_SKIP_BROWSER_HOOK=0` *enabled* the skip — as did
+  `PZI_DISABLE_DESKTOP_BROWSER_FALLBACK=0` and `PZI_SKIP_AUTO_START=0`, despite
+  the README documenting "set to `1`". `0`, `false`, `no`, `off` and the empty
+  string now read as off.
+- **RIS export emitted every URL twice** (`canonical_url` and `source_url` are
+  both filled from the single BibTeX `url` field) and broke on multiline
+  abstracts: RIS has no continuation syntax, so a wrapped abstract emitted bare
+  untagged lines that strict readers drop, mis-assign, or — when a line happens
+  to begin with two characters and `  - ` — reparse as a new field.
+- **Old-style arXiv IDs with a dotted subject class** (`math.GT/0309136`) were
+  not recognized and lost their DOI mapping; **publisher display paths**
+  (`/doi/abs/`, `/doi/full/`, `/doi/pdf/`, `/doi/epdf/`) yielded no DOI at all.
+- **`is_ts_reachable` leaked a response object** on every 30-second watchdog
+  probe, as did the health-check poll beside it.
+- `--target` failures now report "no matching library target found or selection
+  is ambiguous" rather than "bib not found", and no longer drop the per-line
+  config errors.
 
 ### Removed
 
