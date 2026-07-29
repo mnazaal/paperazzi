@@ -8,7 +8,12 @@ from pathlib import Path
 from typing import TextIO
 
 from pzi import exit_codes
-from pzi.commands.common import first_error, print_capture_stream_line
+from pzi.commands.common import (
+    first_error,
+    print_capture_stream_line,
+    print_capture_summary,
+    print_dry_run_banner,
+)
 from pzi.config import load_config_file
 from pzi.inbox_service import DrainItem, DrainResult, drain_inbox, parse_inbox_line
 from pzi.tag_service import parse_tag_csv
@@ -61,15 +66,12 @@ def run_inbox_command(
 
         total = result["total"]
         if dry_run:
-            print(
-                f"dry run: previewing {total} item(s), nothing will be written",
-                file=stderr,
-            )
+            print_dry_run_banner(total, stderr)
 
         for seq, item in enumerate(result["items"]):
             _stream_item(seq, total, item, stderr)
 
-        _print_summary(result["counts"], dry_run, stdout)
+        print_capture_summary(result["counts"], dry_run=dry_run, stdout=stdout)
         # PARTIAL, not FINDINGS — see the matching note in `commands/add.py`.
         return (
             exit_codes.PARTIAL if result["counts"]["failed"] else exit_codes.OK
@@ -114,13 +116,7 @@ def _stream_item(seq: int, total: int, item: DrainItem, stderr: TextIO) -> None:
     )
 
 
-def _print_summary(counts: dict[str, int], dry_run: bool, stdout: TextIO) -> None:
-    verb = "would add" if dry_run else "added"
-    print(
-        f"done: {counts['added']} {verb}, {counts['exists']} already present, "
-        f"{counts['failed']} failed",
-        file=stdout,
-    )
+
 
 
 

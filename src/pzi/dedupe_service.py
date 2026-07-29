@@ -7,8 +7,7 @@ from typing import Any, NotRequired, TypedDict
 from pzi.bib_repository import (
     merge_bib_entries,
     merge_entries,
-    read_bib_file_raw,
-    with_bib_lock,
+    read_bib_file,
 )
 from pzi.bibtex import NormalizedRecord
 from pzi.similarity import (
@@ -57,8 +56,7 @@ def find_duplicates(
         dict with ``status``, ``exact_duplicates`` (list of citekey pairs),
         ``fuzzy_candidates`` (list of citekey + hint dicts), and counts.
     """
-    with with_bib_lock(bib_path, shared=True):
-        raw = read_bib_file_raw(bib_path)
+    raw = read_bib_file(bib_path)
     records: list[NormalizedRecord] = raw["records"]
 
     if not records:
@@ -160,8 +158,7 @@ def merge_duplicates(
             "dry_run": dry_run,
         }
 
-    with with_bib_lock(bib_path, shared=True):
-        raw = read_bib_file_raw(bib_path)
+    raw = read_bib_file(bib_path)
     entries = raw["entries"]
     records = raw["records"]
 

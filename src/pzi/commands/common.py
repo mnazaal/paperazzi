@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any, TextIO
 
 from pzi import cli_json, exit_codes
 from pzi.cli_parser import usage_error_lines
-from pzi.config import BibConfig, load_config_file, resolve_library_target
+from pzi.config import AppConfig, BibConfig, BibResolutionFailure, load_bib_target
 from pzi.errors import PziError
 
 
@@ -19,7 +20,7 @@ def print_lines(lines: Sequence[str], out: TextIO) -> None:
 
 def resolve_target(
     *, config_path: str, home_dir: str, bib_selector: str | None,
-) -> tuple[dict[str, Any], BibConfig]:
+) -> tuple[AppConfig, BibConfig]:
     """Load config and resolve a single library target.
 
     Raises :class:`PziError`, which the CLI boundary renders.  Both failures are
@@ -30,15 +31,22 @@ def resolve_target(
     library-maintenance command runners so each one resolves, and fails,
     identically.
     """
-    cfg = load_config_file(config_path, home_dir=home_dir)
-    if cfg["config"] is None:
+    resolved = load_bib_target(
+        config_path=config_path, home_dir=home_dir, bib_selector=bib_selector
+    )
+    if isinstance(resolved, BibResolutionFailure):
+        # Delegated rather than reimplemented: this used to duplicate
+        # load_bib_target's control flow with a worse message ("bib not found"
+        # against "no matching library target found or selection is
+        # ambiguous"), and dropped the per-line config errors on the
+        # unresolved-target path.
         raise PziError(
-            "failed to load config", code=exit_codes.ENVIRONMENT, details=cfg["errors"],
+            resolved.errors[0] if resolved.errors else "failed to resolve bib",
+            code=exit_codes.ENVIRONMENT,
+            details=list(resolved.errors),
         )
-    target = resolve_library_target(cfg["config"]["bibs"], bib_selector, home_dir=home_dir)
-    if target is None:
-        raise PziError("bib not found", code=exit_codes.ENVIRONMENT)
-    return cfg["config"], target
+    config, target = resolved
+    return config, target
 
 
 def target_list(target: Sequence[str] | None) -> list[str | None]:
@@ -228,3 +236,31 @@ def emit_usage_error(
     else:
         print_lines(usage_error_lines(command_path, message), stderr)
     return exit_codes.USAGE
+
+
+def print_capture_summary(
+    counts: Mapping[str, int],
+    *,
+    dry_run: bool,
+    stdout: TextIO,
+    failures_path: Path | None = None,
+) -> None:
+    """Closing line for a bulk capture, shared by `add --from-file` and `inbox drain`.
+
+    Same reason as `print_capture_stream_line` above: two verbatim copies meant
+    a wording or counting fix to one silently skipped the other.
+    """
+    verb = "would add" if dry_run else "added"
+    print(
+        f"done: {counts['added']} {verb}, {counts['exists']} already present, "
+        f"{counts['failed']} failed",
+        file=stdout,
+    )
+    if failures_path is not None:
+        print(f"wrote {counts['failed']} failed item(s) to {failures_path}", file=stdout)
+        print(f"  retry with: pzi add --from-file {failures_path}", file=stdout)
+
+
+def print_dry_run_banner(total: int, stderr: TextIO) -> None:
+    """Announce a dry run before a bulk capture streams its items."""
+    print(f"dry run: previewing {total} item(s), nothing will be written", file=stderr)

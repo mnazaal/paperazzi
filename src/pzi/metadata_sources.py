@@ -206,7 +206,7 @@ def fetch_openalex_record(
     url = f"https://api.openalex.org/works/doi:{quote(doi, safe='')}"
     if contact_email:
         url = f"{url}?mailto={quote(contact_email, safe='')}"
-    data = _api_json_direct(url, fn, errors=errors)
+    data = _api_json(url, fn=fn, errors=errors)
     if not isinstance(data, dict) or "id" not in data:
         return None
     return _openalex_normalize_work(data)
@@ -226,7 +226,7 @@ def fetch_openalex_record_by_title(
     url = f"https://api.openalex.org/works?search={quote(title.strip(), safe='')}&per-page=1"
     if contact_email:
         url = f"{url}&mailto={quote(contact_email, safe='')}"
-    data = _api_json_direct(url, fn, errors=errors)
+    data = _api_json(url, fn=fn, errors=errors)
     if not isinstance(data, dict):
         return None
     results = data.get("results")
@@ -321,7 +321,7 @@ def fetch_semantic_scholar_record(
     fields = "title,authors,year,venue,externalIds,openAccessPdf"
     base = "https://api.semanticscholar.org/graph/v1/paper"
     url = f"{base}/DOI:{quote(doi, safe='')}?fields={fields}"
-    data = _api_json_direct(url, fn, errors=errors)
+    data = _api_json(url, fn=fn, errors=errors)
     if not isinstance(data, dict) or "error" in data or "message" in data:
         return None
     return _s2_normalize_paper(data)
@@ -344,7 +344,7 @@ def fetch_semantic_scholar_record_by_title(
         "https://api.semanticscholar.org/graph/v1/paper/search?"
         f"query={quote(stripped, safe='')}&limit=1&fields={fields}"
     )
-    data = _api_json_direct(url, fn, errors=errors)
+    data = _api_json(url, fn=fn, errors=errors)
     if not isinstance(data, dict) or "error" in data or "message" in data:
         return None
     papers = data.get("data")
@@ -464,7 +464,7 @@ def probe_s2_api(
         "DOI:10.1103/PhysRevLett.116.061102?fields=title"
     )
     try:
-        data = _api_json_direct(url, fn)
+        data = _api_json(url, fn=fn)
         return isinstance(data, dict) and "title" in data and "error" not in data
     except OSError:
         return False
@@ -498,24 +498,6 @@ def _api_json(
         return None
 
 
-def _api_json_direct(
-    url: str,
-    fn: FetchText,
-    *,
-    errors: list[str] | None = None,
-) -> object | None:
-    """Fetch JSON without identity headers, returning None on network or parse errors."""
-    try:
-        return json.loads(fn(url))
-    except urllib.error.HTTPError as exc:
-        if errors is not None:
-            errors.append(f"HTTP {exc.code}")
-        return None
-    except (OSError, json.JSONDecodeError, ValueError) as exc:
-        if errors is not None:
-            errors.append(str(exc))
-        return None
-
 
 # ============================================================================
 # DBLP
@@ -539,7 +521,7 @@ def fetch_dblp_record_by_title(
         return None
     fn = fetch_text or _fetch_text
     url = f"https://dblp.org/search/publ/api?q={quote(title.strip(), safe='')}&format=json&h=1"
-    info = _dblp_first_hit(_api_json_direct(url, fn, errors=errors))
+    info = _dblp_first_hit(_api_json(url, fn=fn, errors=errors))
     return _dblp_normalize(info) if info is not None else None
 
 
@@ -644,7 +626,7 @@ def fetch_openreview_record_by_title(
         "https://api.openreview.net/notes/search?"
         f"term={quote(title.strip(), safe='')}&limit=1&content=all"
     )
-    note = _openreview_first_note(_api_json_direct(url, fn, errors=errors))
+    note = _openreview_first_note(_api_json(url, fn=fn, errors=errors))
     return _openreview_normalize(note) if note is not None else None
 
 
@@ -706,7 +688,7 @@ def fetch_doaj_pdf_url(
 ) -> str | None:
     """Return a PDF URL from DOAJ for a DOI, or None."""
     fn = fetch_text or _fetch_text
-    data = _api_json_direct(f"https://doaj.org/api/search/articles/doi:{quote(doi, safe='')}", fn)
+    data = _api_json(f"https://doaj.org/api/search/articles/doi:{quote(doi, safe='')}", fn=fn)
     if not isinstance(data, dict):
         return None
     results = data.get("results", [])
@@ -763,7 +745,7 @@ def fetch_europepmc_pdf_url(
         "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
         f"?query=DOI:{quote(doi, safe='')}&resultType=core&format=json"
     )
-    data = _api_json_direct(url, fn)
+    data = _api_json(url, fn=fn)
     if not isinstance(data, dict):
         return None
     results = data.get("resultList", {}).get("result", [])

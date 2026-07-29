@@ -187,8 +187,14 @@ def _handle_tags_get(
 def _handle_export_get(
     config_path: str, home_dir: str, qs: dict[str, str],
 ) -> tuple[int, dict[str, Any]]:
+    # Same table as /export/raw. The allowlist used to exist twice in two
+    # shapes -- a tuple literal here, EXPORT_FORMATS there -- so adding a format
+    # needed two edits and missing one made the two routes disagree about what
+    # is supported.
+    from pzi.http_binary_routes import EXPORT_FORMATS
+
     fmt = qs.get("format", "bibtex")
-    if fmt not in ("bibtex", "csv", "json", "ris"):
+    if fmt not in EXPORT_FORMATS:
         return 400, {"error": f"unsupported format: {fmt}"}
 
     bib_selector = qs.get("bib") or None
@@ -199,15 +205,8 @@ def _handle_export_get(
         return 400, {"status": "error", "errors": resolved.errors}
 
     _config, bib = resolved
-    from pzi.export_service import export_bibtex, export_csv, export_json, export_ris
-
-    exporters = {
-        "bibtex": export_bibtex,
-        "csv": export_csv,
-        "json": export_json,
-        "ris": export_ris,
-    }
-    result = exporters[fmt](bib_path=bib["path"])
+    export, _extension = EXPORT_FORMATS[fmt]
+    result = export(bib_path=bib["path"])
 
     if result["status"] != "ok":
         return 500, {"error": "export failed", "errors": result.get("errors", [])}

@@ -25,6 +25,8 @@ from pzi.cli_render import _error_lines, _render_add_success
 from pzi.commands.common import (
     first_error,
     print_capture_stream_line,
+    print_capture_summary,
+    print_dry_run_banner,
     print_lines,
     print_metadata_diagnostics,
 )
@@ -237,7 +239,7 @@ def _run_batch(
     items: list[dict[str, Any]] = []
 
     if args.dry_run:
-        print(f"dry run: previewing {total} item(s), nothing will be written", file=stderr)
+        print_dry_run_banner(total, stderr)
 
     for index, value in enumerate(values):
         if index > 0 and delay > 0:
@@ -301,7 +303,9 @@ def _run_batch(
             command="add --from-file",
         )
     else:
-        _print_summary(counts, args.dry_run, failures_path, stdout)
+        print_capture_summary(
+            counts, dry_run=args.dry_run, stdout=stdout, failures_path=failures_path
+        )
     # A batch where some items failed is PARTIAL, not FINDINGS: `1` is reserved
     # for "ran fine and has something to report", so a script branching on it
     # must not see a half-failed capture as a clean run with findings.
@@ -332,23 +336,6 @@ def _stream_line(
         else (),
         stderr=stderr,
     )
-
-
-def _print_summary(
-    counts: dict[str, int],
-    dry_run: bool,
-    failures_path: Path | None,
-    stdout: TextIO,
-) -> None:
-    verb = "would add" if dry_run else "added"
-    print(
-        f"done: {counts['added']} {verb}, {counts['exists']} already present, "
-        f"{counts['failed']} failed",
-        file=stdout,
-    )
-    if failures_path is not None:
-        print(f"wrote {counts['failed']} failed item(s) to {failures_path}", file=stdout)
-        print(f"  retry with: pzi add --from-file {failures_path}", file=stdout)
 
 
 def _write_failures(failures: list[str], args: argparse.Namespace, from_file: str) -> Path:

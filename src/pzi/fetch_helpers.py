@@ -7,12 +7,14 @@ import time
 import urllib.error
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 from urllib.request import Request
 
 from pzi.metadata_cache import MetadataCache
 from pzi.rate_limit import RateLimiter
 from pzi.safe_http import SsrfBlocked, safe_urlopen
+
+_T = TypeVar("_T")
 
 DEFAULT_USER_AGENT = "pzi/1.0 (mailto:pzi)"
 DEFAULT_TIMEOUT = 30
@@ -106,6 +108,50 @@ def _read_limited(response, *, max_bytes: int) -> bytes:
         chunks.append(chunk)
 
 
+def _fetch_with_retries(
+    url: str,
+    *,
+    headers: dict[str, str],
+    timeout: int,
+    max_retries: int,
+    allow_host: str | None = None,
+    extract: Callable[[Any], _T],
+) -> _T:
+    """Run one GET with the shared retry policy and hand the response to *extract*.
+
+    The policy is: retry transient network errors with exponential backoff
+    (0s, 2s, 4s, capped at 8); retry HTTP 429 honouring Retry-After; do not
+    retry any other HTTPError; treat an SSRF block as terminal, since
+    re-attempting a blocked target is always blocked.
+
+    *extract* receives the **live response**, not its bytes, because
+    :func:`fetch_binary` needs the Content-Type header as well as the body.
+    """
+    last_error: Exception | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            request = Request(url, headers=headers, method="GET")
+            # Passed only when set, so the text path's call is byte-identical to
+            # what it was before this helper existed -- allow_host is a
+            # binary-fetch concept (the configured EZProxy host).
+            extra = {} if allow_host is None else {"allow_host": allow_host}
+            with safe_urlopen(request, timeout=timeout, **extra) as response:
+                return extract(response)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 429 and attempt < max_retries:
+                time.sleep(_retry_after_delay(exc, attempt))
+                continue
+            raise
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            if _is_ssrf_block(exc):
+                raise
+            last_error = exc
+            if attempt < max_retries:
+                time.sleep(min(2**attempt, 8))
+
+    raise last_error  # type: ignore[misc]
+
+
 def fetch_text(
     url: str,
     *,
@@ -126,26 +172,13 @@ def fetch_text(
     if api_key:
         headers["x-api-key"] = api_key
 
-    last_error: Exception | None = None
-    for attempt in range(max_retries + 1):
-        try:
-            request = Request(url, headers=headers, method="GET")
-            with safe_urlopen(request, timeout=timeout) as response:
-                return _read_limited(response, max_bytes=max_bytes).decode("utf-8")
-        except urllib.error.HTTPError as exc:
-            if exc.code == 429 and attempt < max_retries:
-                delay = _retry_after_delay(exc, attempt)
-                time.sleep(delay)
-                continue
-            raise
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            if _is_ssrf_block(exc):
-                raise  # terminal: re-attempting a blocked target is always blocked
-            last_error = exc
-            if attempt < max_retries:
-                time.sleep(min(2**attempt, 8))  # 0s, 2s, 4s (capped at 8)
-
-    raise last_error  # type: ignore[misc]
+    return _fetch_with_retries(
+        url,
+        headers=headers,
+        timeout=timeout,
+        max_retries=max_retries,
+        extract=lambda response: _read_limited(response, max_bytes=max_bytes).decode("utf-8"),
+    )
 
 
 def build_metadata_fetch_text(
@@ -208,24 +241,16 @@ def fetch_binary(
         "User-Agent": user_agent,
         "Accept": "application/pdf,application/octet-stream;q=0.9,*/*;q=0.8",
     }
-    last_error: Exception | None = None
-    for attempt in range(max_retries + 1):
-        try:
-            request = Request(url, headers=headers, method="GET")
-            with safe_urlopen(request, timeout=timeout, allow_host=allow_host) as response:
-                content_type = response.headers.get("Content-Type")
-                return _read_limited(response, max_bytes=max_bytes), content_type
-        except urllib.error.HTTPError as exc:
-            if exc.code == 429 and attempt < max_retries:
-                delay = _retry_after_delay(exc, attempt)
-                time.sleep(delay)
-                continue
-            raise
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            if _is_ssrf_block(exc):
-                raise  # terminal: re-attempting a blocked target is always blocked
-            last_error = exc
-            if attempt < max_retries:
-                time.sleep(min(2**attempt, 8))  # pragma: no cover
-
-    raise last_error  # type: ignore[misc]
+    return _fetch_with_retries(
+        url,
+        headers=headers,
+        timeout=timeout,
+        max_retries=max_retries,
+        allow_host=allow_host,
+        # Content-Type is read off the live response, before the body, which is
+        # why `extract` takes the response rather than bytes.
+        extract=lambda response: (
+            _read_limited(response, max_bytes=max_bytes),
+            response.headers.get("Content-Type"),
+        ),
+    )

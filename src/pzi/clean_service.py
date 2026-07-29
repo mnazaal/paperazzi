@@ -9,9 +9,8 @@ from pathlib import Path
 from typing import Any, NotRequired, TypedDict
 
 from pzi.bib_repository import (
-    read_bib_file_raw,
+    read_bib_file,
     validate_library_parseable,
-    with_bib_lock,
 )
 from pzi.bibtex import BibtexEntry
 from pzi.fileio import read_text_utf8
@@ -47,8 +46,7 @@ def validate_library(
     issues: list[dict[str, Any]] = []
 
     # --- Parse validation ---
-    with with_bib_lock(bib_path, shared=True):
-        raw = read_bib_file_raw(bib_path)
+    raw = read_bib_file(bib_path)
     entries: list[BibtexEntry] = raw["entries"]
     records = raw["records"]
 

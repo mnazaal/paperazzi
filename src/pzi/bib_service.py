@@ -9,6 +9,7 @@ from pzi.bib_repository import (
     delete_bib_entry,
     find_entry_index,
     parse_bib_library,
+    read_bib_file,
     read_bib_file_raw,
     read_bib_source,
     validate_library_parseable,
@@ -77,8 +78,7 @@ class DeleteEntryResult(TypedDict):
 
 def bib_stats(*, bib_path: str, papers_dir: str) -> BibStatsResult:
     """Return statistics for a BibTeX library."""
-    with with_bib_lock(bib_path, shared=True):
-        read_result = read_bib_file_raw(bib_path)
+    read_result = read_bib_file(bib_path)
     entries = read_result["entries"]
     records = read_result["records"]
 
@@ -144,8 +144,7 @@ def list_entries(
     bib_path = bib["path"]
     papers_dir = bib["papers_dir"]
 
-    with with_bib_lock(bib_path, shared=True):
-        read_result = read_bib_file_raw(bib_path)
+    read_result = read_bib_file(bib_path)
 
     records = read_result["records"]
     total = len(records)
@@ -227,8 +226,7 @@ def entry_detail(
         }
     _config, bib = resolved
 
-    with with_bib_lock(bib["path"], shared=True):
-        read_result = read_bib_file_raw(bib["path"])
+    read_result = read_bib_file(bib["path"])
 
     entries = read_result["entries"]
     records = read_result["records"]
