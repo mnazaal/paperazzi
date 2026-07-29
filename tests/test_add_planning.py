@@ -1,5 +1,7 @@
 import urllib.error
 
+import pytest
+
 from pzi.add_planning import (
     _coerce_year,
     attach_similarity_hint,
@@ -507,3 +509,38 @@ def test_fetch_record_for_input_returns_provider_errors() -> None:
     assert record.get("title") == "Test Paper"
     assert provider_errors, "expected at least one provider error"
     assert any("429" in e for e in provider_errors)
+
+
+def test_fetch_record_for_input_routes_providers_through_the_shared_fetcher() -> None:
+    """The add path called providers with their module-default fetcher.
+
+    `check` and `promote` compose `build_metadata_fetch_text` (disk cache +
+    per-host rate limiting) and pass it down; add did not, so
+    `metadata_cache_ttl` did nothing for adds and keyless Semantic Scholar was
+    hit with no spacing.
+    """
+    from pzi.add_planning import fetch_record_for_input
+
+    seen_urls: list[str] = []
+
+    def recording_fetch_text(url: str, **_kwargs) -> str:
+        seen_urls.append(url)
+        raise OSError("stop here — only the wiring is under test")
+
+    # Every provider fails, so the cascade ends by reporting no metadata; the
+    # point under test is which fetcher it used on the way there.
+    with pytest.raises(ValueError, match="no metadata found"):
+        fetch_record_for_input(
+            raw_value="10.1234/example",
+            classified={"kind": "doi", "raw": "10.1234/example",
+                        "normalized": "10.1234/example"},
+            server_url="http://127.0.0.1:1",
+            fetch_web=lambda *_a, **_kw: [],
+            fetch_search=lambda *_a, **_kw: [],
+            metadata_fetch_text=recording_fetch_text,
+        )
+
+    # Crossref, OpenAlex and S2 were all reached through the injected fetcher.
+    assert any("crossref.org" in url for url in seen_urls), seen_urls
+    assert any("openalex.org" in url for url in seen_urls), seen_urls
+    assert any("semanticscholar.org" in url for url in seen_urls), seen_urls

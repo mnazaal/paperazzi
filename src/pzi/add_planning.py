@@ -15,7 +15,7 @@ exercised "planning" could reach the network without saying so.
 from __future__ import annotations
 
 import urllib.error
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, cast
 from urllib.parse import urlsplit
 
@@ -39,6 +39,7 @@ from pzi.protocols import (
     SearchTranslationFetcher,
     UnpaywallFetcher,
     WebTranslationFetcher,
+    accepts_keyword,
 )
 from pzi.similarity import compute_similarity_hint, find_exact_match
 
@@ -354,6 +355,7 @@ def fetch_record_for_input(
     api_auth_token: str | None = None,
     desktop_fallback_hosts: set[str] | None = None,
     pdf_discovery_parallel: bool = False,
+    metadata_fetch_text: Callable[..., str] | None = None,
 ) -> tuple[NormalizedRecord, list[str], list[dict]]:
     provider_errors: list[str] = []
     # The raw translation-server results, returned so the caller can compute
@@ -441,6 +443,7 @@ def fetch_record_for_input(
             normalized,
             contact_email=contact_email,
             errors=provider_errors,
+            fetch_text=metadata_fetch_text,
         )
         if meta is None:
             meta = _call_metadata_fetcher(
@@ -448,13 +451,17 @@ def fetch_record_for_input(
                 normalized,
                 contact_email=contact_email,
                 errors=provider_errors,
+                fetch_text=metadata_fetch_text,
             )
         if meta is None:
             if fetch_s2 is not None:
                 meta = fetch_s2(normalized)
             else:
                 meta = fetch_semantic_scholar_record(
-                    normalized, api_key=s2_api_key, errors=provider_errors
+                    normalized,
+                    api_key=s2_api_key,
+                    errors=provider_errors,
+                    fetch_text=metadata_fetch_text,
                 )
         if meta is not None:
             best = dict(merge_record_sources(fallback, meta))
@@ -700,14 +707,25 @@ def _metadata_diagnostic_line(
 
 
 def _call_metadata_fetcher(
-    fn, doi: str, *, contact_email: str | None, errors: list[str] | None = None
+    fn,
+    doi: str,
+    *,
+    contact_email: str | None,
+    errors: list[str] | None = None,
+    fetch_text: Callable[..., str] | None = None,
 ):
     # Every fetcher conforms to MetadataRecordFetcher, so call it one way. The
     # old shape probed with `except TypeError` and retried with fewer arguments,
     # which silently converted a genuine TypeError *inside* a fetcher into a
     # plausible-looking fallback result.
+    kwargs: dict[str, Any] = {"contact_email": contact_email, "errors": errors}
+    # `fetch_text` is deliberately not part of MetadataRecordFetcher: the real
+    # fetchers accept it and injected ones need not. Passing it when it fits is
+    # what routes this path through the configured cache and rate limiter.
+    if fetch_text is not None and accepts_keyword(fn, "fetch_text"):
+        kwargs["fetch_text"] = fetch_text
     try:
-        return fn(doi, contact_email=contact_email, errors=errors)
+        return fn(doi, **kwargs)
     except urllib.error.HTTPError as exc:
         if errors is not None:
             errors.append(f"HTTP {exc.code}")

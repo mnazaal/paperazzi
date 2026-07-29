@@ -51,6 +51,7 @@ from pzi.capture_local_pdf import (
     plan_with_applied_record,
 )
 from pzi.config import BibConfig, BibResolutionFailure, load_bib_target
+from pzi.fetch_helpers import build_metadata_fetch_text
 from pzi.format_templates import format_citekey
 from pzi.identifiers import classify_input
 from pzi.pdf import remove_new_pdf as _remove_new_pdf
@@ -149,6 +150,12 @@ def add_input_to_bib(
     ezproxy_host = context.ezproxy_host
     desktop_fallback_hosts = context.desktop_fallback_hosts
     metadata_confidence_min_score = int(config.get("metadata_confidence_min_score", 0))
+    # Compose the shared metadata fetcher, as `check` and `promote` already do.
+    # Without it the add path called the providers with their module-level
+    # default fetcher, so `metadata_cache_ttl` did nothing for adds, keyless
+    # Semantic Scholar was hit without spacing, and a DOI that resolved through
+    # Crossref and then went looking for a PDF fetched the same work twice.
+    metadata_fetch_text = build_metadata_fetch_text(config, api_key=s2_api_key)
 
     classified = classify_input(value)
     invalid_input = describe_invalid_add_input(value)
@@ -249,6 +256,7 @@ def add_input_to_bib(
             api_auth_token=api_auth_token,
             desktop_fallback_hosts=desktop_fallback_hosts,
             pdf_discovery_parallel=config.get("pdf_discovery_parallel", False),
+            metadata_fetch_text=metadata_fetch_text,
         )
         provider_errors.extend(_fetched_provider_errors)
         # Diagnostics are computed here, where the results are consumed, rather
