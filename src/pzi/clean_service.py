@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import os
 import shutil
-from collections import Counter
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict
 
 from pzi.bib_repository import (
     read_bib_file,
-    validate_library_parseable,
 )
+from pzi.bib_serialize import failed_block_details
 from pzi.bibtex import BibtexEntry
 from pzi.fileio import read_text_utf8
 from pzi.pdf_planning import pdf_file_present
@@ -27,6 +26,11 @@ class CleanResult(TypedDict):
     duplicate_citekeys: list[str]
     missing_pdfs: list[str]
     orphan_pdfs: list[str]
+    #: True when the parser dropped a block, so the counts above describe only
+    #: what could be read. `clean_library` refuses to quarantine anything while
+    #: this holds.
+    partial_parse: bool
+    errors: list[str]
     issues: list[dict[str, Any]]
     actions: NotRequired[list[dict[str, Any]]]
 
@@ -50,39 +54,57 @@ def validate_library(
     entries: list[BibtexEntry] = raw["entries"]
     records = raw["records"]
 
-    # Parse-check before anything else, and before the empty-library shortcut.
-    # `read_bib_file_raw` is lenient: it drops blocks it cannot parse instead of
+    # `read_bib_file` is lenient: it drops blocks it cannot parse instead of
     # raising, so a malformed file arrives here looking like a short — or
-    # entirely empty — library. Checking after the shortcut meant a wholly
-    # corrupt bib reported "ok, 0 entries, no issues" and exited 0. Worse, a
-    # partially corrupt one let `--fix` quarantine the PDFs of every dropped
-    # entry: a dropped entry contributes no referenced path, so its PDF looks
-    # orphaned, and moving it leaves the entry's `file =` dangling.
+    # entirely empty — library. Classify what was dropped, because the two kinds
+    # warrant different answers:
+    #
+    #   * a duplicate citekey leaves a *readable* file with one reported entry
+    #     missing. That is a finding to report, not a reason to refuse.
+    #   * an unparseable block means the file cannot be trusted as a whole, so
+    #     every count below would understate it. Report the failure alone rather
+    #     than alongside numbers that invite acting on them.
+    duplicate_citekeys: list[str] = []
+    parse_failures: list[str] = []
     if Path(bib_path).exists():
-        try:
-            from bibtexparser.entrypoint import parse_string as _parse
-            text = read_text_utf8(bib_path)
-            library = _parse(text)
-            validate_library_parseable(library)
-        except ValueError as exc:
-            # Every count below is derived from the entries the lenient parser
-            # kept, so all of them would understate a file we cannot fully read.
-            # Report the parse failure alone rather than alongside numbers that
-            # invite acting on it.
-            return {
-                "status": "error",
-                "bib_path": bib_path,
-                "papers_dir": papers_dir,
-                "total_entries": len(entries),
-                "duplicate_citekeys": [],
-                "missing_pdfs": [],
-                "orphan_pdfs": [],
-                "issues": [{
+        from bibtexparser.entrypoint import parse_string as _parse
+
+        library = _parse(read_text_utf8(bib_path))
+        for key, message in failed_block_details(library):
+            if key is None:
+                parse_failures.append(message)
+            else:
+                duplicate_citekeys.append(key)
+                issues.append({
                     "severity": "error",
-                    "type": "parse_error",
-                    "message": str(exc),
-                }],
-            }
+                    "type": "duplicate_citekey",
+                    "message": message,
+                })
+
+    if parse_failures:
+        return {
+            "status": "error",
+            "bib_path": bib_path,
+            "papers_dir": papers_dir,
+            "total_entries": len(entries),
+            "duplicate_citekeys": [],
+            "missing_pdfs": [],
+            "orphan_pdfs": [],
+            "partial_parse": True,
+            # The documented `--json` failure channel must not be empty.
+            "errors": parse_failures,
+            "issues": [
+                {"severity": "error", "type": "parse_error", "message": message}
+                for message in parse_failures
+            ],
+        }
+
+    duplicate_citekeys = sorted(set(duplicate_citekeys))
+    # True whenever the parser dropped something. `clean_library` keys the
+    # orphan quarantine off this rather than off `status`, because a dropped
+    # entry contributes no referenced path — so its PDF looks orphaned, and
+    # moving it would leave the entry's `file =` dangling.
+    partial_parse = bool(duplicate_citekeys)
 
     if not entries:
         return {
@@ -90,21 +112,13 @@ def validate_library(
             "bib_path": bib_path,
             "papers_dir": papers_dir,
             "total_entries": 0,
-            "duplicate_citekeys": [],
+            "duplicate_citekeys": duplicate_citekeys,
             "missing_pdfs": [],
             "orphan_pdfs": [],
-            "issues": [],
+            "partial_parse": partial_parse,
+            "errors": [],
+            "issues": issues,
         }
-
-    # --- Duplicate citekeys ---
-    citekey_counts = Counter(entry["citekey"] for entry in entries)
-    duplicate_citekeys = sorted(k for k, v in citekey_counts.items() if v > 1)
-    for dk in duplicate_citekeys:
-        issues.append({
-            "severity": "error",
-            "type": "duplicate_citekey",
-            "message": f"citekey {dk} appears {citekey_counts[dk]} times",
-        })
 
     # --- Missing PDFs ---
     missing_pdfs: list[str] = []
@@ -128,7 +142,11 @@ def validate_library(
 
     orphan_pdfs: list[str] = []
     papers = Path(papers_dir)
-    if papers.is_dir():
+    # Skipped entirely under a partial parse. Orphan detection needs the
+    # *complete* set of referenced paths, and a dropped duplicate contributes
+    # none — so its PDF would be reported as orphaned, and `--fix` would move a
+    # file the library still refers to.
+    if papers.is_dir() and not partial_parse:
         for pdf_file in papers.rglob("*.pdf"):
             # Files already quarantined are not loose orphans; re-detecting them
             # would keep reporting issues forever after the first --fix run.
@@ -151,6 +169,8 @@ def validate_library(
         "duplicate_citekeys": duplicate_citekeys,
         "missing_pdfs": missing_pdfs,
         "orphan_pdfs": orphan_pdfs,
+        "partial_parse": partial_parse,
+        "errors": [],
         "issues": issues,
     }
 
@@ -216,7 +236,12 @@ def clean_library(
     validation = validate_library(bib_path=bib_path, papers_dir=papers_dir)
     actions: list[dict[str, Any]] = []
 
-    if validation["status"] == "error":
+    # `partial_parse` as well as `status`, and this is load-bearing: duplicates
+    # no longer set an error status, so keying only off `status` would let a
+    # dropped duplicate's PDF be quarantined -- moving a file the library still
+    # references. validate_library already leaves orphan_pdfs empty in that
+    # case; this is the second lock on the same door.
+    if validation["status"] == "error" or validation.get("partial_parse"):
         validation["actions"] = actions
         return validation
 

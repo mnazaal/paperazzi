@@ -112,20 +112,32 @@ def describe_failed_blocks(library: Library) -> list[str]:
     here too: the parser keeps the first block and files every later one as a
     failure, so it is equally an entry the caller never sees.
     """
-    messages: list[str] = []
+    return [message for _key, message in failed_block_details(library)]
+
+
+def failed_block_details(library: Library) -> list[tuple[str | None, str]]:
+    """``(duplicate citekey or None, message)`` for each block the parser dropped.
+
+    The key is what lets a caller tell the two kinds apart: a duplicate citekey
+    is a readable file with a reported entry missing, while an unparseable block
+    means the file cannot be trusted as a whole. `clean_service` needs that
+    distinction to decide whether it is safe to go on computing counts.
+    """
+    details: list[tuple[str | None, str]] = []
     for block in library.failed_blocks:
         line = getattr(block, "start_line", None)
         where = f" at line {line + 1}" if isinstance(line, int) else ""
         key = getattr(block, "key", None)
         if isinstance(key, str) and key:
-            messages.append(
-                f"duplicate citekey {key!r}{where}: only the first occurrence is read"
-            )
+            details.append((
+                key,
+                f"duplicate citekey {key!r}{where}: only the first occurrence is read",
+            ))
             continue
         detail = str(getattr(block, "error", "") or "").strip().splitlines()
         suffix = f": {detail[0]}" if detail else ""
-        messages.append(f"unparseable BibTeX block{where}{suffix}")
-    return messages
+        details.append((None, f"unparseable BibTeX block{where}{suffix}"))
+    return details
 
 
 def parse_bibtex_with_failures(text: str) -> tuple[list[BibtexEntry], list[str]]:

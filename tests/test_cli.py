@@ -1824,3 +1824,35 @@ def test_read_commands_report_a_dropped_duplicate(tmp_path: Path, argv) -> None:
     assert "at line 4" in combined
     # Still shows the data it could read.
     assert "smith2024" in stdout.getvalue() + stderr.getvalue()
+
+
+def test_fix_clean_json_populates_errors_on_an_unreadable_library(tmp_path: Path) -> None:
+    """`errors[]` is the documented failure channel and must not be empty.
+
+    `fix clean` reported `"status": "error"` with `"errors": []`, stranding the
+    detail in `issues[]` — the same defect the doctor command had. It is not
+    covered by the parametrized envelope test above, which shares one valid
+    library and so never reaches this path.
+    """
+    import json
+
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text("@article{ok2024,\n  title = {Fine}\n}\n@article{broken\n  title = {No}\n")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\ndefault = true\n'
+    )
+    stdout = StringIO()
+
+    exit_code = run_cli(
+        ["fix", "clean", "--json", "--config", str(config_path)],
+        home_dir=str(tmp_path),
+        stdout=stdout,
+        stderr=StringIO(),
+    )
+
+    assert exit_code != exit_codes.OK
+    parsed = json.loads(stdout.getvalue())
+    assert parsed["status"] == "error"
+    assert parsed["errors"], "the documented failure channel must not be empty"
+    assert "unparseable" in parsed["errors"][0]

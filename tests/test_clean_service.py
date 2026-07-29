@@ -56,11 +56,15 @@ def test_validate_library_duplicate_citekeys() -> None:
         )
         result = validate_library(bib_path=bib, papers_dir=papers)
         # bibtexparser v2 reports a duplicate key as a failed block and keeps
-        # only the first, so the duplicate never reaches the `duplicate_citekey`
-        # check — it arrives as a parse error, and the library is not fully
-        # readable.
-        assert result["status"] == "error"
-        assert [i["type"] for i in result["issues"]] == ["parse_error"]
+        # only the first. That is a *readable* library with one reported entry
+        # missing — a finding, not a refusal — so it is reported in the field
+        # named for it rather than as a generic parse error.
+        assert result["status"] == "ok"
+        assert result["duplicate_citekeys"] == ["smith2024"]
+        assert [i["type"] for i in result["issues"]] == ["duplicate_citekey"]
+        assert "only the first occurrence is read" in result["issues"][0]["message"]
+        # The counts describe a partial read, and that is flagged.
+        assert result["partial_parse"] is True
 
 
 def test_clean_fix_does_not_quarantine_the_pdf_of_a_dropped_duplicate() -> None:
@@ -88,8 +92,16 @@ def test_clean_fix_does_not_quarantine_the_pdf_of_a_dropped_duplicate() -> None:
             bib_path=bib, papers_dir=papers, dry_run=False, move_orphans=True,
         )
 
-        assert result["status"] == "error"
+        # The guarantee is unchanged; only the status it rides on is. Duplicates
+        # no longer produce an error status, so this is now protected by
+        # `partial_parse` — which is exactly the regression this test exists to
+        # catch.
+        assert result["status"] == "ok"
+        assert result["partial_parse"] is True
+        assert result.get("actions") == []
+        assert result["orphan_pdfs"] == []
         assert os.path.exists(second_pdf)
+        assert os.path.exists(first_pdf)
         assert not os.path.exists(os.path.join(papers, ".orphans"))
 
 
@@ -298,3 +310,45 @@ def test_clean_fix_does_not_quarantine_pdfs_of_unparseable_entries() -> None:
         assert os.path.exists(broken_pdf)
         assert os.path.exists(good_pdf)
         assert not os.path.exists(os.path.join(papers, ".orphans"))
+
+
+def test_validate_library_skips_orphan_detection_under_a_partial_parse() -> None:
+    """Orphan detection needs the *complete* set of referenced paths.
+
+    A dropped duplicate contributes none, so its PDF looks orphaned. Reporting
+    it would be wrong, and `--fix` acting on the report would move a file the
+    library still references. This is the primary guard; `clean_library`'s
+    `partial_parse` check is a second lock on the same door.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "dup.bib")
+        papers = os.path.join(td, "papers")
+        os.makedirs(papers, exist_ok=True)
+        second_pdf = os.path.join(papers, "smith2024-2.pdf")
+        Path(second_pdf).write_bytes(b"%PDF-1.4\n")
+        _write_bib(
+            bib,
+            f'@article{{smith2024, title = {{A}}}}\n'
+            f'@article{{smith2024, title = {{B}}, file = {{{second_pdf}}}}}\n',
+        )
+
+        result = validate_library(bib_path=bib, papers_dir=papers)
+
+        assert result["partial_parse"] is True
+        assert result["orphan_pdfs"] == []
+        assert not any(i["type"] == "orphan_pdf" for i in result["issues"])
+
+
+def test_validate_library_reports_orphans_normally_when_fully_parsed() -> None:
+    """The guard above must not suppress orphan detection on a healthy library."""
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "ok.bib")
+        papers = os.path.join(td, "papers")
+        os.makedirs(papers, exist_ok=True)
+        Path(os.path.join(papers, "loose.pdf")).write_bytes(b"%PDF-1.4\n")
+        _write_bib(bib, '@article{smith2024, title = {A}}\n')
+
+        result = validate_library(bib_path=bib, papers_dir=papers)
+
+        assert result["partial_parse"] is False
+        assert [Path(p).name for p in result["orphan_pdfs"]] == ["loose.pdf"]
