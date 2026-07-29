@@ -55,6 +55,7 @@ _PROBLEMATIC_FLAGS = frozenset(
         "author_truncated",
         "future_year",
         "doi_mismatch",
+        "given_name_substitution",
     }
 )
 
@@ -280,6 +281,10 @@ def _mismatch_lines(match: MatchScore) -> list[str]:
         lines.append("authors appear in a different order than published")
     if "author_truncated" in match["flags"]:
         lines.append("author list is truncated without an 'and others' sentinel")
+    if "doi_mismatch" in match["flags"]:
+        lines.append("DOI disagrees with the matched record")
+    if "given_name_substitution" in match["flags"]:
+        lines.append("an author's first name differs from the matched record")
     return lines
 
 

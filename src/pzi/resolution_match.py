@@ -15,9 +15,13 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import TypedDict
 
+from pzi.identifiers import detect_preprint_source
 from pzi.similarity import (
+    _canonical_doi,
+    _split_family_given,
     author_surnames,
     authors_swapped,
+    classify_given_pair,
     has_truncation_sentinel,
     is_alphabetized_record,
     is_truncation_sentinel,
@@ -36,6 +40,10 @@ _TITLE_HIGH = 85  # title strong enough to anchor a chimeric check
 _PENALTY_TITLE = 20
 _PENALTY_AUTHOR = 20
 _PENALTY_VENUE = 15
+# Higher than venue: a DOI is an exact identifier, so two different ones are a
+# contradiction rather than a naming difference.
+_PENALTY_DOI = 25
+_PENALTY_GIVEN_SUB = 20
 _PENALTY_FAB_EACH = 10
 _PENALTY_FAB_CAP = 20
 _BONUS_MULTI_SOURCE = 10
@@ -74,6 +82,67 @@ def _fabricated_surnames(entry: Sequence[str], candidate: Sequence[str]) -> list
     """Entry surnames absent from the candidate (possible fabricated authors)."""
     cand = set(author_surnames(candidate))
     return [s for s in author_surnames(entry) if s not in cand]
+
+
+#: DOI prefixes belonging to preprint servers, where a different DOI on the
+#: published record is expected rather than contradictory.
+_PREPRINT_DOI_PREFIXES = (
+    "10.48550",  # arXiv
+    "10.1101",   # bioRxiv / medRxiv
+    "10.21203",  # Research Square
+    "10.2139",   # SSRN
+    "10.31234",  # PsyArXiv
+    "10.31219",  # OSF Preprints
+)
+
+
+def _doi_mismatch(entry: Mapping[str, object], candidate: Mapping[str, object]) -> bool:
+    """True only when both records carry a DOI and the two disagree.
+
+    An absent DOI on either side is absent evidence, not disagreement — most
+    provider records are sparse, so treating a missing DOI as a contradiction
+    would flag almost everything.
+
+    A preprint entry is excluded: its DOI legitimately differs from the
+    published version's, and `promote_service` scores exactly that pairing with
+    this function. Penalizing it there would suppress valid promotions, which is
+    the failure mode this guard exists to prevent.
+    """
+    e = _canonical_doi(entry.get("doi"))
+    c = _canonical_doi(candidate.get("doi"))
+    if e is None or c is None or e == c:
+        return False
+    if detect_preprint_source(entry) is not None:
+        return False
+    return not e.startswith(_PREPRINT_DOI_PREFIXES)
+
+
+def _given_name_substitutions(
+    entry: Sequence[str], candidate: Sequence[str]
+) -> list[str]:
+    """Surnames where the entry and candidate give genuinely different first names.
+
+    Author comparison elsewhere is surname-only (`_normalize_author` discards
+    the given name), so "Shunyu Yao" vs "Denny Zhou" scores identically to an
+    exact match whenever the surname agrees. Pairing by surname and comparing
+    the given names recovers that signal, which is a common fingerprint of a
+    fabricated citation.
+    """
+    by_surname: dict[str, str] = {}
+    for name in candidate:
+        family, given = _split_family_given(name)
+        if family:
+            by_surname.setdefault(family, given)
+
+    substituted: list[str] = []
+    for name in entry:
+        family, given = _split_family_given(name)
+        cand_given = by_surname.get(family)
+        if cand_given is None:
+            continue  # unmatched surname is _fabricated_surnames' business
+        if classify_given_pair(given, cand_given) == "substitution":
+            substituted.append(family)
+    return substituted
 
 
 def score_match(
@@ -134,12 +203,27 @@ def score_match(
         flags.append("venue_mismatch")
         contributions.append(f"venue mismatch -{_PENALTY_VENUE}")
 
+    if _doi_mismatch(entry, candidate):
+        score -= _PENALTY_DOI
+        flags.append("doi_mismatch")
+        contributions.append(f"DOI disagrees with the matched record -{_PENALTY_DOI}")
+
     fabricated = _fabricated_surnames(entry_authors, cand_authors) if author_evidence else []
     if len(fabricated) >= 2:
         penalty = min(len(fabricated) * _PENALTY_FAB_EACH, _PENALTY_FAB_CAP)
         score -= penalty
         flags.append("fabricated_author")
         contributions.append(f"{len(fabricated)} unmatched author(s) -{penalty}")
+
+    substituted = (
+        _given_name_substitutions(entry_authors, cand_authors) if author_evidence else []
+    )
+    if substituted:
+        score -= _PENALTY_GIVEN_SUB
+        flags.append("given_name_substitution")
+        contributions.append(
+            f"different first name for {', '.join(substituted)} -{_PENALTY_GIVEN_SUB}"
+        )
 
     if authors_swapped(
         entry_authors,

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`pzi check` now detects two more fabricated-citation signals.** Both were
+  already half-wired: `doi_mismatch` was listed among the flags that make an
+  entry `problematic`, but nothing ever emitted it because `score_match` never
+  compared DOIs; and `classify_given_pair` existed with no caller.
+  - **Contradicting DOIs** are flagged and penalized. Only when *both* records
+    carry a DOI and they disagree — an absent DOI is sparse data, not evidence.
+    Preprint entries are exempt, because an arXiv DOI legitimately differs from
+    the published one and `pzi update --promote` scores exactly that pairing
+    with the same function.
+  - **Given-name substitution** is flagged: an author whose surname matches but
+    whose first name does not. Author comparison was surname-only, so
+    "Yao, Denny" scored identically to "Yao, Shunyu" — the fingerprint of a
+    citation that borrows a real surname. Initials, added middle names, and
+    transliteration differences are still treated as the same person.
+
 ### Removed
 
 - **`pzi/__init__.py` no longer re-exports ten names** — `BibtexEntry`,

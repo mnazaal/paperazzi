@@ -111,3 +111,98 @@ def test_author_disagreement_is_still_penalized() -> None:
     assert "chimeric" in result["flags"]
     assert "author_mismatch" in result["flags"]
     assert result["score"] < 60
+
+
+# === DOI contradiction ===
+
+
+def test_score_match_flags_a_doi_that_disagrees() -> None:
+    """Two different DOIs are a contradiction, not a naming difference."""
+    entry = {"title": "Graph Parsers", "authors": ["Smith, Jane"], "doi": "10.1145/3372297"}
+    candidate = {"title": "Graph Parsers", "authors": ["Smith, Jane"], "doi": "10.1145/9999999"}
+
+    match = score_match(entry, candidate)
+
+    assert "doi_mismatch" in match["flags"]
+    assert any("DOI disagrees" in c for c in match["contributions"])
+
+
+def test_score_match_treats_the_same_doi_written_differently_as_agreement() -> None:
+    entry = {"title": "Graph Parsers", "authors": ["Smith, Jane"], "doi": "10.1145/3372297"}
+    candidate = {
+        "title": "Graph Parsers",
+        "authors": ["Smith, Jane"],
+        "doi": "https://doi.org/10.1145/3372297",
+    }
+
+    assert "doi_mismatch" not in score_match(entry, candidate)["flags"]
+
+
+def test_score_match_does_not_flag_a_missing_doi_on_either_side() -> None:
+    """Provider records are often sparse; absent is not contradictory."""
+    entry = {"title": "Graph Parsers", "authors": ["Smith, Jane"], "doi": "10.1145/3372297"}
+    candidate = {"title": "Graph Parsers", "authors": ["Smith, Jane"]}
+
+    assert "doi_mismatch" not in score_match(entry, candidate)["flags"]
+    assert "doi_mismatch" not in score_match(candidate, entry)["flags"]
+
+
+def test_score_match_does_not_flag_a_preprint_against_its_published_doi() -> None:
+    """The promote path scores exactly this pairing.
+
+    An arXiv preprint legitimately has a different DOI from the journal
+    version, so penalizing it here would suppress valid promotions.
+    """
+    preprint = {
+        "title": "Graph Parsers",
+        "authors": ["Smith, Jane"],
+        "doi": "10.48550/arXiv.2401.00001",
+        "arxiv_id": "2401.00001",
+    }
+    published = {
+        "title": "Graph Parsers",
+        "authors": ["Smith, Jane"],
+        "doi": "10.1145/3372297",
+    }
+
+    assert "doi_mismatch" not in score_match(preprint, published)["flags"]
+
+
+# === given-name substitution ===
+
+
+def test_score_match_flags_a_different_first_name_behind_a_matching_surname() -> None:
+    """Surname-only comparison scored this as a perfect author match.
+
+    `_normalize_author` discards given names, so "Yao, Shunyu" and "Yao, Denny"
+    were indistinguishable — the exact shape of a fabricated citation that
+    borrows a real surname.
+    """
+    entry = {"title": "Tree of Thoughts", "authors": ["Yao, Denny"]}
+    candidate = {"title": "Tree of Thoughts", "authors": ["Yao, Shunyu"]}
+
+    match = score_match(entry, candidate)
+
+    assert "given_name_substitution" in match["flags"]
+    assert match["score"] < 100
+
+
+def test_score_match_accepts_initials_and_middle_names_as_the_same_person() -> None:
+    for entry_author, cand_author in (
+        ("Yao, S.", "Yao, Shunyu"),
+        ("Yao, Shunyu K.", "Yao, Shunyu"),
+        ("Yao, Shunyu", "Yao, S"),
+    ):
+        match = score_match(
+            {"title": "Tree of Thoughts", "authors": [entry_author]},
+            {"title": "Tree of Thoughts", "authors": [cand_author]},
+        )
+        assert "given_name_substitution" not in match["flags"], (entry_author, cand_author)
+
+
+def test_score_match_leaves_unmatched_surnames_to_the_fabricated_author_check() -> None:
+    """A surname with no counterpart is not a given-name substitution."""
+    entry = {"title": "Tree of Thoughts", "authors": ["Nonexistent, Jane"]}
+    candidate = {"title": "Tree of Thoughts", "authors": ["Yao, Shunyu"]}
+
+    assert "given_name_substitution" not in score_match(entry, candidate)["flags"]

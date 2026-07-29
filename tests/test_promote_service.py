@@ -1157,3 +1157,49 @@ def test_promote_reports_unreachable_providers_not_just_no_candidate(
     assert "provider errors" in note
     assert "crossref" in note
     assert result["summary"]["provider_errors"] > 0
+
+
+def test_promote_still_accepts_a_published_doi_that_differs_from_the_preprint(tmp_path):
+    """A preprint's DOI legitimately differs from the published version's.
+
+    `check` now penalizes contradicting DOIs via the shared `score_match`, and
+    `promote` uses that same function as its acceptance gate — so without the
+    preprint exemption this promotion would be rejected as low confidence,
+    breaking the command's whole purpose.
+    """
+    bib_path = tmp_path / "ml.bib"
+    # A raised bar, so the DOI penalty is decisive: an otherwise perfect match
+    # scores 100 and passes, but 100 - 25 = 75 would be rejected. At the default
+    # bar of 60 the penalty would not change the outcome and this test would
+    # pass whether or not the exemption existed.
+    config_path = _write_config(tmp_path, bib_path, promote_confidence_threshold=80)
+    _seed_bib_with_preprint(
+        tmp_path, bib_path, config_path, doi="10.48550/arXiv.2401.12345"
+    )
+
+    def fake_search(query, *, server_url):
+        return [
+            {
+                "item_type": "journalArticle",
+                "record": {
+                    "title": "Graph Parsers",
+                    "venue": "Journal of Parsing",
+                    "year": 2024,
+                    "authors": ["Smith, Jane"],
+                    "doi": "10.1145/3372297",
+                },
+            }
+        ]
+
+    result = promote_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        dry_run=False,
+        keep_preprint=False,
+        fetch_search=fake_search,
+    )
+
+    assert result["status"] == "ok"
+    assert len(result["items"]) == 1
+    assert result["items"][0]["action"] == "update", result["items"][0]
