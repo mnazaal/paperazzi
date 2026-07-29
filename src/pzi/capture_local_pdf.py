@@ -47,11 +47,18 @@ def local_pdf_base_record(
     s2_api_key: str | None = None,
     flaresolverr_url: str | None = None,
     browser_pdf_cmd: str | None = None,
+    errors: list[str] | None = None,
 ) -> NormalizedRecord:
+    """Resolve a record for a local PDF from its embedded DOI or title.
+
+    *errors* collects provider failures. Without it this path resolved metadata
+    "best effort" and reported nothing, so ``--strict-metadata`` had nothing to
+    act on and silently did not apply to local-PDF input.
+    """
     doi = extracted.get("doi")
     if isinstance(doi, str) and doi.strip():
         try:
-            record, _provider_errors, _results = fetch_record(
+            record, provider_errors, _results = fetch_record(
                 raw_value=doi,
                 classified={"kind": "doi", "raw": doi, "normalized": doi},
                 server_url=server_url,
@@ -64,15 +71,21 @@ def local_pdf_base_record(
                 flaresolverr_url=flaresolverr_url,
                 browser_pdf_cmd=browser_pdf_cmd,
             )
+            if errors is not None:
+                errors.extend(provider_errors)
             return record
-        except (OSError, ValueError):
+        except (OSError, ValueError) as exc:
+            if errors is not None:
+                errors.append(str(exc))
             return {"doi": doi, "source_url": raw_value}
 
     title = extracted.get("title")
     if isinstance(title, str) and title.strip():
         try:
             results = fetch_search(title, server_url=server_url)
-        except (OSError, ValueError):
+        except (OSError, ValueError) as exc:
+            if errors is not None:
+                errors.append(str(exc))
             results = []
         if results:
             found_record = results[0].get("record")
@@ -135,11 +148,13 @@ def add_local_pdf(
     browser_hook: bool = True,
     citekey_format: str | None = None,
     pdf_filename_format: str | None = None,
+    strict_metadata: bool = False,
 ) -> AddRecordResult:
     read_result = read_bib_file(bib["path"])
     existing_records = [
         cast(NormalizedRecord, r) for r in read_result["records"]
     ]
+    metadata_errors: list[str] = []
     base_record = local_pdf_base_record(
         raw_value=raw_value,
         extracted=extract_pdf_metadata(raw_value),
@@ -152,7 +167,18 @@ def add_local_pdf(
         s2_api_key=s2_api_key,
         flaresolverr_url=flaresolverr_url,
         browser_pdf_cmd=browser_pdf_cmd,
+        errors=metadata_errors,
     )
+    # Gate before anything is written: reporting the strict failure after the
+    # entry and its PDF had landed would leave exactly the half-verified record
+    # the flag exists to prevent.
+    if strict_metadata and metadata_errors:
+        return _add_planning.error_result(
+            message="metadata provider error (--strict-metadata)",
+            errors=list(metadata_errors),
+            dry_run=dry_run,
+            warnings=[],
+        )
     merged = merge_record_sources(base_record, record_overrides)
     record_with_ck = ensure_citekey(
         merged,

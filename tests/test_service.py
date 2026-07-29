@@ -1760,3 +1760,88 @@ def test_near_duplicate_insert_warns_and_notes_the_existing_entry(tmp_path: Path
     assert text.count("@article{") == 2, "the duplicate is still written"
     assert "Possibly similar to smith2024graph" in text, "note records it in the bib"
     assert "similarity_hint" not in text, "the structural field must not leak into BibTeX"
+
+
+def test_strict_metadata_is_not_bypassed_when_the_whole_cascade_fails(
+    tmp_path: Path, dead_port
+) -> None:
+    """Total provider failure must fail under strict, like partial failure does.
+
+    When the cascade raised, the errors it had accumulated were lost and the
+    strict gate inside the `try` never ran. Control fell to the fallback, which
+    — given enough hand-supplied metadata — added the entry and reported ok.
+    That inverted the flag's severity: a partial failure was fatal while a total
+    one succeeded silently, which is the exact "falling back silently" the flag
+    is documented to prevent.
+    """
+    config_path, _bib_path = _make_add_input_config(tmp_path, dead_port)
+
+    result = add_input_to_bib(
+        config_path=config_path,
+        home_dir=str(tmp_path),
+        value="10.1234/good.2024",
+        record_overrides={
+            "title": "A Hand-Entered Paper",
+            "authors": ["Smith, Ada"],
+            "year": 2024,
+        },
+        bib_selector=None,
+        dry_run=True,
+        metadata_strict=True,
+    )
+
+    assert result["status"] == "error"
+    assert "strict-metadata" in result.get("message", "")
+
+
+def test_without_strict_the_cascade_failure_still_falls_back(
+    tmp_path: Path, dead_port
+) -> None:
+    """The fallback is correct behavior by default — strict is what forbids it."""
+    config_path, _bib_path = _make_add_input_config(tmp_path, dead_port)
+
+    result = add_input_to_bib(
+        config_path=config_path,
+        home_dir=str(tmp_path),
+        value="10.1234/good.2024",
+        record_overrides={
+            "title": "A Hand-Entered Paper",
+            "authors": ["Smith, Ada"],
+            "year": 2024,
+        },
+        bib_selector=None,
+        dry_run=True,
+    )
+
+    assert result["status"] == "ok"
+
+
+def test_a_metadata_lookup_failure_is_not_called_a_translation_server_error(
+    tmp_path: Path, dead_port
+) -> None:
+    """An HTTP status means the server answered; only a connect failure is its fault.
+
+    Reporting every failure as "translation server error" sent users to restart
+    a service that was running fine.
+    """
+    import urllib.error
+
+    config_path, _bib_path = _make_add_input_config(tmp_path, dead_port)
+
+    def failing_web(*_args, **_kwargs):
+        raise urllib.error.HTTPError(
+            "http://x", 500, "Server Error", {}, None  # type: ignore[arg-type]
+        )
+
+    result = add_input_to_bib(
+        config_path=config_path,
+        home_dir=str(tmp_path),
+        value="https://example.com/paper",
+        record_overrides={},
+        bib_selector=None,
+        dry_run=True,
+        fetch_web=failing_web,
+    )
+
+    assert result["status"] == "error"
+    assert result.get("message") == "metadata lookup failed"

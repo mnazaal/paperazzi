@@ -113,3 +113,50 @@ def print_metadata_warnings(result: Mapping[str, object], stderr: TextIO) -> Non
     """
     for line in metadata_warning_lines(result):
         print(f"warning: {line}", file=stderr)
+
+
+# Bulk-capture stream rendering, shared by `add --from-file` and `inbox drain`.
+# Both walked a list of captured items and printed one line each; keeping two
+# copies meant a fix to one (here: printing per-item warnings at all) silently
+# skipped the other.
+_CAPTURE_SYMBOLS = {"added": "✓", "exists": "↻", "failed": "✗"}
+_CAPTURE_LABELS = {"added": "added", "exists": "exists", "failed": "failed"}
+
+
+def first_error(errors: Any) -> str | None:
+    if isinstance(errors, list) and errors:
+        return str(errors[0])
+    return None
+
+
+def shorten(value: str, limit: int = 60) -> str:
+    return value if len(value) <= limit else value[: limit - 1] + "…"
+
+
+def print_capture_stream_line(
+    *,
+    index: int,
+    total: int,
+    value: str,
+    bucket: str,
+    citekey: object,
+    reason: str | None,
+    warnings: Sequence[str] = (),
+    stderr: TextIO,
+) -> None:
+    """Print one bulk-capture progress line, plus any warnings it carried.
+
+    The warnings matter: duplicate-capture detection attaches its "probable
+    duplicate" notice here, and bulk capture — the likeliest place to add the
+    same paper twice — printed nothing, because both renderers plumbed warnings
+    into their results and then never showed them in text mode.
+    """
+    counter = f"[{index + 1:>{len(str(total))}}/{total}]"
+    label = f"{_CAPTURE_LABELS[bucket]:<6}"
+    if bucket == "failed":
+        detail = f"{shorten(value)} — {reason or 'capture failed'}"
+    else:
+        detail = str(citekey or shorten(value))
+    print(f"{counter} {_CAPTURE_SYMBOLS[bucket]} {label} {detail}", file=stderr)
+    for warning in warnings:
+        print(f"      warning: {warning}", file=stderr)

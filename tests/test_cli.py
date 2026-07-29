@@ -469,6 +469,41 @@ def test_add_from_file_writes_failures_and_exits_nonzero(tmp_path: Path, monkeyp
     assert "could not resolve" in stderr.getvalue()
 
 
+def test_add_from_file_survives_one_raising_item(tmp_path: Path, monkeypatch) -> None:
+    """An exception on item K must not discard items 1..K-1.
+
+    Without a per-item guard the batch aborted: no summary, no failures file,
+    and nothing to resume from — the successful captures already written to the
+    bib went unreported.
+    """
+    import pzi.commands.add as add_module
+
+    inner = _fake_capture_factory()
+
+    def exploding_capture(capture_input, *args, **kwargs):
+        if "boom" in capture_input.value:
+            raise RuntimeError("provider exploded")
+        return inner(capture_input, *args, **kwargs)
+
+    monkeypatch.setattr(add_module, "capture_to_bib", exploding_capture)
+    urls = tmp_path / "urls.txt"
+    urls.write_text("https://x/good1\nhttps://x/boom\nhttps://x/good2\n")
+    stdout, stderr = StringIO(), StringIO()
+
+    exit_code = run_cli(
+        ["add", "--from-file", str(urls), "--delay", "0",
+         "--config", str(_batch_config(tmp_path))],
+        home_dir=str(tmp_path), stdout=stdout, stderr=stderr, fetch_web=_fake_fetch_web,
+    )
+
+    assert exit_code == 1
+    # Both good items still counted, and the summary was printed.
+    assert "2 added, 0 already present, 1 failed" in stdout.getvalue()
+    assert "provider exploded" in stderr.getvalue()
+    # The failing URL is recorded so the run can be resumed.
+    assert (tmp_path / "urls.failed.txt").read_text() == "https://x/boom\n"
+
+
 def test_add_from_file_dry_run_writes_no_failures_file(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -1347,3 +1382,28 @@ def test_init_creates_config_owner_only(tmp_path: Path) -> None:
     assert exit_code == 0
     mode = stat.S_IMODE(config_path.stat().st_mode)
     assert mode == 0o600, f"expected 0600, got {oct(mode)}"
+
+
+def test_add_from_file_prints_per_item_warnings(tmp_path: Path, monkeypatch) -> None:
+    """The same duplicate notice must reach the user in bulk `add` too."""
+    import pzi.commands.add as add_module
+
+    def warning_capture(_capture_input, *_args, **_kwargs):
+        return {
+            "status": "ok", "action": "insert", "bib_name": "ml",
+            "citekey": "smith2024", "errors": [],
+            "warnings": ["probable duplicate of smith2020 (title 97% similar)"],
+        }
+
+    monkeypatch.setattr(add_module, "capture_to_bib", warning_capture)
+    urls = tmp_path / "urls.txt"
+    urls.write_text("https://x/good1\n")
+    stdout, stderr = StringIO(), StringIO()
+
+    run_cli(
+        ["add", "--from-file", str(urls), "--delay", "0",
+         "--config", str(_batch_config(tmp_path))],
+        home_dir=str(tmp_path), stdout=stdout, stderr=stderr, fetch_web=_fake_fetch_web,
+    )
+
+    assert "probable duplicate of smith2020" in stderr.getvalue()

@@ -22,7 +22,12 @@ from pzi.cli_parser import (
     usage_error_lines,
 )
 from pzi.cli_render import _error_lines, _render_add_success
-from pzi.commands.common import print_lines, print_metadata_diagnostics
+from pzi.commands.common import (
+    first_error,
+    print_capture_stream_line,
+    print_lines,
+    print_metadata_diagnostics,
+)
 from pzi.config import load_config_file
 from pzi.tag_service import parse_tag_csv
 
@@ -212,20 +217,34 @@ def _run_batch(
     for index, value in enumerate(values):
         if index > 0 and delay > 0:
             time.sleep(delay + random.uniform(0, delay * 0.25))
-        result = capture_to_bib(
-            CaptureInput(
-                value=value,
-                record_overrides={"tags": tags} if tags else {},
-                bib_selector=bib_selector,
-                pdf_candidates=(),
-                page_artifact=None,
-                auth_hints=AuthHints(cookies=None),
-            ),
-            options,
-            config_path=config_path,
-            home_dir=home_dir,
-            service_kwargs=service_kwargs,
-        )
+        try:
+            result = capture_to_bib(
+                CaptureInput(
+                    value=value,
+                    record_overrides={"tags": tags} if tags else {},
+                    bib_selector=bib_selector,
+                    pdf_candidates=(),
+                    page_artifact=None,
+                    auth_hints=AuthHints(cookies=None),
+                ),
+                options,
+                config_path=config_path,
+                home_dir=home_dir,
+                service_kwargs=service_kwargs,
+            )
+        except Exception as exc:  # noqa: BLE001 — one bad item must not lose the batch
+            # `inbox drain` already guards its loop this way. Without it, an
+            # exception on item K discarded the K-1 results already captured,
+            # printed no summary, and wrote no failures file — so a long run had
+            # nothing to resume from and no record of what had succeeded.
+            result = {
+                "status": "error",
+                "action": None,
+                "citekey": None,
+                "message": str(exc),
+                "errors": [str(exc)],
+                "warnings": [],
+            }
         bucket = _classify(result)
         counts[bucket] += 1
         if bucket == "failed":
@@ -262,21 +281,24 @@ def _classify(result: Mapping[str, Any]) -> str:
     return "exists" if result.get("action") == "update" else "added"
 
 
-_SYMBOLS = {"added": "✓", "exists": "↻", "failed": "✗"}
-_LABELS = {"added": "added", "exists": "exists", "failed": "failed"}
 
 
 def _stream_line(
     index: int, total: int, value: str, result: Mapping[str, Any], bucket: str, stderr: TextIO
 ) -> None:
-    counter = f"[{index + 1:>{len(str(total))}}/{total}]"
-    label = f"{_LABELS[bucket]:<6}"
-    if bucket == "failed":
-        reason = result.get("message") or _first(result.get("errors")) or "capture failed"
-        detail = f"{_short(value)} — {reason}"
-    else:
-        detail = str(result.get("citekey") or _short(value))
-    print(f"{counter} {_SYMBOLS[bucket]} {label} {detail}", file=stderr)
+    raw_warnings = result.get("warnings")
+    print_capture_stream_line(
+        index=index,
+        total=total,
+        value=value,
+        bucket=bucket,
+        citekey=result.get("citekey"),
+        reason=str(result.get("message") or "") or first_error(result.get("errors")),
+        warnings=[w for w in raw_warnings if isinstance(w, str)]
+        if isinstance(raw_warnings, list)
+        else (),
+        stderr=stderr,
+    )
 
 
 def _print_summary(
@@ -311,11 +333,3 @@ def _failures_path(override: str | None, from_file: str) -> Path:
     return src.with_name(f"{src.stem}.failed.txt")
 
 
-def _first(errors: Any) -> str | None:
-    if isinstance(errors, list) and errors:
-        return str(errors[0])
-    return None
-
-
-def _short(value: str, limit: int = 60) -> str:
-    return value if len(value) <= limit else value[: limit - 1] + "…"

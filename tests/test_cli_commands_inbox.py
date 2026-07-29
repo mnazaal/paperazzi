@@ -267,3 +267,28 @@ def test_inbox_drain_renders_progress_to_stderr(tmp_path: Path) -> None:
     err = stderr.getvalue()
     assert "[1/2]" in err
     assert "[2/2]" in err
+
+
+def test_inbox_prints_per_item_warnings(tmp_path: Path) -> None:
+    """Duplicate-capture warnings were plumbed into items and never shown.
+
+    Bulk capture is the likeliest place to add the same paper twice, and it was
+    the one place the "probable duplicate" notice never reached the user.
+    """
+    inbox = _inbox_with_lines(tmp_path, 1)
+    result = _drain_ok(added=1)
+    result["items"][0]["warnings"] = [
+        "probable duplicate of smith2020 (title 97% similar)"
+    ]
+
+    stdout, stderr = StringIO(), StringIO()
+    run_inbox_command(
+        _args(inbox),
+        home_dir=str(tmp_path),
+        config_path=str(tmp_path / "config.toml"),
+        stdout=stdout,
+        stderr=stderr,
+        drain_inbox_fn=lambda **_kw: result,
+    )
+
+    assert "probable duplicate of smith2020" in stderr.getvalue()

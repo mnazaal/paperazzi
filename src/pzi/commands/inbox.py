@@ -5,14 +5,12 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, TextIO
+from typing import TextIO
 
+from pzi.commands.common import first_error, print_capture_stream_line
 from pzi.config import load_config_file
 from pzi.inbox_service import DrainItem, DrainResult, drain_inbox, parse_inbox_line
 from pzi.tag_service import parse_tag_csv
-
-_SYMBOLS = {"added": "✓", "exists": "↻", "failed": "✗"}
-_LABELS  = {"added": "added", "exists": "exists", "failed": "failed"}
 
 
 def run_inbox_command(
@@ -100,16 +98,16 @@ def run_inbox_command(
 
 
 def _stream_item(seq: int, total: int, item: DrainItem, stderr: TextIO) -> None:
-    bucket = item["status"]
-    counter = f"[{seq + 1:>{len(str(total))}}/{total}]"
-    label = f"{_LABELS[bucket]:<6}"
-    value = item["value"]
-    if bucket == "failed":
-        reason = _first(item.get("errors")) or "capture failed"
-        detail = f"{_short(value)} — {reason}"
-    else:
-        detail = str(item.get("citekey") or _short(value))
-    print(f"{counter} {_SYMBOLS[bucket]} {label} {detail}", file=stderr)
+    print_capture_stream_line(
+        index=seq,
+        total=total,
+        value=item["value"],
+        bucket=item["status"],
+        citekey=item.get("citekey"),
+        reason=first_error(item.get("errors")),
+        warnings=item.get("warnings") or (),
+        stderr=stderr,
+    )
 
 
 def _print_summary(counts: dict[str, int], dry_run: bool, stdout: TextIO) -> None:
@@ -121,11 +119,5 @@ def _print_summary(counts: dict[str, int], dry_run: bool, stdout: TextIO) -> Non
     )
 
 
-def _first(errors: Any) -> str | None:
-    if isinstance(errors, list) and errors:
-        return str(errors[0])
-    return None
 
 
-def _short(value: str, limit: int = 60) -> str:
-    return value if len(value) <= limit else value[:limit - 1] + "…"

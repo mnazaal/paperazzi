@@ -187,6 +187,10 @@ def add_input_to_bib(
         )
 
     provider_errors: list[str] = []
+    # Resolved before the input-kind branch below: every path that can hit a
+    # metadata provider has to honor the flag, including local PDFs and the
+    # fallback taken when the whole cascade raises.
+    effective_strict = metadata_strict or bool(config.get("metadata_strict", False))
 
     def _finalize(result: AddRecordResult) -> AddRecordResult:
         if metadata_diagnostics:
@@ -219,6 +223,7 @@ def add_input_to_bib(
             browser_hook=config.get("browser_hook", True),
             citekey_format=citekey_format,
             pdf_filename_format=pdf_filename_format,
+            strict_metadata=effective_strict,
         )
 
     try:
@@ -259,7 +264,6 @@ def add_input_to_bib(
                     cast(list[Mapping[str, Any]], translation_results),
                     fallback_for_diagnostics,
                 )
-        effective_strict = metadata_strict or bool(config.get("metadata_strict", False))
         if effective_strict and provider_errors:
             return _error_result(
                 message="metadata provider error (--strict-metadata)",
@@ -273,6 +277,21 @@ def add_input_to_bib(
         # failures, so a genuine bug elsewhere in this block (KeyError,
         # AttributeError, TypeError, ...) surfaces as a crash instead of
         # being silently misreported as "translation server error".
+        # The cascade raised, so it never returned the errors it had already
+        # accumulated and the strict gate inside the `try` never ran. That
+        # inverted the flag's severity: a *partial* provider failure returned
+        # normally and failed the add, while a *total* one landed here and — if
+        # the user had supplied enough metadata by hand — succeeded silently via
+        # the fallback below, which is the "falling back silently" the flag
+        # exists to prevent.
+        provider_errors.append(str(exc))
+        if effective_strict:
+            return _error_result(
+                message="metadata provider error (--strict-metadata)",
+                errors=list(provider_errors),
+                dry_run=dry_run,
+                warnings=[],
+            )
         manual_record = _manual_record_from_overrides(record_overrides)
         if classified["kind"] in {"doi", "url", "pdf_url"} and has_minimum_metadata(manual_record):
             fallback_record = merge_record_sources(
@@ -330,7 +349,11 @@ def add_input_to_bib(
             err_msg = str(exc)
         fallback_warnings = minimum_metadata_diagnostics(manual_record)
         return _error_result(
-            message="translation server error",
+            # Only a connection failure is a translation-server problem. An
+            # HTTP status or a malformed response means the server answered and
+            # the lookup failed, and calling that "translation server error"
+            # sent users to restart a service that was running fine.
+            message="translation server error" if is_conn_err else "metadata lookup failed",
             errors=[err_msg],
             dry_run=dry_run,
             warnings=fallback_warnings,

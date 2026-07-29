@@ -17,6 +17,9 @@ from pzi.safe_http import SsrfBlocked, safe_urlopen
 DEFAULT_USER_AGENT = "pzi/1.0 (mailto:pzi)"
 DEFAULT_TIMEOUT = 30
 DEFAULT_RETRIES = 2
+#: Ceiling on a server-supplied ``Retry-After``. Long enough to respect a real
+#: rate-limit window, short enough that no response can stall a command.
+MAX_RETRY_AFTER = 30.0
 DEFAULT_MAX_RESPONSE_BYTES = 64 * 1024 * 1024
 READ_CHUNK_BYTES = 64 * 1024
 
@@ -41,12 +44,21 @@ def _is_ssrf_block(exc: BaseException) -> bool:
 
 
 def _retry_after_delay(exc: urllib.error.HTTPError, attempt: int) -> float:
-    """Return sleep seconds from Retry-After header, falling back to exponential backoff."""
+    """Return sleep seconds from Retry-After header, falling back to exponential backoff.
+
+    The header is remote input, so it is clamped: honoring it verbatim let a
+    server — hostile, misconfigured, or simply sending ``Retry-After: 86400`` —
+    park ``pzi add`` for a day inside a single call. A negative or absurd value
+    is not a reason to wait, and past ``MAX_RETRY_AFTER`` seconds the retry is
+    worth abandoning anyway.
+    """
     raw = exc.headers.get("Retry-After") if hasattr(exc, "headers") else None
     if raw is not None:
         try:
-            return float(raw)
+            return max(0.0, min(float(raw), MAX_RETRY_AFTER))
         except (ValueError, TypeError):
+            # Retry-After also permits an HTTP-date, which this does not parse;
+            # fall through to backoff rather than guess at it.
             pass
     return min(2**attempt, 8)
 

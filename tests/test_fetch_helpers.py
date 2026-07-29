@@ -220,3 +220,45 @@ def test_accepts_keyword_detects_narrow_and_wide_seams() -> None:
     assert accepts_keyword(lambda url, *, user_agent=None: url, "user_agent")
     assert accepts_keyword(lambda url, **kwargs: url, "user_agent")
     assert not accepts_keyword(lambda url: url, "user_agent")
+
+
+def test_retry_after_is_clamped_to_a_sane_ceiling() -> None:
+    """`Retry-After` is remote input: honoring it verbatim stalls the command.
+
+    A server answering `Retry-After: 86400` would park `pzi add` for a day
+    inside one call.
+    """
+    from pzi.fetch_helpers import MAX_RETRY_AFTER, _retry_after_delay
+
+    class _Exc:
+        headers = {"Retry-After": "86400"}
+
+    assert _retry_after_delay(_Exc(), 1) == MAX_RETRY_AFTER
+
+
+def test_retry_after_honors_a_short_server_delay() -> None:
+    from pzi.fetch_helpers import _retry_after_delay
+
+    class _Exc:
+        headers = {"Retry-After": "5"}
+
+    assert _retry_after_delay(_Exc(), 1) == 5.0
+
+
+def test_retry_after_never_returns_a_negative_delay() -> None:
+    from pzi.fetch_helpers import _retry_after_delay
+
+    class _Exc:
+        headers = {"Retry-After": "-10"}
+
+    assert _retry_after_delay(_Exc(), 1) == 0.0
+
+
+def test_retry_after_falls_back_to_backoff_for_an_http_date() -> None:
+    """The header also permits a date form, which is not parsed as a number."""
+    from pzi.fetch_helpers import _retry_after_delay
+
+    class _Exc:
+        headers = {"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}
+
+    assert _retry_after_delay(_Exc(), 1) == 2.0
