@@ -15,7 +15,7 @@ from pzi.http_binary_routes import (
     build_export_bytes_response,
     build_pdf_file_response,
 )
-from pzi.http_get_routes import process_get_request
+from pzi.http_get_routes import decode_path_segment, process_get_request
 from pzi.http_post_routes import process_post_request
 from pzi.http_security import (
     AUTH_HEADER,
@@ -42,6 +42,10 @@ from pzi.pdf_attach_session_store import AttachSessionStore
 # `self.connection.settimeout(...)`, so setting it here bounds every
 # individual read/write on that connection.
 CONNECTION_READ_TIMEOUT_SECONDS = 30
+#: How often the `--stop-after` watchdog checks for idleness. Distinct from the
+#: two other 30s values in this module (the per-connection read timeout above and
+#: the `accept()` timeout in `run_server`) — they are unrelated despite matching.
+IDLE_POLL_SECONDS = 30
 
 
 def server_exposure_error(host: str, security: HttpSecurityConfig) -> str | None:
@@ -74,13 +78,50 @@ def build_handler_class(
             "_browser_session_manager": browser_manager,
             "_attach_session_store": store,
             "do_OPTIONS": lambda request: _handle_options(request, security_config),
-            "do_GET": lambda request: _handle_get(request, config_path, home_dir, security_config),
-            "do_POST": lambda request: _handle_post(
-                request, config_path, home_dir, security_config
+            "do_GET": lambda request: _guarded(
+                lambda: _handle_get(request, config_path, home_dir, security_config),
+                request,
+                security_config,
+            ),
+            "do_POST": lambda request: _guarded(
+                lambda: _handle_post(request, config_path, home_dir, security_config),
+                request,
+                security_config,
             ),
             "log_message": lambda request, format, *args: None,  # noqa: A002
         },
     )
+
+
+def _guarded(
+    handler: Callable[[], None],
+    request: BaseHTTPRequestHandler,
+    security: HttpSecurityConfig,
+) -> None:
+    """Run a request handler, turning an unexpected failure into a 500.
+
+    `BaseHTTPRequestHandler.handle_one_request` catches only `TimeoutError`, so
+    any other exception escapes to `handle_error()` and closes the socket having
+    sent **zero bytes** — which a client cannot distinguish from the server not
+    running. Every service call below this point is otherwise unguarded.
+
+    The exception text is deliberately not sent to the client: it can name local
+    paths and internals. The traceback still reaches stderr via `handle_error`.
+    """
+    # Reset per request, not per connection: with keep-alive one handler
+    # instance serves several requests, and a stale flag would suppress the 500
+    # on every request after the first.
+    request._response_started = False  # type: ignore[attr-defined]
+    try:
+        handler()
+    except Exception:  # noqa: BLE001 — boundary of last resort; re-raised below
+        if getattr(request, "_response_started", False):
+            # Headers (and possibly a partial body) already went out — a second
+            # `send_response` would corrupt the stream. Let the connection drop
+            # and report the traceback the normal way.
+            raise
+        _respond(request, 500, {"error": "internal server error"}, security)
+        raise
 
 
 def _handle_options(request: BaseHTTPRequestHandler, security: HttpSecurityConfig) -> None:
@@ -107,11 +148,8 @@ def _serve_pdf(
     rate_reset: int | None = None,
 ) -> None:
     """Serve a PDF file for a citekey."""
-    if not citekey:
-        request.send_response(400)
-        request.end_headers()
-        return
-
+    # The empty-citekey case is already handled by `build_pdf_file_response`,
+    # which returns a proper JSON error for it.
     status, response = build_pdf_file_response(
         config_path=config_path,
         home_dir=home_dir,
@@ -119,17 +157,25 @@ def _serve_pdf(
         bib_selector=bib_selector,
     )
     if not isinstance(response, PdfFileResponse):
-        request.send_response(status)
-        request.end_headers()
+        # `response` is already the JSON error the planner built. Sending a bare
+        # status discarded it — along with the CORS and rate-limit headers — so a
+        # cross-origin caller could not even read why. Mirrors `_serve_export_raw`.
+        _respond(
+            request, status, response, security,
+            rate_remaining=rate_remaining, rate_reset=rate_reset,
+        )
         return
 
     try:
         size = response.path.stat().st_size
     except OSError:
-        request.send_response(500)
-        request.end_headers()
+        _respond(
+            request, 500, {"error": "PDF could not be read"}, security,
+            rate_remaining=rate_remaining, rate_reset=rate_reset,
+        )
         return
 
+    request._response_started = True  # type: ignore[attr-defined]
     request.send_response(200)
     request.send_header("Content-Type", response.content_type)
     request.send_header("Content-Length", str(size))
@@ -180,6 +226,7 @@ def _serve_export_raw(
         )
         return
 
+    request._response_started = True  # type: ignore[attr-defined]
     request.send_response(200)
     request.send_header("Content-Type", response.content_type)
     request.send_header("Content-Length", str(len(response.content)))
@@ -224,7 +271,7 @@ def _handle_get(
 
     p = urlsplit(request.path).path
     if p.startswith("/pdf/"):
-        citekey = p[len("/pdf/"):]
+        citekey = decode_path_segment(p[len("/pdf/"):])
         qs_raw = parse_qs(urlsplit(request.path).query)
         bib = qs_raw.get("bib", [None])[0] if qs_raw.get("bib") else None
         _serve_pdf(
@@ -344,6 +391,7 @@ def _respond(
     rate_remaining: int | None = None, rate_reset: int | None = None,
 ) -> None:
     body = json.dumps(data, sort_keys=True, default=str).encode("utf-8")
+    request._response_started = True  # type: ignore[attr-defined]
     request.send_response(status)
     request.send_header("Content-Type", "application/json")
     request.send_header("Content-Length", str(len(body)))
@@ -424,12 +472,21 @@ def _start_idle_monitor(
     idle_state: dict[str, float],
     idle_minutes: int,
     on_shutdown: Callable[[], None] | None,
-) -> None:
+    *,
+    poll_seconds: float = IDLE_POLL_SECONDS,
+    start_thread: bool = True,
+) -> Callable[[], None]:
+    """Shut the server down once it has been idle for *idle_minutes*.
+
+    Returns the monitor loop so it can be driven directly in a test; normally it
+    is started on a daemon thread. *poll_seconds* is how often idleness is
+    checked, so the actual shutdown lands up to one poll late.
+    """
     import threading
 
     def _monitor() -> None:
         while True:
-            time.sleep(30)
+            time.sleep(poll_seconds)
             elapsed = time.monotonic() - idle_state["_last_request"]
             if elapsed > idle_minutes * 60:
                 server.shutdown()
@@ -437,5 +494,7 @@ def _start_idle_monitor(
                     on_shutdown()
                 return
 
-    t = threading.Thread(target=_monitor, daemon=True)
-    t.start()
+    if start_thread:
+        t = threading.Thread(target=_monitor, daemon=True)
+        t.start()
+    return _monitor

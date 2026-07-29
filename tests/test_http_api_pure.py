@@ -1062,3 +1062,167 @@ def test_http_still_accepts_a_configured_library_by_name_or_path(monkeypatch) ->
             captured[selector] = "not-rejected" if "reached the service" in str(exc) else "?"
 
     assert captured == {"main": "not-rejected", "/tmp/main.bib": "not-rejected"}
+
+
+# === /capture local-path confinement ===================================
+
+
+def _capture_config(tmp_path: Path, *, capture_source_dirs: str = "") -> tuple[Path, Path]:
+    """Config plus an empty papers_dir, for local-path capture tests."""
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text("")
+    cpath = tmp_path / "config.toml"
+    cpath.write_text(
+        f"{capture_source_dirs}\n"
+        f'[[bibs]]\nname="ml"\npath="{bib_path}"\n'
+        f'papers_dir="{papers}"\ndefault=true\n'
+    )
+    return cpath, papers
+
+
+def test_capture_refuses_a_local_path_when_no_source_dirs_configured(
+    tmp_path: Path,
+) -> None:
+    """The SSRF guard was skipped for a schemeless value, so a bare path got in.
+
+    `add_local_pdf` would read the file — sending extracted text to metadata
+    providers — and copy it into `papers_dir`, from where `GET /pdf/<citekey>`
+    serves it, laundering around the read-side confinement.
+    """
+    secret = tmp_path / "private.pdf"
+    secret.write_bytes(b"%PDF-1.4\nsensitive\n")
+    cpath, papers = _capture_config(tmp_path)
+
+    status, body = http_post_routes.process_post_request(
+        "/capture", {"url": str(secret)}, str(cpath), str(tmp_path),
+    )
+
+    assert status == 400
+    assert "capture_source_dirs" in body["error"]
+    # Nothing was ingested.
+    assert list(papers.iterdir()) == []
+
+
+def test_capture_refuses_a_local_path_outside_the_allowlist(tmp_path: Path) -> None:
+    allowed = tmp_path / "drop"
+    allowed.mkdir()
+    secret = tmp_path / "private.pdf"
+    secret.write_bytes(b"%PDF-1.4\nsensitive\n")
+    cpath, papers = _capture_config(
+        tmp_path, capture_source_dirs=f'capture_source_dirs = ["{allowed}"]'
+    )
+
+    status, body = http_post_routes.process_post_request(
+        "/capture", {"url": str(secret)}, str(cpath), str(tmp_path),
+    )
+
+    assert status == 400
+    assert "outside" in body["error"]
+    assert list(papers.iterdir()) == []
+
+
+def test_capture_refuses_a_traversal_out_of_an_allowed_dir(tmp_path: Path) -> None:
+    """`..` is collapsed before the containment test, not after."""
+    allowed = tmp_path / "drop"
+    allowed.mkdir()
+    secret = tmp_path / "private.pdf"
+    secret.write_bytes(b"%PDF-1.4\nsensitive\n")
+    cpath, papers = _capture_config(
+        tmp_path, capture_source_dirs=f'capture_source_dirs = ["{allowed}"]'
+    )
+
+    status, body = http_post_routes.process_post_request(
+        "/capture",
+        {"url": str(allowed / ".." / "private.pdf")},
+        str(cpath),
+        str(tmp_path),
+    )
+
+    assert status == 400
+    assert list(papers.iterdir()) == []
+
+
+def test_capture_refuses_a_symlink_pointing_out_of_an_allowed_dir(
+    tmp_path: Path,
+) -> None:
+    """Symlinks are resolved before the containment test."""
+    allowed = tmp_path / "drop"
+    allowed.mkdir()
+    secret = tmp_path / "private.pdf"
+    secret.write_bytes(b"%PDF-1.4\nsensitive\n")
+    (allowed / "innocent.pdf").symlink_to(secret)
+    cpath, papers = _capture_config(
+        tmp_path, capture_source_dirs=f'capture_source_dirs = ["{allowed}"]'
+    )
+
+    status, _body = http_post_routes.process_post_request(
+        "/capture", {"url": str(allowed / "innocent.pdf")}, str(cpath), str(tmp_path),
+    )
+
+    assert status == 400
+    assert list(papers.iterdir()) == []
+
+
+# === /inbox/drain confinement ==========================================
+
+
+def _inbox_config(tmp_path: Path, *, inbox_line: str = "") -> Path:
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text("")
+    cpath = tmp_path / "config.toml"
+    cpath.write_text(
+        f"{inbox_line}\n"
+        f'[[bibs]]\nname="ml"\npath="{bib_path}"\ndefault=true\n'
+    )
+    return cpath
+
+
+def test_inbox_drain_is_closed_when_no_inbox_path_configured(tmp_path: Path) -> None:
+    """Draining rewrites the named file in place, so an unvalidated path let any
+    loopback-reachable client truncate a file the user can write."""
+    victim = tmp_path / "notes.txt"
+    victim.write_text("important\nlines\n")
+    cpath = _inbox_config(tmp_path)
+
+    status, body = http_post_routes.process_post_request(
+        "/inbox/drain", {"file": str(victim)}, str(cpath), str(tmp_path),
+    )
+
+    assert status == 400
+    assert "inbox_path" in body["error"]
+    assert victim.read_text() == "important\nlines\n"
+    assert not (tmp_path / "notes.txt.lock").exists()
+
+
+def test_inbox_drain_refuses_a_file_that_is_not_the_configured_one(
+    tmp_path: Path,
+) -> None:
+    inbox = tmp_path / "inbox.txt"
+    inbox.write_text("")
+    victim = tmp_path / "notes.txt"
+    victim.write_text("important\nlines\n")
+    cpath = _inbox_config(tmp_path, inbox_line=f'inbox_path = "{inbox}"')
+
+    status, body = http_post_routes.process_post_request(
+        "/inbox/drain", {"file": str(victim)}, str(cpath), str(tmp_path),
+    )
+
+    assert status == 400
+    assert "configured inbox_path" in body["error"]
+    assert victim.read_text() == "important\nlines\n"
+
+
+def test_inbox_drain_rejects_a_non_numeric_delay(tmp_path: Path) -> None:
+    """It used to coerce silently to 0.0 — including `true`, since bool is an int."""
+    inbox = tmp_path / "inbox.txt"
+    inbox.write_text("")
+    cpath = _inbox_config(tmp_path, inbox_line=f'inbox_path = "{inbox}"')
+
+    for bad in ("soon", True, -1):
+        status, body = http_post_routes.process_post_request(
+            "/inbox/drain", {"file": str(inbox), "delay": bad}, str(cpath), str(tmp_path),
+        )
+        assert status == 400, bad
+        assert "delay" in body["error"], bad

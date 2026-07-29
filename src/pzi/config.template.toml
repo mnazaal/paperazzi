@@ -70,3 +70,12 @@ name = "main"
 path = "~/bibs/main.bib"
 default = true
 # papers_dir = "~/bibs/papers"  # defaults to <bib-dir>/papers/
+
+# Directories `POST /capture` may ingest a local PDF from. Empty (the default)
+# refuses local-file capture over HTTP entirely; the browser extension only ever
+# sends http(s) URLs, so leave this unset unless you script local ingests.
+# capture_source_dirs = ["~/Downloads/papers"]
+
+# The only file `POST /inbox/drain` may read and rewrite. Unset (the default)
+# closes that route. Draining rewrites the file in place.
+# inbox_path = "~/pzi-inbox.txt"

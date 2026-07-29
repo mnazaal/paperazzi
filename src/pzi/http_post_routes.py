@@ -29,6 +29,7 @@ from pzi.config import (
     load_bib_target,
     load_config_file,
 )
+from pzi.http_binary_routes import path_confined_to
 from pzi.http_payloads import (
     capture_payload,
     inbox_drain_payload,
@@ -51,6 +52,12 @@ from pzi.update_service import update_bib
 # ---------------------------------------------------------------------------
 
 MAX_PDF_URL_CANDIDATES = 20
+#: Politeness delay between inbox items, matching the CLI's `--delay` default
+#: (`cli_parser.py`). The HTTP route used to default to 0.
+_DEFAULT_INBOX_DELAY_SECONDS = 1.0
+#: Ceiling on a client-supplied delay: the drain occupies a server thread for
+#: its whole run, so an unbounded value is a self-inflicted denial of service.
+_MAX_INBOX_DELAY_SECONDS = 60.0
 ATTACH_SESSION_TTL_SECONDS = 600
 MAX_BROWSER_PDF_BYTES = DEFAULT_MAX_BODY_BYTES
 
@@ -518,6 +525,28 @@ def _handle_delete_post(
     return status, dict(result)
 
 
+def _local_capture_path_error(
+    value: str, *, config_path: str, home_dir: str
+) -> str | None:
+    """Reject a local capture path unless it is inside `capture_source_dirs`.
+
+    Returns an error message, or None when the path is allowed. Uses the same
+    confinement primitive as the PDF read route, so ``..`` and symlinks are
+    resolved before the containment test rather than after.
+    """
+    cfg = load_config_file(config_path, home_dir=home_dir)
+    config = cfg.get("config")
+    roots = tuple(config.get("capture_source_dirs") or ()) if config else ()
+    if not roots:
+        return (
+            "local file capture is not enabled over HTTP; "
+            "set capture_source_dirs in config to allow it"
+        )
+    if path_confined_to(value, roots) is None:
+        return "path is outside the configured capture_source_dirs"
+    return None
+
+
 def _handle_capture_post(
     body: Any,
     config_path: str,
@@ -535,8 +564,22 @@ def _handle_capture_post(
         return 400, {"error": "url required"}
     stripped_url = url.strip()
     parsed_url = urlsplit(stripped_url)
-    if parsed_url.scheme and not safe_public_http_url(stripped_url):
-        return 400, {"error": "url must be a public http(s) URL for HTTP capture"}
+    if parsed_url.scheme:
+        if not safe_public_http_url(stripped_url):
+            return 400, {"error": "url must be a public http(s) URL for HTTP capture"}
+    else:
+        # No scheme means this is a local filesystem path, and the SSRF guard
+        # above does not apply to it. Left unchecked, `add_local_pdf` reads the
+        # file (sending extracted text to metadata providers) and copies it into
+        # `papers_dir`, from where `GET /pdf/<citekey>` serves it — laundering
+        # around the read-side confinement. The extension only ever sends
+        # http(s) URLs, so this path is opt-in: with no `capture_source_dirs`
+        # configured the allowlist is empty and every local path is refused.
+        capture_error = _local_capture_path_error(
+            stripped_url, config_path=config_path, home_dir=home_dir,
+        )
+        if capture_error is not None:
+            return 400, {"error": capture_error}
     override_error = metadata_url_override_error(body, safe_url=safe_public_http_url)
     if override_error is not None:
         return 400, {"error": override_error}
@@ -861,11 +904,39 @@ def _handle_inbox_drain_post(
     inbox_path = body.get("file")
     if not isinstance(inbox_path, str) or not inbox_path.strip():
         return 400, {"error": "inbox body must include a 'file' path string"}
+    # Draining *rewrites* the named file in place — it also creates a `.lock`
+    # beside it and any missing parent directories — so an unvalidated `file`
+    # let any loopback-reachable client truncate a file the user can write.
+    # Only the configured inbox may be drained; with none configured the route
+    # is closed, which is the safe reading of "not set up".
+    cfg = load_config_file(config_path, home_dir=home_dir)
+    config = cfg.get("config")
+    configured_inbox = config.get("inbox_path") if config else None
+    if not configured_inbox:
+        return 400, {
+            "error": "inbox draining is not enabled over HTTP; set inbox_path in config"
+        }
+    if path_confined_to(inbox_path.strip(), [configured_inbox]) is None:
+        return 400, {"error": "file must be the configured inbox_path"}
+
+    raw_delay = body.get("delay")
+    # `bool` is an `int` subclass, so `{"delay": true}` would otherwise become
+    # 1.0. Bad input used to coerce silently to 0.0, and the HTTP default was
+    # 0.0 while the CLI default is 1.0 — so this route hammered metadata
+    # providers with no politeness delay. Match the CLI and cap it, since an
+    # unbounded sleep pins a server thread.
+    if raw_delay is None:
+        delay = _DEFAULT_INBOX_DELAY_SECONDS
+    elif isinstance(raw_delay, bool) or not isinstance(raw_delay, (int, float)):
+        return 400, {"error": "delay must be a number"}
+    elif raw_delay < 0:
+        return 400, {"error": "delay must not be negative"}
+    else:
+        delay = min(float(raw_delay), _MAX_INBOX_DELAY_SECONDS)
+
     from pzi.inbox_service import drain_inbox
     raw_tags = body.get("tags")
     extra_tags = [t for t in raw_tags if isinstance(t, str)] if isinstance(raw_tags, list) else None
-    raw_delay = body.get("delay")
-    delay = float(raw_delay) if isinstance(raw_delay, (int, float)) and raw_delay >= 0 else 0.0
     result = drain_inbox(
         config_path=config_path,
         home_dir=home_dir,

@@ -105,6 +105,8 @@ names — never PDFs, cookies, or HTML.
 | Attach session tokens | Random 32-byte URL-safe token, TTL 10 minutes, one-shot consume | Tokens generated per capture request, validated on raw PDF upload. |
 | Content-Length validation | Bodies over `api_max_body_bytes` rejected before reading | Kept. |
 | Recursive DNS safety | `safe_public_http_url` resolves hostnames with 250ms budget, rejects private/local IPs | Kept. One scoped exception: a configured `ezproxy_host` (see below). |
+| Local capture paths | `/capture` accepts a local filesystem path only if it resolves inside `capture_source_dirs`; that list is **empty by default**, so local-file capture is refused over HTTP until you opt in | Leave unset unless you script local ingests. Paths are resolved (symlinks and `..` collapsed) before the containment test. |
+| Inbox draining | `POST /inbox/drain` drains only the configured `inbox_path` and refuses any other file; unset closes the route. Client-supplied `delay` is bounded and defaults to the CLI's value | Leave `inbox_path` unset unless you drive the inbox over HTTP. |
 
 ### API token considerations
 
@@ -125,6 +127,15 @@ If an attacker has code execution on the same machine:
 
 paperazzi's threat model assumes the local machine is trusted. If the machine is
 compromised, the attacker can access any local file regardless of paperazzi.
+
+**One qualification.** That reasoning covers a local *actor*, but two routes used
+to let a request name a local path directly: `/capture` would read and copy any
+readable PDF into `papers_dir` (from where `GET /pdf/<citekey>` serves it), and
+`/inbox/drain` would rewrite any writable file in place. Those turn a
+loopback-reachable request — including one originating from a web page through
+the extension — into arbitrary local file access, which is a different boundary
+from "the user at a shell". Both are now confined to explicitly configured
+directories and are closed by default.
 
 ## Browser extension security
 

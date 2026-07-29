@@ -6,6 +6,7 @@ Keep socket writes in ``http_api``. Keep BibTeX lookup and path validation here.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -122,20 +123,51 @@ def build_export_bytes_response(
     )
 
 
+def path_confined_to(candidate_path: object, roots: object) -> Path | None:
+    """Resolve *candidate_path* and return it only if it sits under one of *roots*.
+
+    ``resolve(strict=True)`` on both sides is what makes this safe: it collapses
+    ``..`` and follows symlinks *before* the containment test, so neither can be
+    used to point outside a root. Both operands must exist.
+
+    *roots* is a single path or an iterable of them. An empty iterable confines
+    to nothing and always returns ``None`` — that is the intended reading of an
+    unset allowlist, not a bug.
+    """
+    if isinstance(roots, (str, Path)):
+        root_paths: list[object] = [roots]
+    elif isinstance(roots, Iterable):
+        root_paths = list(roots)
+    else:
+        return None
+    if not isinstance(candidate_path, (str, Path)):
+        return None
+    try:
+        candidate = Path(candidate_path).expanduser().resolve(strict=True)
+    except OSError:
+        return None
+    for raw_root in root_paths:
+        if not isinstance(raw_root, (str, Path)):
+            continue
+        try:
+            root = Path(raw_root).expanduser().resolve(strict=True)
+        except OSError:
+            continue
+        if candidate == root or root in candidate.parents:
+            return candidate
+    return None
+
+
 def safe_pdf_file(pdf_path: object, papers_dir: object) -> Path | None:
     """Return confined existing PDF path, or None.
 
     Path must resolve under configured papers_dir, be a regular file, and start
     with PDF magic bytes.
     """
-    if not isinstance(pdf_path, (str, Path)) or not isinstance(papers_dir, (str, Path)):
+    if not isinstance(papers_dir, (str, Path)):
         return None
-    try:
-        candidate = Path(pdf_path).expanduser().resolve(strict=True)
-        root = Path(papers_dir).expanduser().resolve(strict=True)
-    except OSError:
-        return None
-    if candidate != root and root not in candidate.parents:
+    candidate = path_confined_to(pdf_path, papers_dir)
+    if candidate is None:
         return None
     if not candidate.is_file():
         return None

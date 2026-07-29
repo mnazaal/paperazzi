@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **`POST /capture` no longer accepts arbitrary local filesystem paths.** Its
+  SSRF check was conditional on the value having a URL scheme, so a bare path
+  skipped it entirely: the server would read the file (sending extracted text to
+  metadata providers) and copy any readable PDF into `papers_dir`, from where
+  `GET /pdf/<citekey>` serves it — laundering around the confinement that route
+  applies. Local paths are now accepted only from directories listed in the new
+  **`capture_source_dirs`** config key, which is **empty by default**, so this is
+  refused over HTTP until you opt in. `pzi add /path/to.pdf` on the CLI is
+  unchanged.
+
+- **`POST /inbox/drain` no longer rewrites arbitrary files.** It took any
+  client-named `file`, then read it, created a `.lock` and parent directories
+  beside it, and atomically rewrote it in place — following symlinks. It now
+  drains only the new **`inbox_path`** config key and refuses anything else; with
+  the key unset the route is closed. Its `delay` is also bounded, defaults to the
+  CLI's `1.0` rather than `0`, and rejects non-numeric or negative values instead
+  of silently coercing them to zero.
+
+  Both routes are reachable from a browser-originated request and the API
+  requires no auth token by default, so they sat on a different trust boundary
+  than the "local machine is trusted" model `docs/security.md` describes. That
+  document now records both controls and the qualification.
+
+### Fixed
+
+- **The HTTP server no longer drops the connection on an unexpected error.**
+  `BaseHTTPRequestHandler` catches only `TimeoutError`, so any other exception
+  closed the socket having sent zero bytes — indistinguishable from the server
+  not running. Unhandled failures now return `500` with a JSON body. The
+  exception text is not sent to the client; the traceback still goes to stderr.
+
+- **Percent-encoded citekeys resolve.** `/pdf/`, `/detail/` and `/tags/` never
+  decoded their path segment, and the browser extension builds them with
+  `encodeURIComponent`, which escapes `:` to `%3A` — so every citekey containing
+  a colon or non-ASCII character 404'd.
+
+- **PDF route errors carry a body.** The three error exits sent a bare status,
+  discarding the JSON error already built and omitting the CORS headers, so a
+  cross-origin caller could not read even the status.
+
+- **`pzi server --port 0` and `--stop-after 0` are rejected** instead of doing
+  something surprising. `--port 0` was swallowed by a falsiness test and replaced
+  by the configured port — except when the config failed to load, where it bound
+  an ephemeral port nothing reports back. `--port 99999` died with an
+  `OverflowError` traceback rather than a usage error. `--stop-after 0` made the
+  idle watchdog shut the server down at its first 30s poll regardless of traffic;
+  omitting the flag already means "never stop".
+
 ### Changed
 
 - **`--json` now really does emit one envelope on every failure.** A previous

@@ -35,6 +35,14 @@ class AppConfig(TypedDict):
     api_auth_token: str | None
     api_auth_token_cmd: str | None
     api_allowed_origins: tuple[str, ...] | None
+    #: Directories the HTTP `/capture` route may ingest a local PDF from.
+    #: Empty by default: the route is extension-facing and the extension only
+    #: ever sends http(s) URLs, so a local path is accepted only where the user
+    #: has deliberately opted in.
+    capture_source_dirs: tuple[str, ...]
+    #: The only file `POST /inbox/drain` may read and rewrite. Unset closes the
+    #: route, since draining rewrites the target in place.
+    inbox_path: str | None
     api_max_body_bytes: int
     contact_email: str | None
     contact_email_cmd: str | None
@@ -131,6 +139,16 @@ def _opt_str_from_raw(raw: Mapping[str, object], key: str) -> str | None:
     return v.strip() or None
 
 
+def _expanded_opt(raw: Mapping[str, object], key: str) -> str | None:
+    """Like :func:`_opt_str_from_raw` but expands a leading ``~``.
+
+    Path-valued keys are compared against resolved paths at use time, so they
+    have to be expanded here or a configured ``~/inbox.txt`` never matches.
+    """
+    value = _opt_str_from_raw(raw, key)
+    return os.path.expanduser(value) if value is not None else None
+
+
 def _validate_bib_list(
     raw_bibs: object, *, home_dir: str
 ) -> tuple[list[BibConfig] | None, list[str]]:
@@ -187,6 +205,15 @@ def _normalize_app_config(
             if isinstance(origin, str) and origin.strip()
         ) or None
 
+    raw_capture_source_dirs = raw.get("capture_source_dirs")
+    normalized_capture_source_dirs: tuple[str, ...] = ()
+    if isinstance(raw_capture_source_dirs, list):
+        normalized_capture_source_dirs = tuple(
+            os.path.expanduser(d.strip())
+            for d in raw_capture_source_dirs
+            if isinstance(d, str) and d.strip()
+        )
+
     def opt(k: str) -> str | None:
         return _opt_str_from_raw(raw, k)
 
@@ -230,6 +257,8 @@ def _normalize_app_config(
         "api_auth_token": opt("api_auth_token"),
         "api_auth_token_cmd": opt("api_auth_token_cmd"),
         "api_allowed_origins": normalized_api_allowed_origins,
+        "capture_source_dirs": normalized_capture_source_dirs,
+        "inbox_path": _expanded_opt(raw, "inbox_path"),
         "api_max_body_bytes": _safe_int(raw_api_max_body_bytes, 64 * 1024 * 1024),
         "contact_email": opt("contact_email"),
         "contact_email_cmd": opt("contact_email_cmd"),
@@ -399,6 +428,17 @@ def validate_app_config(
     raw_s2_key_cmd = raw.get("semantic_scholar_api_key_cmd")
     if raw_s2_key_cmd is not None and not isinstance(raw_s2_key_cmd, str):
         errors.append("semantic_scholar_api_key_cmd must be a string when provided")
+
+    raw_capture_source_dirs = raw.get("capture_source_dirs")
+    if raw_capture_source_dirs is not None and (
+        not isinstance(raw_capture_source_dirs, list)
+        or not all(isinstance(d, str) for d in raw_capture_source_dirs)
+    ):
+        errors.append("capture_source_dirs must be a list of strings when provided")
+
+    raw_inbox_path = raw.get("inbox_path")
+    if raw_inbox_path is not None and not isinstance(raw_inbox_path, str):
+        errors.append("inbox_path must be a string when provided")
 
     raw_citekey_format = raw.get("citekey_format")
     if raw_citekey_format is not None and not isinstance(raw_citekey_format, str):

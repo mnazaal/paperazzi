@@ -122,6 +122,8 @@ def test_validate_app_config_applies_defaults() -> None:
         "api_auth_token": None,
         "api_auth_token_cmd": None,
         "api_allowed_origins": None,
+        "capture_source_dirs": (),
+        "inbox_path": None,
         "api_max_body_bytes": 67108864,
         "contact_email": None,
         "contact_email_cmd": None,

@@ -114,6 +114,35 @@ def _non_negative_int(value: str) -> int:
     return parsed
 
 
+def _tcp_port(value: str) -> int:
+    """argparse type: a bindable TCP port, ``1..65535``.
+
+    `0` would mean "let the OS choose", but nothing reports the chosen port back
+    and the browser extension derives its URL from the *configured* port, so an
+    ephemeral one is unusable here. The config loader already enforces this same
+    range; the flag did not, so `--port 99999` reached `socket.bind` and died
+    with an `OverflowError` traceback.
+    """
+    try:
+        parsed = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected an integer, got {value!r}") from None
+    if not 1 <= parsed <= 65535:
+        raise argparse.ArgumentTypeError(f"must be between 1 and 65535, got {parsed}")
+    return parsed
+
+
+def _positive_int(value: str) -> int:
+    """argparse type: a base-10 integer ``>= 1``."""
+    try:
+        parsed = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected an integer, got {value!r}") from None
+    if parsed < 1:
+        raise argparse.ArgumentTypeError(f"must be one or greater, got {parsed}")
+    return parsed
+
+
 def _non_negative_float(value: str) -> float:
     """argparse type: a number ``>= 0`` (rejects negatives/garbage)."""
     try:
@@ -503,9 +532,12 @@ def build_parser() -> argparse.ArgumentParser:
     add_config(server_parser)
     server_parser.add_argument("--host", help="bind host (default: api_listen_host, 127.0.0.1)")
     server_parser.add_argument(
-        "--port", type=_non_negative_int, help="bind port (default: api_listen_port, 8765)"
+        "--port", type=_tcp_port, help="bind port (default: api_listen_port, 8765)"
     )
-    server_parser.add_argument("--stop-after", type=_non_negative_int, metavar="MINUTES",
+    # `>= 1`: omitting the flag already means "never stop", so 0 would be a
+    # second spelling of the default — and it used to mean "stop at the first
+    # 30s tick regardless of traffic".
+    server_parser.add_argument("--stop-after", type=_positive_int, metavar="MINUTES",
                                help="auto-stop the whole server after N idle minutes")
 
     # ── init ─────────────────────────────────────────────────────────────

@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from pzi.bib_repository import read_bib_file
 from pzi.bib_service import list_bibs, list_entries
@@ -59,8 +59,24 @@ def process_get_request(
             return route.handler(config_path, home_dir, qs)
     for route in GET_PREFIX_ROUTES:
         if p.startswith(route.prefix):
-            return route.handler(config_path, home_dir, p[len(route.prefix):], qs)
+            return route.handler(
+                config_path, home_dir, decode_path_segment(p[len(route.prefix):]), qs
+            )
     return 404, {"error": "not found"}
+
+
+def decode_path_segment(segment: str) -> str:
+    """Percent-decode one already-extracted path segment.
+
+    Citekeys reach these routes percent-encoded — the extension builds them with
+    `encodeURIComponent`, which escapes `:` to `%3A` — and nothing decoded them,
+    so every citekey containing a colon or non-ASCII 404'd.
+
+    Decode *after* the route has been matched and the segment sliced off, never
+    the whole path before routing: an encoded `%2F` would otherwise turn into a
+    separator and let a citekey escape into a different route.
+    """
+    return unquote(segment)
 
 
 def _handle_health_get(

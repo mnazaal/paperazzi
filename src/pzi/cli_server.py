@@ -58,8 +58,15 @@ def build_server_plan(
     resolved_host = host
     resolved_port = port
     if config is not None:
-        resolved_host = resolved_host or config["api_listen_host"]
-        resolved_port = resolved_port or config["api_listen_port"]
+        # `is None`, not falsiness: an explicit `--port 0` used to be swallowed
+        # here and replaced by the config port, while the config-failure path
+        # below let it through to an ephemeral bind — the two paths disagreed.
+        # (`--port 0` is now rejected by the parser, but the guard on the next
+        # line is the one that was always meant to decide this.)
+        if resolved_host is None:
+            resolved_host = config["api_listen_host"]
+        if resolved_port is None:
+            resolved_port = config["api_listen_port"]
 
     if resolved_host is None or resolved_port is None:
         return {"status": "error", "message": "failed to load config"}
