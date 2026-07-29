@@ -24,7 +24,6 @@ from pzi import exit_codes
 from pzi.bib_serialize import (
     _bibtex_entry_to_library_entry,
     _library_to_entries_records,
-    _normalize_file_field,
     _parse_bib_library,
     _resolve_file_field,
     _serialize_library,
@@ -32,7 +31,6 @@ from pzi.bib_serialize import (
     _validate_library_parseable,
     merge_preserving_unchanged_source,
     parse_bibtex_with_failures,
-    serialize_bibtex,
 )
 from pzi.bib_serialize import parse_bibtex as _parse_bibtex
 from pzi.bibtex import (
@@ -241,43 +239,6 @@ def _resolve_write_target(path: str) -> Path:
     config path is for.
     """
     return Path(os.path.realpath(path))
-
-
-def write_bib_file(
-    path: str,
-    entries: list[BibtexEntry],
-    *,
-    file_path_style: str = "absolute",
-) -> None:
-    """Write BibTeX entries to disk atomically.
-
-    ``file_path_style`` controls how absolute ``file`` paths under the bib
-    directory are serialized. Internal records still use absolute paths.
-    """
-    file_path = _resolve_write_target(path)
-    file_path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
-    if file_path_style not in {"absolute", "relative"}:
-        raise ValueError("file_path_style must be 'absolute' or 'relative'")
-    if file_path_style == "relative":
-        entries = [_normalize_file_field(entry, path) for entry in entries]
-    content = serialize_bibtex(entries).encode("utf-8")
-    # Atomic write: temp file in same directory, then os.replace.
-    # os.replace is atomic on POSIX (rename) and on Windows (MoveFileEx
-    # with MOVEFILE_REPLACE_EXISTING) when src and dst are on the same
-    # filesystem.
-    fd, tmp = tempfile.mkstemp(dir=str(file_path.parent), prefix=".bib-", suffix=".tmp")
-    try:
-        try:
-            os.write(fd, content)
-            os.fsync(fd)  # flush to disk before rename so a crash can't leave an empty bib
-        finally:
-            os.close(fd)
-        os.replace(tmp, file_path)
-    except BaseException:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp)
-        raise
-    fsync_parent_dir(file_path)
 
 
 def _write_bib_text_atomic(path: str, text: str) -> None:

@@ -58,19 +58,6 @@ def landing_page_urls(
     return candidates
 
 
-def pdf_candidates_from_record(
-    *, base_record: Mapping[str, object], raw_value: str
-) -> list[PdfCandidate]:
-    pdf_url = base_record.get("pdf_url")
-    if isinstance(pdf_url, str) and pdf_url.strip():
-        return [{"source": "record", "url": pdf_url.strip()}]
-
-    return [
-        {"source": "landing_page", "url": url}
-        for url in landing_page_urls(base_record=base_record, raw_value=raw_value)
-    ]
-
-
 # ---------------------------------------------------------------------------
 # Discovery pipeline
 # ---------------------------------------------------------------------------

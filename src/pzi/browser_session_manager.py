@@ -112,10 +112,6 @@ class BrowserSessionManager:
                     pass
                 self._session = None
 
-    def idle_seconds(self) -> float:
-        """Seconds since the last ensure_session() call."""
-        return time.monotonic() - self._last_used
-
     # -- internal ---------------------------------------------------------
 
     def _launch(self) -> Any:

@@ -8,7 +8,7 @@ from typing import Any, TypeAlias, cast
 
 from pzi import add_planning as _add_planning
 from pzi.add_planning import fetch_record_for_input, merge_record_sources
-from pzi.bib_repository import WritePlan, read_bib_file, serialize_bibtex
+from pzi.bib_repository import WritePlan, read_bib_file
 from pzi.bibtex import BibtexEntry, NormalizedRecord, bibtex_entry_to_record
 from pzi.config import BibConfig
 from pzi.pdf import fetch_and_store_pdf_with_fallbacks, remove_new_pdf, snapshot_pdf_paths
@@ -385,33 +385,3 @@ def build_add_record_result(
     }
 
 
-def dry_run_diff(
-    *,
-    plan: WritePlan,
-    existing_entries: list[BibtexEntry],
-) -> str:
-    new_entry = plan["entry"]
-    new_text = serialize_bibtex([new_entry]).rstrip()
-
-    if plan["action"] == "insert":
-        action = "new entry"
-        old_text = "(none — new entry)"
-    else:
-        action = "update entry"
-        index = plan["index"]
-        try:
-            old_entry = existing_entries[index] if index is not None else None
-        except IndexError:
-            old_entry = None
-        if old_entry is None:
-            old_text = "(original entry not available)"
-        else:
-            old_text = serialize_bibtex([old_entry]).rstrip()
-
-    changed = ", ".join(plan["changed_fields"]) if plan["changed_fields"] else "none"
-    return (
-        f"--- {action} (changed: {changed}) ---\n"
-        f"{old_text}\n"
-        f"+++\n"
-        f"{new_text}"
-    )

@@ -419,7 +419,6 @@ def run_server(  # pragma: no cover — I/O entry point, covered by integration 
     server_class: type[HTTPServer] = ThreadingHTTPServer,
     security: HttpSecurityConfig | None = None,
     idle_minutes: int | None = None,
-    on_shutdown: Callable[[], None] | None = None,
     browser_profile_path: str | None = None,
     browser_engine: str = "chromium",
 ) -> None:
@@ -453,8 +452,6 @@ def run_server(  # pragma: no cover — I/O entry point, covered by integration 
 
     def _shutdown() -> None:
         browser_manager.close()
-        if on_shutdown is not None:
-            on_shutdown()
 
     if idle_state is not None:
         assert idle_minutes is not None  # guarded by idle_state is not None

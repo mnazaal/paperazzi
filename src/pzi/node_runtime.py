@@ -274,9 +274,6 @@ def download_node(
         for p in list(node_dir.glob("node-v*")):
             if p.is_dir():
                 shutil.rmtree(p, ignore_errors=True)
-        for p in list(node_dir.iterdir()):
-            if p.name.startswith("node-v") and p.is_dir():
-                shutil.rmtree(p, ignore_errors=True)
 
         with tarfile.open(tmp_path, "r:gz") as tar:
             # filter="data" rejects members with absolute paths, "..", or that

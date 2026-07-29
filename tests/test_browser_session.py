@@ -1,6 +1,5 @@
 """Tests for browser_session.py — BrowserSession and lifecycle management."""
 
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -99,73 +98,6 @@ def test_session_fetch_direct_exception() -> None:
     result = s.fetch_direct("https://example.com/paper.pdf")
     assert result.status == -1
     assert not result.is_pdf()
-
-
-def test_session_click_first() -> None:
-    class FakeLocatorFirst:
-        def click(self, timeout=None):
-            pass
-
-    class FakeLocator:
-        first = FakeLocatorFirst()
-
-    class FakePage:
-        def locator(self, sel):
-            return FakeLocator()
-
-    s = BrowserSession(playwright="pw", browser_ref="br", page=FakePage())
-    assert s.click_first("button:has-text('Accept')") is True
-
-
-def test_session_click_first_fails() -> None:
-    class FakePage:
-        def locator(self, sel):
-            raise RuntimeError("not found")
-
-    s = BrowserSession(playwright="pw", browser_ref="br", page=FakePage())
-    assert s.click_first("button:has-text('Nonexistent')") is False
-
-
-def test_session_try_click_first() -> None:
-    events = []
-
-    class FakePage:
-        def locator(self, sel):
-            events.append(sel)
-            if len(events) < 3:
-                raise RuntimeError("nope")
-            return MagicMock()
-
-    s = BrowserSession(playwright="pw", browser_ref="br", page=FakePage())
-    ok = s.try_click_first(["sel1", "sel2", "sel3"])
-    assert ok is True
-    assert len(events) == 3
-
-
-def test_session_try_click_first_all_fail() -> None:
-    events = []
-    class FakePage:
-        def locator(self, sel):
-            events.append(sel)
-            raise RuntimeError("all fail")
-    s = BrowserSession(playwright="pw", browser_ref="br", page=FakePage())
-    ok = s.try_click_first(["sel1", "sel2"])
-    assert ok is False
-    assert len(events) == 2
-    events = []
-
-    class FakePage:
-        def locator(self, sel):
-            events.append(sel)
-            if len(events) < 3:
-                raise RuntimeError("nope")
-            m = MagicMock()
-            return m
-
-    s = BrowserSession(playwright="pw", browser_ref="br", page=FakePage())
-    ok = s.try_click_first(["sel1", "sel2", "sel3"])
-    assert ok is True
-    assert len(events) == 3
 
 
 def test_session_wait_network_idle() -> None:

@@ -10,9 +10,9 @@ from typing import Any, TypedDict
 from pzi.bib_repository import (
     ReadBibResult,
     read_bib_file_raw_with_failures,
-    serialize_bibtex,
     with_bib_lock,
 )
+from pzi.bib_serialize import serialize_bibtex
 
 
 class ExportResult(TypedDict):

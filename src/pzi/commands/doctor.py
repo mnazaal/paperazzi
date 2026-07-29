@@ -67,10 +67,10 @@ def _reinstall_server(*, config_path, home_dir, stdout, stderr) -> int:
         print_lines(_error_lines("failed to load config", cfg["errors"]), stderr)
         return exit_codes.ENVIRONMENT
 
-    ts_url = config.get("translation_server_url")
-    if not isinstance(ts_url, str) or not ts_url:
-        print("translation_server_url not configured", file=stderr)
-        return exit_codes.ENVIRONMENT
+    # Subscript, not `.get` + guard: `AppConfig` is a total TypedDict and
+    # `validate_app_config` rejects the config outright unless this is an
+    # http(s) URL, so the guard here could never fire.
+    ts_url = config["translation_server_url"]
 
     data_home = Path(config["pzi_data_home"])
     print("reinstalling translation-server …", file=stdout)

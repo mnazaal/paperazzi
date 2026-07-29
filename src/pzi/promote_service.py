@@ -101,7 +101,6 @@ def promote_bib(
     fetch_binary: BinaryFetcher | None = None,
     flaresolverr_url: str | None = None,
     browser_pdf_cmd: str | None = None,
-    confidence_threshold: int | None = None,
     mark_resolved: bool = False,
 ) -> PromoteResult:
     resolved = load_bib_target(
@@ -129,11 +128,7 @@ def promote_bib(
     # the loader always supplies this. The old fallback of 3 predated the move
     # to `score_match`'s 0-100 scale (where the default is 60) and would have
     # meant an effectively open gate had it ever been reachable.
-    effective_confidence_threshold = (
-        config["promote_confidence_threshold"]
-        if confidence_threshold is None
-        else confidence_threshold
-    )
+    effective_confidence_threshold = config["promote_confidence_threshold"]
     # Compose the metadata fetcher once (opt-in disk cache + per-host rate
     # limiting); the resolver uses it as the default for its title-search
     # providers unless a fetcher override is injected (e.g. by tests).
@@ -625,8 +620,6 @@ def _published_candidate_diagnostics(
     preprint: NormalizedRecord,
     candidates: list[NormalizedRecord],
 ) -> list[str]:
-    if not candidates:
-        return []
     scored = [
         (index, candidate, _score_published_candidate(preprint, candidate))
         for index, candidate in enumerate(candidates)

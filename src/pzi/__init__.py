@@ -13,8 +13,8 @@ from pzi.bib_repository import (
     merge_entries,
     parse_bibtex,
     plan_bib_write,
-    serialize_bibtex,
 )
+from pzi.bib_serialize import serialize_bibtex
 from pzi.bibtex import BibtexEntry, NormalizedRecord
 from pzi.http_security import HttpSecurityConfig, build_http_security_config
 from pzi.url_safety import safe_public_http_url

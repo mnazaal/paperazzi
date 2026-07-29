@@ -40,7 +40,11 @@ def _seed_bib_with_preprint(tmp_path, bib_path, config_path, **kwargs):
 
 def _write_config(tmp_path, bib_path, **kwargs):
     config_path = tmp_path / "config.toml"
-    app_extra = "\n".join(f'{k} = "{v}"' for k, v in kwargs.items())
+    app_extra = "\n".join(
+        # ints unquoted so numeric keys like promote_confidence_threshold parse
+        f"{k} = {v}" if isinstance(v, int) and not isinstance(v, bool) else f'{k} = "{v}"'
+        for k, v in kwargs.items()
+    )
     prefix = f"{app_extra}\n" if app_extra else ""
     config_path.write_text(
         f"""
@@ -422,7 +426,10 @@ def test_promote_empty_query_skips_search(tmp_path):
 
 def test_promote_different_author_year_scoring(tmp_path):
     bib_path = tmp_path / "ml.bib"
-    config_path = _write_config(tmp_path, bib_path)
+    # Above the extra-author/off-by-one-year penalty, below the default bar of
+    # 60: a threshold of 2 would pass no matter how the scoring drifted. Set via
+    # config since `promote_bib`'s per-call override was removed as unused.
+    config_path = _write_config(tmp_path, bib_path, promote_confidence_threshold=40)
     _seed_bib_with_preprint(tmp_path, bib_path, config_path)
 
     def fake_search(query, *, server_url):
@@ -445,9 +452,6 @@ def test_promote_different_author_year_scoring(tmp_path):
         dry_run=False,
         keep_preprint=False,
         fetch_search=fake_search,
-        # Above the extra-author/off-by-one-year penalty, below the default bar:
-        # a threshold of 2 would pass no matter how the scoring drifted.
-        confidence_threshold=40,
     )
 
     assert len(result["items"]) == 1

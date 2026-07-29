@@ -28,7 +28,6 @@ FlareSolverrCookies: TypeAlias = dict[str, Any]
 
 
 
-FlareSolverrSolution: TypeAlias = dict[str, Any]
 
 
 

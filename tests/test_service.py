@@ -15,7 +15,7 @@ from pzi.add_service import (
 )
 from pzi.bib_repository import ConcurrentEditError, plan_bib_write
 from pzi.bibtex import record_to_bibtex_entry
-from pzi.capture_local_pdf import build_add_record_result, dry_run_diff, plan_with_applied_record
+from pzi.capture_local_pdf import build_add_record_result, plan_with_applied_record
 
 
 def test_add_record_to_bib_inserts_new_entry(tmp_path: Path) -> None:
@@ -1506,18 +1506,6 @@ def test_build_add_record_result_shapes_dry_run_message() -> None:
     assert result["status"] == "ok"
     assert result["message"] == "would insert entry"
     assert result["citekey"] == "smith2024paper"
-
-
-def test_dry_run_diff_mentions_new_entry() -> None:
-    plan = plan_bib_write(
-        {"citekey": "smith2024paper", "title": "Paper"},
-        [],
-    )
-
-    diff = dry_run_diff(plan=plan, existing_entries=[])
-
-    assert "new entry" in diff
-    assert "smith2024paper" in diff
 
 
 # ---------------------------------------------------------------------------

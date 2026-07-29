@@ -281,25 +281,9 @@ def _launch_browser(
     return _impl(browser, profile_path, headless=headless)
 
 
-def _close_browser(session_or_playwright: Any, *args: Any) -> None:
+def _close_browser(session: BrowserSession) -> None:
     """Clean up browser resources."""
-    if isinstance(session_or_playwright, BrowserSession):
-        session_or_playwright.close()
-        return
-    # Legacy triple-format support
-    try:
-        playwright = session_or_playwright
-        if args:  # pragma: no branch — covered by integration/browser tests
-            browser_ref = args[0]
-            if isinstance(browser_ref, tuple):
-                browser, context = browser_ref
-                context.close()
-                browser.close()
-            else:
-                browser_ref.close()
-        playwright.stop()  # pragma: no cover — legacy path
-    except Exception:  # pragma: no cover — legacy path
-        pass
+    session.close()
 
 
 def discover_pdf_url(

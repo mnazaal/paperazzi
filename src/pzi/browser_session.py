@@ -135,26 +135,6 @@ class BrowserSession:
             return FetchResult(status=-1, content_type=None, body=b"")
 
     # ------------------------------------------------------------------
-    # DOM interaction
-    # ------------------------------------------------------------------
-
-    def click_first(self, selector: str, *, timeout: int = 1000) -> bool:
-        """Click the first element matching *selector*.  Returns True on success."""
-        self._check_open()
-        try:
-            self.page.locator(selector).first.click(timeout=timeout)
-            return True
-        except Exception:
-            return False
-
-    def try_click_first(self, selectors: list[str], *, timeout: int = 1000) -> bool:
-        """Try each selector in order; return True as soon as one succeeds."""
-        for selector in selectors:
-            if self.click_first(selector, timeout=timeout):
-                return True
-        return False
-
-    # ------------------------------------------------------------------
     # Wait helpers
     # ------------------------------------------------------------------
 

@@ -6,18 +6,17 @@ import pytest
 
 from pzi.bib_repository import (
     ConcurrentEditError,
+    _write_bib_text_atomic,
     apply_write_plan,
     execute_write_plan,
     parse_bib_library,
     parse_bibtex,
     plan_bib_write,
     read_bib_file,
-    serialize_bibtex,
     update_bib_entry,
     with_bib_lock,
-    write_bib_file,
 )
-from pzi.bib_serialize import _balance_braces, _safe_citekey, _safe_field_value
+from pzi.bib_serialize import _balance_braces, _safe_citekey, _safe_field_value, serialize_bibtex
 from pzi.bibtex import record_to_bibtex_entry
 
 
@@ -61,67 +60,6 @@ def test_serialize_bibtex_writes_deterministic_output() -> None:
         text
         == "@article{smith2024graph,\n  doi = {10.1/foo},\n  title = {Graph Parsers}\n}\n"
     )
-
-
-def test_write_bib_file_keeps_absolute_file_paths_by_default(tmp_path: Path) -> None:
-    bib_path = tmp_path / "refs.bib"
-    pdf_path = tmp_path / "papers" / "smith2024.pdf"
-
-    write_bib_file(
-        str(bib_path),
-        [
-            {
-                "entry_type": "article",
-                "citekey": "smith2024",
-                "fields": {"title": "T", "file": str(pdf_path)},
-            }
-        ],
-    )
-
-    assert f"file = {{{pdf_path}}}" in bib_path.read_text(encoding="utf-8")
-
-
-def test_write_bib_file_can_write_relative_file_paths(tmp_path: Path) -> None:
-    bib_path = tmp_path / "refs.bib"
-    pdf_path = tmp_path / "papers" / "smith2024.pdf"
-
-    write_bib_file(
-        str(bib_path),
-        [
-            {
-                "entry_type": "article",
-                "citekey": "smith2024",
-                "fields": {"title": "T", "file": str(pdf_path)},
-            }
-        ],
-        file_path_style="relative",
-    )
-
-    assert "file = {papers/smith2024.pdf}" in bib_path.read_text(encoding="utf-8")
-
-
-def test_write_bib_file_writes_through_a_symlink(tmp_path: Path) -> None:
-    # `os.replace` treats a symlink destination as the directory entry to
-    # replace, not the file it points at. Writing straight to a symlinked
-    # path would silently delete the symlink and drop a regular file in its
-    # place, detaching it from wherever it used to point (e.g. synced cloud
-    # storage). The write must land on the real target and the symlink must
-    # survive.
-    real_dir = tmp_path / "real"
-    real_dir.mkdir()
-    real_path = real_dir / "library.bib"
-    real_path.write_text("", encoding="utf-8")
-    link_path = tmp_path / "refs.bib"
-    link_path.symlink_to(real_path)
-
-    write_bib_file(
-        str(link_path),
-        [{"entry_type": "article", "citekey": "smith2024", "fields": {"title": "T"}}],
-    )
-
-    assert link_path.is_symlink()
-    assert link_path.resolve() == real_path
-    assert "smith2024" in real_path.read_text(encoding="utf-8")
 
 
 def test_apply_write_plan_appends_insert_entry() -> None:
@@ -524,29 +462,49 @@ def test_update_bib_entry_two_threads_no_lost_update_and_no_stale_lock(
 # === crash injection: atomic bib writes must not corrupt or litter ===
 
 
-def test_write_bib_file_preserves_original_and_cleans_up_temp_on_replace_failure(
+def test_write_bib_text_atomic_preserves_original_and_cleans_up_temp_on_failure(
     tmp_path: Path,
 ) -> None:
     """If the final os.replace fails (simulated crash mid-write), the original
-    file must be untouched and no leftover .tmp file should remain."""
+    file must be untouched and no leftover .tmp file should remain.
+
+    Ported from the deleted `write_bib_file`; `docs/remediation-plan-2026-07.md`
+    records this catching a real bug, so the guarantee outlives the function it
+    was originally written against.
+    """
     path = tmp_path / "library.bib"
     path.write_text("original content\n")
 
     with patch("os.replace", side_effect=OSError("simulated crash")):
         with pytest.raises(OSError, match="simulated crash"):
-            write_bib_file(
-                str(path),
-                [
-                    {
-                        "entry_type": "article",
-                        "citekey": "smith2024graph",
-                        "fields": {"title": "New"},
-                    }
-                ],
+            _write_bib_text_atomic(
+                str(path), "@article{smith2024graph,\n  title = {New}\n}\n"
             )
 
     assert path.read_text() == "original content\n"
     assert list(tmp_path.iterdir()) == [path]
+
+
+def test_write_bib_text_atomic_writes_through_a_symlink(tmp_path: Path) -> None:
+    # `os.replace` treats a symlink destination as the directory entry to
+    # replace, not the file it points at. Writing straight to a symlinked path
+    # would silently delete the symlink and drop a regular file in its place,
+    # detaching it from wherever it used to point (e.g. synced cloud storage).
+    # Also ported from `write_bib_file`.
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    real_path = real_dir / "library.bib"
+    real_path.write_text("", encoding="utf-8")
+    link_path = tmp_path / "refs.bib"
+    link_path.symlink_to(real_path)
+
+    _write_bib_text_atomic(
+        str(link_path), "@article{smith2024,\n  title = {T}\n}\n"
+    )
+
+    assert link_path.is_symlink()
+    assert link_path.resolve() == real_path
+    assert "smith2024" in real_path.read_text(encoding="utf-8")
 
 
 # === malformed / unicode corpora ===

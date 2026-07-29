@@ -48,12 +48,6 @@ class FakeBrowserSession:
         from pzi.browser_session import FetchResult
         return FetchResult(status=-1, content_type=None, body=b"")
 
-    def click_first(self, selector, *, timeout=1000):
-        return False
-
-    def try_click_first(self, selectors, *, timeout=1000):
-        return False
-
     def wait_network_idle(self, *, timeout=5000):
         pass
 

@@ -21,9 +21,9 @@ from pzi.bib_repository import (
     _serialize_library,
     execute_write_plan,
     preview_write_plan,
-    serialize_bibtex,
     update_bib_entry,
 )
+from pzi.bib_serialize import serialize_bibtex
 
 # ── Fixtures ──────────────────────────────────────────────────────────
 
