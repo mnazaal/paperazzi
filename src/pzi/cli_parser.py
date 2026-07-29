@@ -380,7 +380,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_single_target(pdf_retry)
     pdf_retry.add_argument(
         "--failed-only", action="store_true",
-        help="retry PDF for all entries with no local PDF (ignores citekey argument)",
+        help="retry PDF for all entries with no local PDF (cannot be combined with a citekey)",
     )
     pdf_retry.add_argument(
         "--json", action="store_true", help="emit the result as a JSON envelope",

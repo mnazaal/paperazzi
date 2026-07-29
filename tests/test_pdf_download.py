@@ -2,7 +2,7 @@ import http.client
 from pathlib import Path
 
 import pzi.pdf_download as pdf_download
-from pzi.pdf_download import fetch_and_store_pdf, store_pdf_source
+from pzi.pdf_download import fetch_and_store_pdf
 
 
 def test_fetch_and_store_pdf_uses_injected_downloader_and_writer(tmp_path: Path) -> None:
@@ -42,6 +42,8 @@ def test_fetch_and_store_pdf_ezproxy_rewrites_url_and_trusts_host(tmp_path: Path
 
 
 def test_store_pdf_source_routes_urls_to_downloader(tmp_path: Path) -> None:
+    from pzi.pdf_service import _store_pdf_source as store_pdf_source
+
     path, error = store_pdf_source(
         source="https://example.test/paper.pdf",
         papers_dir=str(tmp_path),

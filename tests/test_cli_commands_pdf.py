@@ -151,3 +151,40 @@ def test_pdf_retry_unknown_citekey_is_not_found(tmp_path: Path) -> None:
 
     assert result["status"] == "error"
     assert result["reason"] == "not_found"
+
+
+def test_run_pdf_command_rejects_failed_only_combined_with_a_citekey(tmp_path: Path) -> None:
+    """The citekey used to be accepted and silently discarded.
+
+    That was documented in the flag's help and in the README, but doing
+    something other than what was typed is worse than refusing:
+    `pzi pdf retry smith2024 --failed-only` reads as "retry this one entry" and
+    retried the entire library.
+    """
+    called: list[dict] = []
+    stdout, stderr = StringIO(), StringIO()
+
+    exit_code = run_pdf_command(
+        Namespace(
+            pdf_command="retry",
+            citekey="smith2024",
+            failed_only=True,
+            json=False,
+            target=None,
+        ),
+        config_path=str(tmp_path / "config.toml"),
+        home_dir=str(tmp_path),
+        stdout=stdout,
+        stderr=stderr,
+        bib_selector=None,
+        retry_failed_pdfs_fn=lambda **kw: called.append(kw) or {},
+    )
+
+    assert exit_code == 2
+    assert called == [], "the batch retry ran despite the usage error"
+    assert stdout.getvalue() == ""
+    assert stderr.getvalue() == (
+        "pzi pdf retry: error: --failed-only retries every PDF-less entry; "
+        "drop the citekey, or drop --failed-only to retry just that entry\n"
+        "Run 'pzi pdf retry --help' for usage.\n"
+    )

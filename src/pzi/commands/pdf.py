@@ -46,6 +46,20 @@ def run_pdf_command(
         return _pdf_exit_code(result)
 
     if getattr(args, "failed_only", False):
+        if args.citekey:
+            # Previously the citekey was accepted and discarded. That was
+            # documented, but doing something other than what was typed is
+            # worse than refusing: `pzi pdf retry smith2024 --failed-only`
+            # looks like it retries one entry and silently retried the whole
+            # library instead.
+            return emit_usage_error(
+                args,
+                "--failed-only retries every PDF-less entry; "
+                "drop the citekey, or drop --failed-only to retry just that entry",
+                command_path=("pdf", "retry"),
+                stdout=stdout,
+                stderr=stderr,
+            )
         result = retry_failed_pdfs_fn(
             config_path=config_path,
             home_dir=home_dir,

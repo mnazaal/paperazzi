@@ -68,36 +68,6 @@ def copy_pdf_to_papers_dir(
     ), None
 
 
-def store_pdf_source(
-    *,
-    source: str,
-    papers_dir: str,
-    citekey: str,
-    fetch_binary: FetchBinary | None = None,
-    record: PdfRecord | None = None,
-    filename_format: str | None = None,
-    ezproxy_host: str | None = None,
-) -> tuple[str | None, str | None]:
-    """Store a PDF from a URL or local path under the deterministic citekey path."""
-    if source.startswith(("http://", "https://")):
-        return fetch_and_store_pdf(
-            url=source,
-            papers_dir=papers_dir,
-            citekey=citekey,
-            fetch_binary=fetch_binary,
-            record=record,
-            filename_format=filename_format,
-            ezproxy_host=ezproxy_host,
-        )
-    return copy_pdf_to_papers_dir(
-        source_path=source,
-        papers_dir=papers_dir,
-        citekey=citekey,
-        record=record,
-        filename_format=filename_format,
-    )
-
-
 def fetch_and_store_pdf(
     *,
     url: str,

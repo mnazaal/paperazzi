@@ -206,7 +206,7 @@ pzi init [--force] [--setup --bib PATH] [--papers-dir PATH] [--name NAME] [--bro
 pzi add <doi|url|pdf> [--tags t1,t2] [--dry-run] [--citekey KEY] [--verbose] [--strict-metadata]
 pzi add --from-file <file|-> [--tags t1,t2] [--delay S] [--failures-out PATH]  # bulk
 pzi inbox <file> [--dry-run] [--tags t1,t2] [--delay S]   # drain a file of DOIs/URLs
-pzi pdf retry [<citekey>] [--failed-only]     # --failed-only retries every PDF-less entry, ignoring citekey
+pzi pdf retry [<citekey>] [--failed-only]     # --failed-only retries every PDF-less entry; not combinable with a citekey
 pzi pdf attach <citekey> <url-or-path>
 pzi tag add|remove <citekey> <tag...> [--dry-run]
 pzi tag list [citekey] [--json]

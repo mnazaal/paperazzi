@@ -13,13 +13,45 @@ from pzi.bibtex import (
     NormalizedRecord,
     apply_record_to_entry,
 )
-from pzi.config import BibResolutionFailure, load_bib_target
+from pzi.capture_context import resolve_api_auth_token
+from pzi.config import AppConfig, BibResolutionFailure, load_bib_target
+from pzi.pdf import fetch_and_store_pdf_with_fallbacks, write_pdf_bytes
 from pzi.pdf import remove_new_pdf as _remove_new_pdf
 from pzi.pdf import snapshot_pdf_paths as _snapshot_pdf_paths
-from pzi.pdf import write_pdf_bytes
-from pzi.pdf_download import fetch_and_store_pdf, store_pdf_source
+from pzi.pdf_download import copy_pdf_to_papers_dir
 from pzi.pdf_planning import pdf_file_present
 from pzi.protocols import BinaryFetcher
+
+
+def _fallback_kwargs(config: AppConfig) -> dict[str, Any]:
+    """Fallback-chain knobs, read the same way `pzi add` reads them.
+
+    `pdf retry` and `pdf attach` used to call the direct-only downloader while
+    telling the user, on failure, to "configure browser_pdf_cmd" -- machinery
+    that code path never invoked. They now run the same chain `add` does:
+    direct, then the server browser, then the browser_pdf_cmd hook, then
+    FlareSolverr, then the desktop-download watcher.
+
+    Reads the keys directly rather than going through `build_capture_context`,
+    which additionally resolves contact/unpaywall/S2 credentials that play no
+    part in fetching a PDF.
+    """
+    api_url = config.get("api_url")
+    if not api_url:
+        api_url = (
+            f"http://{config.get('api_listen_host', '127.0.0.1')}"
+            f":{config.get('api_listen_port', 8765)}"
+        )
+    return {
+        "flaresolverr_url": config.get("flaresolverr_url"),
+        "browser_pdf_cmd": config.get("browser_pdf_cmd"),
+        "browser_hook": config.get("browser_hook", True),
+        "api_url": api_url,
+        "api_auth_token": resolve_api_auth_token(config),
+        "desktop_fallback_hosts": set(config.get("desktop_fallback_hosts") or []),
+        "ezproxy_host": config.get("ezproxy_host"),
+    }
+
 
 PdfRetryResult: TypeAlias = dict[str, Any]
 
@@ -93,27 +125,21 @@ def retry_pdf(
             "errors": ["no PDF URL found on entry"],
         }
 
+    # Both arguments passed unconditionally: pdf_planning already handles a
+    # falsy filename_format and a None record, so branching on them here only
+    # duplicated that decision.
     filename_format = config.get("pdf_filename_format")
-    ezproxy_host = config.get("ezproxy_host")
     existing_pdf_paths = _snapshot_pdf_paths(bib["papers_dir"])
-    if filename_format:
-        local_pdf_path, warning = fetch_and_store_pdf(
-            url=pdf_url,
-            papers_dir=bib["papers_dir"],
-            citekey=citekey,
-            fetch_binary=fetch_binary,
-            record=_record_at(read_result, index),
-            filename_format=filename_format,
-            ezproxy_host=ezproxy_host,
-        )
-    else:
-        local_pdf_path, warning = fetch_and_store_pdf(
-            url=pdf_url,
-            papers_dir=bib["papers_dir"],
-            citekey=citekey,
-            fetch_binary=fetch_binary,
-            ezproxy_host=ezproxy_host,
-        )
+    local_pdf_path, warning, error = fetch_and_store_pdf_with_fallbacks(
+        url=pdf_url,
+        papers_dir=bib["papers_dir"],
+        citekey=citekey,
+        fetch_binary=fetch_binary,
+        record=_record_at(read_result, index),
+        filename_format=filename_format,
+        **_fallback_kwargs(config),
+    )
+    warning = error or warning
     if local_pdf_path is None:
         return {
             "status": "error",
@@ -185,7 +211,7 @@ def retry_failed_pdfs(
     read_result = read_bib_file(bib["path"])
     entries = read_result["entries"]
     records = read_result.get("records") or []
-    ezproxy_host = config.get("ezproxy_host")
+    fallback_kwargs = _fallback_kwargs(config)
     filename_format = config.get("pdf_filename_format")
     existing_pdf_paths = _snapshot_pdf_paths(bib["papers_dir"])
 
@@ -232,17 +258,15 @@ def retry_failed_pdfs(
         record = records[index] if index < len(records) else None
         record_dict = _record_at(read_result, index)
 
-        kwargs: dict[str, Any] = {
-            "url": pdf_url,
-            "papers_dir": bib["papers_dir"],
-            "citekey": citekey,
-            "ezproxy_host": ezproxy_host,
-        }
-        if filename_format:
-            kwargs["filename_format"] = filename_format
-            kwargs["record"] = record_dict
-
-        local_pdf_path, warning = fetch_and_store_pdf(**kwargs)
+        local_pdf_path, warning, error = fetch_and_store_pdf_with_fallbacks(
+            url=pdf_url,
+            papers_dir=bib["papers_dir"],
+            citekey=citekey,
+            record=record_dict,
+            filename_format=filename_format,
+            **fallback_kwargs,
+        )
+        warning = error or warning
 
         if local_pdf_path is None:
             failures.append({"citekey": citekey, "error": warning or "failed to fetch PDF"})
@@ -319,26 +343,16 @@ def attach_pdf(
         }
 
     filename_format = config.get("pdf_filename_format")
-    ezproxy_host = config.get("ezproxy_host")
     existing_pdf_paths = _snapshot_pdf_paths(bib["papers_dir"])
-    if filename_format:
-        local_pdf_path, error = _store_pdf_source(
-            source=source,
-            papers_dir=bib["papers_dir"],
-            citekey=citekey,
-            fetch_binary=fetch_binary,
-            record=_record_at(read_result, index),
-            filename_format=filename_format,
-            ezproxy_host=ezproxy_host,
-        )
-    else:
-        local_pdf_path, error = _store_pdf_source(
-            source=source,
-            papers_dir=bib["papers_dir"],
-            citekey=citekey,
-            fetch_binary=fetch_binary,
-            ezproxy_host=ezproxy_host,
-        )
+    local_pdf_path, error = _store_pdf_source(
+        source=source,
+        papers_dir=bib["papers_dir"],
+        citekey=citekey,
+        fetch_binary=fetch_binary,
+        record=_record_at(read_result, index),
+        filename_format=filename_format,
+        fallback=_fallback_kwargs(config),
+    )
     if local_pdf_path is None:
         return {
             "status": "error",
@@ -604,24 +618,30 @@ def _store_pdf_source(
     fetch_binary: BinaryFetcher | None = None,
     record: dict[str, object] | None = None,
     filename_format: str | None = None,
-    ezproxy_host: str | None = None,
+    fallback: dict[str, Any] | None = None,
 ) -> tuple[str | None, str | None]:
-    if filename_format:
-        return store_pdf_source(
-            source=source,
+    """Store a PDF from a URL or a local path.
+
+    Mirrors `pdf_download.store_pdf_source`, but routes URLs through the full
+    fallback chain rather than a single direct GET.
+    """
+    if source.startswith(("http://", "https://")):
+        local_path, warning, error = fetch_and_store_pdf_with_fallbacks(
+            url=source,
             papers_dir=papers_dir,
             citekey=citekey,
             fetch_binary=fetch_binary,
-            record=record,
+            record=cast(Any, record),
             filename_format=filename_format,
-            ezproxy_host=ezproxy_host,
+            **(fallback or {}),
         )
-    return store_pdf_source(
-        source=source,
+        return local_path, error or warning
+    return copy_pdf_to_papers_dir(
+        source_path=source,
         papers_dir=papers_dir,
         citekey=citekey,
-        fetch_binary=fetch_binary,
-        ezproxy_host=ezproxy_host,
+        record=cast(Any, record),
+        filename_format=filename_format,
     )
 
 

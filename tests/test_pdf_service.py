@@ -94,8 +94,8 @@ def test_retry_pdf_fetch_failed(monkeypatch) -> None:
         },
     )
     monkeypatch.setattr(
-        pdf_service, "fetch_and_store_pdf",
-        lambda **kw: (None, "network error"),
+        pdf_service, "fetch_and_store_pdf_with_fallbacks",
+        lambda **kw: (None, None, "network error"),
     )
     result = pdf_service.retry_pdf(
         config_path="/f",
@@ -125,8 +125,8 @@ def test_retry_pdf_update_not_found(monkeypatch) -> None:
         },
     )
     monkeypatch.setattr(
-        pdf_service, "fetch_and_store_pdf",
-        lambda **kw: ("/p/smith2024.pdf", None),
+        pdf_service, "fetch_and_store_pdf_with_fallbacks",
+        lambda **kw: ("/p/smith2024.pdf", None, None),
     )
     monkeypatch.setattr(
         pdf_service, "update_bib_entry",
@@ -165,9 +165,9 @@ def test_retry_pdf_removes_new_pdf_when_update_disappears(monkeypatch, tmp_path:
     def fake_fetch(**kwargs):
         papers_dir.mkdir(parents=True, exist_ok=True)
         new_pdf.write_bytes(b"%PDF-new")
-        return str(new_pdf), None
+        return str(new_pdf), None, None
 
-    monkeypatch.setattr(pdf_service, "fetch_and_store_pdf", fake_fetch)
+    monkeypatch.setattr(pdf_service, "fetch_and_store_pdf_with_fallbacks", fake_fetch)
     monkeypatch.setattr(
         pdf_service,
         "update_bib_entry",
@@ -204,8 +204,8 @@ def test_retry_pdf_success(monkeypatch) -> None:
         },
     )
     monkeypatch.setattr(
-        pdf_service, "fetch_and_store_pdf",
-        lambda **kw: ("/p/smith2024.pdf", None),
+        pdf_service, "fetch_and_store_pdf_with_fallbacks",
+        lambda **kw: ("/p/smith2024.pdf", None, None),
     )
     monkeypatch.setattr(
         pdf_service, "update_bib_entry",
@@ -672,24 +672,24 @@ def test_attach_pdf_data_success(monkeypatch, tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# _store_pdf_source: compatibility wrapper around pzi.pdf_download.store_pdf_source
+# _store_pdf_source: URL -> fallback chain, local path -> copy
 # ---------------------------------------------------------------------------
 
 
-def test_store_pdf_source_wrapper_delegates_to_shared_pdf_helper(monkeypatch) -> None:
-    """The old private helper stays as a thin compatibility wrapper."""
+def test_store_pdf_source_routes_a_url_through_the_full_fallback_chain(monkeypatch) -> None:
+    """A URL source must get the same chain `pzi add` uses, not one direct GET.
+
+    `pdf attach <url>` previously called the direct-only downloader while its
+    failure message recommended configuring `browser_pdf_cmd` -- machinery that
+    path never invoked.
+    """
     seen = {}
 
-    def fake_store_pdf_source(*, source, papers_dir, citekey, fetch_binary, **kwargs):
-        seen.update(
-            source=source,
-            papers_dir=papers_dir,
-            citekey=citekey,
-            fetch_binary=fetch_binary,
-        )
-        return "/p/smith2024.pdf", None
+    def fake_with_fallbacks(**kwargs):
+        seen.update(kwargs)
+        return "/p/smith2024.pdf", None, None
 
-    monkeypatch.setattr(pdf_service, "store_pdf_source", fake_store_pdf_source)
+    monkeypatch.setattr(pdf_service, "fetch_and_store_pdf_with_fallbacks", fake_with_fallbacks)
     fetch_binary = object()
 
     result = pdf_service._store_pdf_source(
@@ -697,15 +697,28 @@ def test_store_pdf_source_wrapper_delegates_to_shared_pdf_helper(monkeypatch) ->
         papers_dir="/p",
         citekey="smith2024",
         fetch_binary=fetch_binary,
+        fallback={"browser_pdf_cmd": "hook --pdf", "flaresolverr_url": "http://fs:8191"},
     )
 
     assert result == ("/p/smith2024.pdf", None)
-    assert seen == {
-        "source": "https://example.com/p.pdf",
-        "papers_dir": "/p",
-        "citekey": "smith2024",
-        "fetch_binary": fetch_binary,
-    }
+    assert seen["url"] == "https://example.com/p.pdf"
+    assert seen["citekey"] == "smith2024"
+    assert seen["fetch_binary"] is fetch_binary
+    # The knobs the failure message tells the user to configure are threaded in.
+    assert seen["browser_pdf_cmd"] == "hook --pdf"
+    assert seen["flaresolverr_url"] == "http://fs:8191"
+
+
+def test_store_pdf_source_reports_the_fallback_chain_error(monkeypatch) -> None:
+    monkeypatch.setattr(
+        pdf_service,
+        "fetch_and_store_pdf_with_fallbacks",
+        lambda **kw: (None, None, "all fallbacks exhausted"),
+    )
+
+    assert pdf_service._store_pdf_source(
+        source="https://example.com/p.pdf", papers_dir="/p", citekey="smith2024"
+    ) == (None, "all fallbacks exhausted")
 
 
 def test_store_pdf_source_local_missing() -> None:
@@ -1049,10 +1062,10 @@ def test_retry_failed_pdfs_some_retried(
         if call_count["count"] == 1:
             pdf = papers_dir / "smith2024.pdf"
             pdf.write_bytes(b"%PDF-1.4")
-            return str(pdf), None
-        return None, "network error"
+            return str(pdf), None, None
+        return None, None, "network error"
 
-    monkeypatch.setattr(pdf_service, "fetch_and_store_pdf", fake_fetch)
+    monkeypatch.setattr(pdf_service, "fetch_and_store_pdf_with_fallbacks", fake_fetch)
     monkeypatch.setattr(
         pdf_service, "update_bib_entry",
         lambda path, citekey, updater, **kwargs: {

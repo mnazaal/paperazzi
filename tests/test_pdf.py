@@ -9,7 +9,6 @@ from pzi.pdf import (
 from pzi.pdf_download import (
     copy_pdf_to_papers_dir,
     fetch_and_store_pdf,
-    store_pdf_source,
 )
 from pzi.pdf_planning import is_pdf_bytes, is_pdf_content_type, plan_pdf_path
 
@@ -99,6 +98,8 @@ def test_copy_pdf_to_papers_dir_reports_read_error(tmp_path: Path) -> None:
 
 
 def test_store_pdf_source_uses_download_for_urls(tmp_path: Path) -> None:
+    from pzi.pdf_service import _store_pdf_source as store_pdf_source
+
     path, error = store_pdf_source(
         source="https://example.com/paper.pdf",
         papers_dir=str(tmp_path),
@@ -112,6 +113,8 @@ def test_store_pdf_source_uses_download_for_urls(tmp_path: Path) -> None:
 
 
 def test_store_pdf_source_uses_copy_for_local_paths(tmp_path: Path) -> None:
+    from pzi.pdf_service import _store_pdf_source as store_pdf_source
+
     source = tmp_path / "source.pdf"
     source.write_bytes(b"%PDF-local-source")
 
