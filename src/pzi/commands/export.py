@@ -28,7 +28,7 @@ def run_export_command(
 
     if result["status"] != "ok":
         print_lines(_error_lines("export failed", result.get("errors", [])), stderr)
-        return 1
+        return exit_codes.ENVIRONMENT
 
     content = result["content"]
     if args.output:
@@ -38,7 +38,9 @@ def run_export_command(
                 f"error: output file already exists: {args.output} (use --force to overwrite)",
                 file=stderr,
             )
-            return 1
+            # USAGE: the invocation was refused, nothing ran. 1 would have said
+            # "ran fine, here are findings".
+            return exit_codes.USAGE
         output_path.write_text(content, encoding="utf-8")
         print(f"exported {result['total_entries']} entries to {args.output}", file=stdout)
     else:

@@ -225,7 +225,9 @@ default = true
         stderr=stderr,
     )
 
-    assert exit_code == 1
+    # USAGE, not 1: the command refused the invocation and did nothing, and the
+    # exit-code contract reserves 1 for "ran fine, has something to report".
+    assert exit_code == exit_codes.USAGE
     assert output_path.read_text() == original
     assert "already exists" in stderr.getvalue()
 
@@ -1856,3 +1858,42 @@ def test_fix_clean_json_populates_errors_on_an_unreadable_library(tmp_path: Path
     assert parsed["status"] == "error"
     assert parsed["errors"], "the documented failure channel must not be empty"
     assert "unparseable" in parsed["errors"][0]
+
+
+def test_fix_clean_exits_environment_on_an_unreadable_library(tmp_path: Path) -> None:
+    """1 never means failure — the exit-code contract says so explicitly.
+
+    `fix clean` returned bare 1 both for "could not read the library" and for
+    "found some orphan PDFs", so a script could not tell a broken library from
+    a healthy one with findings.
+    """
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text("@article{broken\n  title = {No}\n")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\ndefault = true\n'
+    )
+
+    exit_code = run_cli(
+        ["fix", "clean", "--config", str(config_path)],
+        home_dir=str(tmp_path), stdout=StringIO(), stderr=StringIO(),
+    )
+    assert exit_code == exit_codes.ENVIRONMENT
+
+    json_exit = run_cli(
+        ["fix", "clean", "--json", "--config", str(config_path)],
+        home_dir=str(tmp_path), stdout=StringIO(), stderr=StringIO(),
+    )
+    assert json_exit == exit_codes.ENVIRONMENT, "the exit code must not depend on --json"
+
+
+def test_fix_clean_exits_findings_for_a_duplicate_citekey(tmp_path: Path) -> None:
+    """A duplicate is a finding: the library is readable, one entry is missing."""
+    config_path = _dup_library(tmp_path)
+
+    exit_code = run_cli(
+        ["fix", "clean", "--config", str(config_path)],
+        home_dir=str(tmp_path), stdout=StringIO(), stderr=StringIO(),
+    )
+
+    assert exit_code == exit_codes.FINDINGS

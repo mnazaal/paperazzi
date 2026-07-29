@@ -17,7 +17,8 @@ def run_init_command(
     dest = Path(config_path)
     if dest.exists() and not args.force:
         print(f"config already exists: {dest} (use --force to overwrite)", file=stderr)
-        return 1
+        # USAGE: refused before doing anything, not a finding.
+        return exit_codes.USAGE
 
     dest.parent.mkdir(parents=True, exist_ok=True)
 
