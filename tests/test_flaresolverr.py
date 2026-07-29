@@ -79,9 +79,18 @@ def test_fetch_html_via_flaresolverr_builds_endpoint():
     assert captured["endpoint"] == "http://127.0.0.1:8191/v1"
 
 
-def test_fetch_pdf_via_flaresolverr_returns_pdf_bytes() -> None:
+def test_fetch_pdf_via_flaresolverr_returns_pdf_bytes(monkeypatch) -> None:
+    """The success path, actually exercised.
+
+    This test previously asserted `result is None` while its name and comments
+    claimed to check PDF parsing. It passed only because conftest's autouse
+    socket guard blocks non-loopback connects and the resulting error is
+    swallowed as an OSError — so it proved nothing about the code under test and
+    would have kept passing if the parsing broke entirely.
+    """
     import json
 
+    import pzi.safe_http
     from pzi.flaresolverr import fetch_pdf_via_flaresolverr
 
     def fake_post(endpoint: str, payload: object) -> str:
@@ -107,17 +116,25 @@ def test_fetch_pdf_via_flaresolverr_returns_pdf_bytes() -> None:
             }
         })
 
-    # Note: This test mocks the FlareSolverr response but the actual download
-    # would need a real server. We're just testing the parsing logic.
-    # The _download_with_cookies function would need to be mocked separately.
+    seen: dict[str, object] = {}
+
+    def fake_build_safe_opener(*, extra_handlers):
+        seen["jar"] = extra_handlers[0].cookiejar
+        return _FakeOpener(b"%PDF-1.4 solved")
+
+    monkeypatch.setattr(pzi.safe_http, "build_safe_opener", fake_build_safe_opener)
+
     result = fetch_pdf_via_flaresolverr(
         "https://example.com/paper.pdf",
         server_url="http://127.0.0.1:8191",
         post_json=fake_post,
     )
-    # Result will be None because _download_with_cookies tries to actually download
-    # In a real test, we'd mock urllib.request.urlopen
-    assert result is None
+
+    assert result == b"%PDF-1.4 solved"
+    # The clearance cookie FlareSolverr returned is what makes the retry work,
+    # so it must reach the opener's jar.
+    jar = seen["jar"]
+    assert [c.name for c in jar] == ["cf_clearance"]
 
 
 def test_fetch_pdf_via_flaresolverr_returns_none_on_error() -> None:

@@ -1,7 +1,11 @@
 """Extract bibliographic metadata from academic HTML pages.
 
-Supports citation_* meta tags (Google Scholar spec), Dublin Core, OpenGraph,
-and JSON-LD ScholarlyArticle — covering ACM DL, IEEE, Springer, Elsevier, etc.
+Supports citation_* meta tags (Google Scholar spec) and JSON-LD
+ScholarlyArticle — covering ACM DL, IEEE, Springer, Elsevier, etc. — plus
+og:title / twitter:title as a last-resort title fallback.
+
+No Dublin Core (`DC.*` / `dcterms.*`) support: the docstring claimed it for a
+long time, but nothing here has ever parsed those keys.
 """
 
 from __future__ import annotations

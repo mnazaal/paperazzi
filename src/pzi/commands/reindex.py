@@ -1,4 +1,4 @@
-"""CLI runner for `pzi reindex`."""
+"""CLI runner for `pzi fix reindex`."""
 
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
     if not rename and result.get("changed"):
         print(
             "run with --rename-citekeys to apply "
-            "(this rewrites citekeys; see 'pzi reindex --help')",
+            "(this rewrites citekeys; see 'pzi fix reindex --help')",
             file=stdout,
         )
     return exit_codes.FINDINGS if findings else exit_codes.OK

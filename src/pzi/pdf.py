@@ -131,9 +131,15 @@ def fetch_pdf_via_desktop_browser_download(
                 record=record,
                 filename_format=filename_format,
             )
+            # Name the actual host: this path serves every host in
+            # desktop_fallback_hosts, which is configurable and whose *default*
+            # already includes Research Square, SSRN and Authorea -- so the
+            # hardcoded "bioRxiv/medRxiv" was wrong for three of five hosts
+            # before any user configuration.
             warning = (
-                "PDF attached from desktop browser download because direct "
-                "bioRxiv/medRxiv download was blocked."
+                f"PDF attached from desktop browser download because direct "
+                f"download from {normalized_hostname(url) or 'the publisher'} "
+                f"was blocked."
             )
             return local_path, warning
         _time.sleep(1)

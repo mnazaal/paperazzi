@@ -396,11 +396,11 @@ def build_parser() -> argparse.ArgumentParser:
     pdf_attach.add_argument("source", help="PDF URL or local file path")
     add_config(pdf_attach)
     add_single_target(pdf_attach)
-
-    # ── tag ──────────────────────────────────────────────────────────────
     pdf_attach.add_argument(
         "--json", action="store_true", help="emit the result as a JSON envelope",
     )
+
+    # ── tag ──────────────────────────────────────────────────────────────
     tag_parser = subparsers.add_parser("tag", help="Manage tags on BibTeX entries")
     tag_sub = tag_parser.add_subparsers(dest="tag_command", required=True, parser_class=_PziParser)
     tag_add_p = tag_sub.add_parser("add", help="Add tags to an entry")
@@ -435,7 +435,7 @@ def build_parser() -> argparse.ArgumentParser:
             "pzi search --tag systems --json",
         )),
     )
-    search_parser.add_argument("--query", help="match title and abstract text")
+    search_parser.add_argument("--query", help="match title, abstract, and note text")
     search_parser.add_argument("--author", help="match author name")
     search_parser.add_argument("--year", type=int, help="match publication year")
     search_parser.add_argument("--tag", help="match an attached tag")
