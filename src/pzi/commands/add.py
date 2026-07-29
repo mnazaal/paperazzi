@@ -291,12 +291,27 @@ def _run_batch(
         # Was hand-rolled with `json.dumps`, so it carried `items` by luck and
         # none of the other four envelope keys. `total`, `counts` and
         # `failures_file` still ride along as command-specific fields.
+        # A batch where something worked is not an "error": the exit code
+        # already distinguishes a partial run (PARTIAL) from a clean one, and
+        # calling a half-successful capture an error made `.status` contradict
+        # it — a script reading the envelope would treat "1 added, 1 failed" as
+        # a total failure. `import` reports the same situation as "ok" with the
+        # per-item reasons in `errors`; this now matches it. Only a batch that
+        # captured nothing at all is an error.
+        captured = counts["added"] + counts["exists"]
         cli_json.emit_result(
             {
-                "status": "error" if counts["failed"] else "ok",
+                "status": "error" if counts["failed"] and not captured else "ok",
                 "total": total,
                 "counts": counts,
                 "failures_file": str(failures_path) if failures_path else None,
+                # The documented failure channel: previously empty even when
+                # items had failed, leaving the reasons only inside `items[]`.
+                "errors": [
+                    f"{item['value']}: {first_error(item['result']) or 'failed'}"
+                    for item in items
+                    if _classify(item["result"]) == "failed"
+                ],
                 "items": items,
             },
             stdout,

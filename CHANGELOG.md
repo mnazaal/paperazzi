@@ -44,6 +44,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`add --from-file` no longer calls a partly-successful batch an error.** A
+  batch of "1 added, 1 failed" reported `"status": "error"` with an empty
+  `errors` list, contradicting its own exit code — `4` means *partly* failed, so
+  a script reading `.status` classified a half-successful capture as a total
+  failure. It now reports `"ok"` with the per-item reasons in `errors`, matching
+  `import`; only a batch that captured nothing at all is an error.
+
 - **Boolean environment variables no longer invert.** `bool("0")` is `True`, so
   `PZI_SKIP_BROWSER_HOOK=0` *enabled* the skip — as did
   `PZI_DISABLE_DESKTOP_BROWSER_FALLBACK=0` and `PZI_SKIP_AUTO_START=0`, despite

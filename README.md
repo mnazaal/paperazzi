@@ -422,3 +422,19 @@ pytest --cov=pzi --cov-report=term-missing -q
 .venv/bin/python -m build
 .venv/bin/twine check dist/*.tar.gz dist/*.whl
 ```
+
+The suite is hermetic: two autouse fixtures in `tests/conftest.py` pin DNS and
+refuse any non-loopback connection, so no test reaches the network.
+
+`tests/test_cli_end_to_end.py` covers three behaviours that look untestable and
+are not. Each spawns a subprocess, so they are slower than the rest:
+
+| Behaviour | What makes it testable |
+|---|---|
+| `pzi server` binds, enforces auth, serves | `PZI_SKIP_AUTO_START=1` makes the backend session a no-op, so it never clones translation-server |
+| `add --from-file` exits `4` on a partly-failed batch | `tests/stub_translation_server.py` — a loopback stand-in that resolves chosen inputs and refuses the rest, so a *mixed* batch is reproducible |
+| `pzi check` exits `5` when nothing is reachable | `unshare -rn` gives a network namespace with no route out and needs no root; skipped where unavailable |
+
+Prefer these over manual checks: anything verified only by hand stops being
+verified. If you add a behaviour that seems to need real network or the real
+translation-server, check whether one of the three levers above applies first.
