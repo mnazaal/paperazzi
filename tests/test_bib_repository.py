@@ -12,6 +12,7 @@ from pzi.bib_repository import (
     parse_bib_library,
     parse_bibtex,
     plan_bib_write,
+    preview_write_plan,
     read_bib_file,
     update_bib_entry,
     with_bib_lock,
@@ -681,3 +682,45 @@ def test_with_bib_lock_still_acquires_a_free_lock(tmp_path: Path) -> None:
     # Released, so a second acquisition succeeds too.
     with with_bib_lock(str(path), shared=True):
         pass
+
+
+def test_write_paths_parse_the_library_exactly_once(tmp_path: Path, monkeypatch) -> None:
+    """Each write path parsed the whole .bib twice, and dry-run-then-write four times.
+
+    `_render_write_plan` re-read the same in-memory source, re-parsed it,
+    re-projected every entry to a record and re-applied the plan — all of it
+    already done by its callers, under the same lock, on the same string. This
+    pins the collapse so it cannot silently regress.
+    """
+    from pzi import bib_repository
+
+    calls = {"n": 0}
+    real = bib_repository._parse_bib_library
+
+    def counting(source: str):
+        calls["n"] += 1
+        return real(source)
+
+    monkeypatch.setattr(bib_repository, "_parse_bib_library", counting)
+
+    path = tmp_path / "library.bib"
+    path.write_text("@article{a2024,\n  title = {A}\n}\n")
+
+    insert = plan_bib_write({"citekey": "b2024", "title": "B"}, [])
+    calls["n"] = 0
+    execute_write_plan(str(path), insert)
+    assert calls["n"] == 1, "insert re-parsed the library"
+
+    records = read_bib_file(str(path))["records"]
+    update = plan_bib_write({"citekey": "c2024", "title": "C"}, records)
+    calls["n"] = 0
+    preview_write_plan(str(path), update)
+    assert calls["n"] == 1, "preview re-parsed the library"
+
+    calls["n"] = 0
+    update_bib_entry(
+        str(path),
+        "a2024",
+        lambda entry, record: {**entry, "fields": {**entry["fields"], "year": "2024"}},
+    )
+    assert calls["n"] == 1, "update_bib_entry re-parsed the library"

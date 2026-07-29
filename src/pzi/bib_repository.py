@@ -332,30 +332,38 @@ def _update_library_blocks(
     return Library(blocks=new_blocks)
 
 
-def _render_write_plan(
+def _touched_index(plan: WritePlan) -> int | None:
+    """The existing block index a plan rewrites, or None for a pure insert.
+
+    Read the action *after* any rebase: rebasing can turn an insert into an
+    update against an existing block. An insert touches no existing block, so
+    None — meaning "rebuild nothing" — is the honest answer for it, not "rebuild
+    everything".
+    """
+    return plan["index"] if plan["action"] == "update" else None
+
+
+def _render_updated_library(
+    library: Library,
+    updated_entries: list[BibtexEntry],
     path: str,
-    source: str,
-    plan: WritePlan,
     *,
+    updated_index: int | None,
     file_path_style: str = "absolute",
 ) -> str:
-    """Render the full BibTeX text after applying a write plan."""
-    library = _parse_bib_library(source)
-    if plan["action"] == "update":
-        _validate_library_parseable(library)
-    entries, records = _library_to_entries_records(library, path)
+    """Serialize *library* with *updated_entries* applied to it.
 
-    if plan["action"] == "update":
-        _validate_update_plan_against_current(records, plan)
-    if plan["action"] == "insert":
-        plan = _rebase_insert_plan_against_current(records, entries, plan)
+    Takes what the caller already computed rather than recomputing it. The
+    previous `_render_write_plan` re-read the same in-memory source, re-parsed
+    the whole library, re-projected every entry to a record and re-applied the
+    plan — all of which its three callers had just done, under the same lock, on
+    the same string. Every write parsed the file twice; a dry-run followed by a
+    real write parsed it four times.
 
-    updated_entries = apply_write_plan(entries, plan)
-    # Read the action *after* the rebase above, which can turn an insert into an
-    # update against an existing block. An insert touches no existing block, so
-    # the empty set is the honest answer for it — not `None`, which would mean
-    # "rebuild everything".
-    updated_index = plan["index"] if plan["action"] == "update" else None
+    Collapsing the passes also tightens `_validate_bibtex_roundtrip`: it now
+    guards the exact entry list that gets serialized, rather than a first-pass
+    list that merely matched the written one by determinism.
+    """
     updated_library = _update_library_blocks(
         library,
         updated_entries,
@@ -404,7 +412,13 @@ def execute_write_plan(
         updated_entries = apply_write_plan(entries, plan)
         _validate_bibtex_roundtrip(updated_entries)
 
-        new_source = _render_write_plan(path, source, plan, file_path_style=file_path_style)
+        new_source = _render_updated_library(
+            library,
+            updated_entries,
+            path,
+            updated_index=_touched_index(plan),
+            file_path_style=file_path_style,
+        )
         if new_source != source:
             _write_bib_text_atomic(path, new_source)
         return updated_entries
@@ -587,8 +601,12 @@ def preview_write_plan(
         updated_entries = apply_write_plan(entries, plan)
         _validate_bibtex_roundtrip(updated_entries)
 
-        new_source = _render_write_plan(
-            path, source, plan, file_path_style=file_path_style
+        new_source = _render_updated_library(
+            library,
+            updated_entries,
+            path,
+            updated_index=_touched_index(plan),
+            file_path_style=file_path_style,
         )
         return {
             "changed": source != new_source,
@@ -715,20 +733,14 @@ def update_bib_entry(
         updated_record = bibtex_entry_to_record(updated_entry)
         if updated_entry != current_entry:
             entries[index] = updated_entry
-            new_source = _render_write_plan(
+            # `entries` already has the update applied at `index`, which is
+            # exactly what apply_write_plan would produce for this plan — so
+            # there is nothing left to re-derive from `source`.
+            new_source = _render_updated_library(
+                library,
+                entries,
                 path,
-                source,
-                {
-                    "action": "update",
-                    "index": index,
-                    "record": updated_record,
-                    "entry": updated_entry,
-                    "changed_fields": [
-                        field
-                        for field, value in updated_entry["fields"].items()
-                        if current_entry["fields"].get(field) != value
-                    ],
-                },
+                updated_index=index,
                 file_path_style=file_path_style,
             )
             if new_source != source:
