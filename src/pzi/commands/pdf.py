@@ -86,7 +86,7 @@ def run_pdf_command(
             ),
             stderr,
         )
-        return 2
+        return exit_codes.USAGE
 
     result = retry_pdf_fn(
         config_path=config_path,

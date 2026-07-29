@@ -57,7 +57,7 @@ def run_add_command(
     invalid = _validate_add_args(args, from_file=from_file)
     if invalid is not None:
         print_lines(usage_error_lines(("add",), invalid), stderr)
-        return 2
+        return exit_codes.USAGE
 
     # Reject unrecognized input (e.g. `pzi add l`) before starting the
     # translation-server or touching the bib — fail fast with no side effects.
@@ -166,7 +166,7 @@ def _capture_and_render(
         cli_json.emit_result(result, stdout, command="add")
         for warning in result["warnings"]:
             print(f"warning: {warning}", file=stderr)
-        return 0
+        return exit_codes.OK
 
     print(_render_add_success(result), file=stdout)
     if args.dry_run and result.get("diff"):
@@ -178,7 +178,7 @@ def _capture_and_render(
     suggestion = result.get("pdf_suggestion")
     if isinstance(suggestion, str) and suggestion:
         print(f"suggestion: {suggestion}", file=stderr)
-    return 0
+    return exit_codes.OK
 
 
 # ---------------------------------------------------------------------------

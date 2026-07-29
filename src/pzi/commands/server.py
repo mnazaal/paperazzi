@@ -6,6 +6,7 @@ import signal
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+from pzi import exit_codes
 from pzi.capture_context import resolve_api_auth_token
 from pzi.cli_server import build_server_plan
 from pzi.config import load_config_file
@@ -68,7 +69,7 @@ def run_server_command(args, *, home_dir, config_path, stdout, stderr) -> int:
     if config is None:
         with _sigterm_as_keyboard_interrupt():
             _serve()
-        return 0
+        return exit_codes.OK
 
     from pzi.ts_backend import backend_session
 
@@ -91,7 +92,7 @@ def run_server_command(args, *, home_dir, config_path, stdout, stderr) -> int:
         finally:
             if watchdog is not None:
                 watchdog.stop()
-    return 0
+    return exit_codes.OK
 
 
 def _maybe_start_watchdog(backend, *, stdout, stderr):

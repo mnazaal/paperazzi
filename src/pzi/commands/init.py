@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from typing import TextIO
 
-from pzi import setup_service
+from pzi import exit_codes, setup_service
 from pzi.config import default_data_home
 
 
@@ -69,4 +69,4 @@ def run_init_command(
             "then `playwright install chromium` (binaries also install on first use).",
             file=stdout,
         )
-    return 0
+    return exit_codes.OK

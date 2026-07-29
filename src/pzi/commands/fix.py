@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TextIO
 
+from pzi import exit_codes
 from pzi.commands.clean import run_clean_command
 from pzi.commands.dedupe import run_dedupe_command, run_merge_command
 from pzi.commands.reindex import run_reindex_command
@@ -28,7 +29,7 @@ def run_fix_command(
     runner = _SUBCOMMANDS.get(args.fix_command)
     if runner is None:  # pragma: no cover — argparse marks fix_command required
         print(f"unknown fix command: {args.fix_command}", file=stderr)
-        return 2
+        return exit_codes.USAGE
     return runner(
         args,
         home_dir=home_dir,

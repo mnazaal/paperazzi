@@ -32,7 +32,7 @@ def _run_list(args, home_dir, config_path, stdout, stderr, bib_selector) -> int:
         items = result["items"]
         if not items:
             print("(no entries)", file=stderr)
-            return 0
+            return exit_codes.OK
         for item in items:
             ck = item["citekey"]
             title = item.get("title", "") or ""
@@ -53,7 +53,7 @@ def _run_list(args, home_dir, config_path, stdout, stderr, bib_selector) -> int:
             f"(bib: {result['bib_name']}, sort: {result['sort']})",
             file=stderr,
         )
-        return 0
+        return exit_codes.OK
     print_lines(_error_lines("failed to list entries", result["errors"]), stderr)
     return exit_codes.ENVIRONMENT
 
@@ -103,7 +103,7 @@ def _run_detail(args, home_dir, config_path, stdout, stderr, bib_selector) -> in
     abstract = record.get("abstract")
     if isinstance(abstract, str) and abstract.strip():
         print(f"\nabstract:\n{abstract.strip()}", file=stdout)
-    return 0
+    return exit_codes.OK
 
 
 def _run_stats(args, home_dir, config_path, stdout, stderr, bib_selector) -> int:
@@ -117,7 +117,7 @@ def _run_stats(args, home_dir, config_path, stdout, stderr, bib_selector) -> int
         return exit_codes.OK if result["status"] == "ok" else exit_codes.ENVIRONMENT
     if result["status"] == "ok":
         print_lines(_render_bib_stats(result), stdout)
-        return 0
+        return exit_codes.OK
     print_lines(_error_lines("stats failed", result["errors"]), stderr)
     return exit_codes.ENVIRONMENT
 
