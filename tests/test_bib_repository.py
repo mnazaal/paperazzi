@@ -724,3 +724,35 @@ def test_write_paths_parse_the_library_exactly_once(tmp_path: Path, monkeypatch)
         lambda entry, record: {**entry, "fields": {**entry["fields"], "year": "2024"}},
     )
     assert calls["n"] == 1, "update_bib_entry re-parsed the library"
+
+
+def test_write_refusal_names_the_duplicate_and_its_real_line(tmp_path: Path) -> None:
+    """The refusal message interpolated a 0-based line index.
+
+    A duplicate whose second block starts on file line 4 was reported as
+    "around line 3", and the message named no citekey at all — while
+    `describe_failed_blocks` had a correct, specific message all along.
+    """
+    path = tmp_path / "library.bib"
+    path.write_text(
+        "@article{smith2024,\n"
+        "  title = {First}\n"
+        "}\n"
+        "@article{smith2024,\n"
+        "  title = {Second}\n"
+        "}\n"
+    )
+
+    with pytest.raises(ValueError) as excinfo:
+        update_bib_entry(
+            str(path),
+            "smith2024",
+            lambda entry, record: {**entry, "fields": {**entry["fields"], "year": "2024"}},
+        )
+
+    message = str(excinfo.value)
+    assert "duplicate citekey 'smith2024'" in message
+    assert "at line 4" in message
+    assert "line 3" not in message
+    # The file is untouched: refusing to rewrite is the whole point.
+    assert path.read_text().count("smith2024") == 2

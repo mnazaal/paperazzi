@@ -136,15 +136,20 @@ def parse_bibtex_with_failures(text: str) -> tuple[list[BibtexEntry], list[str]]
 
 
 def _validate_library_parseable(library: Library) -> None:
-    """Raise ValueError if the library has unparseable blocks."""
+    """Raise ValueError if the library has unparseable blocks.
+
+    Guards the *write* paths: rewriting a file whose blocks the parser never
+    saw would drop them. Read paths should report the same blocks via
+    :func:`describe_failed_blocks` and carry on.
+    """
     if not library.failed_blocks:
         return
-    first = library.failed_blocks[0]
-    raise ValueError(
-        "malformed BibTeX: refusing to patch existing source; "
-        f"parser error at around line {first.start_line}. "
-        "Fix the .bib file manually or append a new entry instead."
-    )
+    # `describe_failed_blocks` names the citekey for a duplicate and adds the
+    # 1-based line; reuse it rather than re-deriving a worse message. The old
+    # text interpolated the raw 0-based `start_line`, so a duplicate on line 4
+    # was reported as "around line 3".
+    detail = describe_failed_blocks(library)[0]
+    raise ValueError(f"malformed BibTeX: refusing to rewrite the file — {detail}")
 
 
 def _library_to_entries_records(

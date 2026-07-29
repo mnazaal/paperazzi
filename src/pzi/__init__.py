@@ -6,9 +6,19 @@ module that defines it (``pzi.bib_repository``, ``pzi.bibtex``, …), which is
 what the codebase itself does.
 """
 
+import logging
 from collections.abc import Callable
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as metadata_version
+
+# bibtexparser logs `Unknown block type <class '...DuplicateBlockKeyBlock'>` at
+# WARNING for every failed block its middlewares walk past. pzi configures no
+# logging, so Python's `lastResort` handler printed that bare to stderr during
+# an ordinary `pzi entries` run. Attaching a handler stops `lastResort` firing
+# without discarding anything we rely on: failed blocks are read straight off
+# `library.failed_blocks` and reported in our own words by
+# `bib_serialize.describe_failed_blocks`.
+logging.getLogger("bibtexparser").addHandler(logging.NullHandler())
 
 
 def package_version(

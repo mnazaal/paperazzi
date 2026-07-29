@@ -1733,3 +1733,46 @@ def test_plain_init_writes_the_api_token_its_template_promises(tmp_path: Path) -
     assert token_path.stat().st_mode & 0o777 == 0o600
     assert token_path.read_text().strip(), "token file is empty"
     assert "api_token" in stdout.getvalue()
+
+
+def test_no_bibtexparser_warning_leaks_to_the_terminal(tmp_path: Path) -> None:
+    """`Unknown block type <class '...DuplicateBlockKeyBlock'>` reached the user.
+
+    It is bibtexparser's own logger.warning, printed bare by Python's
+    `lastResort` handler because pzi configured no logging at all. It appeared
+    during an ordinary `pzi entries` run on a library with a duplicate citekey.
+
+    Run in a subprocess deliberately: pytest's logging plugin installs a root
+    handler, which suppresses `lastResort` on its own — so an in-process version
+    of this test passes whether or not the fix is present, and proves nothing.
+    """
+    import subprocess
+    import sys
+
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text(
+        "@article{smith2024,\n  title = {First}\n}\n"
+        "@article{smith2024,\n  title = {Second}\n}\n"
+    )
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\ndefault = true\n'
+    )
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; from pzi.cli import run_cli; "
+            "sys.exit(run_cli(['entries', '--config', sys.argv[1]]))",
+            str(config_path),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert "Unknown block type" not in proc.stdout
+    assert "Unknown block type" not in proc.stderr
+    # The command still works; this is about the stray log line only.
+    assert "smith2024" in proc.stdout
