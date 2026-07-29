@@ -199,11 +199,14 @@ def _normalize_app_config(
     raw_api_allowed_origins = raw.get("api_allowed_origins")
     normalized_api_allowed_origins: tuple[str, ...] | None = None
     if isinstance(raw_api_allowed_origins, list):
+        # No trailing `or None`: an explicit `[]` has to survive as `()` so the
+        # user can say "allow no origins at all". `None` keeps meaning "the key
+        # was absent", which is what selects the defaults downstream.
         normalized_api_allowed_origins = tuple(
             origin.strip()
             for origin in raw_api_allowed_origins
             if isinstance(origin, str) and origin.strip()
-        ) or None
+        )
 
     raw_capture_source_dirs = raw.get("capture_source_dirs")
     normalized_capture_source_dirs: tuple[str, ...] = ()
@@ -381,6 +384,30 @@ def validate_app_config(
     raw_page_metadata_cmd = raw.get("page_metadata_cmd")
     if raw_page_metadata_cmd is not None and not isinstance(raw_page_metadata_cmd, str):
         errors.append("page_metadata_cmd must be a string when provided")
+
+    # `_opt_str_from_raw` returns None for any non-string, so a wrong type reads
+    # as "unset" and vanishes. That is exactly the silent fallback the
+    # `node_path` docs disclaim ("a set-but-broken value is a hard error"), and
+    # it applied to all five of these keys.
+    for key in (
+        "flaresolverr_url",
+        "api_url",
+        "browser_pdf_cmd",
+        "node_path",
+        "browser_profile_path",
+    ):
+        value = raw.get(key)
+        if value is not None and not isinstance(value, str):
+            errors.append(f"{key} must be a string when provided")
+
+    # Both are URLs and both were discarded in silence when malformed:
+    # `flaresolverr_url` was nulled by the normalizer with no error at all,
+    # which left the feature off while `add_planning` told the user to
+    # configure the thing they had configured.
+    for key in ("flaresolverr_url", "api_url"):
+        value = raw.get(key)
+        if isinstance(value, str) and value.strip() and not _is_http_url(value.strip()):
+            errors.append(f"{key} must be an http or https URL")
 
     raw_page_metadata_timeout_seconds = raw.get("page_metadata_timeout_seconds", 5)
     if (
@@ -631,7 +658,10 @@ def _normalize_host_list(raw: list[object]) -> list[str]:
         if host and host not in seen:
             hosts.append(host)
             seen.add(host)
-    return hosts if hosts else DEFAULT_DESKTOP_FALLBACK_HOSTS
+    # Returns an empty list unchanged: the caller decides what absent means, and
+    # collapsing `[]` to the defaults here made "no fallback hosts"
+    # inexpressible.
+    return hosts
 
 
 # ---------------------------------------------------------------------------
@@ -818,7 +848,10 @@ def dump_app_config(config: AppConfig) -> str:
         lines.append(f"rate_limit_rpm = {rate_limit_rpm}")
 
     desktop_hosts = config.get("desktop_fallback_hosts", [])
-    if desktop_hosts and desktop_hosts != DEFAULT_DESKTOP_FALLBACK_HOSTS:
+    # `!=` alone, not `desktop_hosts and ...`: an explicit empty list is a
+    # meaningful setting ("no host needs the desktop fallback") and truthiness
+    # would drop it, so a round-trip silently restored the defaults.
+    if desktop_hosts != DEFAULT_DESKTOP_FALLBACK_HOSTS:
         dq = '"'
         lines.append(
             f"desktop_fallback_hosts = [{', '.join(dq + _escape(h) + dq for h in desktop_hosts)}]"

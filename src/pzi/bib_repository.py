@@ -6,7 +6,9 @@ import contextlib
 import difflib
 import hashlib
 import os
+import shutil
 import tempfile
+import time
 from collections.abc import Callable, Collection, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -18,6 +20,7 @@ import portalocker
 from bibtexparser.library import Library
 from bibtexparser.model import Entry as BibtexEntryV2
 
+from pzi import exit_codes
 from pzi.bib_serialize import (
     _bibtex_entry_to_library_entry,
     _library_to_entries_records,
@@ -41,6 +44,7 @@ from pzi.bibtex import (
     record_to_bibtex_entry,
     resolve_citekey_collision,
 )
+from pzi.errors import PziError
 from pzi.fileio import fsync_parent_dir, read_text_utf8
 from pzi.identifiers import detect_preprint_source
 from pzi.similarity import (
@@ -102,8 +106,50 @@ class MergeDecision(TypedDict):
     changed_fields: list[str]
 
 
+#: How long to wait for a bib lock before giving up. Generous on purpose: the
+#: batch write path holds the lock across an entire import, PDF downloads
+#: included, so anything short would fail legitimate concurrent use. Its job is
+#: to turn "hangs forever behind a wedged holder" into the exit 5 that
+#: `exit_codes.ENVIRONMENT` already promises for a locked bib.
+LOCK_TIMEOUT_SECONDS = 300.0
+#: How often the wait polls while blocked.
+LOCK_POLL_SECONDS = 0.25
+
+
+def acquire_lock_with_timeout(
+    lock_fh: Any,
+    flags: portalocker.LockFlags,
+    *,
+    bib_path: str,
+    timeout: float,
+) -> None:
+    """Take the lock, giving up after *timeout* instead of blocking forever.
+
+    `portalocker.lock` takes no timeout and blocks in the kernel, so a wedged
+    holder hung pzi silently with no message and no exit code — the one case
+    `exit_codes.ENVIRONMENT` names but nothing could produce, since
+    `ConcurrentEditError` only fires *after* the lock is acquired.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            portalocker.lock(lock_fh, flags | portalocker.LOCK_NB)
+            return
+        except portalocker.exceptions.BaseLockException:
+            if time.monotonic() >= deadline:
+                raise PziError(
+                    f"timed out after {timeout:.0f}s waiting for the lock on "
+                    f"{bib_path} — another pzi process may still be running, or "
+                    f"a stale {bib_path}.lock may need removing",
+                    code=exit_codes.ENVIRONMENT,
+                ) from None
+            time.sleep(LOCK_POLL_SECONDS)
+
+
 @contextmanager
-def with_bib_lock(bib_path: str, shared: bool = False) -> Iterator[None]:
+def with_bib_lock(
+    bib_path: str, shared: bool = False, *, timeout: float = LOCK_TIMEOUT_SECONDS
+) -> Iterator[None]:
     """Take an advisory lock scoped to a bib file.
 
     Acquires an exclusive lock by default (for writes/updates).
@@ -116,7 +162,7 @@ def with_bib_lock(bib_path: str, shared: bool = False) -> Iterator[None]:
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     flags = portalocker.LOCK_SH if shared else portalocker.LOCK_EX
     with open(str(lock_path), "a") as lock_fh:
-        portalocker.lock(lock_fh, flags)
+        acquire_lock_with_timeout(lock_fh, flags, bib_path=bib_path, timeout=timeout)
         try:
             yield
         finally:
@@ -746,12 +792,21 @@ def update_bib_entry(
 # ---------------------------------------------------------------------------
 
 
-def delete_bib_entry(path: str, citekey: str) -> UpdateBibEntryResult:
+def delete_bib_entry(
+    path: str, citekey: str, *, backup_path: Path | None = None
+) -> UpdateBibEntryResult:
     """Delete the first entry matching *citekey*, preserving all other blocks.
 
     Drops only the matching ``@entry`` block; comments, ``@string`` macros,
     ``@preamble`` blocks, and every other entry (including their ``file``
     paths) are left exactly as written.
+
+    *backup_path*, when given, is written from the on-disk file **inside this
+    lock**, immediately before the delete. The caller cannot do it itself: this
+    function takes the only exclusive lock, and `with_bib_lock` opens a fresh
+    descriptor each time, so an outer lock in the same process would block on
+    itself. Copying outside the lock left the backup a snapshot of a version
+    another writer may already have replaced.
     """
     with with_bib_lock(path):
         source = _read_bib_source(path)
@@ -772,6 +827,13 @@ def delete_bib_entry(path: str, citekey: str) -> UpdateBibEntryResult:
         new_library = Library(blocks=new_blocks)
         new_source = _serialize_library(new_library)
         if new_source != source:
+            if backup_path is not None:
+                # Under the lock and immediately before the write, so the backup
+                # is exactly the content being replaced — and written only when
+                # something is actually deleted, so a missing citekey leaves no
+                # stray `.bak`.
+                backup_path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+                shutil.copy2(path, backup_path)
             _write_bib_text_atomic(path, new_source)
         entries, _records = _library_to_entries_records(new_library, path)
         return {"found": True, "entries": entries, "entry": None, "record": None}

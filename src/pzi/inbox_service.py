@@ -15,6 +15,10 @@ from typing import Any, NotRequired, TypedDict
 
 import portalocker
 
+from pzi.bib_repository import (
+    LOCK_TIMEOUT_SECONDS,
+    acquire_lock_with_timeout,
+)
 from pzi.fileio import fsync_parent_dir
 from pzi.tag_service import normalize_tags
 
@@ -89,7 +93,14 @@ def with_inbox_lock(inbox_path: Path) -> Iterator[None]:
     lock_path = Path(str(inbox_path) + ".lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with open(str(lock_path), "a") as lock_fh:
-        portalocker.lock(lock_fh, portalocker.LOCK_EX)
+        # Same reasoning as `with_bib_lock`: a bare `portalocker.lock` blocks in
+        # the kernel forever, so a wedged holder hangs the drain with no message.
+        acquire_lock_with_timeout(
+            lock_fh,
+            portalocker.LOCK_EX,
+            bib_path=str(inbox_path),
+            timeout=LOCK_TIMEOUT_SECONDS,
+        )
         try:
             yield
         finally:

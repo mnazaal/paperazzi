@@ -638,3 +638,88 @@ def test_execute_write_plan_rebase_keeps_on_disk_entry_type_and_fields(
     assert entry["fields"]["volume"] == "12"
     assert entry["fields"]["pages"] == "1--10"
     assert entry["fields"]["publisher"] == "ACM"
+
+
+def test_delete_bib_entry_writes_the_backup_under_its_own_lock(tmp_path: Path) -> None:
+    """The backup must reflect the file the delete actually operated on.
+
+    It used to be copied before the exclusive lock was taken, so a writer
+    interleaving in that window made the `.bak` a snapshot of a version that no
+    longer existed — restoring it would revert that writer's work too.
+    """
+    from pzi.bib_repository import delete_bib_entry
+
+    path = tmp_path / "library.bib"
+    path.write_text(
+        "@article{keep2024, title = {Keep}}\n@article{drop2024, title = {Drop}}\n"
+    )
+    backup = tmp_path / "library.bak"
+
+    result = delete_bib_entry(str(path), "drop2024", backup_path=backup)
+
+    assert result["found"] is True
+    # The backup holds the pre-delete content, taken under the same lock.
+    assert "drop2024" in backup.read_text()
+    assert "keep2024" in backup.read_text()
+    # ...and the live file no longer does.
+    assert "drop2024" not in path.read_text()
+    assert "keep2024" in path.read_text()
+
+
+def test_delete_bib_entry_writes_no_backup_when_the_citekey_is_missing(
+    tmp_path: Path,
+) -> None:
+    """A no-op delete should not leave a stray .bak behind."""
+    from pzi.bib_repository import delete_bib_entry
+
+    path = tmp_path / "library.bib"
+    path.write_text("@article{keep2024, title = {Keep}}\n")
+    backup = tmp_path / "library.bak"
+
+    result = delete_bib_entry(str(path), "nosuch2024", backup_path=backup)
+
+    assert result["found"] is False
+    assert not backup.exists()
+
+
+def test_with_bib_lock_times_out_instead_of_blocking_forever(tmp_path: Path) -> None:
+    """A lock held by another process used to hang pzi silently and forever.
+
+    `portalocker.lock` takes no timeout and blocks in the kernel, and
+    `ConcurrentEditError` only fires *after* the lock is acquired — so nothing
+    could produce the exit 5 that `exit_codes` documents for a locked bib.
+    """
+    import portalocker
+
+    from pzi.bib_repository import with_bib_lock
+    from pzi.errors import PziError
+    from pzi.exit_codes import ENVIRONMENT
+
+    path = tmp_path / "library.bib"
+    path.write_text("@article{a2024, title = {A}}\n")
+    lock_path = tmp_path / "library.bib.lock"
+
+    # Hold the lock on a separate open-file-description, as another process would.
+    with open(str(lock_path), "a") as holder:
+        portalocker.lock(holder, portalocker.LOCK_EX | portalocker.LOCK_NB)
+        with pytest.raises(PziError) as excinfo:
+            with with_bib_lock(str(path), timeout=0.05):
+                pytest.fail("acquired a lock that was already held exclusively")
+
+    assert excinfo.value.code == ENVIRONMENT
+    assert str(path) in str(excinfo.value)
+    assert "timed out" in str(excinfo.value)
+
+
+def test_with_bib_lock_still_acquires_a_free_lock(tmp_path: Path) -> None:
+    """The non-blocking retry loop must not break the ordinary uncontended path."""
+    from pzi.bib_repository import with_bib_lock
+
+    path = tmp_path / "library.bib"
+    path.write_text("@article{a2024, title = {A}}\n")
+
+    with with_bib_lock(str(path)):
+        pass
+    # Released, so a second acquisition succeeds too.
+    with with_bib_lock(str(path), shared=True):
+        pass

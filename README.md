@@ -170,7 +170,7 @@ Shared flags: every command accepts `[--config PATH]` to point at a config file 
 | 2 | Usage error (unknown command, bad or missing arguments) |
 | 3 | Entry not found (unknown citekey) |
 | 4 | Batch partly failed — some items succeeded, some did not (`add --from-file`, `import`) |
-| 5 | Could not run: unreadable or invalid config, unknown `--target`, externally modified bib, permission denied, unreachable service |
+| 5 | Could not run: unreadable or invalid config, unknown `--target`, a locked or externally modified bib, permission denied, unreachable service |
 | 130 / 141 | Interrupted (SIGINT) / downstream pipe closed (SIGPIPE) |
 
 Note that `1` never means "the command failed" — a failure to run is always `5`,

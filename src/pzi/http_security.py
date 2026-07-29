@@ -86,9 +86,13 @@ def build_http_security_config(
     listen_host: str = "127.0.0.1",
 ) -> HttpSecurityConfig:
     """Normalize HTTP security knobs without touching request state."""
+    # `is None` rather than falsiness: an explicitly empty list means "allow no
+    # cross-origin requests", and `or` silently turned that into the permissive
+    # default set — including `chrome-extension://`.
+    configured = DEFAULT_ALLOWED_ORIGINS if allowed_origins is None else allowed_origins
     origins = tuple(
         origin.strip()
-        for origin in (allowed_origins or DEFAULT_ALLOWED_ORIGINS)
+        for origin in configured
         if isinstance(origin, str) and origin.strip()
     )
     normalized_token = (

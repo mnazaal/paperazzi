@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 from typing import Any, NotRequired, TypeAlias, TypedDict
 
@@ -362,10 +361,13 @@ def delete_entry(
             "errors": [],
         }
 
+    # The copy happens inside `delete_bib_entry`'s exclusive lock, immediately
+    # before the write. Doing it here left a window in which another writer
+    # could rewrite the bib, making this `.bak` — which the result advertises as
+    # the undo artifact — a snapshot of a version that no longer existed, so
+    # restoring it would revert the other writer's work too.
     backup_path = _backup_path_for_delete(bib_path, citekey)
-    backup_path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
-    shutil.copy2(bib_path, backup_path)
-    delete_result = delete_bib_entry(bib_path, citekey)
+    delete_result = delete_bib_entry(bib_path, citekey, backup_path=backup_path)
     if not delete_result["found"]:
         return {
             "status": "error",

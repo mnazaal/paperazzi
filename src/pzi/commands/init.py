@@ -21,10 +21,14 @@ def run_init_command(
 
     dest.parent.mkdir(parents=True, exist_ok=True)
 
-    token_path: Path | None = None
+    # Provisioned on both paths: the template `init` copies states outright that
+    # "`pzi init` writes a token to <data-home>/api_token (0600)", so the plain
+    # path used to ship a config asserting a file it had not created. The read
+    # side already auto-discovers it (`capture_context`), so writing it here is
+    # all that was missing.
+    data_home = Path(default_data_home(home_dir))
+    token_path: Path = setup_service.provision_api_token(data_home)
     if args.setup:
-        data_home = Path(default_data_home(home_dir))
-        token_path = setup_service.provision_api_token(data_home)
         content = setup_service.render_config(
             bib_name=args.name,
             bib_path=args.bib,
@@ -49,13 +53,12 @@ def run_init_command(
     os.chmod(dest, 0o600)
     print(f"created {dest} (mode 0600)", file=stdout)
 
-    if args.setup and token_path is not None:
-        print(
-            f"API auth token written to {token_path} (mode 0600). pzi auto-reads "
-            "it at runtime, so config.toml holds no secret or path and is safe to "
-            "commit. To use a manager instead, set `api_auth_token_cmd`.",
-            file=stdout,
-        )
+    print(
+        f"API auth token written to {token_path} (mode 0600). pzi auto-reads "
+        "it at runtime, so config.toml holds no secret or path and is safe to "
+        "commit. To use a manager instead, set `api_auth_token_cmd`.",
+        file=stdout,
+    )
 
     if args.setup:
         print(

@@ -98,7 +98,10 @@ def needs_desktop_browser_fallback(url: str, *, hosts: set[str] | None = None) -
     hostname = normalized_hostname(url)
     if hostname is None:
         return False
-    return hostname in (hosts or set(DEFAULT_DESKTOP_FALLBACK_HOSTS))
+    # `is None` rather than falsiness — an empty set means "no host needs the
+    # desktop fallback", which `or` turned back into the default list.
+    known = set(DEFAULT_DESKTOP_FALLBACK_HOSTS) if hosts is None else hosts
+    return hostname in known
 
 
 def candidate_matches_requested_pdf_name(

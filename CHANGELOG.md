@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **`pzi init` now provisions the API auth token on the plain path too**, not
+  only under `--setup`. The template it copies states that "`pzi init` writes a
+  token to `<data-home>/api_token` (0600)", so the default path shipped a config
+  asserting a file it had never created, and the server started with
+  `auth: DISABLED`. The token is written 0600 and auto-read at runtime, so
+  `config.toml` still holds no secret. `docs/security.md` no longer describes the
+  token as "None (optional)" or "stored in plain text in `config.toml`" — both
+  predated the `api_token`-file design.
+- **An explicit empty `api_allowed_origins = []` now means "no cross-origin
+  requests"**, instead of silently reverting to the permissive defaults
+  (`chrome-extension://`, `moz-extension://`, localhost). The default was
+  re-expanded at two layers — config normalization and
+  `build_http_security_config` — so writing `[]` to lock the API down had the
+  opposite of the intended effect. Omitting the key still selects the defaults.
+
 - **`POST /capture` no longer accepts arbitrary local filesystem paths.** Its
   SSRF check was conditional on the value having a URL scheme, so a bare path
   skipped it entirely: the server would read the file (sending extracted text to
@@ -33,6 +48,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   document now records both controls and the qualification.
 
 ### Fixed
+
+- **A held bib lock no longer hangs pzi forever.** `with_bib_lock` called
+  `portalocker.lock`, which takes no timeout and blocks in the kernel;
+  `ConcurrentEditError` only fires *after* the lock is acquired, so nothing could
+  produce the exit 5 that `exit_codes` documents for "a locked or externally
+  modified bib". Waits now time out after 300s — well above any legitimate hold,
+  since a batch import keeps the lock for the whole run — and report exit 5
+  naming the bib. `inbox_service` had the same blocking pattern and gets the same
+  treatment. `README.md`'s exit-code table now matches `exit_codes.py`.
+- **`pzi delete`'s backup is taken under the exclusive lock** that guards the
+  write, rather than before it. Another writer could rewrite the bib in that
+  window, making the `.bak` the command advertises as the undo artifact a
+  snapshot of a version that no longer existed — restoring it would have reverted
+  that writer's work too. The backup is also no longer written when the citekey
+  is absent, so a no-op delete leaves no stray file.
+- **Five optional string config keys reject a wrong type instead of discarding
+  it**: `flaresolverr_url`, `api_url`, `browser_pdf_cmd`, `node_path`, and
+  `browser_profile_path`. A non-string was indistinguishable from unset, so
+  `node_path = 22` took exactly the silent fallback that the template, `README`,
+  and this changelog all disclaim ("a set-but-broken value is a hard error").
+  `api_url` and `flaresolverr_url` are additionally checked for an http(s)
+  scheme; a schemeless `flaresolverr_url` used to be nulled without a word,
+  leaving the user who had configured it told to configure it.
+- **`desktop_fallback_hosts = []` now means "no host needs the desktop
+  fallback"** rather than re-expanding the default host list, which happened at
+  three separate layers. An explicit empty list also round-trips through
+  `dump_app_config`, which previously dropped it as falsy.
+
 
 - **The HTTP server no longer drops the connection on an unexpected error.**
   `BaseHTTPRequestHandler` catches only `TimeoutError`, so any other exception

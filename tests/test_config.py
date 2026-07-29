@@ -424,3 +424,123 @@ def test_validate_app_config_accepts_the_documented_template_default() -> None:
 
     assert errors == []
     assert config is not None
+
+
+def test_validate_app_config_rejects_wrong_types_for_optional_string_keys() -> None:
+    """A wrong type used to read as "unset" and vanish.
+
+    `_opt_str_from_raw` returns None for any non-string, so `node_path = 22`
+    took exactly the silent fallback the template, README and CHANGELOG all
+    disclaim ("a set-but-broken value is a hard error, not a silent fallback").
+    """
+    for key in (
+        "flaresolverr_url",
+        "api_url",
+        "browser_pdf_cmd",
+        "node_path",
+        "browser_profile_path",
+    ):
+        config, errors = validate_app_config(
+            {key: 22, "bibs": [{"name": "ml", "path": "~/ml.bib"}]}, home_dir=HOME
+        )
+        assert config is None, key
+        assert f"{key} must be a string when provided" in errors, key
+
+
+def test_validate_app_config_rejects_a_schemeless_flaresolverr_url() -> None:
+    """It was nulled by the normalizer with no error, so the feature went off
+    silently — and `add_planning` then told the user to configure it."""
+    config, errors = validate_app_config(
+        {
+            "flaresolverr_url": "127.0.0.1:8191",
+            "bibs": [{"name": "ml", "path": "~/ml.bib"}],
+        },
+        home_dir=HOME,
+    )
+
+    assert config is None
+    assert "flaresolverr_url must be an http or https URL" in errors
+
+
+def test_validate_app_config_still_accepts_a_well_formed_flaresolverr_url() -> None:
+    config, errors = validate_app_config(
+        {
+            "flaresolverr_url": "http://127.0.0.1:8191",
+            "bibs": [{"name": "ml", "path": "~/ml.bib"}],
+        },
+        home_dir=HOME,
+    )
+
+    assert errors == []
+    assert config is not None
+    assert config["flaresolverr_url"] == "http://127.0.0.1:8191"
+
+
+def test_explicit_empty_api_allowed_origins_means_none(tmp_path) -> None:
+    """`[]` used to revert to the permissive defaults at two separate layers.
+
+    A user writing this means "allow no cross-origin requests"; they silently
+    got `chrome-extension://`, `moz-extension://` and localhost instead.
+    """
+    from pzi.http_security import build_http_security_config
+
+    config, errors = validate_app_config(
+        {"api_allowed_origins": [], "bibs": [{"name": "ml", "path": "~/ml.bib"}]},
+        home_dir=HOME,
+    )
+
+    assert errors == []
+    assert config is not None
+    assert config["api_allowed_origins"] == ()
+    # ...and it survives the second `or` in the consumer.
+    security = build_http_security_config(allowed_origins=config["api_allowed_origins"])
+    assert security["allowed_origins"] == ()
+
+
+def test_absent_api_allowed_origins_still_means_defaults() -> None:
+    from pzi.http_security import DEFAULT_ALLOWED_ORIGINS, build_http_security_config
+
+    config, errors = validate_app_config(
+        {"bibs": [{"name": "ml", "path": "~/ml.bib"}]}, home_dir=HOME
+    )
+
+    assert errors == []
+    assert config is not None
+    assert config["api_allowed_origins"] is None
+    security = build_http_security_config(allowed_origins=config["api_allowed_origins"])
+    assert security["allowed_origins"] == DEFAULT_ALLOWED_ORIGINS
+
+
+def test_explicit_empty_desktop_fallback_hosts_means_none() -> None:
+    """Same shape, and the default was re-expanded at three layers here."""
+    from pzi.pdf_planning import needs_desktop_browser_fallback
+
+    config, errors = validate_app_config(
+        {"desktop_fallback_hosts": [], "bibs": [{"name": "ml", "path": "~/ml.bib"}]},
+        home_dir=HOME,
+    )
+
+    assert errors == []
+    assert config is not None
+    assert config["desktop_fallback_hosts"] == []
+    # biorxiv is in the default set, so this is the discriminating case.
+    assert not needs_desktop_browser_fallback(
+        "https://www.biorxiv.org/content/10.1101/x.pdf",
+        hosts=set(config["desktop_fallback_hosts"]),
+    )
+
+
+def test_absent_desktop_fallback_hosts_still_means_defaults() -> None:
+    from pzi.pdf_planning import needs_desktop_browser_fallback
+
+    config, errors = validate_app_config(
+        {"bibs": [{"name": "ml", "path": "~/ml.bib"}]}, home_dir=HOME
+    )
+
+    assert errors == []
+    assert config is not None
+    assert "biorxiv.org" in config["desktop_fallback_hosts"]
+    assert needs_desktop_browser_fallback(
+        "https://www.biorxiv.org/content/10.1101/x.pdf",
+        hosts=set(config["desktop_fallback_hosts"]),
+    )

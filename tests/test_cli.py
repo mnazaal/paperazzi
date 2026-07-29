@@ -1676,3 +1676,25 @@ def test_cli_failing_commands_still_emit_one_envelope(
     assert _ENVELOPE_KEYS <= set(parsed), parsed
     assert parsed["status"] == "error", parsed
     assert parsed["errors"], "the documented failure channel must not be empty"
+
+
+def test_plain_init_writes_the_api_token_its_template_promises(tmp_path: Path) -> None:
+    """The copied template says "`pzi init` writes a token to <data-home>/api_token
+    (0600)", but the plain path never created one — so the common case shipped a
+    config asserting a file that did not exist."""
+    config_path = tmp_path / "config.toml"
+    stdout = StringIO()
+
+    exit_code = run_cli(
+        ["init", "--config", str(config_path)],
+        home_dir=str(tmp_path), stdout=stdout, stderr=StringIO(),
+    )
+
+    assert exit_code == exit_codes.OK
+    from pzi.config import default_data_home
+
+    token_path = Path(default_data_home(str(tmp_path))) / "api_token"
+    assert token_path.is_file(), "plain `init` did not provision the token"
+    assert token_path.stat().st_mode & 0o777 == 0o600
+    assert token_path.read_text().strip(), "token file is empty"
+    assert "api_token" in stdout.getvalue()
