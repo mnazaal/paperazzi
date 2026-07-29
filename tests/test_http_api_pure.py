@@ -807,7 +807,7 @@ def test_post_capture_emits_pdf_request_and_stores_attach_session(monkeypatch) -
         "pdf_gateway",
         "article_page",
     ]
-    session = store.get("req-1")
+    session = store.claim("req-1")
     assert session is not None
     assert session.citekey == "poborchaya2022analysis"
     assert session.bib == "main"
@@ -929,7 +929,8 @@ def test_post_attach_raw_with_request_id_requires_valid_attach_token(monkeypatch
     assert ok_status == 200
     assert ok_body["status"] == "ok"
     assert called["kwargs"]["citekey"] == "smith2024"
-    assert store.get("req-1") is None
+    # A successful attach consumes the session: nothing left to claim.
+    assert store.claim("req-1") is None
 
 
 def test_post_attach_bytes_with_request_id_requires_valid_attach_token(monkeypatch) -> None:
@@ -1000,7 +1001,8 @@ def test_post_attach_bytes_with_request_id_requires_valid_attach_token(monkeypat
     assert ok_status == 200
     assert ok_body["status"] == "ok"
     assert called["kwargs"]["citekey"] == "smith2024"
-    assert store.get("req-1") is None
+    # A successful attach consumes the session: nothing left to claim.
+    assert store.claim("req-1") is None
 
 
 def test_http_refuses_a_bib_path_that_is_not_a_configured_library(monkeypatch) -> None:

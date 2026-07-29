@@ -2,7 +2,7 @@ from pzi.pdf_attach_session import build_attach_session
 from pzi.pdf_attach_session_store import AttachSessionStore
 
 
-def test_attach_session_store_saves_gets_and_consumes_session() -> None:
+def test_attach_session_store_saves_and_claims_session() -> None:
     store = AttachSessionStore(clock=lambda: 200.0)
     session = build_attach_session(
         request_id="req-1",
@@ -17,14 +17,12 @@ def test_attach_session_store_saves_gets_and_consumes_session() -> None:
 
     store.put(session)
 
-    assert store.get("req-1") == session
-    consumed = store.consume("req-1")
-    assert consumed is not None
-    assert consumed.used is True
-    assert store.get("req-1") is None
+    assert store.claim("req-1") == session
+    # Claiming pops, so the session is gone for any later claimant.
+    assert store.claim("req-1") is None
 
 
-def test_attach_session_store_prunes_expired_sessions_on_put_and_get() -> None:
+def test_attach_session_store_prunes_expired_sessions_on_put() -> None:
     store = AttachSessionStore(clock=lambda: 1000.0)
     expired = build_attach_session(
         request_id="old",
@@ -50,14 +48,14 @@ def test_attach_session_store_prunes_expired_sessions_on_put_and_get() -> None:
     store.put(expired)
     store.put(fresh)
 
-    assert store.get("old") is None
-    assert store.get("new") == fresh
+    assert store.claim("old") is None
+    assert store.claim("new") == fresh
 
 
 def test_attach_session_store_claim_removes_session_immediately() -> None:
-    # claim() must pop atomically (not just peek like get()), so a second
-    # concurrent claimant for the same request_id sees it gone rather than
-    # being able to also pass validation on the still-present session.
+    # claim() must pop atomically, so a second concurrent claimant for the same
+    # request_id sees it gone rather than also passing validation on a session
+    # that is still present.
     store = AttachSessionStore(clock=lambda: 200.0)
     session = build_attach_session(
         request_id="req-1",
@@ -73,7 +71,6 @@ def test_attach_session_store_claim_removes_session_immediately() -> None:
 
     claimed = store.claim("req-1")
     assert claimed == session
-    assert store.get("req-1") is None
     assert store.claim("req-1") is None
 
 
@@ -97,7 +94,7 @@ def test_attach_session_store_restore_allows_retry_after_failed_attempt() -> Non
     assert claimed is not None
     store.restore(claimed)
 
-    assert store.get("req-1") == session
+    assert store.claim("req-1") == session
 
 
 def test_attach_session_store_restore_drops_expired_session() -> None:
@@ -115,4 +112,4 @@ def test_attach_session_store_restore_drops_expired_session() -> None:
 
     store.restore(session)
 
-    assert store.get("req-1") is None
+    assert store.claim("req-1") is None

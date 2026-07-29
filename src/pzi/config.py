@@ -542,15 +542,16 @@ def derive_papers_dir(bib_path: str) -> str:
     return os.path.join(os.path.dirname(bib_path), "papers")
 
 
-def resolve_bib(bibs: list[BibConfig], selector: str | None) -> BibConfig | None:
-    """Resolve a bib by explicit selector or default policy."""
-    if selector is not None:
-        normalized_selector = selector.strip()
-        for bib in bibs:
-            if bib["name"] == normalized_selector or bib["path"] == normalized_selector:
-                return bib
-        return None
+def resolve_bib(bibs: list[BibConfig]) -> BibConfig | None:
+    """Pick the default bib: the only one, or the one marked default.
 
+    Selector handling lives in :func:`resolve_library_target`, which normalizes
+    both sides of a path comparison. The selector branch that used to be here
+    compared ``bib["path"]`` by raw string equality against user input, so
+    ``--target ~/ml.bib`` would not have matched a config storing
+    ``/home/you/ml.bib`` — it was never reached, and would have been wrong if it
+    had been.
+    """
     if len(bibs) == 1:
         return bibs[0]
 
@@ -588,7 +589,7 @@ def resolve_library_target(
 ) -> BibConfig | None:
     """Resolve default/configured library name or direct .bib path target."""
     if selector is None:
-        return resolve_bib(bibs, None)
+        return resolve_bib(bibs)
 
     normalized_selector = selector.strip()
     normalized_path = _normalize_path(normalized_selector, home_dir=home_dir)

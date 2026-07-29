@@ -18,7 +18,6 @@ class AttachSession:
     expires_at: float
     max_bytes: int
     allowed_source_urls: tuple[str, ...]
-    used: bool = False
 
 
 def build_attach_session(
@@ -42,7 +41,6 @@ def build_attach_session(
         expires_at=created_at + max(0, ttl_seconds),
         max_bytes=max(0, max_bytes),
         allowed_source_urls=_unique_nonempty(allowed_source_urls),
-        used=False,
     )
 
 
@@ -58,8 +56,6 @@ def validate_attach_request(
     now: float,
 ) -> str | None:
     """Return validation error string, or None when request is allowed."""
-    if session.used:
-        return "attach session already used"
     if now > session.expires_at:
         return "attach session expired"
     if request_id != session.request_id:
@@ -77,11 +73,6 @@ def validate_attach_request(
     if not _source_allowed(source_url, session.allowed_source_urls):
         return "source URL not allowed for attach session"
     return None
-
-
-def mark_attach_session_used(session: AttachSession) -> AttachSession:
-    """Return copy marked used."""
-    return AttachSession(**{**session.__dict__, "used": True})
 
 
 def _source_allowed(source_url: str | None, allowed_source_urls: tuple[str, ...]) -> bool:

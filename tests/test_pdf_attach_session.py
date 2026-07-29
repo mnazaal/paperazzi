@@ -26,7 +26,6 @@ def test_build_attach_session_is_bound_to_citekey_bib_and_expiry() -> None:
         expires_at=700.0,
         max_bytes=25_000_000,
         allowed_source_urls=("https://ieeexplore.ieee.org/stamp/stamp.jsp?arnumber=1",),
-        used=False,
     )
 
 
@@ -102,7 +101,7 @@ def test_validate_attach_request_rejects_wrong_token() -> None:
     ) == "invalid attach token"
 
 
-def test_validate_attach_request_rejects_expired_or_used_session() -> None:
+def test_validate_attach_request_rejects_an_expired_session() -> None:
     expired = build_attach_session(
         request_id="req-1",
         token="tok-1",
@@ -113,8 +112,6 @@ def test_validate_attach_request_rejects_expired_or_used_session() -> None:
         max_bytes=20,
         allowed_source_urls=[],
     )
-    used = AttachSession(**{**expired.__dict__, "expires_at": 700.0, "used": True})
-
     assert validate_attach_request(
         expired,
         request_id="req-1",
@@ -125,16 +122,6 @@ def test_validate_attach_request_rejects_expired_or_used_session() -> None:
         source_url=None,
         now=200.0,
     ) == "attach session expired"
-    assert validate_attach_request(
-        used,
-        request_id="req-1",
-        token="tok-1",
-        citekey="smith2024",
-        bib=None,
-        pdf_bytes=b"%PDF-1.7 test",
-        source_url=None,
-        now=200.0,
-    ) == "attach session already used"
 
 
 def test_validate_attach_request_rejects_identity_size_type_and_source_mismatch() -> None:

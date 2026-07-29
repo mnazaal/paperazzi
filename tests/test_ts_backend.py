@@ -116,102 +116,6 @@ def test_apply_cookie_patch_unknown_type_raises(tmp_path: Path) -> None:
 # _build_cookie_patch  (hardened — diff/patch-based)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def test_build_cookie_patch_session_generates_patch(tmp_path: Path) -> None:
-    src = tmp_path / "webSession.js"
-    src.write_text("this._cookieSandbox = cookieJar();")
-    result = ts_backend._build_cookie_patch(src, "session")
-    assert result is not None
-    diff_text, patched = result
-    assert "pzi cookie bridge" in diff_text
-    assert "this._cookieSandbox = cookieJar()" in diff_text
-    assert "pzi cookie bridge" in patched
-
-
-def test_build_cookie_patch_endpoint_generates_patch(tmp_path: Path) -> None:
-    src = tmp_path / "webEndpoint.js"
-    src.write_text("await session.handleURL();")
-    result = ts_backend._build_cookie_patch(src, "endpoint")
-    assert result is not None
-    diff_text, patched = result
-    assert "pzi cookie bridge" in diff_text
-
-
-def test_build_cookie_patch_already_applied_returns_none(tmp_path: Path) -> None:
-    src = tmp_path / "webSession.js"
-    src.write_text(
-        "// --- pzi cookie bridge ---\nthis._cookieSandbox = cookieJar();"
-    )
-    result = ts_backend._build_cookie_patch(src, "session")
-    assert result is None
-
-
-def test_build_cookie_patch_anchor_not_found_returns_none(tmp_path: Path) -> None:
-    src = tmp_path / "webSession.js"
-    src.write_text("// completely different code\nlet x = 1;")
-    result = ts_backend._build_cookie_patch(src, "session")
-    assert result is None
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# _patch_cookie_bridge  (hardened — uses patch CLI)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def test_patch_cookie_bridge_applies_and_verifies(tmp_path: Path) -> None:
-    ts_dir = tmp_path / "ts"
-    src_dir = ts_dir / "src"
-    src_dir.mkdir(parents=True)
-    session_js = src_dir / "webSession.js"
-    session_js.write_text("this._cookieSandbox = cookieJar();")
-    endpoint_js = src_dir / "webEndpoint.js"
-    endpoint_js.write_text("await session.handleURL();")
-
-    result = ts_backend._patch_cookie_bridge(ts_dir)
-    assert result is True
-
-    s = session_js.read_text()
-    assert "pzi cookie bridge" in s
-    assert "this._cookieSandbox = cookieJar()" in s
-    e = endpoint_js.read_text()
-    assert "pzi cookie bridge" in e
-
-
-def test_patch_cookie_bridge_already_patched_is_ok(tmp_path: Path) -> None:
-    ts_dir = tmp_path / "ts"
-    src_dir = ts_dir / "src"
-    src_dir.mkdir(parents=True)
-    session_js = src_dir / "webSession.js"
-    session_js.write_text(
-        "// --- pzi cookie bridge ---\nthis._cookieSandbox = cookieJar();"
-    )
-    endpoint_js = src_dir / "webEndpoint.js"
-    endpoint_js.write_text(
-        "// --- pzi cookie bridge ---\nawait session.handleURL();"
-    )
-
-    result = ts_backend._patch_cookie_bridge(ts_dir)
-    assert result is True
-
-
-def test_patch_cookie_bridge_anchor_missing_fails(tmp_path: Path) -> None:
-    ts_dir = tmp_path / "ts"
-    src_dir = ts_dir / "src"
-    src_dir.mkdir(parents=True)
-    session_js = src_dir / "webSession.js"
-    session_js.write_text("// completely different upstream code\nlet x = 1;")
-    endpoint_js = src_dir / "webEndpoint.js"
-    endpoint_js.write_text("// completely different upstream code\nlet y = 2;")
-
-    result = ts_backend._patch_cookie_bridge(ts_dir)
-    assert result is False
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# cookie-bridge patch against realistic Zotero-shaped fixtures
-#
-# The trivial one-line tests above prove the regex anchors fire on a bare
-# anchor string; these prove they still fire inside realistic constructor /
-# handler bodies (indentation + surrounding code), so a drift in the flexible
-# anchor regex relative to real upstream structure is caught.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _TS_JS_FIXTURES = Path(__file__).parent / "fixtures" / "ts_js"
@@ -244,34 +148,53 @@ def test_apply_cookie_patch_endpoint_realistic_fixture(tmp_path: Path) -> None:
     assert f.read_text().count("pzi cookie bridge") == 1
 
 
-def test_patch_cookie_bridge_applies_to_realistic_fixtures(tmp_path: Path) -> None:
-    # Exercises the real `patch -p0` CLI path end-to-end on realistic source:
-    # _build_cookie_patch must produce a unified diff that re-applies cleanly.
-    ts_dir = tmp_path / "ts"
-    src_dir = ts_dir / "src"
-    src_dir.mkdir(parents=True)
-    _copy_fixture("webSession.js", src_dir)
-    _copy_fixture("webEndpoint.js", src_dir)
+def test_apply_cookie_patch_warns_when_the_session_anchor_drifted(
+    tmp_path: Path,
+) -> None:
+    """Anchor rewritten upstream: warn rather than corrupt the file.
 
-    assert ts_backend._patch_cookie_bridge(ts_dir) is True
-    assert "_pziCookies" in (src_dir / "webSession.js").read_text()
-    assert "session._cookies" in (src_dir / "webEndpoint.js").read_text()
+    Replaces a test that exercised the deleted `_patch_cookie_bridge`. The
+    drift contract belongs to the function production actually calls.
+    """
+    f = _copy_fixture("webSession.js", tmp_path)
+    f.write_text(f.read_text().replace("this._cookieSandbox", "this._jar"))
+
+    warning = ts_backend._apply_cookie_patch(f, "session")
+
+    assert warning is not None
+    assert "webSession.js" in warning
+    assert "cookies will not be forwarded" in warning
+    # No half-applied block left behind.
+    assert "pzi cookie bridge" not in f.read_text()
 
 
-def test_patch_cookie_bridge_drifted_realistic_fixture_fails(tmp_path: Path) -> None:
-    # Anchor removed (simulating an upstream rewrite): the patch must refuse
-    # rather than corrupt the file — warn-don't-crash contract.
-    ts_dir = tmp_path / "ts"
-    src_dir = ts_dir / "src"
-    src_dir.mkdir(parents=True)
-    session = _copy_fixture("webSession.js", src_dir)
-    drifted = session.read_text().replace("this._cookieSandbox", "this._jar")
-    session.write_text(drifted)
-    _copy_fixture("webEndpoint.js", src_dir)
+def test_apply_cookie_patch_warns_when_the_symbol_survives_but_the_anchor_does_not(
+    tmp_path: Path,
+) -> None:
+    """`this._cookieSandbox` present but no usable insertion point.
 
-    assert ts_backend._patch_cookie_bridge(ts_dir) is False
-    # The drifted file is left without a half-applied patch block.
-    assert "pzi cookie bridge" not in session.read_text()
+    This case used to `return None  # silently skip`, so cookie forwarding
+    could stop working with nothing reported at install time or afterwards.
+    """
+    # Written inline rather than derived from the fixture, whose header comment
+    # itself contains a `this._cookieSandbox = ...;` string that the anchor
+    # regex matches.
+    f = tmp_path / "webSession.js"
+    f.write_text(
+        "var WebSession = function (url, data, options, cookieSandbox) {\n"
+        "\tvoid this._cookieSandbox;\n"
+        "};\n"
+        "WebSession.prototype.handleURL = async function () {\n"
+        "\ttranslate.setCookieSandbox(this._cookieSandbox);\n"
+        "};\n",
+        encoding="utf-8",
+    )
+
+    warning = ts_backend._apply_cookie_patch(f, "session")
+
+    assert warning is not None
+    assert "no safe insertion point" in warning
+    assert "pzi cookie bridge" not in f.read_text()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

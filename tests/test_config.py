@@ -283,26 +283,7 @@ def test_resolve_bib_by_default_when_single_bib() -> None:
         "default": False,
     }
 
-    assert resolve_bib([bib], None) == bib
-
-
-def test_resolve_bib_by_explicit_name() -> None:
-    bibs = [
-        {
-            "name": "ml",
-            "path": "/home/tester/bib/ml.bib",
-            "papers_dir": "/home/tester/bib/papers",
-            "default": False,
-        },
-        {
-            "name": "systems",
-            "path": "/home/tester/bib/systems.bib",
-            "papers_dir": "/home/tester/bib/papers",
-            "default": True,
-        },
-    ]
-
-    assert resolve_bib(bibs, "ml") == bibs[0]
+    assert resolve_bib([bib]) == bib
 
 
 def test_resolve_bib_returns_none_when_ambiguous_without_default() -> None:
@@ -321,7 +302,7 @@ def test_resolve_bib_returns_none_when_ambiguous_without_default() -> None:
         },
     ]
 
-    assert resolve_bib(bibs, None) is None
+    assert resolve_bib(bibs) is None
 
 
 def test_derive_papers_dir_returns_sibling_directory() -> None:

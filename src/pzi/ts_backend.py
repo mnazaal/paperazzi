@@ -6,7 +6,6 @@ translation-server, manage subprocess lifecycle.  No container dependency.
 
 from __future__ import annotations
 
-import difflib
 import os
 import re
 import shutil
@@ -156,7 +155,12 @@ def _patch_session(content: str, file_path: Path) -> str | None:
             f"{file_path.name} — upstream Zotero source may have changed; "
             f"browser cookies will not be forwarded to the translation server"
         )
-    return None  # silently skip (symbol exists, no safe insertion point)
+    return (
+        f"cookie-bridge patch (session) found this._cookieSandbox in "
+        f"{file_path.name} but no safe insertion point — upstream Zotero source "
+        f"may have changed; browser cookies will not be forwarded to the "
+        f"translation server"
+    )
 
 
 _SESSION_BLOCK = (
@@ -223,121 +227,6 @@ def _find_endpoint_anchor(content: str) -> re.Match[str] | None:
         return m
     m = re.search(r"handleURL\(\)", content)
     return m
-
-
-def _build_cookie_patch(file_path: Path, patch_type: str) -> tuple[str, str] | None:
-    """Generate a unified diff and patched content for a cookie-bridge patch.
-
-    Returns ``(diff_text, patched_content)``, or ``None`` if the patch is
-    already applied or the anchor line cannot be found (upstream changed).
-    Does NOT modify any files.
-    """
-    content = file_path.read_text(encoding="utf-8")
-
-    # Already patched?
-    if "pzi cookie bridge" in content:
-        return None
-
-    # Check if any anchor exists (flexible — tolerates whitespace/renames).
-    if patch_type == "session":
-        anchor_present = (
-            _find_session_anchor(content) is not None
-            or "this._cookieSandbox" in content
-        )
-        code = _SESSION_BLOCK
-        template = "session"
-    elif patch_type == "endpoint":
-        anchor_present = _find_endpoint_anchor(content) is not None
-        code = _ENDPOINT_BLOCK
-        template = "endpoint"
-    else:
-        raise ValueError(f"unknown patch type: {patch_type}")
-
-    if not anchor_present:
-        return None  # upstream changed
-
-    # Build patched content for diff preview.
-    # For session: insert block after first anchor match.
-    if template == "session":
-        m = _find_session_anchor(content)
-        if m is None:
-            m = re.search(r"(this\._cookieSandbox)", content)
-        if m is None:
-            return None
-        patched = content[: m.end()] + "\n" + code + content[m.end() :]
-    else:
-        m = _find_endpoint_anchor(content)
-        if m is None:
-            return None
-        patched = content[: m.start()] + code + "\n" + content[m.start() :]
-
-    if patched == content:
-        return None
-
-    # Generate unified diff
-    diff_lines = list(
-        difflib.unified_diff(
-            content.splitlines(keepends=True),
-            patched.splitlines(keepends=True),
-            fromfile=f"a/{file_path.name}",
-            tofile=f"b/{file_path.name}",
-            lineterm="",
-        )
-    )
-    return "".join(diff_lines), patched
-
-
-def _patch_cookie_bridge(ts_dir: Path) -> bool:
-    """Apply cookie-bridge patches via ``patch`` CLI subprocess.
-
-    Returns ``True`` if all patches applied successfully (or were already
-    present).  Returns ``False`` if any anchor line cannot be found (upstream
-    Zotero source has changed).
-    """
-    patch_files = [
-        (ts_dir / "src" / "webSession.js", "session"),
-        (ts_dir / "src" / "webEndpoint.js", "endpoint"),
-    ]
-    ok = True
-    for js_file, ptype in patch_files:
-        if not js_file.exists():
-            continue
-        build_result = _build_cookie_patch(js_file, ptype)
-        if build_result is None:
-            if "pzi cookie bridge" not in js_file.read_text(encoding="utf-8"):
-                ok = False  # anchor missing
-            continue
-        diff_text, patched_content = build_result
-
-        # Write diff to temp file and apply via patch CLI
-        diff_path = js_file.parent / f".{js_file.name}.pzi.patch"
-        diff_path.write_text(diff_text, encoding="utf-8")
-        try:
-            subprocess.run(
-                ["patch", "-p0", str(js_file), str(diff_path)],
-                cwd=str(ts_dir),
-                capture_output=True,
-                text=True,
-                timeout=20,
-                check=True,
-            )
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            # patch CLI failed or not available — apply directly
-            js_file.write_text(patched_content, encoding="utf-8")
-        finally:
-            diff_path.unlink(missing_ok=True)
-
-    # Verification: check that all files contain the expected markers
-    markers = {
-        ts_dir / "src" / "webSession.js": "_pziCookies",
-        ts_dir / "src" / "webEndpoint.js": "session._cookies",
-    }
-    for file_path, marker in markers.items():
-        if file_path.exists():
-            content = file_path.read_text(encoding="utf-8")
-            if marker not in content and "pzi cookie bridge" not in content:
-                ok = False
-    return ok
 
 
 def _clone_repo(
@@ -462,6 +351,22 @@ def ensure_translation_server(
         warning = _apply_cookie_patch(web_endpoint, "endpoint")
         if warning:
             patch_warnings.append(warning)
+    # Verify the patch actually landed rather than trusting the return value.
+    # `_patch_session`/`_patch_endpoint` report anchor failures, but a write that
+    # silently produced unpatched content would otherwise go unnoticed until
+    # cookies quietly stopped being forwarded at request time.
+    for js_file, marker in (
+        (web_session, "_pziCookies"),
+        (web_endpoint, "session._cookies"),
+    ):
+        if not js_file.exists():
+            continue
+        content = js_file.read_text(encoding="utf-8")
+        if marker not in content and "pzi cookie bridge" not in content:
+            patch_warnings.append(
+                f"cookie-bridge patch did not land in {js_file.name}; "
+                f"browser cookies will not be forwarded to the translation server"
+            )
     if patch_warnings:
         for w in patch_warnings:
             print(f"WARNING: {w}", file=stderr)

@@ -1490,6 +1490,36 @@ def test_plan_with_applied_record_rebases_citekey() -> None:
     assert result["entry"] is updated_entry
 
 
+def test_plan_with_applied_record_keeps_the_force_new_citekey() -> None:
+    """A force-new insert must not be rebound onto the entry it duplicates.
+
+    Both entries carry the same DOI, so the identity-based `find_exact_match`
+    rebind would return the *pre-existing* one and silently discard the
+    force-generated citekey — turning "add this again as a separate entry" back
+    into "you already have this". The `force_new` early return is what prevents
+    that, and nothing covered it.
+    """
+    plan = {
+        "record": {"citekey": "smith2024a", "doi": "10.1234/a"},
+        "action": "insert",
+        "force_new": True,
+    }
+    pre_existing = record_to_bibtex_entry(
+        {"citekey": "smith2024", "doi": "10.1234/a", "title": "Paper"}
+    )
+    forced = record_to_bibtex_entry(
+        {"citekey": "smith2024a", "doi": "10.1234/a", "title": "Paper"}
+    )
+
+    result = plan_with_applied_record(
+        plan,
+        {"doi": "10.1234/a"},  # type: ignore[arg-type]
+        [pre_existing, forced],
+    )
+
+    assert result["record"]["citekey"] == "smith2024a"
+
+
 def test_build_add_record_result_shapes_dry_run_message() -> None:
     plan = plan_bib_write(
         {"citekey": "smith2024paper", "title": "Paper"},

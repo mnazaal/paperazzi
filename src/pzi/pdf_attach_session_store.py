@@ -6,7 +6,7 @@ import threading
 import time
 from collections.abc import Callable
 
-from pzi.pdf_attach_session import AttachSession, mark_attach_session_used
+from pzi.pdf_attach_session import AttachSession
 
 
 class AttachSessionStore:
@@ -30,19 +30,6 @@ class AttachSessionStore:
                 return
             self._sessions[session.request_id] = session
 
-    def get(self, request_id: str) -> AttachSession | None:
-        with self._lock:
-            self._prune_expired_locked()
-            return self._sessions.get(request_id)
-
-    def consume(self, request_id: str) -> AttachSession | None:
-        with self._lock:
-            self._prune_expired_locked()
-            session = self._sessions.pop(request_id, None)
-        if session is None:
-            return None
-        return mark_attach_session_used(session)
-
     def claim(self, request_id: str) -> AttachSession | None:
         """Atomically remove and return a session for exclusive use.
 
@@ -63,17 +50,17 @@ class AttachSessionStore:
         """Put a claimed-but-not-successfully-used session back for retry."""
         with self._lock:
             self._prune_expired_locked()
-            if session.used or session.expires_at <= self._clock():
+            if session.expires_at <= self._clock():
                 return
             self._sessions[session.request_id] = session
 
     def _prune_expired_locked(self) -> None:
-        """Drop expired/used sessions. Caller must hold ``self._lock``."""
+        """Drop expired sessions. Caller must hold ``self._lock``."""
         now = self._clock()
         expired = [
             request_id
             for request_id, session in list(self._sessions.items())
-            if session.expires_at <= now or session.used
+            if session.expires_at <= now
         ]
         for request_id in expired:
             self._sessions.pop(request_id, None)

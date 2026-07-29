@@ -315,20 +315,14 @@ def plan_with_applied_record(
 ) -> WritePlan:
     updated_records = [bibtex_entry_to_record(entry) for entry in updated_entries]
 
-    # When force_new was used, both the old and new entries share the same
-    # DOI — find_exact_match would return the old entry by identity.
-    # Match by citekey instead to preserve the force-generated citekey.
+    # When force_new was used, both the old and new entries share the same DOI,
+    # so the find_exact_match rebind below would return the *old* entry by
+    # identity and throw away the force-generated citekey. The plan is already
+    # correct in this case: plan_bib_write(force_new=True) sets the record to
+    # the incoming one, whose citekey is already the suffixed key that gets
+    # written. (The rebind-by-citekey loop that used to live here could not
+    # change anything — it compared plan["record"]["citekey"] against itself.)
     if plan.get("force_new"):
-        planned_citekey = plan["record"].get("citekey")
-        if isinstance(planned_citekey, str) and planned_citekey.strip():
-            for idx, record in enumerate(updated_records):
-                if record.get("citekey") == planned_citekey:
-                    if planned_citekey == plan["record"].get("citekey"):
-                        return plan
-                    updated_plan = dict(plan)
-                    updated_plan["record"] = record
-                    updated_plan["entry"] = updated_entries[idx]
-                    return cast(WritePlan, updated_plan)
         return plan
 
     match_index = find_exact_match(intended_record, updated_records)
