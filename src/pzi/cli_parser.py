@@ -13,7 +13,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import NoReturn, TextIO
 
-from pzi import cli_version_text
+from pzi import cli_version_text, exit_codes
 from pzi.capture_models import (
     AuthHints,
     CaptureInput,
@@ -21,6 +21,7 @@ from pzi.capture_models import (
     PdfCandidate,
     load_page_artifact,
 )
+from pzi.errors import PziError
 from pzi.fileio import read_text_utf8
 from pzi.tag_service import parse_tag_csv
 
@@ -709,11 +710,48 @@ def parse_batch_values(text: str) -> list[str]:
 def load_add_metadata_json(
     path: str, *, stdin_text: str | None = None
 ) -> dict[str, object]:
-    """Load record metadata JSON for `pzi add --metadata-json`."""
-    payload = json.loads(load_text_arg(path, stdin_text=stdin_text))
+    """Load record metadata JSON for `pzi add --metadata-json`.
+
+    Raises :class:`PziError` with a ``USAGE`` code, not a bare ``ValueError``:
+    the file is user input, and the CLI boundary deliberately lets unrecognized
+    exceptions propagate as tracebacks so genuine bugs stay visible. A typo in a
+    hand-written JSON file is not a bug in pzi.
+    """
+    raw = load_text_arg(path, stdin_text=stdin_text)
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise PziError(
+            f"--metadata-json is not valid JSON: {exc}",
+            code=exit_codes.USAGE,
+        ) from exc
     if not isinstance(payload, dict):
-        raise ValueError("metadata JSON must be an object")
+        raise PziError(
+            "--metadata-json must contain a JSON object",
+            code=exit_codes.USAGE,
+        )
     return dict(payload)
+
+
+def describe_invalid_metadata_json(
+    path: str | None, *, stdin_text: str | None = None
+) -> str | None:
+    """Return a usage message when ``--metadata-json`` cannot be read, else None.
+
+    Mirrors :func:`describe_invalid_add_input` so the add runner can reject the
+    file in its fail-fast block — *before* the translation-server backend is
+    started. Parsing it only at capture time meant a one-character JSON typo cost
+    a full Node/translation-server startup and then produced a traceback.
+    """
+    if not path:
+        return None
+    try:
+        load_add_metadata_json(path, stdin_text=stdin_text)
+    except PziError as exc:
+        return exc.message
+    except OSError as exc:
+        return f"cannot read --metadata-json {path}: {exc.strerror or exc}"
+    return None
 
 
 def build_record_overrides_from_add_args(args: argparse.Namespace) -> dict[str, object]:

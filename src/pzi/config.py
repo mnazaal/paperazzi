@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any, Literal, TypeAlias, TypedDict
 from urllib.parse import urlsplit
 
+from pzi.format_templates import describe_template_error
+
 # Minimum `resolution_match.score_match` result (0–100) for `update --promote`
 # to write a published version over a preprint. Named because it is read from
 # three places — the loader, the validator, and `config.template.toml` — and a
@@ -401,10 +403,21 @@ def validate_app_config(
     raw_citekey_format = raw.get("citekey_format")
     if raw_citekey_format is not None and not isinstance(raw_citekey_format, str):
         errors.append("citekey_format must be a string when provided")
+    elif isinstance(raw_citekey_format, str):
+        # The template renderer degrades on a malformed template rather than
+        # raising, so without this check a typo would silently drop the option
+        # from every citekey it generates.
+        template_error = describe_template_error(raw_citekey_format)
+        if template_error is not None:
+            errors.append(f"citekey_format is not a valid template: {template_error}")
 
     raw_pdf_filename_format = raw.get("pdf_filename_format")
     if raw_pdf_filename_format is not None and not isinstance(raw_pdf_filename_format, str):
         errors.append("pdf_filename_format must be a string when provided")
+    elif isinstance(raw_pdf_filename_format, str):
+        template_error = describe_template_error(raw_pdf_filename_format)
+        if template_error is not None:
+            errors.append(f"pdf_filename_format is not a valid template: {template_error}")
 
     raw_ezproxy_host = raw.get("ezproxy_host")
     if raw_ezproxy_host is not None and (

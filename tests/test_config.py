@@ -373,3 +373,52 @@ def test_app_config_explicit_data_home_overrides_xdg(monkeypatch) -> None:
     )
     assert errors == []
     assert config["pzi_data_home"] == "/explicit/dir"
+
+
+def test_validate_app_config_rejects_an_unparseable_pdf_filename_format() -> None:
+    """A one-character typo used to traceback out of every add/pdf.
+
+    The renderer now degrades instead of raising, so without this check the
+    typo would silently drop the option from every filename it touches.
+    """
+    config, errors = validate_app_config(
+        {
+            "pdf_filename_format": '{{ title truncate="100 }}',
+            "bibs": [{"name": "ml", "path": "~/ml.bib"}],
+        },
+        home_dir=HOME,
+    )
+
+    assert config is None
+    assert any("pdf_filename_format is not a valid template" in e for e in errors)
+
+
+def test_validate_app_config_rejects_an_unparseable_citekey_format() -> None:
+    config, errors = validate_app_config(
+        {
+            "citekey_format": "{{ auth suffix='x }}",
+            "bibs": [{"name": "ml", "path": "~/ml.bib"}],
+        },
+        home_dir=HOME,
+    )
+
+    assert config is None
+    assert any("citekey_format is not a valid template" in e for e in errors)
+
+
+def test_validate_app_config_accepts_the_documented_template_default() -> None:
+    """The commented-out suggestion in config.template.toml must validate."""
+    config, errors = validate_app_config(
+        {
+            "pdf_filename_format": (
+                '{{ firstCreator suffix=" - " }}{{ year suffix=" - " }}'
+                '{{ title truncate="100" }}'
+            ),
+            "citekey_format": "auth.lower + shorttitle(3,3) + year",
+            "bibs": [{"name": "ml", "path": "~/ml.bib"}],
+        },
+        home_dir=HOME,
+    )
+
+    assert errors == []
+    assert config is not None

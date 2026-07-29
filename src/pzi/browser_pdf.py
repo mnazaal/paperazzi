@@ -49,7 +49,10 @@ def discover_pdf_url_with_browser(
             text=True,
             timeout=120,
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, ValueError, subprocess.SubprocessError):
+        # `ValueError` too: `_validate_browser_command` raises it for an empty
+        # command, and `shlex.split` for an unbalanced quote. A config typo must
+        # read as "this hook found nothing", like every other failure here.
         return None
     if result.returncode != 0:
         return None
@@ -97,6 +100,17 @@ def download_pdf_with_browser(
             "browser PDF hook timed out while trying to download PDF",
             file=sys.stderr,
         )
+        return None
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        # `fetch_and_store_pdf_with_fallbacks` advances on a falsy return and has
+        # no exception handling of its own, so every step in that chain must
+        # report failure by returning None. Raising here — on a missing binary
+        # (OSError), an unbalanced quote or empty command (ValueError) — aborted
+        # the whole chain and skipped the FlareSolverr and desktop fallbacks,
+        # which is worse than the misconfiguration itself. Note this is
+        # reachable without any `browser_pdf_cmd` in config, because
+        # `_auto_browser_pdf_cmd_for_url` synthesizes one for known hosts.
+        print(f"browser PDF hook could not run: {exc}", file=sys.stderr)
         return None
     child_stderr = getattr(result, "stderr", "")
     if result.returncode != 0:

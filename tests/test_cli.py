@@ -1407,3 +1407,122 @@ def test_add_from_file_prints_per_item_warnings(tmp_path: Path, monkeypatch) -> 
     )
 
     assert "probable duplicate of smith2020" in stderr.getvalue()
+
+
+def test_add_malformed_metadata_json_is_a_usage_error(tmp_path: Path) -> None:
+    """A JSON typo is user input, not a pzi bug — it must not traceback.
+
+    `load_add_metadata_json` raised `json.JSONDecodeError` (a `ValueError`),
+    which the CLI boundary deliberately does not catch.
+    """
+    bad = tmp_path / "meta.json"
+    bad.write_text('{"title": "Unclosed')
+    stderr = StringIO()
+
+    exit_code = run_cli(
+        ["add", "10.1234/x", "--metadata-json", str(bad),
+         "--config", str(_batch_config(tmp_path))],
+        home_dir=str(tmp_path), stdout=StringIO(), stderr=stderr,
+    )
+
+    assert exit_code == exit_codes.USAGE
+    out = stderr.getvalue()
+    assert "not valid JSON" in out
+    assert "Traceback" not in out
+
+
+def test_add_non_object_metadata_json_is_a_usage_error(tmp_path: Path) -> None:
+    meta = tmp_path / "meta.json"
+    meta.write_text('["not", "an", "object"]')
+    stderr = StringIO()
+
+    exit_code = run_cli(
+        ["add", "10.1234/x", "--metadata-json", str(meta),
+         "--config", str(_batch_config(tmp_path))],
+        home_dir=str(tmp_path), stdout=StringIO(), stderr=stderr,
+    )
+
+    assert exit_code == exit_codes.USAGE
+    assert "must contain a JSON object" in stderr.getvalue()
+
+
+def test_add_rejects_bad_metadata_json_before_starting_the_backend(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The check must run before `backend_session`, not inside it.
+
+    Parsing at capture time meant a one-character typo cost a full Node /
+    translation-server startup — and printed `starting translation-server` —
+    before failing.
+    """
+    import pzi.ts_backend
+
+    def _must_not_run(*_args, **_kwargs):
+        raise AssertionError("backend_session started before validating input")
+
+    monkeypatch.setattr(pzi.ts_backend, "backend_session", _must_not_run)
+
+    bad = tmp_path / "meta.json"
+    bad.write_text("{oops")
+    stderr = StringIO()
+
+    exit_code = run_cli(
+        ["add", "10.1234/x", "--metadata-json", str(bad),
+         "--config", str(_batch_config(tmp_path))],
+        home_dir=str(tmp_path), stdout=StringIO(), stderr=stderr,
+    )
+
+    assert exit_code == exit_codes.USAGE
+    assert "starting translation-server" not in stderr.getvalue()
+
+
+def test_doctor_health_verdict_fails_on_a_broken_key_command() -> None:
+    """Naming the fault and still exiting 0 is the outcome doctor exists to prevent.
+
+    Semantic Scholar was not part of the health verdict at all, so a recorded
+    `key_error` would have printed and still exited 0. An unreachable API stays
+    advisory — that is not the user's config being wrong.
+    """
+    from pzi.commands.doctor import _doctor_healthy
+
+    healthy = {"config_ok": True, "bibs": [{"path_exists": True}],
+               "translation_server_url": None, "semantic_scholar": {}}
+    assert _doctor_healthy(healthy) is True
+
+    broken_key = {**healthy, "semantic_scholar": {"key_error": "secret command exited with code 1"}}
+    assert _doctor_healthy(broken_key) is False
+
+    unreachable_api = {**healthy, "semantic_scholar": {"probe_error": "connection refused"}}
+    assert _doctor_healthy(unreachable_api) is True
+
+
+def test_add_reports_a_broken_key_command_as_a_structured_error(tmp_path: Path) -> None:
+    """`add` already guarded this; changing the exception type must not regress it.
+
+    `add_service` catches around `build_capture_context` and returns a structured
+    error result — the HTTP capture route consumes that return value, so a
+    `PziError` escaping the service layer would surface as a 500 rather than a
+    reported error.
+    """
+    bib_path = tmp_path / "library.bib"
+    bib_path.write_text("")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'semantic_scholar_api_key_cmd = "false"\n\n'
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\ndefault = true\n'
+    )
+    stdout, stderr = StringIO(), StringIO()
+
+    exit_code = run_cli(
+        ["add", "10.1234/x", "--config", str(config_path)],
+        home_dir=str(tmp_path), stdout=stdout, stderr=stderr,
+        fetch_web=_fake_fetch_web, fetch_search=_fake_fetch_search,
+    )
+
+    out = stdout.getvalue() + stderr.getvalue()
+    assert "Traceback" not in out
+    assert exit_code == exit_codes.ENVIRONMENT
+    # The service-level wrapper survives, proving the error was handled inside
+    # the service rather than escaping to the CLI boundary.
+    assert "failed to resolve capture context" in out
+    assert "secret command" in out

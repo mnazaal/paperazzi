@@ -61,6 +61,11 @@ def test_render_zotero_template_variables(template, expected) -> None:
         # Zotero template.
         ("{{ title match='[' }}", ""),
         ("{{ title replaceFrom='[' replaceTo='X' }}", "The Graph Neural Networks of Tomorrow"),
+        # An unbalanced quote in the options list makes `shlex` raise during
+        # iteration. Degrade to "no options" like the cases above rather than
+        # letting a one-character config typo traceback out of every add/pdf.
+        ("{{ title truncate='100 }}", "The Graph Neural Networks of Tomorrow"),
+        ('{{ title suffix=" - }}', "The Graph Neural Networks of Tomorrow"),
     ],
 )
 def test_render_zotero_template_options(template, expected) -> None:
@@ -159,3 +164,14 @@ def test_format_citekey_empty_base_falls_back_to_generated() -> None:
     record = {"authors": ["Smith, John"], "title": "Graphs", "year": 2024}
     out = format_citekey("{{ unsupportedVar }}", record, set())
     assert out  # non-empty generated key
+
+
+def test_describe_template_error_flags_an_unbalanced_quote() -> None:
+    """Config validation uses this so a typo is reported, not silently dropped."""
+    from pzi.format_templates import describe_template_error
+
+    assert describe_template_error('{{ title truncate="100 }}') is not None
+    assert describe_template_error("{{ title truncate='100' }}") is None
+    assert describe_template_error(None) is None
+    # Better-BibTeX formulas take a renderer that never reaches shlex.
+    assert describe_template_error("auth.lower + 's + year") is None

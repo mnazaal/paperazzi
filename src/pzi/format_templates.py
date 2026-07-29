@@ -75,13 +75,44 @@ def _parse_options(text: str) -> dict[str, str]:
     lexer.whitespace_split = True
     lexer.commenters = ""
     options: dict[str, str] = {}
-    for token in lexer:
-        if "=" not in token:
-            options[token] = "true"
-            continue
-        key, value = token.split("=", 1)
-        options[key] = value
+    try:
+        for token in lexer:
+            if "=" not in token:
+                options[token] = "true"
+                continue
+            key, value = token.split("=", 1)
+            options[key] = value
+    except ValueError:
+        # An unbalanced quote inside `{{ … }}` — `shlex` raises during
+        # *iteration*, not construction. Degrade like the bad-regex and bad-int
+        # handlers below rather than raising: this runs deep inside `add`/`pdf`,
+        # where a one-character config typo would otherwise surface as a raw
+        # traceback. `validate_app_config` reports the typo at config load, so
+        # degrading here does not make it silent.
+        return {}
     return options
+
+
+def describe_template_error(template: str | None) -> str | None:
+    """Return why *template* is unparseable, or None when it is fine.
+
+    Used by config validation so a typo is reported once, at load, instead of
+    silently changing every filename it touches.
+    """
+    if not template or "{{" not in template:
+        # Better-BibTeX style formulas take a different renderer that never
+        # reaches `shlex`, so there is nothing to check here.
+        return None
+    for match in _TEMPLATE_RE.finditer(template):
+        options_text = match.group(2)
+        lexer = shlex.shlex(options_text, posix=True)
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        try:
+            list(lexer)
+        except ValueError as exc:
+            return f"{exc} in {match.group(0)!r}"
+    return None
 
 
 def _apply_options(value: str, options: Mapping[str, str]) -> str:

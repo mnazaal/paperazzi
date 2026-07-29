@@ -208,3 +208,52 @@ def test_download_pdf_with_browser_non_dict_json(mock_run) -> None:
         pdf_url="https://example.com/paper.pdf",
     )
     assert result is None
+
+
+@patch("pzi.browser_pdf.subprocess.run")
+def test_download_pdf_with_browser_returns_none_when_the_binary_is_missing(
+    mock_run,
+) -> None:
+    """A misconfigured hook must report "no PDF", not raise.
+
+    `fetch_and_store_pdf_with_fallbacks` advances on a falsy return and has no
+    exception handling, so raising here aborted the whole chain and skipped the
+    FlareSolverr and desktop fallbacks.
+    """
+    mock_run.side_effect = FileNotFoundError(2, "No such file or directory")
+
+    assert download_pdf_with_browser(command="/nope/browser", pdf_url="https://x/p.pdf") is None
+
+
+@patch("pzi.browser_pdf.subprocess.run")
+def test_download_pdf_with_browser_returns_none_on_permission_error(mock_run) -> None:
+    mock_run.side_effect = PermissionError(13, "Permission denied")
+
+    assert download_pdf_with_browser(command="/bin/hook", pdf_url="https://x/p.pdf") is None
+
+
+def test_download_pdf_with_browser_returns_none_on_unbalanced_quote() -> None:
+    """`shlex.split` raises ValueError on an unterminated quote in config."""
+    assert download_pdf_with_browser(
+        command='python hook.py --profile "unterminated', pdf_url="https://x/p.pdf"
+    ) is None
+
+
+def test_download_pdf_with_browser_returns_none_on_empty_command() -> None:
+    assert download_pdf_with_browser(command="   ", pdf_url="https://x/p.pdf") is None
+
+
+@patch("pzi.browser_pdf.subprocess.run")
+def test_discover_pdf_url_with_browser_returns_none_when_the_binary_is_missing(
+    mock_run,
+) -> None:
+    mock_run.side_effect = FileNotFoundError(2, "No such file or directory")
+
+    assert discover_pdf_url_with_browser(command="/nope/browser", page_url="https://x") is None
+
+
+def test_discover_pdf_url_with_browser_returns_none_on_unbalanced_quote() -> None:
+    """The sibling leaked ValueError too, despite catching OSError."""
+    assert discover_pdf_url_with_browser(
+        command='python hook.py --profile "unterminated', page_url="https://x"
+    ) is None

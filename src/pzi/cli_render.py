@@ -243,8 +243,13 @@ def _render_doctor_result(result: Mapping[str, Any]) -> list[str]:
 
     s2 = result.get("semantic_scholar") or {}
     if s2:
-        state = ok if s2.get("reachable") else bad
+        # A broken key command is a failure even when the API itself answers —
+        # otherwise the header reads "ok" directly above the error explaining
+        # that the configured key could not be obtained.
+        state = ok if s2.get("reachable") and not s2.get("key_error") else bad
         lines.append(f"semantic scholar: {state} (key: {s2.get('configured', 'unknown')})")
+        if s2.get("key_error"):
+            lines.append(f"  - semantic_scholar_api_key_cmd failed: {s2['key_error']}")
         if s2.get("probe_error"):
             lines.append(f"  - {s2['probe_error']}")
 

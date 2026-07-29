@@ -9,7 +9,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from pzi import exit_codes
 from pzi.config import AppConfig, BibConfig
+from pzi.errors import PziError
 
 DEFAULT_TOKEN_FILENAME = "api_token"
 
@@ -94,21 +96,38 @@ def run_shell_command(command: str) -> str:
     Only simple commands (no shell operators like &&, |, ;, $(), ``) are
     accepted.  If the command string contains shell metacharacters the
     call is rejected to prevent accidental injection through config.
+
+    Every failure is a :class:`PziError`, because every one of them is a config
+    problem rather than a bug: the command is a string the user wrote. Raising
+    ``ValueError``/``RuntimeError`` here meant the CLI boundary — which
+    deliberately lets unrecognized exceptions through so real bugs stay visible —
+    turned a typo'd ``*_cmd`` into a traceback, including in ``pzi doctor``, the
+    command whose job is to report that misconfiguration.
     """
-    _reject_shell_metacharacters(command)
-    tokens = shlex.split(command)
+    try:
+        _reject_shell_metacharacters(command)
+        tokens = shlex.split(command)
+    except ValueError as exc:
+        raise PziError(str(exc), code=exit_codes.ENVIRONMENT) from exc
     if not tokens:
-        raise ValueError("empty shell command in config")
+        raise PziError("empty shell command in config", code=exit_codes.ENVIRONMENT)
     try:
         result = subprocess.run(tokens, capture_output=True, text=True, timeout=10)
     except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(
-            f"secret command timed out after 10s (did it prompt for input?): {command!r}"
+        raise PziError(
+            f"secret command timed out after 10s (did it prompt for input?): {command!r}",
+            code=exit_codes.ENVIRONMENT,
+        ) from exc
+    except OSError as exc:
+        raise PziError(
+            f"secret command could not run: {exc.strerror or exc}: {command!r}",
+            code=exit_codes.ENVIRONMENT,
         ) from exc
     if result.returncode != 0:
-        raise RuntimeError(
+        raise PziError(
             f"secret command exited with code {result.returncode}: "
-            f"{result.stderr.strip() or '(no stderr)'}"
+            f"{result.stderr.strip() or '(no stderr)'}",
+            code=exit_codes.ENVIRONMENT,
         )
     return result.stdout
 

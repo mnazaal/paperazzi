@@ -17,6 +17,7 @@ from pzi.capture_models import AuthHints, CaptureInput
 from pzi.cli_parser import (
     build_capture_input_from_add_args,
     build_capture_options_from_add_args,
+    describe_invalid_metadata_json,
     load_text_arg,
     parse_batch_values,
     usage_error_lines,
@@ -64,7 +65,18 @@ def run_add_command(
         bad_value = describe_invalid_add_input(args.value)
         if bad_value is not None:
             print_lines(usage_error_lines(("add",), bad_value), stderr)
-            return 2
+            return exit_codes.USAGE
+
+    # Same rule for the metadata file. It used to be parsed at capture time,
+    # which runs *inside* the backend session below — so a JSON typo cost a full
+    # translation-server startup before failing. `-` (stdin) is excluded: it can
+    # only be read once, and reading it here would consume it.
+    metadata_json = getattr(args, "metadata_json", None)
+    if metadata_json and metadata_json != "-":
+        bad_metadata = describe_invalid_metadata_json(metadata_json)
+        if bad_metadata is not None:
+            print_lines(usage_error_lines(("add",), bad_metadata), stderr)
+            return exit_codes.USAGE
 
     cfg = load_config_file(config_path, home_dir=home_dir)
     config = cfg["config"]

@@ -88,4 +88,11 @@ def _doctor_healthy(result) -> bool:
         return False
     if result.get("translation_server_url") and not result.get("translation_server_reachable"):
         return False
+    # A configured secret command that cannot run is a config fault the user
+    # must fix, not an advisory: without this the report would name the problem
+    # and still exit 0, which is the outcome `doctor` exists to prevent. An
+    # unreachable API (`probe_error`) stays advisory — that is not the user's
+    # config being wrong.
+    if (result.get("semantic_scholar") or {}).get("key_error"):
+        return False
     return True

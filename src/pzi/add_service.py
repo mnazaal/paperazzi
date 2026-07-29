@@ -51,6 +51,7 @@ from pzi.capture_local_pdf import (
     plan_with_applied_record,
 )
 from pzi.config import BibConfig, BibResolutionFailure, load_bib_target
+from pzi.errors import PziError
 from pzi.fetch_helpers import build_metadata_fetch_text
 from pzi.format_templates import format_citekey
 from pzi.identifiers import classify_input
@@ -448,7 +449,12 @@ def _resolve_capture_context(
             browser_pdf_cmd_override=browser_pdf_cmd_override,
             browser=browser,
         )
-    except (OSError, RuntimeError, ValueError) as exc:
+    except (OSError, RuntimeError, ValueError, PziError) as exc:
+        # `PziError` since `run_shell_command` now raises it for a broken
+        # `*_cmd`. It must still become a structured result here rather than
+        # propagating: the HTTP capture route consumes this return value, and an
+        # exception escaping the service layer would surface as a 500 instead of
+        # a reported error.
         return None, _error_result(
             message="failed to resolve capture context",
             errors=[str(exc)],

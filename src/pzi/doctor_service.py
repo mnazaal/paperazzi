@@ -10,6 +10,7 @@ from urllib.request import Request, urlopen
 
 from pzi.capture_context import resolve_optional_value
 from pzi.config import load_config_file
+from pzi.errors import PziError
 from pzi.metadata_sources import probe_s2_api
 
 
@@ -110,10 +111,20 @@ def doctor_check(
         reachable = False
 
     # Semantic Scholar reachability.
-    s2_key = resolve_optional_value(
-        command=config.get("semantic_scholar_api_key_cmd"),
-        fallback=config.get("semantic_scholar_api_key"),
-    )
+    # A `semantic_scholar_api_key_cmd` that cannot run is a config fault, and
+    # reporting config faults is this command's entire job — so record it and
+    # carry on with the remaining diagnostics rather than aborting the report.
+    # Kept separate from `probe_error` so "your key command is broken" stays
+    # distinguishable from "the API is unreachable".
+    s2_key_error: str | None = None
+    try:
+        s2_key = resolve_optional_value(
+            command=config.get("semantic_scholar_api_key_cmd"),
+            fallback=config.get("semantic_scholar_api_key"),
+        )
+    except PziError as exc:
+        s2_key_error = exc.message
+        s2_key = None
     s2_reachable = False
     s2_key_effective: bool | None = None
     s2_probe_error: str | None = None
@@ -147,6 +158,7 @@ def doctor_check(
             "reachable": s2_reachable,
             "key_effective": s2_key_effective,
             "probe_error": s2_probe_error,
+            "key_error": s2_key_error,
         },
         "config_permissions_warning": config_permissions_warning(
             config_result["path"]

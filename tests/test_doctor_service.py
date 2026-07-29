@@ -251,3 +251,52 @@ def test_doctor_s2_key_cmd_resolution(tmp_path) -> None:
     assert result["semantic_scholar"]["configured"] == "cmd"
     assert result["semantic_scholar"]["key_effective"] is True
     assert seen_api_key == ["test-s2-key"]
+
+
+def test_doctor_reports_a_failing_key_command_instead_of_crashing(tmp_path) -> None:
+    """doctor is the command whose job is to report this misconfiguration.
+
+    `run_shell_command` raised RuntimeError on a nonzero exit, which the CLI
+    boundary deliberately does not catch — so the diagnostic command died on the
+    very config fault it exists to diagnose.
+    """
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text("")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'semantic_scholar_api_key_cmd = "false"\n\n'
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\ndefault = true\n'
+    )
+
+    result = doctor_check(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        translation_probe=lambda _url: True,
+        s2_probe=lambda **_kw: False,
+    )
+
+    assert result["status"] == "ok"
+    assert result["semantic_scholar"]["key_error"]
+    # The rest of the report still ran.
+    assert result["translation_server_reachable"] is True
+    assert result["bibs"]
+
+
+def test_doctor_reports_a_metacharacter_key_command(tmp_path) -> None:
+    """`pass show x | head -1` is rejected by the injection guard, not a bug."""
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text("")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'semantic_scholar_api_key_cmd = "pass show s2 | head -1"\n\n'
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\ndefault = true\n'
+    )
+
+    result = doctor_check(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        translation_probe=lambda _url: True,
+        s2_probe=lambda **_kw: False,
+    )
+
+    assert "metacharacter" in result["semantic_scholar"]["key_error"]

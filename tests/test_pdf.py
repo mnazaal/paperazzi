@@ -330,3 +330,47 @@ def test_fetch_and_store_pdf_with_fallbacks_uses_flaresolverr_after_failures(
     assert "PDF downloaded via FlareSolverr" in warning
     assert local_path == str(tmp_path / "papers" / "flare2024.pdf")
     assert (tmp_path / "papers" / "flare2024.pdf").read_bytes() == b"%PDF-flare"
+
+
+def test_fetch_and_store_pdf_with_fallbacks_survives_a_raising_browser_step(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """A misconfigured browser hook must not skip the remaining fallbacks.
+
+    The chain advances on a falsy return and has no exception handling of its
+    own, so every step is required never to raise. When the browser step raised
+    — a missing binary, or an unbalanced quote in `browser_pdf_cmd` — FlareSolverr
+    and the desktop fallback were never reached.
+    """
+    import pzi.browser_pdf
+    import pzi.flaresolverr
+
+    def mock_fetch_binary(url: str) -> tuple[bytes, str | None]:
+        return (b"<html>blocked</html>", "text/html")
+
+    # Fail at the subprocess boundary, leaving the real `download_pdf_with_browser`
+    # in place — stubbing that function out would test the stub, not the fix.
+    def exploding_run(*_args, **_kwargs):
+        raise FileNotFoundError(2, "No such file or directory")
+
+    monkeypatch.setattr(pzi.browser_pdf.subprocess, "run", exploding_run)
+    monkeypatch.setattr(
+        pzi.flaresolverr,
+        "fetch_pdf_via_flaresolverr",
+        lambda url, *, server_url: b"%PDF-flare",
+    )
+
+    local_path, warning, error = fetch_and_store_pdf_with_fallbacks(
+        url="https://example.com/paper.pdf",
+        papers_dir=str(tmp_path / "papers"),
+        citekey="flare2024",
+        fetch_binary=mock_fetch_binary,
+        browser_pdf_cmd="/nonexistent/hook --profile prof",
+        flaresolverr_url="http://127.0.0.1:8191",
+    )
+
+    # The chain continued to FlareSolverr instead of aborting.
+    assert error is None
+    assert local_path == str(tmp_path / "papers" / "flare2024.pdf")
+    assert (tmp_path / "papers" / "flare2024.pdf").read_bytes() == b"%PDF-flare"

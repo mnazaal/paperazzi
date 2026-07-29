@@ -82,7 +82,10 @@ def fetch_pdf_via_flaresolverr(
 
         # Step 2: Download PDF using the cookies
         return _download_with_cookies(url, cookies, user_agent)
-    except (OSError, json.JSONDecodeError, ValueError):
+    except (OSError, json.JSONDecodeError, ValueError, KeyError, TypeError, AttributeError):
+        # The last three are defence in depth against a response shape this code
+        # does not anticipate: this is a step in the PDF fallback chain, which
+        # advances on a falsy return and aborts entirely on an exception.
         return None
 
 
@@ -102,16 +105,27 @@ def _download_with_cookies(
     domain = parsed.hostname or ""
 
     for cookie in cookies:
+        # FlareSolverr's response is third-party input. `name` and `value` were
+        # the only fields read with `[]` — every other one already used `.get()`
+        # with a default — so one cookie missing a key raised `KeyError` out of
+        # the whole PDF fallback chain, skipping the desktop fallback that comes
+        # after this step. A cookie we cannot read is one to skip, not to crash
+        # on; the rest of the jar is still usable.
+        if not isinstance(cookie, dict) or "name" not in cookie or "value" not in cookie:
+            continue
+        # `.get("domain", domain)` returns None, not the default, when the key is
+        # present and null — which a real FlareSolverr response does send.
+        cookie_domain = cookie.get("domain") or ""
         c = Cookie(
             version=0,
             name=cookie["name"],
             value=cookie["value"],
             port=None,
             port_specified=False,
-            domain=cookie.get("domain", domain),
-            domain_specified=bool(cookie.get("domain")),
-            domain_initial_dot=cookie.get("domain", "").startswith("."),
-            path=cookie.get("path", "/"),
+            domain=cookie_domain or domain,
+            domain_specified=bool(cookie_domain),
+            domain_initial_dot=cookie_domain.startswith("."),
+            path=cookie.get("path") or "/",
             path_specified=True,
             secure=cookie.get("secure", False),
             expires=cookie.get("expiry"),
