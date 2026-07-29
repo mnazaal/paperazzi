@@ -810,7 +810,23 @@ def _optional_string_list(key: str, value: tuple[str, ...] | None) -> list[str]:
 
 
 def dump_app_config(config: AppConfig) -> str:
-    """Serialize a full AppConfig to TOML text."""
+    """Serialize an AppConfig to TOML text. **Partial, by design.**
+
+    Emits 23 of ``AppConfig``'s 36 keys. It exists for test fixtures and for
+    ``pzi init``-style scaffolding, where a minimal readable file is wanted —
+    not as a faithful round-trip of an arbitrary config. Feeding it a config
+    that sets any of the keys below and re-reading the result silently drops
+    them:
+
+    ``capture_source_dirs``, ``inbox_path``, ``pdf_file_path_style``,
+    ``page_metadata_cmd``, ``page_metadata_timeout_seconds``,
+    ``metadata_confidence_min_score``, ``promote_confidence_threshold``,
+    ``metadata_cache_ttl``, ``browser_hook``, ``pzi_data_home``, ``node_path``,
+    ``pdf_discovery_parallel``, ``ezproxy_host``.
+
+    Do not use it to rewrite a user's config file. Adding a key to ``AppConfig``
+    does not automatically add it here.
+    """
     lines: list[str] = [
         f'translation_server_url = "{_escape(config["translation_server_url"])}"',
         f'api_listen_host = "{_escape(config["api_listen_host"])}"',

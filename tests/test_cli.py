@@ -47,9 +47,20 @@ def _fake_fetch_search(query: str, *, server_url: str) -> list[dict]:
 
 
 def test_cli_dispatch_registry_covers_all_parser_commands() -> None:
+    """Every parser command must be dispatchable, and vice versa.
+
+    This asserts against `cli._DISPATCH` — the table `run_cli` actually indexes
+    — not against a hand-written list. The previous version compared the parser
+    to a literal `CLI_COMMANDS` tuple while the real dispatch dict was a local
+    inside `run_cli` and unreachable from here, so a command added to the parser
+    and the literal but not to the dispatch dict passed this test and then died
+    at runtime with "unknown command".
+    """
     parser_commands = _parser_command_names(build_parser())
 
-    assert parser_commands <= set(cli.CLI_COMMANDS)
+    assert parser_commands == set(cli._DISPATCH)
+    # CLI_COMMANDS is derived, so this can only fail if that derivation breaks.
+    assert set(cli.CLI_COMMANDS) == set(cli._DISPATCH)
     assert "fix" in cli.CLI_COMMANDS
     # Removed top-level commands must not linger in the dispatch registry.
     removed = {"list", "set-default", "version", "clean", "dedupe", "merge",

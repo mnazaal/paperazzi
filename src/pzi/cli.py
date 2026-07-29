@@ -5,7 +5,8 @@ from __future__ import annotations
 import os
 import sys
 from collections.abc import Callable, Sequence
-from typing import TextIO, TypedDict
+from dataclasses import dataclass
+from typing import Any, TextIO, TypedDict
 
 from pzi import cli_json, exit_codes
 from pzi.bib_repository import ConcurrentEditError
@@ -39,23 +40,82 @@ class _CommonRunKwargs(TypedDict):
     config_path: str
 
 
-CLI_COMMANDS: tuple[str, ...] = (
-    "add",
-    "check",
-    "delete",
-    "doctor",
-    "entries",
-    "export",
-    "fix",
-    "inbox",
-    "import",
-    "init",
-    "pdf",
-    "search",
-    "server",
-    "tag",
-    "update",
-)
+@dataclass(frozen=True)
+class _DispatchContext:
+    """Everything the command runners need, gathered once by :func:`run_cli`."""
+
+    args: Any
+    cfg: _CommonRunKwargs
+    out: TextIO
+    err: TextIO
+    effective_home: str
+    config_path: str
+    bib_selector: BibSelector
+    # Single-target commands (e.g. `add`) only ever parse a scalar --target.
+    single_selector: str | None
+    fetch_web: Any
+    fetch_search: Any
+
+
+# The dispatch table lives at module scope so it can be checked against the
+# parser. It used to be a local inside `run_cli`, with `CLI_COMMANDS` a
+# hand-maintained literal standing in for it — so the test named "dispatch
+# registry covers all parser commands" actually compared the parser against
+# that literal, and a command added to both the parser and the literal but not
+# to the dispatch dict passed CI and then failed at runtime with
+# "unknown command".
+_DISPATCH: dict[str, Callable[[_DispatchContext], int]] = {
+    "add": lambda c: _run_add(
+        c.args, **c.cfg,
+        stdout=c.out, stderr=c.err, bib_selector=c.single_selector,
+        fetch_web=c.fetch_web, fetch_search=c.fetch_search,
+    ),
+    "check": lambda c: _run_check(
+        c.args, **c.cfg, stdout=c.out, stderr=c.err, bib_selector=c.single_selector,
+    ),
+    "delete": lambda c: _run_delete(
+        c.args, **c.cfg, stdout=c.out, stderr=c.err, bib_selector=c.bib_selector,
+    ),
+    "doctor": lambda c: _run_doctor(
+        c.args, home_dir=c.effective_home, config_path=c.config_path,
+        stdout=c.out, stderr=c.err,
+    ),
+    "entries": lambda c: _run_entries(
+        c.args, **c.cfg, stdout=c.out, stderr=c.err, bib_selector=c.bib_selector,
+    ),
+    "export": lambda c: _run_export(
+        c.args, **c.cfg, stdout=c.out, stderr=c.err, bib_selector=c.bib_selector,
+    ),
+    "fix": lambda c: _run_fix(
+        c.args, **c.cfg, stdout=c.out, stderr=c.err, bib_selector=c.single_selector,
+    ),
+    "inbox": lambda c: _run_inbox(c.args, **c.cfg, stdout=c.out, stderr=c.err),
+    "import": lambda c: _run_import(
+        c.args, **c.cfg, stdout=c.out, stderr=c.err, bib_selector=c.bib_selector,
+    ),
+    "init": lambda c: _run_init(
+        c.args, home_dir=c.effective_home, config_path=c.config_path,
+        stdout=c.out, stderr=c.err,
+    ),
+    "pdf": lambda c: _run_pdf(
+        c.args, **c.cfg, stdout=c.out, stderr=c.err, bib_selector=c.single_selector,
+    ),
+    "search": lambda c: _run_search(
+        c.args, **c.cfg, stdout=c.out, stderr=c.err, bib_selector=c.bib_selector,
+    ),
+    "server": lambda c: _run_server(
+        c.args, **c.cfg, stdout=c.out, stderr=c.err,
+    ),
+    "tag": lambda c: _run_tag(
+        c.args, **c.cfg, stdout=c.out, stderr=c.err, bib_selector=c.single_selector,
+    ),
+    "update": lambda c: _run_update(
+        c.args, **c.cfg, stdout=c.out, stderr=c.err,
+    ),
+}
+
+#: Derived from the dispatch table, never hand-written.
+CLI_COMMANDS: tuple[str, ...] = tuple(sorted(_DISPATCH))
 
 
 def _friendly_error(exc: OSError | UnicodeDecodeError) -> str:
@@ -122,58 +182,21 @@ def run_cli(
 
     _cfg: _CommonRunKwargs = {"home_dir": effective_home, "config_path": config_path}
     _bib_selector: BibSelector = getattr(args, "target", None)
-    # Single-target commands (e.g. `add`) only ever parse a scalar --target.
-    _single_selector: str | None = _bib_selector if isinstance(_bib_selector, str) else None
 
-    _dispatch: dict[str, Callable[[], int]] = {
-        "add": lambda: _run_add(
-            args, **_cfg,
-            stdout=out, stderr=err, bib_selector=_single_selector,
-            fetch_web=fetch_web, fetch_search=fetch_search,
-        ),
-        "check": lambda: _run_check(
-            args, **_cfg, stdout=out, stderr=err, bib_selector=_single_selector,
-        ),
-        "delete": lambda: _run_delete(
-            args, **_cfg, stdout=out, stderr=err, bib_selector=_bib_selector,
-        ),
-        "doctor": lambda: _run_doctor(
-            args, home_dir=effective_home, config_path=config_path, stdout=out, stderr=err,
-        ),
-        "entries": lambda: _run_entries(
-            args, **_cfg, stdout=out, stderr=err, bib_selector=_bib_selector,
-        ),
-        "export": lambda: _run_export(
-            args, **_cfg, stdout=out, stderr=err, bib_selector=_bib_selector,
-        ),
-        "fix": lambda: _run_fix(
-            args, **_cfg, stdout=out, stderr=err, bib_selector=_single_selector,
-        ),
-        "inbox": lambda: _run_inbox(args, **_cfg, stdout=out, stderr=err),
-        "import": lambda: _run_import(
-            args, **_cfg, stdout=out, stderr=err, bib_selector=_bib_selector,
-        ),
-        "init": lambda: _run_init(
-            args, home_dir=effective_home, config_path=config_path, stdout=out, stderr=err,
-        ),
-        "pdf": lambda: _run_pdf(
-            args, **_cfg, stdout=out, stderr=err, bib_selector=_single_selector,
-        ),
-        "search": lambda: _run_search(
-            args, **_cfg, stdout=out, stderr=err, bib_selector=_bib_selector,
-        ),
-        "server": lambda: _run_server(
-            args, **_cfg, stdout=out, stderr=err,
-        ),
-        "tag": lambda: _run_tag(
-            args, **_cfg, stdout=out, stderr=err, bib_selector=_single_selector,
-        ),
-        "update": lambda: _run_update(
-            args, **_cfg, stdout=out, stderr=err,
-        ),
-    }
+    ctx = _DispatchContext(
+        args=args,
+        cfg=_cfg,
+        out=out,
+        err=err,
+        effective_home=effective_home,
+        config_path=config_path,
+        bib_selector=_bib_selector,
+        single_selector=_bib_selector if isinstance(_bib_selector, str) else None,
+        fetch_web=fetch_web,
+        fetch_search=fetch_search,
+    )
 
-    if args.command in _dispatch:
+    if args.command in _DISPATCH:
         # `--json` promises exactly one document on stdout *including when the
         # command fails*, but these handlers are the last thing to run and used
         # to report only as prose on stderr. `resolve_target` alone raises
@@ -200,7 +223,7 @@ def run_cli(
             return code
 
         try:
-            return _dispatch[args.command]()
+            return _DISPATCH[args.command](ctx)
         except BrokenPipeError:
             # A downstream reader (e.g. `| head`) closed the pipe — let main()
             # handle it quietly; never report it as a command error.

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **`pzi/__init__.py` no longer re-exports ten names** — `BibtexEntry`,
+  `HttpSecurityConfig`, `NormalizedRecord`, `WritePlan`,
+  `build_http_security_config`, `merge_entries`, `parse_bibtex`,
+  `plan_bib_write`, `safe_public_http_url`, and `serialize_bibtex`. **Breaking
+  for anyone importing `pzi` as a library**: import from the defining module
+  instead (`from pzi.bib_repository import plan_bib_write`), which is what the
+  codebase itself already does. `cli_version_text` and `package_version` stay.
+  Nothing in `pzi` imported the removed names through the package root.
+
 ### Security
 
 - **`pzi init` now provisions the API auth token on the plain path too**, not

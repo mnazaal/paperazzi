@@ -1,23 +1,14 @@
 """pzi — Capture papers into local BibTeX libraries from DOI, URL, or PDF.
 
-Public API exports — pure functions and types suitable for external consumers.
-I/O entry points live in their respective modules and are not re-exported here.
+This package is a CLI and a local HTTP API; it is not designed as a library.
+Only the version helpers are re-exported here. Import anything else from the
+module that defines it (``pzi.bib_repository``, ``pzi.bibtex``, …), which is
+what the codebase itself does.
 """
 
 from collections.abc import Callable
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as metadata_version
-
-from pzi.bib_repository import (
-    WritePlan,
-    merge_entries,
-    parse_bibtex,
-    plan_bib_write,
-)
-from pzi.bib_serialize import serialize_bibtex
-from pzi.bibtex import BibtexEntry, NormalizedRecord
-from pzi.http_security import HttpSecurityConfig, build_http_security_config
-from pzi.url_safety import safe_public_http_url
 
 
 def package_version(
@@ -53,16 +44,6 @@ def cli_version_text(
 __version__ = package_version()
 
 __all__ = [
-    "BibtexEntry",
-    "HttpSecurityConfig",
-    "NormalizedRecord",
-    "WritePlan",
-    "build_http_security_config",
     "cli_version_text",
-    "merge_entries",
     "package_version",
-    "parse_bibtex",
-    "plan_bib_write",
-    "safe_public_http_url",
-    "serialize_bibtex",
 ]
