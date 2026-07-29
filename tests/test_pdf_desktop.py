@@ -55,3 +55,39 @@ def test_fallback_settings_are_injectable_without_touching_the_environment() -> 
         settings=settings,
     )
     assert (path, error) == (None, None)
+
+
+def test_env_flag_treats_zero_and_false_as_off() -> None:
+    """`bool("0")` is True, so `PZI_SKIP_BROWSER_HOOK=0` *enabled* the skip.
+
+    README documents "set to 1 to skip", which implies 0 does not — so the
+    obvious way to turn these off did the opposite.
+    """
+    from pzi.pdf_planning import env_flag
+
+    for off in (None, "", "0", "false", "False", "no", "off", "  0  "):
+        assert env_flag(off) is False, off
+    for on in ("1", "true", "yes", "on", "anything"):
+        assert env_flag(on) is True, on
+
+
+def test_pdf_fallback_settings_do_not_skip_when_flags_are_set_to_zero() -> None:
+    from pzi.pdf_planning import PdfFallbackSettings
+
+    settings = PdfFallbackSettings.from_environment(
+        {"PZI_SKIP_BROWSER_HOOK": "0", "PZI_DISABLE_DESKTOP_BROWSER_FALLBACK": "0"}
+    )
+
+    assert settings.skip_browser_hook is False
+    assert settings.disable_desktop_browser is False
+
+
+def test_pdf_fallback_settings_still_skip_when_flags_are_set_to_one() -> None:
+    from pzi.pdf_planning import PdfFallbackSettings
+
+    settings = PdfFallbackSettings.from_environment(
+        {"PZI_SKIP_BROWSER_HOOK": "1", "PZI_DISABLE_DESKTOP_BROWSER_FALLBACK": "1"}
+    )
+
+    assert settings.skip_browser_hook is True
+    assert settings.disable_desktop_browser is True

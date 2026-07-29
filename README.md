@@ -344,10 +344,12 @@ Expected coverage for common sources. ✅ = works out-of-box. ⚠️ = needs con
 | `PZI_NODE` | Explicit Node.js >=22 binary for the translation-server (absolute path or a command name on PATH). Overrides PATH auto-detect and the `node_path` config; when set, pzi never prompts or downloads. A broken value is a hard error, not a silent fallback. Use this under systemd/daemons whose PATH lacks your shell's version-manager (fnm/nvm/volta/asdf) shims |
 | `PZI_NODE_MIRROR` | Override the Node.js download server (default: `https://nodejs.org/dist`); must be `https://` |
 | `PZI_NPM_REGISTRY` | Override the npm registry used when installing the translation-server's dependencies |
-| `PZI_DISABLE_DESKTOP_BROWSER_FALLBACK` | Set to skip the "open in desktop browser and watch Downloads/" PDF fallback |
+| `PZI_DISABLE_DESKTOP_BROWSER_FALLBACK` | Set to `1` to skip the "open in desktop browser and watch Downloads/" PDF fallback |
 | `PZI_DOWNLOAD_DIR` | Directory watched for the desktop-browser PDF fallback (default: `~/Downloads`) |
 | `PZI_DESKTOP_BROWSER_TIMEOUT` | Seconds to wait for a PDF to appear during the desktop-browser fallback (default: 300; minimum 30) |
-| `PZI_SKIP_BROWSER_HOOK` | Set to skip the `browser_pdf_cmd` headless-browser hook (used by the browser extension's own capture flow) |
+| `PZI_SKIP_BROWSER_HOOK` | Set to `1` to skip the `browser_pdf_cmd` headless-browser hook (used by the browser extension's own capture flow) |
+
+Boolean variables above (`PZI_SKIP_AUTO_START`, `PZI_DISABLE_DESKTOP_BROWSER_FALLBACK`, `PZI_SKIP_BROWSER_HOOK`) read `0`, `false`, `no`, `off` and the empty string as off; any other value is on. Unset is off.
 
 ## PDF download for paywalled papers
 

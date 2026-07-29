@@ -328,16 +328,34 @@ class PdfFallbackSettings:
         """Build settings from *env* (defaults to the process environment)."""
         source = os.environ if env is None else env
         return cls(
-            disable_desktop_browser=bool(source.get("PZI_DISABLE_DESKTOP_BROWSER_FALLBACK")),
+            disable_desktop_browser=env_flag(
+                source.get("PZI_DISABLE_DESKTOP_BROWSER_FALLBACK")
+            ),
             download_dir=Path(
                 source.get("PZI_DOWNLOAD_DIR", str(Path.home() / "Downloads"))
             ).expanduser(),
             desktop_timeout=_desktop_timeout(source.get("PZI_DESKTOP_BROWSER_TIMEOUT")),
-            skip_browser_hook=bool(source.get("PZI_SKIP_BROWSER_HOOK")),
+            skip_browser_hook=env_flag(source.get("PZI_SKIP_BROWSER_HOOK")),
             browser_pdf_cmd=source.get("PZI_BROWSER_PDF_CMD"),
             browser_profile=source.get("PZI_BROWSER_PROFILE"),
             browser=source.get("PZI_BROWSER", "firefox") or "firefox",
         )
+
+
+#: Values that read as "off" when an env var is used as a boolean flag.
+_FALSEY_ENV_VALUES = frozenset({"", "0", "false", "no", "off"})
+
+
+def env_flag(raw: str | None) -> bool:
+    """Interpret an environment variable as a boolean.
+
+    `bool(os.environ.get(...))` is wrong for this: `bool("0")` is True, so
+    setting a flag to `0` to turn it *off* turned it on. The docs compound it —
+    README says "set to 1 to skip", which implies 0 does not.
+    """
+    if raw is None:
+        return False
+    return raw.strip().lower() not in _FALSEY_ENV_VALUES
 
 
 def _desktop_timeout(raw: str | None) -> int:

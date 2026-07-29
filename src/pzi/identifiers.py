@@ -28,11 +28,17 @@ TRACKING_QUERY_KEYS = frozenset(
 DOI_PATTERN = re.compile(
     r"(?i)^(?:doi:\s*|https?://(?:dx\.)?doi\.org/)?(10\.\d{4,9}/[^\s?#]+)(?:[?#]\S*)?$"
 )
-DOI_IN_PATH_PATTERN = re.compile(r"(?i)/doi/(10\.\d{4,9}/[^\s?#]+)")
-ARXIV_ABS_PATTERN = re.compile(r"(?i)^/abs/([a-z\-]+/\d{7}|\d{4}\.\d{4,5})(v\d+)?/?$")
-ARXIV_PDF_PATTERN = re.compile(
-    r"(?i)^/pdf/([a-z\-]+/\d{7}|\d{4}\.\d{4,5})(v\d+)?(?:\.pdf)?/?$"
-)
+# `(?:[a-z]+/)?` absorbs the display segment publishers put between /doi/ and
+# the DOI itself -- ACM's /doi/abs/, Wiley's /doi/full/, /doi/pdf/, /doi/epdf/.
+# Without it those URLs yielded no DOI at all. Kept to a lowercase word rather
+# than `[^/]+/`, which would start swallowing arbitrary junk.
+DOI_IN_PATH_PATTERN = re.compile(r"(?i)/doi/(?:[a-z]+/)?(10\.\d{4,9}/[^\s?#]+)")
+# `(?:\.[a-z]{2})?` admits the dotted subject class in old-style arXiv IDs
+# (math.GT/0309136); `[a-z\-]+` alone excluded the dot, so those fell through to
+# being classified as a plain URL and lost their DOI mapping.
+_ARXIV_ID = r"[a-z\-]+(?:\.[a-z]{2})?/\d{7}|\d{4}\.\d{4,5}"
+ARXIV_ABS_PATTERN = re.compile(rf"(?i)^/abs/({_ARXIV_ID})(v\d+)?/?$")
+ARXIV_PDF_PATTERN = re.compile(rf"(?i)^/pdf/({_ARXIV_ID})(v\d+)?(?:\.pdf)?/?$")
 
 
 

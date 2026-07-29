@@ -21,6 +21,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from pzi.node_runtime import ensure_node
+from pzi.pdf_planning import env_flag
 
 # ---------------------------------------------------------------------------
 # Pinned repository references.
@@ -499,8 +500,11 @@ def is_ts_reachable(url: str, *, timeout: float = 2.0) -> bool:
     """Return True if translation-server responds at ``url``."""
     try:
         req = Request(url.rstrip("/"), method="GET")
-        urlopen(req, timeout=timeout)
-        return True
+        # `with`, not a bare call: the watchdog probes this every 30s, so a
+        # leaked response object leaks a socket on every tick. Every other
+        # urlopen in the codebase already uses the context-manager form.
+        with urlopen(req, timeout=timeout):
+            return True
     except HTTPError:
         return True  # server responded (just not 2xx)
     except (URLError, OSError, ValueError):
@@ -544,9 +548,9 @@ def wait_for_ts(
 
         attempt += 1
         try:
-            urlopen(Request(health_url, method="GET"), timeout=2)
-            print(f"translation-server ready (attempt {attempt})", file=stdout)
-            return True
+            with urlopen(Request(health_url, method="GET"), timeout=2):
+                print(f"translation-server ready (attempt {attempt})", file=stdout)
+                return True
         except HTTPError:
             print(f"translation-server ready (attempt {attempt})", file=stdout)
             return True
@@ -627,7 +631,7 @@ def backend_session(
     ts_url = _ts_url_from_config(config)
 
     # No URL configured, or auto-start disabled: nothing for us to manage.
-    if ts_url is None or os.environ.get("PZI_SKIP_AUTO_START"):
+    if ts_url is None or env_flag(os.environ.get("PZI_SKIP_AUTO_START")):
         yield {"url": ts_url, "ready": True, "owned": False, "proc": None}
         return
 

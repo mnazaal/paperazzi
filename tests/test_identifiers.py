@@ -169,3 +169,39 @@ def test_normalize_doi_is_case_insensitive_across_forms() -> None:
     # DOIs are case-insensitive by spec.
     assert normalize_doi("10.1145/ABC") == normalize_doi("10.1145/abc")
     assert normalize_doi("https://DOI.ORG/10.1145/AbC") == "10.1145/abc"
+
+
+def test_classify_input_recognizes_old_style_arxiv_ids_with_a_subject_class() -> None:
+    """`math.GT/0309136` — the dot in the subject class was excluded.
+
+    `[a-z\\-]+/\\d{7}` matched `cs/0112017` and `hep-th/9901001` but not a dotted
+    class, so those URLs fell through to being classified as a plain `url` and
+    lost their arXiv DOI mapping and path canonicalization.
+    """
+    result = classify_input("https://arxiv.org/abs/math.GT/0309136")
+
+    # Same convention as the other arXiv URLs: canonicalized to the arXiv DOI.
+    assert result["kind"] == "doi"
+    assert result["normalized"] == "10.48550/arxiv.math.gt/0309136"
+
+
+def test_classify_input_still_treats_a_non_id_arxiv_path_as_a_url() -> None:
+    """The widened pattern must not start swallowing listing pages."""
+    assert classify_input("https://arxiv.org/list/cs.LG/recent")["kind"] == "url"
+
+
+def test_classify_input_extracts_dois_from_publisher_display_paths() -> None:
+    """ACM's /doi/abs/, Wiley's /doi/full/ and /doi/epdf/ yielded nothing.
+
+    The pattern required `10.` immediately after `/doi/`, so every publisher URL
+    with a display segment silently produced no DOI.
+    """
+    for url in (
+        "https://dl.acm.org/doi/abs/10.1145/3372297",
+        "https://onlinelibrary.wiley.com/doi/full/10.1002/spe.1234",
+        "https://onlinelibrary.wiley.com/doi/epdf/10.1002/spe.1234",
+        "https://dl.acm.org/doi/pdf/10.1145/3372297",
+    ):
+        result = classify_input(url)
+        assert result["kind"] == "doi", url
+        assert result["normalized"].startswith("10."), url
