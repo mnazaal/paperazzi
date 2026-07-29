@@ -9,8 +9,8 @@ from pzi.bib_repository import (
     delete_bib_entry,
     find_entry_index,
     parse_bib_library,
-    read_bib_file,
     read_bib_file_raw,
+    read_bib_file_with_failures,
     read_bib_source,
     validate_library_parseable,
     with_bib_lock,
@@ -59,6 +59,9 @@ class BibStatsResult(TypedDict):
     preprints: int
     entry_types: dict[str, int]
     errors: list[str]
+    #: Blocks the parser dropped (e.g. a duplicate citekey). Non-fatal, so they
+    #: are not `errors` — the counts above are simply of what could be read.
+    warnings: NotRequired[list[str]]
 
 
 class DeleteEntryResult(TypedDict):
@@ -78,7 +81,7 @@ class DeleteEntryResult(TypedDict):
 
 def bib_stats(*, bib_path: str, papers_dir: str) -> BibStatsResult:
     """Return statistics for a BibTeX library."""
-    read_result = read_bib_file(bib_path)
+    read_result, dropped = read_bib_file_with_failures(bib_path)
     entries = read_result["entries"]
     records = read_result["records"]
 
@@ -114,6 +117,7 @@ def bib_stats(*, bib_path: str, papers_dir: str) -> BibStatsResult:
         "preprints": preprints,
         "entry_types": type_counts,
         "errors": [],
+        "warnings": dropped,
     }
 
 
@@ -144,7 +148,10 @@ def list_entries(
     bib_path = bib["path"]
     papers_dir = bib["papers_dir"]
 
-    read_result = read_bib_file(bib_path)
+    # `_with_failures`, so a dropped block is reported rather than silently
+    # shrinking `total`: a duplicate citekey keeps only the first occurrence, so
+    # this used to say "1 of 1 entries" for a two-entry file.
+    read_result, dropped = read_bib_file_with_failures(bib_path)
 
     records = read_result["records"]
     total = len(records)
@@ -203,6 +210,7 @@ def list_entries(
         "sort": sort_field,
         "items": items,
         "errors": [],
+        "warnings": dropped,
     }
 
 
@@ -226,7 +234,7 @@ def entry_detail(
         }
     _config, bib = resolved
 
-    read_result = read_bib_file(bib["path"])
+    read_result, dropped = read_bib_file_with_failures(bib["path"])
 
     entries = read_result["entries"]
     records = read_result["records"]
@@ -250,6 +258,7 @@ def entry_detail(
         "bib_path": bib["path"],
         "record": dict(record),
         "errors": [],
+        "warnings": dropped,
     }
 
 

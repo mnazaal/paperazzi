@@ -5,7 +5,12 @@ from __future__ import annotations
 from pzi import cli_json, exit_codes
 from pzi.bib_service import bib_stats, entry_detail, list_entries
 from pzi.cli_render import _error_lines, _render_bib_stats
-from pzi.commands.common import exit_code_for_error, print_lines, resolve_target
+from pzi.commands.common import (
+    exit_code_for_error,
+    print_lines,
+    print_read_warnings,
+    resolve_target,
+)
 
 
 def run_entries_command(args, *, home_dir, config_path, stdout, stderr, bib_selector) -> int:
@@ -47,6 +52,7 @@ def _run_list(args, home_dir, config_path, stdout, stderr, bib_selector) -> int:
         offset = result["offset"]
         limit = result["limit"]
         shown = min(len(items), limit)
+        print_read_warnings(result, stderr)
         # Summary goes to stderr so `pzi entries | cut` stays clean.
         print(
             f"{offset + 1}-{offset + shown} of {total} entries "
@@ -75,6 +81,7 @@ def _run_detail(args, home_dir, config_path, stdout, stderr, bib_selector) -> in
             print_lines(_error_lines(result["message"], result["errors"]), stderr)
         return exit_code_for_error(result)
     record = result["record"]
+    print_read_warnings(result, stderr)
     if getattr(args, "json", False):
         # One record still arrives as a one-item envelope, so `.items[]` is the
         # same jq path as the listing. The service's own `record` key is dropped
@@ -123,6 +130,7 @@ def _run_stats(args, home_dir, config_path, stdout, stderr, bib_selector) -> int
         return exit_codes.OK if result["status"] == "ok" else exit_codes.ENVIRONMENT
     if result["status"] == "ok":
         print_lines(_render_bib_stats(result), stdout)
+        print_read_warnings(result, stderr)
         return exit_codes.OK
     print_lines(_error_lines("stats failed", result["errors"]), stderr)
     return exit_codes.ENVIRONMENT

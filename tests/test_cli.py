@@ -1776,3 +1776,51 @@ def test_no_bibtexparser_warning_leaks_to_the_terminal(tmp_path: Path) -> None:
     assert "Unknown block type" not in proc.stderr
     # The command still works; this is about the stray log line only.
     assert "smith2024" in proc.stdout
+
+
+def _dup_library(tmp_path: Path) -> Path:
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text(
+        "@article{smith2024,\n  title = {First}\n}\n"
+        "@article{smith2024,\n  title = {Second}\n}\n"
+    )
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\ndefault = true\n'
+    )
+    return config_path
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["entries"],
+        ["entries", "--stats"],
+        ["entries", "smith2024"],
+        ["search", "--query", "first"],
+        ["fix", "dedupe"],
+    ],
+)
+def test_read_commands_report_a_dropped_duplicate(tmp_path: Path, argv) -> None:
+    """A duplicate citekey kept only the first block, silently.
+
+    `pzi entries` said "1-1 of 1 entries" for a two-entry file, and `fix
+    dedupe` — the command whose job is finding duplicates — reported zero
+    clusters. The read still succeeds; it just has to say what it lost.
+    """
+    config_path = _dup_library(tmp_path)
+    stdout, stderr = StringIO(), StringIO()
+
+    exit_code = run_cli(
+        [*argv, "--config", str(config_path)],
+        home_dir=str(tmp_path),
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+    assert exit_code in (exit_codes.OK, exit_codes.FINDINGS)
+    combined = stderr.getvalue()
+    assert "duplicate citekey 'smith2024'" in combined, combined
+    assert "at line 4" in combined
+    # Still shows the data it could read.
+    assert "smith2024" in stdout.getvalue() + stderr.getvalue()

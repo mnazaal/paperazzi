@@ -264,3 +264,16 @@ def print_capture_summary(
 def print_dry_run_banner(total: int, stderr: TextIO) -> None:
     """Announce a dry run before a bulk capture streams its items."""
     print(f"dry run: previewing {total} item(s), nothing will be written", file=stderr)
+
+
+def print_read_warnings(result: Mapping[str, Any], stderr: TextIO) -> None:
+    """Report blocks the parser dropped, on an otherwise successful read.
+
+    These are not `errors`: the command worked and is showing what it could
+    read. But the counts it prints are of a *lenient* parse — a duplicate
+    citekey keeps only the first occurrence — so without this the user sees
+    fewer entries than the file holds and is told nothing. Goes to stderr, like
+    the other summary output, so piping stdout stays clean.
+    """
+    for warning in result.get("warnings") or ():
+        print(f"warning: {warning}", file=stderr)

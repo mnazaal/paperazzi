@@ -7,7 +7,12 @@ from typing import TextIO
 
 from pzi import cli_json, exit_codes
 from pzi.cli_render import _error_lines, _render_search_matches
-from pzi.commands.common import emit_usage_error, print_lines, target_list
+from pzi.commands.common import (
+    emit_usage_error,
+    print_lines,
+    print_read_warnings,
+    target_list,
+)
 from pzi.search_service import SearchResult, search_bib
 
 SearchService = Callable[..., SearchResult]
@@ -65,6 +70,7 @@ def run_search_command(
             all_errors.extend(result.get("errors") or [])
         elif result["status"] == "ok":
             print_lines(_render_search_matches(result), stdout)
+            print_read_warnings(result, stderr)
             if not result.get("matches"):
                 print("no matches", file=stderr)
         else:

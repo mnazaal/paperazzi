@@ -202,6 +202,18 @@ def read_bib_file(path: str) -> ReadBibResult:
         return _read_bib_file_raw(path)
 
 
+def read_bib_file_with_failures(path: str) -> tuple[ReadBibResult, list[str]]:
+    """:func:`read_bib_file`, also reporting the blocks the parser dropped.
+
+    The locked twin of :func:`read_bib_file_raw_with_failures`. Prefer this
+    wherever the count of entries is shown to a user: a duplicate citekey keeps
+    only the first block, so a plain `read_bib_file` reports fewer entries than
+    the file contains and says nothing about it.
+    """
+    with with_bib_lock(path, shared=True):
+        return _read_bib_file_raw_with_failures(path)
+
+
 def _read_bib_file_raw(path: str) -> ReadBibResult:
     """Read BibTeX file without acquiring a lock (caller must lock)."""
     result, _failures = _read_bib_file_raw_with_failures(path)

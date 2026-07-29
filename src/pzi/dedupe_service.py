@@ -8,6 +8,7 @@ from pzi.bib_repository import (
     merge_bib_entries,
     merge_entries,
     read_bib_file,
+    read_bib_file_with_failures,
 )
 from pzi.bibtex import NormalizedRecord
 from pzi.similarity import (
@@ -24,6 +25,10 @@ class DedupeResult(TypedDict):
     fuzzy_candidates: list[dict[str, Any]]
     total_clusters: int
     errors: list[str]
+    #: Blocks the parser dropped (e.g. a duplicate citekey). Non-fatal: the
+    #: command succeeded and is reporting what it could read. Absent on the
+    #: error paths, which never got as far as parsing.
+    warnings: NotRequired[list[str]]
 
 
 class MergeResult(TypedDict):
@@ -56,7 +61,7 @@ def find_duplicates(
         dict with ``status``, ``exact_duplicates`` (list of citekey pairs),
         ``fuzzy_candidates`` (list of citekey + hint dicts), and counts.
     """
-    raw = read_bib_file(bib_path)
+    raw, dropped = read_bib_file_with_failures(bib_path)
     records: list[NormalizedRecord] = raw["records"]
 
     if not records:
@@ -68,6 +73,7 @@ def find_duplicates(
             "fuzzy_candidates": [],
             "total_clusters": 0,
             "errors": [],
+            "warnings": dropped,
         }
 
     # --- Exact duplicates via identity index ---
@@ -129,6 +135,7 @@ def find_duplicates(
         "fuzzy_candidates": fuzzy_candidates,
         "total_clusters": len(exact_duplicates),
         "errors": [],
+        "warnings": dropped,
     }
 
 
