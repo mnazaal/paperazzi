@@ -63,6 +63,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is ambiguous" rather than "bib not found", and no longer drop the per-line
   config errors.
 
+- **A duplicate citekey no longer silently drops an entry.** bibtexparser keeps
+  only the first block of a repeated key and files the rest as parse failures,
+  which every reader built on `read_bib_file` discarded. `pzi entries` reported
+  "1-1 of 1 entries" for a two-entry file, and `pzi fix dedupe` — the command
+  for finding duplicates — reported zero clusters. `entries` (list, detail and
+  `--stats`), `search` and `fix dedupe` now name the dropped entry and its line
+  while still showing what they could read.
+- **`fix clean`'s `duplicate_citekeys` finally reports duplicates.** The field
+  has existed since June and could never be non-empty, because it counted
+  repeated keys among entries the parser had already de-duplicated. A duplicate
+  is now a finding (exit 1) rather than a refusal, and an unparseable block
+  still fails. **Orphan-PDF detection is skipped whenever the parser dropped
+  anything**: a dropped entry contributes no referenced path, so its PDF looked
+  orphaned and `--fix` would have quarantined a file the library still refers to.
+- **`fix clean --json` populates `errors`** on a failure, instead of reporting
+  `"status": "error"` with an empty list and the detail stranded in `issues[]`.
+- **Five command runners returned 1 for genuine failures**, which the exit-code
+  contract reserves for "ran fine, has something to report". `fix clean` and
+  `export` now exit 5 when they cannot read the library; `export` and `init`
+  exit 2 when refusing to overwrite without `--force`; `server` exits 5 when the
+  auth token or server plan cannot be resolved. **`export --output <existing>`
+  without `--force` changes from 1 to 2.**
+- **A raw `Unknown block type <class '...DuplicateBlockKeyBlock'>` line** no
+  longer reaches the terminal. It is bibtexparser's own logger, printed by
+  Python's fallback handler because pzi configured no logging.
+- The refusal to rewrite a malformed bib now names the duplicate citekey and its
+  real line number; it previously reported a 0-based index, so a duplicate on
+  line 4 was described as "around line 3".
+
 ### Removed
 
 - **`pzi/__init__.py` no longer re-exports ten names** — `BibtexEntry`,
