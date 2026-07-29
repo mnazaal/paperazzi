@@ -25,6 +25,11 @@ class DoctorBibStatus(TypedDict):
 
 class DoctorResult(TypedDict):
     status: str
+    #: Health problems, one per line. The envelope's documented failure channel
+    #: is `errors`, and doctor only ever populated `config_errors`, so a
+    #: `--json` consumer following the contract saw an empty list on every
+    #: failure — including the hard config-load one.
+    errors: list[str]
     config_path: str
     config_ok: bool
     config_errors: list[str]
@@ -35,6 +40,36 @@ class DoctorResult(TypedDict):
     credentials: dict[str, str]
     semantic_scholar: dict[str, Any]
     config_permissions_warning: str | None
+
+
+def doctor_health_problems(result: DoctorResult) -> list[str]:
+    """Every reason this library is not healthy; empty means it is.
+
+    Lives here rather than in the runner so `status` and the exit code are two
+    readings of one value. They used to be computed separately, and `status` was
+    hardcoded `"ok"` whenever the config merely loaded — so a missing bib, an
+    unreachable translation-server or a broken key command produced
+    `"status": "ok"` on a run that exited 5.
+    """
+    problems: list[str] = []
+    if not result.get("config_ok"):
+        problems.extend(result.get("config_errors") or ["config could not be loaded"])
+    for bib in result.get("bibs") or []:
+        if not bib.get("path_exists"):
+            problems.append(f"bib file not found: {bib.get('path')}")
+    if result.get("translation_server_url") and not result.get(
+        "translation_server_reachable"
+    ):
+        problems.append(
+            f"translation server unreachable at {result['translation_server_url']}"
+        )
+    key_error = (result.get("semantic_scholar") or {}).get("key_error")
+    if key_error:
+        # A configured secret command that cannot run is a config fault the user
+        # must fix. An unreachable API (`probe_error`) stays advisory — that is
+        # not the user's config being wrong.
+        problems.append(f"semantic_scholar_api_key_cmd failed: {key_error}")
+    return problems
 
 
 def config_permissions_warning(config_path: str) -> str | None:
@@ -70,6 +105,7 @@ def doctor_check(
     if config_result["config"] is None:
         return {
             "status": "error",
+            "errors": list(config_result["errors"]),
             "config_path": config_result["path"],
             "config_ok": False,
             "config_errors": config_result["errors"],
@@ -140,8 +176,9 @@ def doctor_check(
     except OSError as exc:
         s2_probe_error = str(exc)
 
-    return {
+    result: DoctorResult = {
         "status": "ok",
+        "errors": [],
         "config_path": config_result["path"],
         "config_ok": True,
         "config_errors": [],
@@ -164,6 +201,12 @@ def doctor_check(
             config_result["path"]
         ),
     }
+
+    # One source of truth: `status` and the runner's exit code are now two
+    # readings of the same list.
+    result["errors"] = doctor_health_problems(result)
+    result["status"] = "ok" if not result["errors"] else "error"
+    return result
 
 
 def _credential_status(config: dict[str, Any]) -> dict[str, str]:

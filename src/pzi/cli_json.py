@@ -64,8 +64,13 @@ def build_envelope(
     return envelope
 
 
-def emit(payload: Mapping[str, Any] | Sequence[Any], stdout: TextIO) -> None:
-    """Write one JSON document to *stdout*."""
+def _emit(payload: Mapping[str, Any] | Sequence[Any], stdout: TextIO) -> None:
+    """Write one JSON document to *stdout*.
+
+    Private: it guarantees only "valid JSON", not the envelope, so every one of
+    its former direct callers was a contract violation. Reach it through
+    :func:`emit_result` or :func:`emit_error`, which stamp the five keys.
+    """
     print(json.dumps(payload, indent=2, default=str), file=stdout)
 
 
@@ -77,7 +82,7 @@ def emit_result(
     items: Sequence[Any] | None = None,
 ) -> None:
     """Write a service result to *stdout* as the standard envelope."""
-    emit(build_envelope(result, command=command, items=items), stdout)
+    _emit(build_envelope(result, command=command, items=items), stdout)
 
 
 def emit_error(message: str, errors: Sequence[str], stdout: TextIO, *, command: str) -> None:

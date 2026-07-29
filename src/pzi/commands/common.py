@@ -5,7 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, TextIO
 
-from pzi import exit_codes
+from pzi import cli_json, exit_codes
+from pzi.cli_parser import usage_error_lines
 from pzi.config import BibConfig, load_config_file, resolve_library_target
 from pzi.errors import PziError
 
@@ -177,3 +178,53 @@ def exit_code_for_error(result: Mapping[str, object]) -> int:
     if result.get("reason") == "not_found":
         return exit_codes.NOT_FOUND
     return exit_codes.ENVIRONMENT
+
+
+#: Sub-command attributes, in the order the CLI nests them. `pzi fix clean`
+#: parses as `command="fix"`, `fix_command="clean"`, and the runners label their
+#: envelopes with the joined form.
+_SUBCOMMAND_ATTRS = ("fix_command", "tag_command", "pdf_command")
+
+
+def command_label(args: object) -> str:
+    """The envelope ``command`` label for an invocation.
+
+    The runners pass string literals (``"fix clean"``, ``"entries --stats"``).
+    The CLI boundary has only ``args``, so it reconstructs the same label here —
+    otherwise a command's failure document would name itself differently from
+    its success document, and `.command` would stop being a reliable key.
+    """
+    label = str(getattr(args, "command", "") or "")
+    for attr in _SUBCOMMAND_ATTRS:
+        sub = getattr(args, attr, None)
+        if isinstance(sub, str) and sub:
+            return f"{label} {sub}"
+    if label == "entries" and getattr(args, "stats", False):
+        return "entries --stats"
+    if label == "update" and getattr(args, "promote", False):
+        return "update --promote"
+    if label == "add" and getattr(args, "from_file", None):
+        return "add --from-file"
+    return label
+
+
+def emit_usage_error(
+    args: object,
+    message: str,
+    *,
+    command_path: tuple[str, ...],
+    stdout: TextIO,
+    stderr: TextIO,
+) -> int:
+    """Report a usage error, as the JSON envelope when ``--json`` was passed.
+
+    A rejected invocation is still a result the caller has to classify, and the
+    contract says they never have to scrape stderr to do it. Without this, every
+    conditional usage check (the ones argparse cannot express) emitted prose
+    only, so `--json` produced no document at all.
+    """
+    if getattr(args, "json", False):
+        cli_json.emit_error(message, [message], stdout, command=command_label(args))
+    else:
+        print_lines(usage_error_lines(command_path, message), stderr)
+    return exit_codes.USAGE

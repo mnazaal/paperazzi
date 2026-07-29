@@ -18,21 +18,40 @@ def run_doctor_command(args, *, home_dir, config_path, stdout, stderr) -> int:
 
     if getattr(args, "config_only", False):
         # Offline config check (no live service probes) — formerly `config validate`.
-        result = load_config_file(config_path, home_dir=home_dir)
-        if result["config"] is not None:
-            print(f"config valid: {result['path']}", file=stdout)
+        cfg = load_config_file(config_path, home_dir=home_dir)
+        valid = cfg["config"] is not None
+        if getattr(args, "json", False):
+            # This branch returns before the `--json` check below, so
+            # `doctor --config-only --json` emitted prose — and on a *passing*
+            # run it wrote `config valid: …` to stdout, breaking `| jq`.
+            cli_json.emit_result(
+                {
+                    "status": "ok" if valid else "error",
+                    "config_path": cfg["path"],
+                    "config_ok": valid,
+                    "errors": list(cfg["errors"]),
+                },
+                stdout,
+                command="doctor --config-only",
+                items=[],
+            )
+            return exit_codes.OK if valid else exit_codes.ENVIRONMENT
+        if valid:
+            print(f"config valid: {cfg['path']}", file=stdout)
             return exit_codes.OK
-        print_lines(_error_lines("config invalid", result["errors"]), stderr)
+        print_lines(_error_lines("config invalid", cfg["errors"]), stderr)
         return exit_codes.ENVIRONMENT
 
     result = doctor_check(config_path=config_path, home_dir=home_dir)
     if getattr(args, "json", False):
-        cli_json.emit_result(result, stdout, command="doctor", items=result.get("bibs") or [])
+        cli_json.emit_result(result, stdout, command="doctor")
     else:
         print_lines(_render_doctor_result(result), stdout)
     # A health check has to fail when the health is bad: reporting an
     # unreachable translation-server and exiting 0 makes it useless as a gate.
-    return exit_codes.OK if _doctor_healthy(result) else exit_codes.ENVIRONMENT
+    # `status` is computed from the same problem list the report prints, so the
+    # envelope and the exit code can no longer disagree.
+    return exit_codes.OK if result["status"] == "ok" else exit_codes.ENVIRONMENT
 
 
 def _reinstall_server(*, config_path, home_dir, stdout, stderr) -> int:
@@ -78,21 +97,3 @@ def _reinstall_server(*, config_path, home_dir, stdout, stderr) -> int:
         return exit_codes.ENVIRONMENT
     print("translation-server reinstalled. Run `pzi server` to start.", file=stdout)
     return exit_codes.OK
-
-
-def _doctor_healthy(result) -> bool:
-    """True when every probe doctor ran came back healthy."""
-    if not result.get("config_ok"):
-        return False
-    if any(not bib.get("path_exists") for bib in result.get("bibs") or []):
-        return False
-    if result.get("translation_server_url") and not result.get("translation_server_reachable"):
-        return False
-    # A configured secret command that cannot run is a config fault the user
-    # must fix, not an advisory: without this the report would name the problem
-    # and still exit 0, which is the outcome `doctor` exists to prevent. An
-    # unreachable API (`probe_error`) stays advisory — that is not the user's
-    # config being wrong.
-    if (result.get("semantic_scholar") or {}).get("key_error"):
-        return False
-    return True

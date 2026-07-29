@@ -30,7 +30,11 @@ def run_import_command(
         # (`exit_codes.py`, `commands/common.py`), and a source path that is not
         # there is the same "could not run" condition `import_service` already
         # reports as an error when its own check wins the race.
-        print(f"error: source file not found: {source}", file=stderr)
+        message = f"source file not found: {source}"
+        if getattr(args, "json", False):
+            cli_json.emit_error(message, [message], stdout, command="import")
+        else:
+            print(f"error: {message}", file=stderr)
         return exit_codes.ENVIRONMENT
 
     result = import_from_bibtex(

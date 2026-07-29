@@ -9,6 +9,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`--json` now really does emit one envelope on every failure.** A previous
+  release announced this for `add`, `tag` and `check`; those three, and a dozen
+  other sites, still did not conform. Two shapes of violation:
+
+  - **Emitted nothing at all.** `entries <citekey>`, `search` with no criteria,
+    `update --replace` without `--promote`, `delete` on a non-tty, `pdf retry`
+    with no citekey, `import` with a missing source, `add --from-file` with an
+    unreadable list, and — via `resolve_target` raising at the top of seven
+    runners — *any* command given an unknown `--target`. Scripts had to scrape
+    stderr to classify exactly the failures the contract says they never do.
+  - **Emitted the wrong shape.** `tag add`/`tag remove`, `add`'s error path and
+    `check`'s error path used the raw serializer, so their documents had no
+    `command` and no `.items[]`. `add --from-file` hand-built its own document
+    and carried only one of the five keys.
+
+  The `PziError` family is now handled once at the CLI boundary rather than in
+  each runner, so every present and future one is covered. `cli_json.emit` is
+  private (`_emit`): after this sweep it had no legitimate caller, and making
+  the envelope the only way out is what stops the next bypass.
+
+- **`pzi doctor --json` no longer contradicts its own exit code.** `status` was
+  hardcoded `"ok"` whenever the config merely loaded, while the exit code
+  consulted four signals — so a missing bib file, an unreachable
+  translation-server or a broken `semantic_scholar_api_key_cmd` all produced
+  `"status": "ok"` on a run that exited 5. The health verdict now lives in one
+  place and both read it. The envelope's `errors` list is also populated: doctor
+  only ever filled `config_errors`, so the documented failure channel was empty
+  even on a hard config failure. **`doctor --config-only` honours `--json` at
+  all** — on a *passing* run it used to write `config valid: …` to stdout,
+  breaking `| jq`.
+
+- **`pzi check --jsonl - --json` is rejected as a usage error (exit 2).** Both
+  write to stdout, so the combination produced an NDJSON stream followed by a
+  pretty-printed document — neither valid NDJSON nor the single document
+  `--json` promises. `check` also no longer reports `"status": "ok"` on a run
+  that reached no metadata source and exits 5.
+
 - **Eleven commands now return the exit code they document.** A previous release
   announced that exit codes have one meaning each; these sites never conformed,
   so the guarantee that `1` means "ran fine and has something to report" — and

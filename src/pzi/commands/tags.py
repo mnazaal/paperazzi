@@ -57,14 +57,21 @@ def run_tag_command(
         tags=flat_tags,
         dry_run=args.dry_run,
     )
+    # `tag list` above already emits the envelope; these two used the raw
+    # serializer, so a mutation's JSON had no `command` and no `.items[]`.
+    mutation_command = f"tag {args.tag_command}"
     if result["status"] == "ok":
         if getattr(args, "json", False):
-            cli_json.emit(result, stdout)
+            cli_json.emit_result(
+                result, stdout, command=mutation_command, items=result.get("tags") or [],
+            )
         else:
             print(_render_tag_mutation_success(result), file=stdout)
         return exit_codes.OK
     if getattr(args, "json", False):
-        cli_json.emit(result, stdout)
+        cli_json.emit_result(
+            result, stdout, command=mutation_command, items=result.get("tags") or [],
+        )
     else:
         print_lines(_error_lines(result["message"], result["errors"]), stderr)
     return exit_code_for_error(result)

@@ -66,7 +66,13 @@ def _run_detail(args, home_dir, config_path, stdout, stderr, bib_selector) -> in
         bib_selector=bib_selector,
     )
     if result["status"] != "ok":
-        print_lines(_error_lines(result["message"], result["errors"]), stderr)
+        # The `--json` branch below sits after this guard, so an unknown citekey
+        # used to emit no document at all — the one case a script most needs to
+        # classify.
+        if getattr(args, "json", False):
+            cli_json.emit_result(result, stdout, command="entries", items=[])
+        else:
+            print_lines(_error_lines(result["message"], result["errors"]), stderr)
         return exit_code_for_error(result)
     record = result["record"]
     if getattr(args, "json", False):

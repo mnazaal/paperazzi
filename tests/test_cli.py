@@ -889,6 +889,10 @@ def _write_small_library(tmp_path: Path) -> Path:
     return config
 
 
+#: The five keys `README.md` promises on every `--json` document.
+_ENVELOPE_KEYS = frozenset({"command", "status", "bib_name", "items", "errors"})
+
+
 @pytest.mark.parametrize(
     "argv",
     [
@@ -898,6 +902,7 @@ def _write_small_library(tmp_path: Path) -> Path:
         ["tag", "list"],
         ["fix", "dedupe"],
         ["fix", "clean"],
+        ["doctor", "--config-only"],
     ],
 )
 def test_cli_read_commands_emit_json(tmp_path: Path, argv: list[str]) -> None:
@@ -916,7 +921,9 @@ def test_cli_read_commands_emit_json(tmp_path: Path, argv: list[str]) -> None:
     # 0 (ok) or 1 (e.g. dedupe/clean signalling findings) — never 2 (flag rejected).
     assert exit_code in (0, 1), stderr.getvalue()
     parsed = json.loads(stdout.getvalue())  # raises if not valid JSON
-    assert parsed is not None
+    # `assert parsed is not None` passed for `{}` — assert the documented shape.
+    assert _ENVELOPE_KEYS <= set(parsed), parsed
+    assert isinstance(parsed["items"], list)
 
 
 def test_cli_uses_default_home_when_home_dir_not_injected(
@@ -1478,24 +1485,24 @@ def test_add_rejects_bad_metadata_json_before_starting_the_backend(
     assert "starting translation-server" not in stderr.getvalue()
 
 
-def test_doctor_health_verdict_fails_on_a_broken_key_command() -> None:
+def test_doctor_health_problems_flags_a_broken_key_command() -> None:
     """Naming the fault and still exiting 0 is the outcome doctor exists to prevent.
 
     Semantic Scholar was not part of the health verdict at all, so a recorded
     `key_error` would have printed and still exited 0. An unreachable API stays
     advisory — that is not the user's config being wrong.
     """
-    from pzi.commands.doctor import _doctor_healthy
+    from pzi.doctor_service import doctor_health_problems
 
     healthy = {"config_ok": True, "bibs": [{"path_exists": True}],
                "translation_server_url": None, "semantic_scholar": {}}
-    assert _doctor_healthy(healthy) is True
+    assert doctor_health_problems(healthy) == []
 
     broken_key = {**healthy, "semantic_scholar": {"key_error": "secret command exited with code 1"}}
-    assert _doctor_healthy(broken_key) is False
+    assert doctor_health_problems(broken_key) != []
 
     unreachable_api = {**healthy, "semantic_scholar": {"probe_error": "connection refused"}}
-    assert _doctor_healthy(unreachable_api) is True
+    assert doctor_health_problems(unreachable_api) == []
 
 
 def test_add_reports_a_broken_key_command_as_a_structured_error(tmp_path: Path) -> None:
@@ -1613,3 +1620,59 @@ def test_add_from_file_unreadable_is_environment(tmp_path: Path) -> None:
     )
 
     assert exit_code == exit_codes.ENVIRONMENT
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        # Unknown --target: raised as PziError from `resolve_target`, which is
+        # the first statement of seven runners.
+        ["fix", "clean", "--target", "nosuchbib"],
+        ["fix", "dedupe", "--target", "nosuchbib"],
+        ["fix", "reindex", "--target", "nosuchbib"],
+        ["entries", "--stats", "--target", "nosuchbib"],
+        # `export` is deliberately absent: it has no `--json` flag (it uses
+        # `--format json`), so argparse rejects the invocation before dispatch.
+        # Recorded in PLAN.md as a separate decision.
+        # Unknown citekey: a service-level error result.
+        ["entries", "nosuch2024"],
+        ["tag", "add", "nosuch2024", "ml"],
+        ["tag", "remove", "nosuch2024", "ml"],
+        ["pdf", "retry", "nosuch2024"],
+        # Conditional usage errors argparse cannot express.
+        ["search"],
+        ["update", "--replace"],
+        ["pdf", "retry"],
+        ["check", "--jsonl", "-"],
+        # Missing input file.
+        ["import", "/nonexistent/source.bib"],
+    ],
+)
+def test_cli_failing_commands_still_emit_one_envelope(
+    tmp_path: Path, argv: list[str]
+) -> None:
+    """`--json` promises a document *including when the command fails*.
+
+    Every one of these used to print prose to stderr and emit nothing at all, so
+    a script had to scrape stderr to classify the failure — the exact thing the
+    contract says it never has to do. No test asserted the envelope on a failure
+    path, which is why they drifted.
+    """
+    import json
+
+    config = _write_small_library(tmp_path)
+    stdout = StringIO()
+    stderr = StringIO()
+
+    exit_code = run_cli(
+        [*argv, "--json", "--config", str(config)],
+        home_dir=str(tmp_path), stdout=stdout, stderr=stderr,
+    )
+
+    assert exit_code != 0, "expected a failing invocation"
+    raw = stdout.getvalue()
+    assert raw.strip(), f"no JSON emitted for {argv}"
+    parsed = json.loads(raw)  # exactly one document — raises on NDJSON or prose
+    assert _ENVELOPE_KEYS <= set(parsed), parsed
+    assert parsed["status"] == "error", parsed
+    assert parsed["errors"], "the documented failure channel must not be empty"

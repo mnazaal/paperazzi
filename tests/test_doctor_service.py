@@ -275,7 +275,10 @@ def test_doctor_reports_a_failing_key_command_instead_of_crashing(tmp_path) -> N
         s2_probe=lambda **_kw: False,
     )
 
-    assert result["status"] == "ok"
+    # `status` now tracks health, so a broken key command makes the run unhealthy
+    # — it used to say "ok" while the command exited 5.
+    assert result["status"] == "error"
+    assert any("semantic_scholar_api_key_cmd" in e for e in result["errors"])
     assert result["semantic_scholar"]["key_error"]
     # The rest of the report still ran.
     assert result["translation_server_reachable"] is True

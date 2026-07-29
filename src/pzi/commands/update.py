@@ -6,13 +6,13 @@ from collections.abc import Callable, Mapping
 from typing import Any, TextIO
 
 from pzi import cli_json, exit_codes
-from pzi.cli_parser import usage_error_lines
 from pzi.cli_render import (
     _error_lines,
     _render_bib_promote_items,
     _render_bib_update_items,
 )
 from pzi.commands.common import (
+    emit_usage_error,
     print_lines,
     print_metadata_diagnostics,
     print_metadata_warnings,
@@ -44,16 +44,16 @@ def run_update_command(
     """
     promote = getattr(args, "promote", False)
     if getattr(args, "replace", False) and not promote:
-        print_lines(
-            usage_error_lines(("update",), "--replace only applies with --promote"), stderr
+        return emit_usage_error(
+            args, "--replace only applies with --promote",
+            command_path=("update",), stdout=stdout, stderr=stderr,
         )
-        return exit_codes.USAGE
     mark_resolved = getattr(args, "mark_resolved", False)
     if mark_resolved and not promote:
-        print_lines(
-            usage_error_lines(("update",), "--mark-resolved only applies with --promote"), stderr
+        return emit_usage_error(
+            args, "--mark-resolved only applies with --promote",
+            command_path=("update",), stdout=stdout, stderr=stderr,
         )
-        return exit_codes.USAGE
 
     as_json = getattr(args, "json", False)
     ok = True

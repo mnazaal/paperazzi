@@ -8,9 +8,8 @@ from typing import TextIO
 
 from pzi import cli_json, exit_codes
 from pzi.bib_service import delete_entry
-from pzi.cli_parser import usage_error_lines
 from pzi.cli_render import _error_lines, _render_delete_success
-from pzi.commands.common import exit_code_for_error, print_lines, resolve_target
+from pzi.commands.common import emit_usage_error, exit_code_for_error, print_lines, resolve_target
 
 
 def _render_errors(title: str, errors: Sequence[str], stderr: TextIO, code: int) -> int:
@@ -19,6 +18,7 @@ def _render_errors(title: str, errors: Sequence[str], stderr: TextIO, code: int)
 
 
 def run_delete_command(args, *, home_dir, config_path, stdout, stderr, bib_selector) -> int:
+    as_json = getattr(args, "json", False)
     _config, target = resolve_target(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector,
     )
@@ -28,15 +28,14 @@ def run_delete_command(args, *, home_dir, config_path, stdout, stderr, bib_selec
         # the caller's data, and answering "no" for them turns a forgotten
         # --force into a silent no-op that reports success.
         if not sys.stdin.isatty():
-            print_lines(
-                usage_error_lines(
-                    ("delete",),
-                    "refusing to prompt for confirmation with stdin not a terminal; "
-                    "pass --force to delete or --dry-run to preview",
-                ),
-                stderr,
+            return emit_usage_error(
+                args,
+                "refusing to prompt for confirmation with stdin not a terminal; "
+                "pass --force to delete or --dry-run to preview",
+                command_path=("delete",),
+                stdout=stdout,
+                stderr=stderr,
             )
-            return exit_codes.USAGE
         print(
             f"Delete entry '{args.citekey}' from {target['path']}? [y/N] ",
             end="",
@@ -44,7 +43,16 @@ def run_delete_command(args, *, home_dir, config_path, stdout, stderr, bib_selec
         )
         response = sys.stdin.readline().strip().lower()
         if response not in ("y", "yes"):
-            print("cancelled", file=stderr)
+            # Declining is a result the caller has to see; emitting nothing left
+            # `--json` unable to distinguish it from a successful delete.
+            if as_json:
+                cli_json.emit_result(
+                    {"status": "ok", "citekey": args.citekey, "deleted": False,
+                     "message": "cancelled"},
+                    stdout, command="delete", items=[],
+                )
+            else:
+                print("cancelled", file=stderr)
             return exit_codes.OK
 
     result = delete_entry(
@@ -52,7 +60,6 @@ def run_delete_command(args, *, home_dir, config_path, stdout, stderr, bib_selec
         citekey=args.citekey,
         dry_run=args.dry_run,
     )
-    as_json = getattr(args, "json", False)
     if result["status"] == "ok":
         if as_json:
             cli_json.emit_result(result, stdout, command="delete", items=[])

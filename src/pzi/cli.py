@@ -7,11 +7,12 @@ import sys
 from collections.abc import Callable, Sequence
 from typing import TextIO, TypedDict
 
-from pzi import exit_codes
+from pzi import cli_json, exit_codes
 from pzi.bib_repository import ConcurrentEditError
 from pzi.cli_parser import build_parser, set_error_stream
 from pzi.commands.add import run_add_command as _run_add
 from pzi.commands.check import run_check_command as _run_check
+from pzi.commands.common import command_label
 from pzi.commands.delete import run_delete_command as _run_delete
 from pzi.commands.doctor import run_doctor_command as _run_doctor
 from pzi.commands.entries import run_entries_command as _run_entries
@@ -173,6 +174,31 @@ def run_cli(
     }
 
     if args.command in _dispatch:
+        # `--json` promises exactly one document on stdout *including when the
+        # command fails*, but these handlers are the last thing to run and used
+        # to report only as prose on stderr. `resolve_target` alone raises
+        # `PziError` as the first statement of seven runners, so a bad
+        # `--target` produced no JSON for any of them.
+        as_json = getattr(args, "json", False)
+
+        def _fail(message: str, details: Sequence[str], code: int) -> int:
+            if as_json:
+                # `.errors[]` is the documented failure channel, so it must say
+                # something on every failure. Most `PziError`s carry details
+                # (the per-line config errors); the ones that do not put
+                # everything in the message.
+                cli_json.emit_error(
+                    message,
+                    list(details) or [message],
+                    out,
+                    command=command_label(args),
+                )
+                return code
+            print(f"error: {message}", file=err)
+            for detail in details:
+                print(f"  - {detail}", file=err)
+            return code
+
         try:
             return _dispatch[args.command]()
         except BrokenPipeError:
@@ -183,25 +209,21 @@ def run_cli(
             # Another process edited the bib between our pre-lock snapshot and
             # acquiring the lock; the write was aborted to prevent data loss.
             # A retry almost always succeeds (the race window is tiny).
-            print(
-                "error: bib file was modified externally while writing — "
+            return _fail(
+                "bib file was modified externally while writing — "
                 "retry the command",
-                file=err,
+                [],
+                exit_codes.ENVIRONMENT,
             )
-            return exit_codes.ENVIRONMENT
         except PziError as exc:
             # Carries a message already phrased for the user (e.g. naming the
             # bib file that is not valid UTF-8) and the exit code to report.
-            print(f"error: {exc.message}", file=err)
-            for detail in exc.details:
-                print(f"  - {detail}", file=err)
-            return exc.code
+            return _fail(exc.message, exc.details, exc.code)
         except (OSError, UnicodeDecodeError) as exc:
             # Expected environmental failures (permission denied, disk full, a
             # file that is not valid UTF-8, …) become a clean diagnostic
             # instead of a raw traceback.  Genuine bugs still propagate.
-            print(f"error: {_friendly_error(exc)}", file=err)
-            return exit_codes.ENVIRONMENT
+            return _fail(_friendly_error(exc), [], exit_codes.ENVIRONMENT)
 
     print(f"unknown command: {args.command}", file=err)
     return exit_codes.USAGE

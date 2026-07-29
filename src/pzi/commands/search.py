@@ -6,9 +6,8 @@ from collections.abc import Callable, Sequence
 from typing import TextIO
 
 from pzi import cli_json, exit_codes
-from pzi.cli_parser import usage_error_lines
 from pzi.cli_render import _error_lines, _render_search_matches
-from pzi.commands.common import print_lines, target_list
+from pzi.commands.common import emit_usage_error, print_lines, target_list
 from pzi.search_service import SearchResult, search_bib
 
 SearchService = Callable[..., SearchResult]
@@ -26,13 +25,13 @@ def run_search_command(
 ) -> int:
     """Run `pzi search` using injected service for thin-I/O testing."""
     if not any((args.query, args.author, args.year, args.tag)):
-        print_lines(
-            usage_error_lines(
-                ("search",), "at least one of --query, --author, --year, --tag is required"
-            ),
-            stderr,
+        return emit_usage_error(
+            args,
+            "at least one of --query, --author, --year, --tag is required",
+            command_path=("search",),
+            stdout=stdout,
+            stderr=stderr,
         )
-        return exit_codes.USAGE
 
     as_json = getattr(args, "json", False)
     ok = True

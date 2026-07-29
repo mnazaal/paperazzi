@@ -9,7 +9,7 @@ from typing import TextIO
 from pzi import cli_json, exit_codes
 from pzi.check_service import CheckResult, check_bib
 from pzi.cli_render import _error_lines, _render_check_items
-from pzi.commands.common import print_lines
+from pzi.commands.common import emit_usage_error, print_lines
 
 
 def run_check_command(
@@ -24,9 +24,24 @@ def run_check_command(
 ) -> int:
     """Run `pzi check`: audit each entry, report verdicts, never write the bib.
 
-    Exit codes: 1 on service error; in --strict mode, 1 when any entry is
+    Exit codes: 5 when the service could not run or no source could be reached;
+    2 for a conflicting invocation; in --strict mode, 1 when any entry is
     problematic (so CI can gate on it); 0 otherwise.
     """
+    jsonl_path: str | None = getattr(args, "jsonl", None)
+    if jsonl_path == "-" and getattr(args, "json", False):
+        # Both write to stdout: the NDJSON stream plus the pretty envelope is
+        # neither valid NDJSON nor the single document `--json` promises. The
+        # human table is already guarded against the stream; this is the same
+        # collision one flag over. argparse cannot express "conflicts only when
+        # --jsonl is `-`", so the check lives here.
+        return emit_usage_error(
+            args,
+            "--jsonl - writes NDJSON to stdout and cannot be combined with --json",
+            command_path=("check",),
+            stdout=stdout,
+            stderr=stderr,
+        )
     strict: bool = getattr(args, "strict", False)
     result = check_bib_fn(
         config_path=config_path,
@@ -37,7 +52,7 @@ def run_check_command(
 
     if result["status"] != "ok":
         if getattr(args, "json", False):
-            cli_json.emit(result, stdout)
+            cli_json.emit_result(result, stdout, command="check")
         else:
             print_lines(_error_lines("check failed", result["errors"]), stderr)
         return exit_codes.ENVIRONMENT
@@ -55,7 +70,6 @@ def run_check_command(
         with open(report_path, "w", encoding="utf-8") as f:
             json.dump(result, f, indent=2, default=str)
 
-    jsonl_path: str | None = getattr(args, "jsonl", None)
     if jsonl_path:
         lines = [json.dumps(item, default=str) for item in result["items"]]
         if jsonl_path == "-":
@@ -68,6 +82,16 @@ def run_check_command(
                 for line in lines:
                     f.write(line + "\n")
 
+    # An audit that reached no source audited nothing, and the run exits 5 for
+    # it below — so the envelope must not report a clean `ok`.
+    audited_nothing = bool(
+        result["items"]
+        and result["errors"]
+        and not any(item.get("sources_checked") for item in result["items"])
+    )
+    if audited_nothing:
+        result = {**result, "status": "error"}
+
     if getattr(args, "json", False):
         cli_json.emit_result(result, stdout, command="check")
     elif jsonl_path != "-":
@@ -77,9 +101,7 @@ def run_check_command(
 
     # An audit that reached no source at all audited nothing. Exiting 0 there
     # reports a clean library, which is precisely the claim the run cannot make.
-    if result["items"] and result["errors"] and not any(
-        item.get("sources_checked") for item in result["items"]
-    ):
+    if audited_nothing:
         return exit_codes.ENVIRONMENT
 
     problematic = result["counts"]["problematic"]

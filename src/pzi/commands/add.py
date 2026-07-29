@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import random
 import time
 from collections.abc import Mapping
@@ -157,7 +156,9 @@ def _capture_and_render(
 
     if result["status"] == "error":
         if getattr(args, "json", False):
-            cli_json.emit(result, stdout)
+            # Same envelope as the success path below — a consumer should not
+            # have to switch shapes depending on the outcome.
+            cli_json.emit_result(result, stdout, command="add")
         else:
             print_lines(_error_lines(result["message"], result["errors"]), stderr)
         return exit_codes.ENVIRONMENT
@@ -202,11 +203,23 @@ def _run_batch(
     try:
         text = load_text_arg(from_file)
     except OSError as exc:
-        print(f"error: cannot read --from-file {from_file}: {exc}", file=stderr)
+        message = f"cannot read --from-file {from_file}: {exc}"
+        if getattr(args, "json", False):
+            cli_json.emit_error(
+                message, [message], stdout, command="add --from-file",
+            )
+        else:
+            print(f"error: {message}", file=stderr)
         return exit_codes.ENVIRONMENT
     values = parse_batch_values(text)
     if not values:
-        print(f"error: no DOIs or URLs found in {from_file}", file=stderr)
+        message = f"no DOIs or URLs found in {from_file}"
+        if getattr(args, "json", False):
+            cli_json.emit_error(
+                message, [message], stdout, command="add --from-file",
+            )
+        else:
+            print(f"error: {message}", file=stderr)
         return exit_codes.ENVIRONMENT
 
     options = build_capture_options_from_add_args(args, config=cfg.get("config"))
@@ -273,14 +286,19 @@ def _run_batch(
     )
 
     if getattr(args, "json", False):
-        print(
-            json.dumps(
-                {"total": total, "counts": counts,
-                 "failures_file": str(failures_path) if failures_path else None,
-                 "items": items},
-                indent=2, default=str,
-            ),
-            file=stdout,
+        # Was hand-rolled with `json.dumps`, so it carried `items` by luck and
+        # none of the other four envelope keys. `total`, `counts` and
+        # `failures_file` still ride along as command-specific fields.
+        cli_json.emit_result(
+            {
+                "status": "error" if counts["failed"] else "ok",
+                "total": total,
+                "counts": counts,
+                "failures_file": str(failures_path) if failures_path else None,
+                "items": items,
+            },
+            stdout,
+            command="add --from-file",
         )
     else:
         _print_summary(counts, args.dry_run, failures_path, stdout)

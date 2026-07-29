@@ -6,9 +6,8 @@ from collections.abc import Callable, Mapping
 from typing import Any, TextIO
 
 from pzi import cli_json, exit_codes
-from pzi.cli_parser import usage_error_lines
 from pzi.cli_render import _error_lines, _render_pdf_success
-from pzi.commands.common import exit_code_for_error, print_lines
+from pzi.commands.common import emit_usage_error, exit_code_for_error, print_lines
 from pzi.pdf_service import attach_pdf, retry_failed_pdfs, retry_pdf
 
 Result = Mapping[str, Any]
@@ -79,14 +78,13 @@ def run_pdf_command(
         return exit_codes.PARTIAL if result.get("failures") else exit_codes.OK
 
     if not args.citekey:
-        print_lines(
-            usage_error_lines(
-                ("pdf", "retry"),
-                "citekey required (or use --failed-only for batch retry)",
-            ),
-            stderr,
+        return emit_usage_error(
+            args,
+            "citekey required (or use --failed-only for batch retry)",
+            command_path=("pdf", "retry"),
+            stdout=stdout,
+            stderr=stderr,
         )
-        return exit_codes.USAGE
 
     result = retry_pdf_fn(
         config_path=config_path,
