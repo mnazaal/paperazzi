@@ -8,6 +8,21 @@ be told which inputs should fail, which is what makes a *partly* failed batch
 reproducible.
 
 Loopback only, so it passes the autouse socket guard in `conftest.py`.
+
+**What this cannot catch.** It reproduces the contract as pzi understands it
+today: a GET health probe, and a POST to `/web` or `/search` answering with a
+JSON array of Zotero-shaped items. Tests built on it therefore verify *pzi's*
+handling, not the real server's behaviour — if upstream changes its response
+shape, endpoints, or error codes, the stub keeps answering the old way and every
+test here stays green while `pzi add` breaks against the real thing.
+
+Two consequences worth acting on:
+
+* Treat a green run as "pzi still handles this shape correctly", never as "pzi
+  still works with translation-server".
+* The pinned upstream commits in `ts_backend._TS_REPOS` are what actually fix
+  the contract. When you bump them, re-run a capture against the real server by
+  hand and update this stub if the shape moved — nothing here will tell you.
 """
 
 from __future__ import annotations

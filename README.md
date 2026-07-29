@@ -438,3 +438,9 @@ are not. Each spawns a subprocess, so they are slower than the rest:
 Prefer these over manual checks: anything verified only by hand stops being
 verified. If you add a behaviour that seems to need real network or the real
 translation-server, check whether one of the three levers above applies first.
+
+One limit to keep in mind: the stub reproduces translation-server's contract as
+pzi understands it today, so those tests prove pzi still handles that shape —
+not that pzi still works with the real server. The pinned commits in
+`ts_backend._TS_REPOS` are what fix the contract; when you bump them, re-run a
+capture by hand, because nothing in the suite will tell you the shape moved.
