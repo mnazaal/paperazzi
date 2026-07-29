@@ -52,6 +52,10 @@ class TagListResult(TypedDict):
     citekey: str | None
     tags: list[str]
     errors: list[str]
+    # Same structured failure kind as `TagChangeResult`, so `tag list` can
+    # distinguish an unknown citekey (exit 3) from a bad --target (exit 5)
+    # without matching on message text.
+    reason: NotRequired[str]
 
 
 class TagChangeResult(TypedDict):
@@ -97,6 +101,7 @@ def list_tags(
                 "bib_name": bib["name"],
                 "citekey": citekey,
                 "tags": [],
+                "reason": "not_found",
                 "errors": [f"citekey not found: {citekey}"],
             }
         raw_tags = list(matching[0].get("tags") or [])

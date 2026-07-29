@@ -123,31 +123,52 @@ def import_from_bibtex(
     errors: list[str] = list(dropped_blocks)
 
     if isinstance(resolved, BibResolutionFailure):
-        # Config/target resolution failed: every record fails identically.
-        batch_results: list[dict[str, Any]] = [
-            {"status": "error", "citekey": r.get("citekey"),
-             "message": "; ".join(resolved.errors), "errors": resolved.errors}
-            for r in records
-        ]
-    else:
-        config, bib = resolved
-        try:
-            batch_results = add_records_to_bib_batch(
-                bib=bib,
-                records=records,
-                dry_run=dry_run,
-                force_new=force_new,
-                browser_hook=config.get("browser_hook", True),
-                citekey_format=config.get("citekey_format"),
-                pdf_filename_format=config.get("pdf_filename_format"),
-                file_path_style=config.get("pdf_file_path_style", "absolute"),
-            )
-        except Exception as exc:
-            batch_results = [
-                {"status": "error", "citekey": r.get("citekey"),
-                 "message": str(exc), "errors": [str(exc)]}
-                for r in records
-            ]
+        # Nothing ran: an unloadable config or an unknown `--target` is not a
+        # batch that partly failed. Fanning it out into one error per record
+        # made the run report `status: "ok"` with N errors for one root cause,
+        # and the runner mapped that to PARTIAL — "some items failed" when no
+        # item was ever attempted. Report the run itself as failed; the runner
+        # already maps that to ENVIRONMENT.
+        return {
+            "status": "error",
+            "source_path": source_path,
+            "message": "failed to resolve target library",
+            "errors": resolved.errors,
+            "total_source": len(source_entries) + len(dropped_blocks),
+            "imported": 0,
+            "skipped_duplicates": 0,
+            "skipped_errors": 0,
+            "results": [],
+        }
+
+    config, bib = resolved
+    try:
+        batch_results = add_records_to_bib_batch(
+            bib=bib,
+            records=records,
+            dry_run=dry_run,
+            force_new=force_new,
+            browser_hook=config.get("browser_hook", True),
+            citekey_format=config.get("citekey_format"),
+            pdf_filename_format=config.get("pdf_filename_format"),
+            file_path_style=config.get("pdf_file_path_style", "absolute"),
+        )
+    except Exception as exc:  # noqa: BLE001 — reported, not swallowed
+        # The batch write is transactional: if it raised, nothing was written.
+        # Reporting one error per record made that look like a partly-failed
+        # batch (PARTIAL) when in fact no record was imported, so this is a
+        # run failure like the resolution failure above.
+        return {
+            "status": "error",
+            "source_path": source_path,
+            "message": "failed to write imported records",
+            "errors": [str(exc)],
+            "total_source": len(source_entries) + len(dropped_blocks),
+            "imported": 0,
+            "skipped_duplicates": 0,
+            "skipped_errors": 0,
+            "results": [],
+        }
 
     for record, result in zip(records, batch_results):
         citekey = result.get("citekey", record.get("citekey", "?"))

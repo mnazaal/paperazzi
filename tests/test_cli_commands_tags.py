@@ -175,3 +175,52 @@ def test_tag_list_json_still_emits_json_when_the_command_fails(tmp_path) -> None
     assert payload["status"] == "error"
     assert payload["errors"] == ["no entry with citekey nosuchkey"]
     assert exit_code == exit_codes.NOT_FOUND
+
+
+def test_tag_list_unknown_citekey_is_not_found(tmp_path: Path) -> None:
+    """Both `tag list` failures collapsed to 1, which never means failure."""
+    def fake_list_tags(**_kwargs):
+        return {
+            "status": "error",
+            "bib_name": "ml",
+            "citekey": "nosuch2024",
+            "tags": [],
+            "reason": "not_found",
+            "errors": ["citekey not found: nosuch2024"],
+        }
+
+    exit_code = run_tag_command(
+        Namespace(tag_command="list", citekey="nosuch2024", json=False),
+        home_dir=str(tmp_path),
+        config_path=str(tmp_path / "config.toml"),
+        stdout=StringIO(),
+        stderr=StringIO(),
+        bib_selector=None,
+        list_tags_fn=fake_list_tags,
+    )
+
+    assert exit_code == exit_codes.NOT_FOUND
+
+
+def test_tag_list_bad_target_is_environment(tmp_path: Path) -> None:
+    """A bad --target is a config problem, so it stays ENVIRONMENT, not 3."""
+    def fake_list_tags(**_kwargs):
+        return {
+            "status": "error",
+            "bib_name": None,
+            "citekey": None,
+            "tags": [],
+            "errors": ["unknown target: nosuchbib"],
+        }
+
+    exit_code = run_tag_command(
+        Namespace(tag_command="list", citekey=None, json=False),
+        home_dir=str(tmp_path),
+        config_path=str(tmp_path / "config.toml"),
+        stdout=StringIO(),
+        stderr=StringIO(),
+        bib_selector="nosuchbib",
+        list_tags_fn=fake_list_tags,
+    )
+
+    assert exit_code == exit_codes.ENVIRONMENT

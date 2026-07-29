@@ -462,7 +462,7 @@ def test_add_from_file_writes_failures_and_exits_nonzero(tmp_path: Path, monkeyp
         home_dir=str(tmp_path), stdout=stdout, stderr=stderr, fetch_web=_fake_fetch_web,
     )
 
-    assert exit_code == 1
+    assert exit_code == exit_codes.PARTIAL
     assert "1 added, 1 already present, 1 failed" in stdout.getvalue()
     failures = tmp_path / "urls.failed.txt"
     assert failures.read_text() == "https://x/bad1\n"
@@ -496,7 +496,7 @@ def test_add_from_file_survives_one_raising_item(tmp_path: Path, monkeypatch) ->
         home_dir=str(tmp_path), stdout=stdout, stderr=stderr, fetch_web=_fake_fetch_web,
     )
 
-    assert exit_code == 1
+    assert exit_code == exit_codes.PARTIAL
     # Both good items still counted, and the summary was printed.
     assert "2 added, 0 already present, 1 failed" in stdout.getvalue()
     assert "provider exploded" in stderr.getvalue()
@@ -521,7 +521,8 @@ def test_add_from_file_dry_run_writes_no_failures_file(
         home_dir=str(tmp_path), stdout=stdout, stderr=stderr, fetch_web=_fake_fetch_web,
     )
 
-    assert exit_code == 1  # a failure still reports as one
+    # A partly-failed batch is PARTIAL even in dry-run.
+    assert exit_code == exit_codes.PARTIAL
     assert not (tmp_path / "urls.failed.txt").exists()
 
 
@@ -851,7 +852,7 @@ def test_doctor_reinstall_server_handles_missing_config(tmp_path: Path) -> None:
         stderr=stderr,
     )
 
-    assert exit_code == 1
+    assert exit_code == exit_codes.ENVIRONMENT
     assert "failed to load config" in stderr.getvalue()
 
 
@@ -1184,7 +1185,8 @@ def test_reindex_default_is_read_only_audit(tmp_path: Path) -> None:
         ["fix", "reindex", "--config", str(config_path)],
         home_dir=str(tmp_path), stdout=stdout, stderr=StringIO(),
     )
-    assert exit_code == 0
+    # A read-only audit that found renames to make has something to report.
+    assert exit_code == exit_codes.FINDINGS
     assert bib_path.read_text() == before  # nothing renamed
     assert "@article{oldkey," in bib_path.read_text()
     assert "--rename-citekeys" in stdout.getvalue()
@@ -1526,3 +1528,88 @@ def test_add_reports_a_broken_key_command_as_a_structured_error(tmp_path: Path) 
     # the service rather than escaping to the CLI boundary.
     assert "failed to resolve capture context" in out
     assert "secret command" in out
+
+
+# --- exit-code contract (Batch 5) -------------------------------------------
+
+
+def test_import_missing_source_is_environment_not_not_found(tmp_path: Path) -> None:
+    """`3` is reserved for a missing *entry*, not a missing file.
+
+    It also has to agree with `import_service`, which already reports the same
+    condition as an error -> 5 when its own check wins the race.
+    """
+    config_path = tmp_path / "config.toml"
+    bib_path = tmp_path / "library.bib"
+    bib_path.write_text("")
+    config_path.write_text(
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\ndefault = true\n'
+    )
+    stderr = StringIO()
+
+    exit_code = run_cli(
+        ["import", str(tmp_path / "nope.bib"), "--config", str(config_path)],
+        home_dir=str(tmp_path), stdout=StringIO(), stderr=stderr,
+    )
+
+    assert exit_code == exit_codes.ENVIRONMENT
+    assert "source file not found" in stderr.getvalue()
+
+
+def test_import_unknown_target_is_environment_not_partial(tmp_path: Path) -> None:
+    """Nothing ran, so it is not a batch that partly failed.
+
+    The resolution failure used to be fanned out into one error per record, so
+    the run reported `ok` with N errors for one root cause and exited 4.
+    """
+    config_path = tmp_path / "config.toml"
+    bib_path = tmp_path / "library.bib"
+    bib_path.write_text("")
+    config_path.write_text(
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\ndefault = true\n'
+    )
+    source = tmp_path / "source.bib"
+    source.write_text("@article{a2024, title = {A}, doi = {10.1/a}}\n")
+    stderr = StringIO()
+
+    exit_code = run_cli(
+        ["import", str(source), "--target", "nosuchbib", "--config", str(config_path)],
+        home_dir=str(tmp_path), stdout=StringIO(), stderr=stderr,
+    )
+
+    assert exit_code == exit_codes.ENVIRONMENT
+
+
+def test_add_backend_not_ready_is_environment(tmp_path: Path, monkeypatch) -> None:
+    """"Could not run" is 5; `1` would mean the command ran and had findings."""
+    import contextlib
+
+    import pzi.ts_backend
+
+    @contextlib.contextmanager
+    def not_ready(*_args, **_kwargs):
+        yield {"ready": False}
+
+    monkeypatch.setattr(pzi.ts_backend, "backend_session", not_ready)
+    stderr = StringIO()
+
+    exit_code = run_cli(
+        ["add", "10.1234/x", "--config", str(_batch_config(tmp_path))],
+        home_dir=str(tmp_path), stdout=StringIO(), stderr=stderr,
+    )
+
+    assert exit_code == exit_codes.ENVIRONMENT
+    assert "translation server is not running" in stderr.getvalue()
+
+
+def test_add_from_file_unreadable_is_environment(tmp_path: Path) -> None:
+    stderr = StringIO()
+
+    exit_code = run_cli(
+        ["add", "--from-file", str(tmp_path / "missing.txt"), "--delay", "0",
+         "--config", str(_batch_config(tmp_path))],
+        home_dir=str(tmp_path), stdout=StringIO(), stderr=stderr,
+        fetch_web=_fake_fetch_web,
+    )
+
+    assert exit_code == exit_codes.ENVIRONMENT

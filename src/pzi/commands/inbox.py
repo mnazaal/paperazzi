@@ -7,6 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TextIO
 
+from pzi import exit_codes
 from pzi.commands.common import first_error, print_capture_stream_line
 from pzi.config import load_config_file
 from pzi.inbox_service import DrainItem, DrainResult, drain_inbox, parse_inbox_line
@@ -35,14 +36,14 @@ def run_inbox_command(
         raw_text = inbox_path.read_text(encoding="utf-8")
     except FileNotFoundError:
         print(f"inbox file not found: {inbox_path}", file=stderr)
-        return 1
+        return exit_codes.ENVIRONMENT
     except OSError as exc:
         print(f"cannot read inbox file: {exc}", file=stderr)
-        return 1
+        return exit_codes.ENVIRONMENT
 
     if not any(parse_inbox_line(line) for line in raw_text.splitlines()):
         print(f"inbox is empty: {inbox_path}", file=stdout)
-        return 0
+        return exit_codes.OK
 
     def _work() -> int:
         result = drain_inbox_fn(
@@ -56,7 +57,7 @@ def run_inbox_command(
         if result["status"] == "error":
             for line in result["errors"]:
                 print(f"error: {line}", file=stderr)
-            return 1
+            return exit_codes.ENVIRONMENT
 
         total = result["total"]
         if dry_run:
@@ -69,7 +70,10 @@ def run_inbox_command(
             _stream_item(seq, total, item, stderr)
 
         _print_summary(result["counts"], dry_run, stdout)
-        return 1 if result["counts"]["failed"] else 0
+        # PARTIAL, not FINDINGS — see the matching note in `commands/add.py`.
+        return (
+            exit_codes.PARTIAL if result["counts"]["failed"] else exit_codes.OK
+        )
 
     # Real drain needs the translation server; an injected fake (tests) does not.
     if drain_inbox_fn is drain_inbox:
@@ -78,7 +82,7 @@ def run_inbox_command(
         if config is None:
             for line in cfg.get("errors") or ["config could not be loaded"]:
                 print(f"error: {line}", file=stderr)
-            return 1
+            return exit_codes.ENVIRONMENT
         from pzi.ts_backend import backend_session
 
         with backend_session(
@@ -91,7 +95,7 @@ def run_inbox_command(
                     "  Run 'pzi server' (it starts the translation-server), then retry.",
                     file=stderr,
                 )
-                return 1
+                return exit_codes.ENVIRONMENT
             return _work()
 
     return _work()

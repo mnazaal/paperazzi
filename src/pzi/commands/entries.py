@@ -5,7 +5,7 @@ from __future__ import annotations
 from pzi import cli_json, exit_codes
 from pzi.bib_service import bib_stats, entry_detail, list_entries
 from pzi.cli_render import _error_lines, _render_bib_stats
-from pzi.commands.common import print_lines, resolve_target
+from pzi.commands.common import exit_code_for_error, print_lines, resolve_target
 
 
 def run_entries_command(args, *, home_dir, config_path, stdout, stderr, bib_selector) -> int:
@@ -67,11 +67,7 @@ def _run_detail(args, home_dir, config_path, stdout, stderr, bib_selector) -> in
     )
     if result["status"] != "ok":
         print_lines(_error_lines(result["message"], result["errors"]), stderr)
-        return (
-            exit_codes.NOT_FOUND
-            if result.get("reason") == "not_found"
-            else exit_codes.ENVIRONMENT
-        )
+        return exit_code_for_error(result)
     record = result["record"]
     if getattr(args, "json", False):
         # One record still arrives as a one-item envelope, so `.items[]` is the

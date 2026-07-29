@@ -107,7 +107,7 @@ def run_add_command(
                     "  Run 'pzi server' (it starts the translation-server), then retry.",
                     file=stderr,
                 )
-                return 1
+                return exit_codes.ENVIRONMENT
             return _work()
 
     return _work()
@@ -203,11 +203,11 @@ def _run_batch(
         text = load_text_arg(from_file)
     except OSError as exc:
         print(f"error: cannot read --from-file {from_file}: {exc}", file=stderr)
-        return 1
+        return exit_codes.ENVIRONMENT
     values = parse_batch_values(text)
     if not values:
         print(f"error: no DOIs or URLs found in {from_file}", file=stderr)
-        return 1
+        return exit_codes.ENVIRONMENT
 
     options = build_capture_options_from_add_args(args, config=cfg.get("config"))
     tags = parse_tag_csv(args.tags) if getattr(args, "tags", None) else []
@@ -284,7 +284,10 @@ def _run_batch(
         )
     else:
         _print_summary(counts, args.dry_run, failures_path, stdout)
-    return 1 if counts["failed"] else 0
+    # A batch where some items failed is PARTIAL, not FINDINGS: `1` is reserved
+    # for "ran fine and has something to report", so a script branching on it
+    # must not see a half-failed capture as a clean run with findings.
+    return exit_codes.PARTIAL if counts["failed"] else exit_codes.OK
 
 
 def _classify(result: Mapping[str, Any]) -> str:

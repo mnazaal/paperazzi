@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pzi import cli_json, exit_codes
 from pzi.cli_render import _error_lines, _render_dedupe_result
-from pzi.commands.common import print_lines, resolve_target
+from pzi.commands.common import exit_code_for_error, print_lines, resolve_target
 from pzi.dedupe_service import find_duplicates, merge_duplicates
 
 
@@ -43,9 +43,11 @@ def run_merge_command(args, *, home_dir, config_path, stdout, stderr, bib_select
     )
     if getattr(args, "json", False):
         cli_json.emit_result(result, stdout, command="fix merge", items=[])
-        return exit_codes.OK if result["status"] == "ok" else exit_codes.ENVIRONMENT
+        return exit_codes.OK if result["status"] == "ok" else exit_code_for_error(result)
     if result["status"] != "ok":
         print_lines(_error_lines(result["message"], []), stderr)
-        return exit_codes.ENVIRONMENT
+        # Both branches go through the same mapper so they cannot drift apart
+        # the way `pdf retry --failed-only`'s JSON and text paths did.
+        return exit_code_for_error(result)
     print(result["message"], file=stdout)
     return exit_codes.OK

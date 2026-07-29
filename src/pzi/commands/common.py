@@ -160,3 +160,20 @@ def print_capture_stream_line(
     print(f"{counter} {_CAPTURE_SYMBOLS[bucket]} {label} {detail}", file=stderr)
     for warning in warnings:
         print(f"      warning: {warning}", file=stderr)
+
+
+def exit_code_for_error(result: Mapping[str, object]) -> int:
+    """Exit code for a service result that failed.
+
+    Services report *why* they failed in a structured ``reason`` field rather
+    than in prose, so a runner never has to match on message text — and a
+    message reworded for humans cannot silently change a script's exit code.
+    ``"not_found"`` is the only value today; anything else, including a missing
+    ``reason``, means the command could not run.
+
+    Callers must have already handled the success case: this always returns a
+    failure code.
+    """
+    if result.get("reason") == "not_found":
+        return exit_codes.NOT_FOUND
+    return exit_codes.ENVIRONMENT

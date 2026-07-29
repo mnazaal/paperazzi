@@ -37,6 +37,9 @@ class MergeResult(TypedDict):
     dropped_citekey: NotRequired[str]
     changed_fields: NotRequired[list[str]]
     merged_record: NotRequired[dict[str, Any]]
+    # Structured failure kind, so the runner picks an exit code without matching
+    # on message text. Only "not_found" today; its absence means ENVIRONMENT.
+    reason: NotRequired[str]
 
 
 def find_duplicates(
@@ -174,11 +177,13 @@ def merge_duplicates(
         return {
             "status": "error", "citekey_a": citekey_a, "citekey_b": citekey_b,
             "message": f"entry not found: {citekey_a}", "dry_run": dry_run,
+            "reason": "not_found",
         }
     if idx_b is None:
         return {
             "status": "error", "citekey_a": citekey_a, "citekey_b": citekey_b,
             "message": f"entry not found: {citekey_b}", "dry_run": dry_run,
+            "reason": "not_found",
         }
 
     record_a = records[idx_a]
@@ -217,6 +222,7 @@ def merge_duplicates(
         return {
             "status": "error", "citekey_a": citekey_a, "citekey_b": citekey_b,
             "message": "entry disappeared between reads", "dry_run": dry_run,
+            "reason": "not_found",
         }
 
     return {

@@ -76,6 +76,7 @@ def retry_pdf(
             "citekey": citekey,
             "local_pdf_path": None,
             "message": "citekey not found",
+            "reason": "not_found",
             "warnings": [],
             "errors": [f"citekey not found: {citekey}"],
         }
@@ -143,6 +144,7 @@ def retry_pdf(
             "citekey": citekey,
             "local_pdf_path": None,
             "message": "citekey disappeared",
+            "reason": "not_found",
             "warnings": [],
             "errors": [f"citekey not found: {citekey}"],
         }
@@ -311,6 +313,7 @@ def attach_pdf(
             "local_pdf_path": None,
             "source": source,
             "message": "citekey not found",
+            "reason": "not_found",
             "warnings": [],
             "errors": [f"citekey not found: {citekey}"],
         }
@@ -368,6 +371,7 @@ def attach_pdf(
             "local_pdf_path": None,
             "source": source,
             "message": "citekey disappeared",
+            "reason": "not_found",
             "warnings": [],
             "errors": [f"citekey not found: {citekey}"],
         }
@@ -517,6 +521,7 @@ def _attach_pdf_data(
             "local_pdf_path": None,
             "source_url": source_url,
             "message": "citekey not found",
+            "reason": "not_found",
             "warnings": [],
             "errors": [f"citekey not found: {citekey}"],
         }
@@ -553,6 +558,7 @@ def _attach_pdf_data(
             "local_pdf_path": None,
             "source_url": source_url,
             "message": "citekey disappeared",
+            "reason": "not_found",
             "warnings": [],
             "errors": [f"citekey not found: {citekey}"],
         }

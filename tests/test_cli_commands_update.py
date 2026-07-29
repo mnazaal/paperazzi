@@ -158,3 +158,64 @@ def test_run_update_command_returns_failure_when_any_target_fails(tmp_path: Path
     assert exit_code == exit_codes.ENVIRONMENT
     assert stdout.getvalue() == "no updates\n"
     assert stderr.getvalue() == "update failed\n- missing bib\n"
+
+
+def test_update_exits_partial_when_a_record_failed(tmp_path: Path) -> None:
+    """A run where records failed exited 0 — failures lived only in free text.
+
+    `note` could not serve as the predicate (it is set for benign outcomes too)
+    and neither could `applied`, which is False for every item of a healthy
+    dry-run. The service now marks failures structurally.
+    """
+    def fake_update_bib(**_kwargs):
+        return {
+            "status": "ok",
+            "bib_name": "ml",
+            "dry_run": False,
+            "items": [
+                {"citekey": "ok2024", "changed_fields": ["doi"],
+                 "applied": True, "note": None},
+                {"citekey": "bad2024", "changed_fields": [],
+                 "applied": False, "note": "update failed: boom", "failed": True},
+            ],
+            "errors": [],
+        }
+
+    exit_code = run_update_command(
+        Namespace(target=["ml"], dry_run=False, verbose=False),
+        home_dir=str(tmp_path),
+        config_path=str(tmp_path / "config.toml"),
+        stdout=StringIO(),
+        stderr=StringIO(),
+        update_bib_fn=fake_update_bib,
+    )
+
+    assert exit_code == exit_codes.PARTIAL
+
+
+def test_update_dry_run_with_no_failures_still_exits_ok(tmp_path: Path) -> None:
+    """Guards the trap: every item of a healthy dry-run has `applied is False`."""
+    def fake_update_bib(**_kwargs):
+        return {
+            "status": "ok",
+            "bib_name": "ml",
+            "dry_run": True,
+            "items": [
+                {"citekey": "a2024", "changed_fields": ["doi"],
+                 "applied": False, "note": None},
+                {"citekey": "b2024", "changed_fields": ["year"],
+                 "applied": False, "note": None},
+            ],
+            "errors": [],
+        }
+
+    exit_code = run_update_command(
+        Namespace(target=["ml"], dry_run=True, verbose=False),
+        home_dir=str(tmp_path),
+        config_path=str(tmp_path / "config.toml"),
+        stdout=StringIO(),
+        stderr=StringIO(),
+        update_bib_fn=fake_update_bib,
+    )
+
+    assert exit_code == exit_codes.OK

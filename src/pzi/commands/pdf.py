@@ -8,7 +8,7 @@ from typing import Any, TextIO
 from pzi import cli_json, exit_codes
 from pzi.cli_parser import usage_error_lines
 from pzi.cli_render import _error_lines, _render_pdf_success
-from pzi.commands.common import print_lines
+from pzi.commands.common import exit_code_for_error, print_lines
 from pzi.pdf_service import attach_pdf, retry_failed_pdfs, retry_pdf
 
 Result = Mapping[str, Any]
@@ -74,7 +74,9 @@ def run_pdf_command(
             for failure in result["failures"]:
                 lines.append(f"  {failure['citekey']}: {failure['error']}")
         print_lines(lines, stdout)
-        return 0
+        # Mirror the JSON branch above: the exit code must not depend on the
+        # output format, and this path has just printed the failure list.
+        return exit_codes.PARTIAL if result.get("failures") else exit_codes.OK
 
     if not args.citekey:
         print_lines(
@@ -106,6 +108,4 @@ def _pdf_exit_code(result) -> int:
     """Map a PDF service result to an exit code."""
     if result["status"] == "ok":
         return exit_codes.OK
-    if result.get("reason") == "not_found":
-        return exit_codes.NOT_FOUND
-    return exit_codes.ENVIRONMENT
+    return exit_code_for_error(result)

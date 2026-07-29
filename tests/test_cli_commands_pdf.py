@@ -2,6 +2,7 @@ from argparse import Namespace
 from io import StringIO
 from pathlib import Path
 
+from pzi import exit_codes
 from pzi.commands.pdf import run_pdf_command
 
 
@@ -102,7 +103,9 @@ def test_run_pdf_command_failed_only_uses_injected_service(tmp_path: Path) -> No
         retry_failed_pdfs_fn=fake_retry_failed_pdfs,
     )
 
-    assert exit_code == 0
+    # A run that reports failures exits PARTIAL in text mode too — the exit code
+    # must not depend on whether --json was passed.
+    assert exit_code == exit_codes.PARTIAL
     assert calls == [
         {
             "config_path": str(tmp_path / "config.toml"),
@@ -119,3 +122,32 @@ def test_run_pdf_command_failed_only_uses_injected_service(tmp_path: Path) -> No
         "  bad2024: no pdf",
     ]
     assert stderr.getvalue() == ""
+
+
+def test_pdf_retry_unknown_citekey_is_not_found(tmp_path: Path) -> None:
+    """`pdf_service` never set `reason`, so the runner's not-found branch was dead.
+
+    `_pdf_exit_code` was already correct; the result it read simply carried no
+    `reason`, so every unknown citekey fell through to ENVIRONMENT.
+    """
+    from pzi.pdf_service import retry_pdf
+
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text("@article{real2024, title = {Real}}\n")
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\n'
+        f'papers_dir = "{papers}"\ndefault = true\n'
+    )
+
+    result = retry_pdf(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        citekey="nosuch2024",
+    )
+
+    assert result["status"] == "error"
+    assert result["reason"] == "not_found"

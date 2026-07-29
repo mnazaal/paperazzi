@@ -26,8 +26,12 @@ def run_import_command(
     # the same marker `add --from-file` already accepts.
     source_text = load_text_arg(source) if source == "-" else None
     if source_text is None and not Path(source).exists():
+        # ENVIRONMENT, not NOT_FOUND: `3` is reserved for a missing *entry*
+        # (`exit_codes.py`, `commands/common.py`), and a source path that is not
+        # there is the same "could not run" condition `import_service` already
+        # reports as an error when its own check wins the race.
         print(f"error: source file not found: {source}", file=stderr)
-        return exit_codes.NOT_FOUND
+        return exit_codes.ENVIRONMENT
 
     result = import_from_bibtex(
         config_path=config_path,

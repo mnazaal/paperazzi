@@ -10,7 +10,7 @@ from pzi import cli_json, exit_codes
 from pzi.bib_service import delete_entry
 from pzi.cli_parser import usage_error_lines
 from pzi.cli_render import _error_lines, _render_delete_success
-from pzi.commands.common import print_lines, resolve_target
+from pzi.commands.common import exit_code_for_error, print_lines, resolve_target
 
 
 def _render_errors(title: str, errors: Sequence[str], stderr: TextIO, code: int) -> int:
@@ -62,7 +62,7 @@ def run_delete_command(args, *, home_dir, config_path, stdout, stderr, bib_selec
         if isinstance(backup, str):
             print(f"backup saved to {backup}", file=stderr)
         return exit_codes.OK
-    code = exit_codes.NOT_FOUND if result.get("reason") == "not_found" else exit_codes.ENVIRONMENT
+    code = exit_code_for_error(result)
     if as_json:
         cli_json.emit_result(result, stdout, command="delete", items=[])
         return code

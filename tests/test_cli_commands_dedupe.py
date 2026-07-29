@@ -79,3 +79,33 @@ def test_dedupe_exits_one_on_fuzzy_candidates_alone_json(
 ) -> None:
     code, _out = _run(monkeypatch, tmp_path, _result(fuzzy=1), json_output=True)
     assert code == 1
+
+
+def test_fix_merge_unknown_citekey_is_not_found(tmp_path: Path) -> None:
+    """Both halves were missing here: the service `reason` and the runner branch."""
+    from pzi.dedupe_service import merge_duplicates
+
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text("@article{real2024, title = {Real}}\n")
+
+    result = merge_duplicates(
+        bib_path=str(bib_path), citekey_a="nosuch2024", citekey_b="real2024",
+    )
+
+    assert result["status"] == "error"
+    assert result["reason"] == "not_found"
+
+
+def test_fix_merge_self_merge_is_not_tagged_not_found(tmp_path: Path) -> None:
+    """"Cannot merge an entry with itself" is a usage mistake, not a missing entry."""
+    from pzi.dedupe_service import merge_duplicates
+
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text("@article{real2024, title = {Real}}\n")
+
+    result = merge_duplicates(
+        bib_path=str(bib_path), citekey_a="real2024", citekey_b="real2024",
+    )
+
+    assert result["status"] == "error"
+    assert "reason" not in result

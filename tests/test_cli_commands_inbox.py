@@ -7,6 +7,7 @@ from io import StringIO
 from pathlib import Path
 from typing import Any
 
+from pzi import exit_codes
 from pzi.commands.inbox import run_inbox_command
 
 # ---------------------------------------------------------------------------
@@ -73,7 +74,8 @@ def _drain_error(message: str = "cannot read inbox file") -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def test_inbox_missing_file_exits_1_without_calling_drain(tmp_path: Path) -> None:
+def test_inbox_missing_file_exits_environment_without_calling_drain(tmp_path: Path) -> None:
+    """A missing inbox file is "could not run" (5), never a findings result."""
     calls: list[dict] = []
 
     def fake_drain(**kwargs: Any) -> dict[str, Any]:
@@ -90,7 +92,7 @@ def test_inbox_missing_file_exits_1_without_calling_drain(tmp_path: Path) -> Non
         stderr=stderr,
         drain_inbox_fn=fake_drain,
     )
-    assert code == 1
+    assert code == exit_codes.ENVIRONMENT
     assert "not found" in stderr.getvalue()
     assert calls == []  # drain (and thus any backend) never invoked
 
@@ -200,7 +202,8 @@ def test_inbox_drain_exit_0_when_no_failures(tmp_path: Path) -> None:
     assert code == 0
 
 
-def test_inbox_drain_exit_1_when_failures(tmp_path: Path) -> None:
+def test_inbox_drain_exits_partial_when_some_items_failed(tmp_path: Path) -> None:
+    """A batch where some items failed is PARTIAL (4), not FINDINGS (1)."""
     def fake_drain(**kwargs: Any) -> dict[str, Any]:
         return _drain_ok(added=1, failed=1)
 
@@ -212,10 +215,10 @@ def test_inbox_drain_exit_1_when_failures(tmp_path: Path) -> None:
         stderr=StringIO(),
         drain_inbox_fn=fake_drain,
     )
-    assert code == 1
+    assert code == exit_codes.PARTIAL
 
 
-def test_inbox_drain_service_error_exit_1(tmp_path: Path) -> None:
+def test_inbox_drain_service_error_exits_environment(tmp_path: Path) -> None:
     def fake_drain(**kwargs: Any) -> dict[str, Any]:
         return _drain_error("cannot read inbox file: boom")
 
@@ -228,7 +231,7 @@ def test_inbox_drain_service_error_exit_1(tmp_path: Path) -> None:
         stderr=stderr,
         drain_inbox_fn=fake_drain,
     )
-    assert code == 1
+    assert code == exit_codes.ENVIRONMENT
     assert "cannot read inbox file" in stderr.getvalue()
 
 
@@ -292,3 +295,36 @@ def test_inbox_prints_per_item_warnings(tmp_path: Path) -> None:
     )
 
     assert "probable duplicate of smith2020" in stderr.getvalue()
+
+
+def test_inbox_backend_not_ready_is_environment(tmp_path: Path, monkeypatch) -> None:
+    """The sibling of `add`'s backend check, and it had no test either."""
+    import contextlib
+
+    import pzi.ts_backend
+    from pzi.inbox_service import drain_inbox
+
+    @contextlib.contextmanager
+    def not_ready(*_args, **_kwargs):
+        yield {"ready": False}
+
+    monkeypatch.setattr(pzi.ts_backend, "backend_session", not_ready)
+    config_path = tmp_path / "config.toml"
+    bib_path = tmp_path / "library.bib"
+    bib_path.write_text("")
+    config_path.write_text(
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\ndefault = true\n'
+    )
+    stderr = StringIO()
+
+    code = run_inbox_command(
+        _args(_inbox_with_lines(tmp_path)),
+        home_dir=str(tmp_path),
+        config_path=str(config_path),
+        stdout=StringIO(),
+        stderr=stderr,
+        drain_inbox_fn=drain_inbox,
+    )
+
+    assert code == exit_codes.ENVIRONMENT
+    assert "translation server is not running" in stderr.getvalue()

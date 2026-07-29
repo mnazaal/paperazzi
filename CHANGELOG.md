@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Eleven commands now return the exit code they document.** A previous release
+  announced that exit codes have one meaning each; these sites never conformed,
+  so the guarantee that `1` means "ran fine and has something to report" — and
+  never "failed" — did not actually hold. **Scripts that branch on a specific
+  code need re-checking; scripts that branch on non-zero are unaffected.**
+
+  | Command | Was | Now |
+  |---|---|---|
+  | `add --from-file` / `inbox` with some items failed | 1 | 4 |
+  | `add` / `inbox` backend not ready, unreadable input file | 1 | 5 |
+  | `pdf retry` / `pdf attach` unknown citekey | 5 | 3 |
+  | `pdf retry --failed-only` with failures, text mode | 0 | 4 |
+  | `fix merge` unknown citekey | 5 | 3 |
+  | `tag list` unknown citekey / bad `--target` | 1 | 3 / 5 |
+  | `doctor --reinstall-server` failures | 1 | 5 |
+  | `import` missing source file | 3 | 5 |
+  | `import` unloadable config or unknown `--target` | 4 | 5 |
+  | `update` where a record failed | 0 | 4 |
+  | `fix reindex` audit that found renames to make | 0 | 1 |
+
+  Two of these were format-dependent rather than merely wrong:
+  `pdf retry --failed-only` returned 4 with `--json` and 0 without it for the
+  same result, and `fix merge` computed its code separately in each branch.
+  Both now share one mapper.
+
+  Root causes, both fixed: `pdf_service` and `dedupe_service` never set the
+  structured `reason` field that four runners already branch on, so every
+  not-found fell through to the "could not run" default; and `update` recorded
+  per-record failures only as free text in each item's `note`, which nothing
+  read — so a run in which every record failed still reported success.
+  `update` also swallowed `ConcurrentEditError`, the one condition every other
+  command reports as 5; it now propagates, because continuing to write after
+  losing that race is not safe.
+
+  `import` with an unloadable config or unknown `--target` previously fanned the
+  failure out into one error per record, reporting a partly-failed batch when in
+  fact nothing had been attempted.
+
 ### Added
 
 - **`pzi add` now warns when it inserts a probable duplicate.** A capture with

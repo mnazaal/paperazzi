@@ -11,6 +11,7 @@ from pzi.add_planning import (
     select_best_metadata_result,
 )
 from pzi.bib_repository import (
+    ConcurrentEditError,
     WritePlan,
     preview_write_plan,
     read_bib_file,
@@ -32,6 +33,11 @@ class UpdatePlanItem(TypedDict):
     changed_fields: list[str]
     applied: bool
     note: str | None
+    # Set when this record could not be updated. `note` alone cannot carry it:
+    # it is also set for benign outcomes, and `applied` is False for *every*
+    # item of a healthy `--dry-run`, so neither can serve as a failure
+    # predicate. The runner needs one to report PARTIAL.
+    failed: NotRequired[bool]
     diff: NotRequired[str]
     metadata_diagnostics: NotRequired[list[str]]
     metadata_warnings: NotRequired[list[str]]
@@ -47,6 +53,8 @@ class UpdateBibResult(TypedDict):
 
 
 _USER_OWNED_UPDATE_FIELDS = frozenset({"tags", "local_pdf_path", "citekey", "note"})
+
+_ENTRY_DISAPPEARED = "entry disappeared during update"
 
 
 def update_bib(
@@ -100,14 +108,22 @@ def update_bib(
                 metadata_confidence_min_score=metadata_confidence_min_score,
                 file_path_style=file_path_style,
             )
+        except ConcurrentEditError:
+            # Not a per-record problem: the bib changed underneath this run, so
+            # continuing to write the remaining records is unsafe. Every other
+            # command surfaces this at the CLI boundary as ENVIRONMENT, and
+            # swallowing it here made `update` the one command that reported
+            # success after losing the race.
+            raise
         except Exception as exc:  # noqa: BLE001 — one bad record must not abort the run
-            failed: UpdatePlanItem = {
+            failed_item: UpdatePlanItem = {
                 "citekey": citekey,
                 "changed_fields": [],
                 "applied": False,
                 "note": f"update failed: {exc}",
+                "failed": True,
             }
-            item = failed
+            item = failed_item
         if item is not None:
             items.append(item)
 
@@ -153,6 +169,7 @@ def _plan_update_for_record(
             "changed_fields": [],
             "applied": False,
             "note": f"lookup failed: {exc}",
+            "failed": True,
         }
 
     if not results:
@@ -200,7 +217,7 @@ def _plan_update_for_record(
             bib_path, citekey, _apply_update, file_path_style=file_path_style
         )
         if not update_result["found"]:
-            note = "entry disappeared during update"
+            note = _ENTRY_DISAPPEARED
         else:
             # Diff the returned records rather than having the callback mutate a
             # captured dict to smuggle the answer back out.
@@ -222,7 +239,7 @@ def _plan_update_for_record(
             None,
         )
         if position is None:  # pragma: no cover — the caller sourced citekey from records
-            note = "entry disappeared during update"
+            note = _ENTRY_DISAPPEARED
         else:
             # Mirror `_apply_update`: project onto the entry on disk, so the
             # preview shows the same merge the write would perform rather than
@@ -245,6 +262,11 @@ def _plan_update_for_record(
         "applied": applied if not dry_run else False,
         "note": note,
     }
+    if note == _ENTRY_DISAPPEARED:
+        # The entry the run was told to update is no longer there, so this
+        # record did not get what was asked for — in a dry run, the preview
+        # could not be produced either.
+        item["failed"] = True
     if diff is not None:
         item["diff"] = diff
     if metadata_diagnostics:

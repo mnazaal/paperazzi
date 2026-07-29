@@ -57,6 +57,7 @@ def run_update_command(
 
     as_json = getattr(args, "json", False)
     ok = True
+    any_item_failed = False
     json_items: list[Any] = []
     json_errors: list[str] = []
     searched_bibs: list[str] = []
@@ -84,6 +85,11 @@ def run_update_command(
 
         if result["status"] != "ok":
             ok = False
+        # A record the run could not update is a partly-failed batch. Failures
+        # used to survive only as free text in each item's `note`, which nothing
+        # read, so a run where every record failed still exited 0.
+        if any(item.get("failed") for item in result.get("items") or []):
+            any_item_failed = True
 
         if as_json:
             # One document for the whole run, the same shape whether or not
@@ -119,4 +125,6 @@ def run_update_command(
             command="update --promote" if promote else "update",
             items=json_items,
         )
-    return exit_codes.OK if ok else exit_codes.ENVIRONMENT
+    if not ok:
+        return exit_codes.ENVIRONMENT
+    return exit_codes.PARTIAL if any_item_failed else exit_codes.OK

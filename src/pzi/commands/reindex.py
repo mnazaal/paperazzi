@@ -32,13 +32,21 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
         file_path_style=config.get("pdf_file_path_style", "absolute"),
     )
 
+    # Computed once above the format branch, as `fix dedupe` does. Keying only
+    # off `errors` meant a read-only audit that found renames to make exited 0
+    # while simultaneously printing "run with --rename-citekeys to apply" —
+    # nothing to report, according to the exit code. Renames only count as a
+    # finding for the audit: once `--rename-citekeys` has applied them the work
+    # is done and the caller has nothing left to act on.
+    findings = bool(result.get("errors")) or (not apply and bool(result.get("changed")))
+
     if getattr(args, "json", False):
         cli_json.emit_result(
             result, stdout, command="fix reindex", items=result.get("changed") or [],
         )
         if result["status"] != "ok":
             return exit_codes.ENVIRONMENT
-        return exit_codes.FINDINGS if result.get("errors") else exit_codes.OK
+        return exit_codes.FINDINGS if findings else exit_codes.OK
 
     if result["status"] != "ok":
         print_lines(_error_lines("reindex failed", result.get("errors", [])), stderr)
@@ -51,4 +59,4 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
             "(this rewrites citekeys; see 'pzi reindex --help')",
             file=stdout,
         )
-    return exit_codes.FINDINGS if result.get("errors") else exit_codes.OK
+    return exit_codes.FINDINGS if findings else exit_codes.OK

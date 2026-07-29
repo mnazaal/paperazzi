@@ -7,7 +7,7 @@ from typing import Any, TextIO
 
 from pzi import cli_json, exit_codes
 from pzi.cli_render import _error_lines, _render_tag_mutation_success
-from pzi.commands.common import print_lines
+from pzi.commands.common import exit_code_for_error, print_lines
 from pzi.tag_service import add_tags, list_tags, parse_tag_csv, remove_tags
 
 TagService = Callable[..., Mapping[str, Any]]
@@ -37,13 +37,15 @@ def run_tag_command(
         )
         if getattr(args, "json", False):
             cli_json.emit_result(result, stdout, command="tag list", items=result.get("tags"))
-            return 0 if result["status"] == "ok" else 1
+            if result["status"] == "ok":
+                return exit_codes.OK
+            return exit_code_for_error(result)
         if result["status"] == "ok":
             for tag in result["tags"]:
                 print(tag, file=stdout)
-            return 0
+            return exit_codes.OK
         print_lines(_error_lines("failed to list tags", result["errors"]), stderr)
-        return 1
+        return exit_code_for_error(result)
 
     flat_tags = [tag for raw in args.tags for tag in parse_tag_csv_fn(raw)]
     service = add_tags_fn if args.tag_command == "add" else remove_tags_fn
@@ -65,8 +67,4 @@ def run_tag_command(
         cli_json.emit(result, stdout)
     else:
         print_lines(_error_lines(result["message"], result["errors"]), stderr)
-    return (
-        exit_codes.NOT_FOUND
-        if result.get("reason") == "not_found"
-        else exit_codes.ENVIRONMENT
-    )
+    return exit_code_for_error(result)
