@@ -133,7 +133,13 @@ def _tcp_port(value: str) -> int:
 
 
 def _positive_int(value: str) -> int:
-    """argparse type: a base-10 integer ``>= 1``."""
+    """argparse type: a base-10 integer ``>= 1``.
+
+    Used for `--limit`, where `_non_negative_int` would let 0 through: 0 was
+    silently clamped to 1 and the result envelope then reported `"limit": 1`,
+    a different limit from the one asked for, with no warning. `--offset 0` is
+    meaningful, so that keeps `_non_negative_int`.
+    """
     try:
         parsed = int(value)
     except ValueError:
@@ -594,7 +600,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--offset", type=_non_negative_int, default=0, help="pagination offset (default: 0)"
     )
     entries_parser.add_argument(
-        "--limit", type=_non_negative_int, default=50, help="entries per page (default: 50)"
+        "--limit",
+        type=_positive_int,
+        default=50,
+        help="entries per page, 1-500 (default: 50; larger values are capped at 500)",
     )
     entries_parser.add_argument(
         "--sort", default="citekey", choices=["citekey", "title", "year", "author"],

@@ -45,7 +45,10 @@ _RIS_FIELDS: list[tuple[str, str]] = [
     # title (TI) is emitted explicitly before this loop, so it is not listed here.
     ("venue", "T2"),  # journal/booktitle → secondary title
     ("doi", "DO"),
-    ("canonical_url", "UR"),
+    # canonical_url is not listed: it is emitted with the other URLs below, so
+    # that a record whose canonical_url and source_url hold the same string
+    # (which is what bibtex.py produces from a single `url` field) yields one
+    # UR line rather than two.
     ("year", "PY"),
     ("abstract", "AB"),
     ("note", "N1"),
@@ -172,6 +175,18 @@ def export_csv(bib_path: str) -> ExportResult:
     }
 
 
+def _ris_value(value: object) -> str:
+    """One RIS line's worth of text: whitespace collapsed to single spaces.
+
+    RIS has no continuation syntax — every line must be ``XX  - value``. A
+    wrapped BibTeX abstract carries newlines straight through, emitting bare
+    untagged lines that tolerant readers glue onto the previous field and
+    strict ones drop or mis-assign. Worse, a continuation line beginning with
+    two characters and ``  - `` is silently reparsed as a new field.
+    """
+    return " ".join(str(value).split())
+
+
 def export_ris(bib_path: str) -> ExportResult:
     """Export a BibTeX library as RIS formatted text string."""
     raw, dropped = _read_for_export(bib_path)
@@ -189,18 +204,18 @@ def export_ris(bib_path: str) -> ExportResult:
         # Title
         title = record.get("title")
         if title:
-            lines.append(f"TI  - {title}")
+            lines.append(f"TI  - {_ris_value(title)}")
 
         # Authors
         authors = record.get("authors")
         if isinstance(authors, list):
             for author in authors:
-                lines.append(f"AU  - {author}")
+                lines.append(f"AU  - {_ris_value(author)}")
         elif isinstance(authors, str) and authors.strip():
             # BibTeX "and"-separated → split
             for author in authors.split(" and "):
                 if author.strip():
-                    lines.append(f"AU  - {author.strip()}")
+                    lines.append(f"AU  - {_ris_value(author)}")
 
         # Mapped fields
         for field_key, ris_tag in _RIS_FIELDS:
@@ -209,33 +224,40 @@ def export_ris(bib_path: str) -> ExportResult:
             else:
                 value = record.get(field_key)
             if value is not None and (not isinstance(value, str) or value.strip()):
-                lines.append(f"{ris_tag}  - {value}")
+                lines.append(f"{ris_tag}  - {_ris_value(value)}")
 
         # Tags as KW
         tags = record.get("tags")
         if isinstance(tags, list):
             for tag in tags:
-                lines.append(f"KW  - {tag}")
+                lines.append(f"KW  - {_ris_value(tag)}")
         elif isinstance(tags, str) and tags.strip():
             for tag in tags.split(","):
                 tag = tag.strip()
                 if tag:
-                    lines.append(f"KW  - {tag}")
-
-        # ArXiv ID
-        arxiv = record.get("arxiv_id")
-        if arxiv:
-            lines.append(f"UR  - https://arxiv.org/abs/{arxiv}")
+                    lines.append(f"KW  - {_ris_value(tag)}")
 
         # Local PDF as L1
         local_pdf = record.get("local_pdf_path")
         if local_pdf:
-            lines.append(f"L1  - file://{local_pdf}")
+            lines.append(f"L1  - file://{_ris_value(local_pdf)}")
 
-        # Source URL
-        source = record.get("source_url")
-        if source:
-            lines.append(f"UR  - {source}")
+        # URLs, deduplicated in a stable order. canonical_url and source_url are
+        # both populated from the single BibTeX `url` field, so emitting them
+        # independently produced a duplicate UR line for every entry read from a
+        # bib file.
+        arxiv = record.get("arxiv_id")
+        urls = [
+            _ris_value(candidate)
+            for candidate in (
+                record.get("canonical_url"),
+                f"https://arxiv.org/abs/{arxiv}" if arxiv else None,
+                record.get("source_url"),
+            )
+            if candidate
+        ]
+        for url in dict.fromkeys(urls):
+            lines.append(f"UR  - {url}")
 
         lines.append("ER  - ")
         lines.append("")  # blank line between entries

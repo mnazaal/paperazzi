@@ -1,9 +1,11 @@
+
 """Tests for pzi.export_service — all four export formats."""
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 from pathlib import Path
 
@@ -216,3 +218,71 @@ def test_export_of_a_clean_library_stays_ok() -> None:
 
         assert result["status"] == "ok"
         assert result["errors"] == []
+
+
+def test_export_ris_emits_one_ur_line_per_unique_url(tmp_path: Path) -> None:
+    """canonical_url and source_url both come from the single BibTeX `url`.
+
+    bibtex.py fills both keys from one field, so every entry read back from a
+    bib file emitted the same URL twice.
+    """
+    bib = tmp_path / "lib.bib"
+    bib.write_text(
+        "@article{smith2024,\n"
+        "  title = {Graph Parsers},\n"
+        "  url = {https://example.test/paper},\n"
+        "}\n"
+    )
+
+    ris = export_ris(str(bib))["content"]
+
+    assert ris.count("UR  - ") == 1
+    assert "UR  - https://example.test/paper" in ris
+
+
+def test_export_ris_keeps_distinct_urls(tmp_path: Path) -> None:
+    """Deduping must not collapse a genuinely different arXiv URL."""
+    bib = tmp_path / "lib.bib"
+    bib.write_text(
+        "@article{smith2024,\n"
+        "  title = {Graph Parsers},\n"
+        "  url = {https://example.test/paper},\n"
+        "  eprint = {2401.12345},\n"
+        "  archiveprefix = {arXiv},\n"
+        "}\n"
+    )
+
+    ris = export_ris(str(bib))["content"]
+
+    assert "UR  - https://example.test/paper" in ris
+    assert "UR  - https://arxiv.org/abs/2401.12345" in ris
+    assert ris.count("UR  - ") == 2
+
+
+def test_export_ris_never_emits_an_untagged_line(tmp_path: Path) -> None:
+    """RIS has no continuation syntax; a wrapped abstract broke the record.
+
+    Every line must be `XX  - value`. A multiline abstract emitted bare text
+    lines that strict readers drop or mis-assign — and a continuation line
+    starting with two characters and "  - " is reparsed as a new field.
+    """
+    bib = tmp_path / "lib.bib"
+    bib.write_text(
+        "@article{smith2024,\n"
+        "  title = {Graph Parsers},\n"
+        "  abstract = {First line of the abstract\n"
+        "AB  - which continues here\n"
+        "and ends here},\n"
+        "}\n"
+    )
+
+    ris = export_ris(str(bib))["content"]
+
+    for line in ris.splitlines():
+        if not line:
+            continue
+        assert re.match(r"^[A-Z][A-Z0-9]  - ", line), f"untagged RIS line: {line!r}"
+    # The abstract survives as a single folded AB line.
+    abstract_lines = [ln for ln in ris.splitlines() if ln.startswith("AB  - ")]
+    assert len(abstract_lines) == 1
+    assert "which continues here" in abstract_lines[0]

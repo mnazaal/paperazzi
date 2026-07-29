@@ -1250,12 +1250,36 @@ def test_argparse_error_also_has_no_usage_block(tmp_path: Path) -> None:
 
 
 def test_negative_numeric_argument_is_rejected(tmp_path: Path) -> None:
+    """`--offset` still accepts 0, so it keeps the non-negative validator."""
+    stderr = StringIO()
+    exit_code = run_cli(
+        ["entries", "--offset", "-5"], home_dir=str(tmp_path), stdout=StringIO(), stderr=stderr
+    )
+    assert exit_code == 2
+    assert "must be zero or greater" in stderr.getvalue()
+
+
+def test_entries_limit_zero_is_a_usage_error(tmp_path: Path) -> None:
+    """`--limit 0` was silently clamped to 1.
+
+    The result envelope then reported `"limit": 1` — a different limit from the
+    one requested, with nothing said about it.
+    """
+    stderr = StringIO()
+    exit_code = run_cli(
+        ["entries", "--limit", "0"], home_dir=str(tmp_path), stdout=StringIO(), stderr=stderr
+    )
+    assert exit_code == 2
+    assert "must be one or greater" in stderr.getvalue()
+
+
+def test_entries_limit_negative_is_a_usage_error(tmp_path: Path) -> None:
     stderr = StringIO()
     exit_code = run_cli(
         ["entries", "--limit", "-5"], home_dir=str(tmp_path), stdout=StringIO(), stderr=stderr
     )
     assert exit_code == 2
-    assert "must be zero or greater" in stderr.getvalue()
+    assert "must be one or greater" in stderr.getvalue()
 
 
 def test_run_cli_converts_oserror_to_clean_error(tmp_path: Path, monkeypatch) -> None:
