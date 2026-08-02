@@ -382,3 +382,22 @@ def test_fix_clean_does_not_quarantine_a_sibling_librarys_pdf(tmp_path: Path) ->
     assert code == exit_codes.OK
     assert theirs.exists()
     assert not (papers / ".orphans").exists()
+
+
+def test_entries_output_stays_five_tab_separated_columns(tmp_path: Path) -> None:
+    """A tab or newline in a captured title used to shift or invent columns."""
+    config_path, _bib = _library(
+        tmp_path,
+        "@article{evil2024,\n"
+        "  title = {Real Title\tforged\nevil2025\t2025\tForged},\n"
+        "  author = {Smith, Jane},\n"
+        "  year = {2024},\n"
+        "}\n",
+    )
+
+    code, stdout, _stderr = _run(["entries", "--config", str(config_path)], tmp_path)
+
+    assert code == exit_codes.OK
+    rows = [line for line in stdout.splitlines() if line.strip()]
+    assert len(rows) == 1
+    assert rows[0].count("\t") == 4

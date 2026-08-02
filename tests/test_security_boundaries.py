@@ -556,3 +556,26 @@ def test_the_desktop_browser_fallback_refuses_a_non_http_url(url: str, tmp_path)
     assert opened == []
     assert path is None
     assert error is not None and "http" in error
+
+
+def test_a_metacharacter_rejection_names_the_key_not_the_command() -> None:
+    """Every other failure path here already refuses to quote the command.
+
+    A `*_cmd` line is a command the user wrote to *fetch a secret*, so its text
+    can carry one — and this rejection printed it verbatim to stderr, where it
+    lands in scrollback, logs and bug reports.
+    """
+    from pzi.capture_context import run_shell_command
+
+    with pytest.raises(PziError) as excinfo:
+        run_shell_command(
+            "vault read --token hunter2 secret/pzi && echo x",
+            config_key="api_auth_token_cmd",
+        )
+
+    message = str(excinfo.value)
+    assert "api_auth_token_cmd" in message
+    assert "hunter2" not in message
+    assert "vault" not in message
+    # It still says what is wrong.
+    assert "&&" in message

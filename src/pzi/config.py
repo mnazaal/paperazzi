@@ -74,7 +74,7 @@ class AppConfig(TypedDict):
 
 
 def validate_bib_config(
-    raw: Mapping[str, object], *, home_dir: str
+    raw: Mapping[str, object], *, home_dir: str, base_dir: str | None = None
 ) -> tuple[BibConfig | None, list[str]]:
     """Validate one bib config and derive computed defaults."""
     errors: list[str] = []
@@ -101,9 +101,9 @@ def validate_bib_config(
     assert raw_path_val is not None, "already validated"
     assert name is not None, "already validated"
     assert isinstance(raw_default, bool), "already validated"
-    path = _normalize_path(raw_path_val, home_dir=home_dir)
+    path = _normalize_path(raw_path_val, home_dir=home_dir, base_dir=base_dir)
     papers_dir = (
-        _normalize_path(raw_papers_dir, home_dir=home_dir)
+        _normalize_path(raw_papers_dir, home_dir=home_dir, base_dir=base_dir)
         if isinstance(raw_papers_dir, str)
         else derive_papers_dir(path)
     )
@@ -150,7 +150,7 @@ def _expanded_opt(raw: Mapping[str, object], key: str) -> str | None:
 
 
 def _validate_bib_list(
-    raw_bibs: object, *, home_dir: str
+    raw_bibs: object, *, home_dir: str, base_dir: str | None = None
 ) -> tuple[list[BibConfig] | None, list[str]]:
     """Validate every bib entry, check for duplicate names and multiple defaults."""
     if not isinstance(raw_bibs, list):
@@ -163,7 +163,9 @@ def _validate_bib_list(
             errors.append(f"bibs[{index}] must be a mapping")
             continue
 
-        bib_config, bib_errors = validate_bib_config(bib_value, home_dir=home_dir)
+        bib_config, bib_errors = validate_bib_config(
+            bib_value, home_dir=home_dir, base_dir=base_dir
+        )
         if bib_errors:
             errors.extend(f"bibs[{index}].{error}" for error in bib_errors)
             continue
@@ -305,7 +307,7 @@ def _normalize_app_config(
 
 
 def validate_app_config(
-    raw: Mapping[str, object], *, home_dir: str
+    raw: Mapping[str, object], *, home_dir: str, base_dir: str | None = None
 ) -> tuple[AppConfig | None, list[str]]:
     """Validate application config into one plain normalized shape."""
     errors: list[str] = []
@@ -424,7 +426,9 @@ def validate_app_config(
     if errors:
         return None, errors
 
-    validated_bibs, bib_errors = _validate_bib_list(raw_bibs, home_dir=home_dir)
+    validated_bibs, bib_errors = _validate_bib_list(
+        raw_bibs, home_dir=home_dir, base_dir=base_dir
+    )
     if bib_errors:
         return None, bib_errors
     assert validated_bibs is not None
@@ -617,12 +621,26 @@ def resolve_library_target(
     return None
 
 
-def _normalize_path(value: str, *, home_dir: str) -> str:
+def _normalize_path(value: str, *, home_dir: str, base_dir: str | None = None) -> str:
+    """Absolute, normalized form of a configured path.
+
+    A relative value resolves against *base_dir* — the directory holding the
+    config file that named it — not the process's current directory. Resolving
+    against the CWD meant `path = "ml.bib"` pointed at a different file
+    depending on where `pzi` was run from: correct from the project root, and a
+    second empty library anywhere else, created without a word.
+
+    *base_dir* is omitted where there is no config file to resolve against (a
+    `--target` typed on the command line, which the user means relative to
+    where they are standing).
+    """
     expanded = value.strip()
     if expanded == "~":
         return os.path.normpath(home_dir)
     if expanded.startswith("~/"):
         expanded = os.path.join(home_dir, expanded[2:])
+    elif base_dir is not None and not os.path.isabs(expanded):
+        expanded = os.path.join(base_dir, expanded)
     return os.path.normpath(os.path.abspath(expanded))
 
 
@@ -770,7 +788,9 @@ def load_config_file(path: str, *, home_dir: str) -> LoadConfigResult:
             "path": str(config_path),
         }
 
-    config, errors = validate_app_config(raw_config, home_dir=home_dir)
+    config, errors = validate_app_config(
+        raw_config, home_dir=home_dir, base_dir=str(config_path.parent)
+    )
     return {
         "config": config,
         "errors": errors,

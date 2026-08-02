@@ -112,7 +112,7 @@ def run_shell_command(command: str, *, config_key: str | None = None) -> str:
     command whose job is to report that misconfiguration.
     """
     try:
-        _reject_shell_metacharacters(command)
+        _reject_shell_metacharacters(command, config_key=config_key)
         tokens = shlex.split(command)
     except ValueError as exc:
         raise PziError(str(exc), code=exit_codes.ENVIRONMENT) from exc
@@ -153,17 +153,25 @@ def _secret_command_label(config_key: str | None) -> str:
     return f"the {config_key} command" if config_key else "a configured secret command"
 
 
-def _reject_shell_metacharacters(command: str) -> None:
-    """Raise ValueError when *command* contains dangerous shell syntax."""
+def _reject_shell_metacharacters(command: str, *, config_key: str | None = None) -> None:
+    """Raise ValueError when *command* contains dangerous shell syntax.
+
+    Names the offending character and the config key, never the command. A
+    ``*_cmd`` line exists to *fetch a secret*, so its text can carry one — a
+    token argument, a vault path — and echoing it put that in stderr,
+    scrollback, logs and bug reports. Every other failure in
+    :func:`run_shell_command` already refuses to quote it.
+    """
     # Reject characters / patterns that a shell would interpret even
     # though we use shell=False — a config typo or injection attempt
     # should fail loudly rather than silently passing opaque args.
-    dangerous = {"&&", "||", "|", ";", "$", "`", "&", "(", ")", "{", "}", "<", ">", "\n", "\r"}
+    dangerous = ["&&", "||", "|", ";", "$", "`", "&", "(", ")", "{", "}", "<", ">", "\n", "\r"]
     for char in dangerous:
         if char in command:
             raise ValueError(
-                f"shell metacharacter {char!r} not allowed in config command: "
-                f"{command!r}"
+                f"{_secret_command_label(config_key)} contains the shell "
+                f"metacharacter {char!r}, which pzi refuses to pass on; "
+                "use a wrapper script if the command needs shell syntax"
             )
 
 

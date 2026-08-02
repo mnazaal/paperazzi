@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pzi import cli_json, exit_codes
 from pzi.bib_service import bib_stats, entry_detail, list_entries
-from pzi.cli_render import _error_lines, _render_bib_stats
+from pzi.cli_render import _error_lines, _render_bib_stats, render_cell
 from pzi.commands.common import (
     emit_usage_error,
     exit_code_for_error,
@@ -71,7 +71,14 @@ def _run_list(args, home_dir, config_path, stdout, stderr, bib_selector) -> int:
             # glued onto the authors column without a separator, so awk -F'\t'
             # read it as part of an author name.
             has_pdf = "pdf" if item.get("has_pdf") else ""
-            print(f"{ck}\t{year_str}\t{title}\t{authors}\t{has_pdf}", file=stdout)
+            # Through `render_cell`: a tab in a captured title shifted every
+            # later column, and a newline invented an entire extra row that
+            # a script reading this would parse as another entry.
+            print(
+                f"{render_cell(ck)}\t{render_cell(year_str)}\t{render_cell(title)}\t"
+                f"{render_cell(authors)}\t{render_cell(has_pdf)}",
+                file=stdout,
+            )
         total = result["total"]
         offset = result["offset"]
         limit = result["limit"]

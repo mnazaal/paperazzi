@@ -525,3 +525,64 @@ def test_absent_desktop_fallback_hosts_still_means_defaults() -> None:
         "https://www.biorxiv.org/content/10.1101/x.pdf",
         hosts=set(config["desktop_fallback_hosts"]),
     )
+
+
+def test_a_relative_bib_path_resolves_against_the_config_file(tmp_path, monkeypatch) -> None:
+    """It resolved against the *current directory*, so `path = "ml.bib"` named a
+    different file depending on where `pzi` happened to be run from — and a
+    config that worked from the project root silently created a second, empty
+    library elsewhere."""
+    from pzi.config import load_config_file
+
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "ml.bib").write_text("", encoding="utf-8")
+    config_path = project / "config.toml"
+    config_path.write_text(
+        '[[bibs]]\nname = "ml"\npath = "ml.bib"\ndefault = true\n', encoding="utf-8"
+    )
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    result = load_config_file(str(config_path), home_dir=str(tmp_path))
+
+    assert result["errors"] == []
+    assert result["config"]["bibs"][0]["path"] == str(project / "ml.bib")
+
+
+def test_a_relative_papers_dir_resolves_against_the_config_file(tmp_path, monkeypatch) -> None:
+    from pzi.config import load_config_file
+
+    project = tmp_path / "project"
+    project.mkdir()
+    config_path = project / "config.toml"
+    config_path.write_text(
+        '[[bibs]]\nname = "ml"\npath = "ml.bib"\npapers_dir = "pdfs"\ndefault = true\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = load_config_file(str(config_path), home_dir=str(tmp_path))
+
+    assert result["config"]["bibs"][0]["papers_dir"] == str(project / "pdfs")
+
+
+def test_an_absolute_or_home_relative_bib_path_is_unaffected(tmp_path, monkeypatch) -> None:
+    from pzi.config import load_config_file
+
+    project = tmp_path / "project"
+    project.mkdir()
+    config_path = project / "config.toml"
+    config_path.write_text(
+        f'[[bibs]]\nname = "abs"\npath = "{tmp_path / "a.bib"}"\ndefault = true\n\n'
+        '[[bibs]]\nname = "home"\npath = "~/h.bib"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    bibs = load_config_file(str(config_path), home_dir=str(tmp_path))["config"]["bibs"]
+
+    assert bibs[0]["path"] == str(tmp_path / "a.bib")
+    assert bibs[1]["path"] == str(tmp_path / "h.bib")

@@ -6,6 +6,7 @@ more lines of text.  No I/O, no side effects.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -29,6 +30,25 @@ def _render_tag_mutation_success(result: Mapping[str, Any]) -> str:
     return f"{prefix}{result['message']} for {result['citekey']}: {joined}"
 
 
+#: Everything a terminal or a `cut -f` reader treats as structure: the column
+#: separator, the row separator, and the control characters an ANSI escape is
+#: built from. All three are values a *captured page* can put in a title, so the
+#: rendering layer neutralizes them — the stored entry keeps them verbatim.
+_UNSAFE_IN_ROW = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+
+def render_cell(value: object) -> str:
+    """One field of a tab-separated row, with its structure characters removed.
+
+    A title carrying a tab shifted every later column by one; one carrying a
+    newline invented an entire extra row, which a script reading `pzi search`
+    would parse as another entry. Replaced with spaces rather than dropped, so
+    the text stays readable.
+    """
+    text = "" if value is None else str(value)
+    return _UNSAFE_IN_ROW.sub("", text.replace("\t", " ").replace("\n", " ").replace("\r", " "))
+
+
 def _render_search_matches(result: Mapping[str, Any]) -> list[str]:
     lines = []
     for match in result["matches"]:
@@ -38,7 +58,10 @@ def _render_search_matches(result: Mapping[str, Any]) -> list[str]:
         # "matched:" prefix disambiguates from `pzi entries`' 4th column, which
         # holds actual author names in the same tab-separated position — a bare
         # "[authors]" here would read as an author name, not a matched field.
-        lines.append(f"{match['citekey']}\t{year}\t{title}\t[matched: {fields}]")
+        lines.append(
+            f"{render_cell(match['citekey'])}\t{render_cell(year)}\t"
+            f"{render_cell(title)}\t[matched: {render_cell(fields)}]"
+        )
     # No placeholder line: an empty result means empty stdout, so the output
     # pipes cleanly into xargs/awk. The runner reports "no matches" on stderr.
     return lines
@@ -238,6 +261,12 @@ def _render_doctor_result(result: Mapping[str, Any]) -> list[str]:
     lines = [f"config: {ok if result.get('config_ok') else bad} ({result.get('config_path')})"]
     for err in result.get("config_errors", []):
         lines.append(f"  - {err}")
+    # A key pzi does not know is not fatal — a config written for a newer pzi
+    # still loads — but a *typo'd* one silently does nothing, which is the exact
+    # failure this command exists to find. `doctor --config-only` reported these
+    # all along; the plain run computed them and dropped them.
+    for warning in result.get("config_warnings", []):
+        lines.append(f"  - warning: {warning}")
 
     for bib in result.get("bibs", []):
         state = ok if bib.get("path_exists") else "missing"

@@ -177,3 +177,55 @@ def test_render_bib_promote_items_surfaces_s2_warning() -> None:
         }
     )
     assert any("warning:" in line and "semantic_scholar_api_key_cmd" in line for line in lines)
+
+
+# ---------------------------------------------------------------------------
+# Tab-separated output stays tab-separated
+# ---------------------------------------------------------------------------
+
+
+def test_a_tab_or_newline_in_a_field_does_not_forge_a_row() -> None:
+    """`entries` and `search` emit tab-separated rows a script splits on.
+
+    A title carrying a literal tab shifted every later column by one; one
+    carrying a newline invented a whole extra row. Both are values a capture can
+    write, so the rendering layer is where they have to be neutralized — the
+    stored entry keeps them.
+    """
+    from pzi.cli_render import _render_search_matches
+
+    lines = _render_search_matches({
+        "matches": [
+            {
+                "citekey": "evil2024",
+                "year": 2024,
+                "title": "Real Title\tforged-column\nevil2025\t2025\tForged Row",
+                "matched_fields": ["title"],
+            }
+        ]
+    })
+
+    assert len(lines) == 1
+    assert lines[0].count("\t") == 3
+    assert "\n" not in lines[0]
+    # The text is still legible, not deleted.
+    assert "Real Title" in lines[0] and "Forged Row" in lines[0]
+
+
+def test_control_characters_are_stripped_from_rendered_output() -> None:
+    """An ANSI escape in a captured title rewrites the user's terminal."""
+    from pzi.cli_render import _render_search_matches
+
+    lines = _render_search_matches({
+        "matches": [
+            {
+                "citekey": "a2024",
+                "year": 2024,
+                "title": "Title\x1b[2J\x07 with escapes",
+                "matched_fields": ["title"],
+            }
+        ]
+    })
+
+    assert "\x1b" not in lines[0]
+    assert "\x07" not in lines[0]

@@ -303,3 +303,22 @@ def test_doctor_reports_a_metacharacter_key_command(tmp_path) -> None:
     )
 
     assert "metacharacter" in result["semantic_scholar"]["key_error"]
+
+
+def test_doctor_reports_a_config_key_it_does_not_recognize() -> None:
+    """A typo'd key loads fine and does nothing — the exact failure `doctor` is
+    for. `--config-only` reported it; the plain run computed the warning and
+    then dropped it on the floor.
+    """
+    from pzi.cli_render import _render_doctor_result
+
+    lines = _render_doctor_result({
+        "config_ok": True,
+        "config_path": "/tmp/config.toml",
+        "config_errors": [],
+        "config_warnings": ["unknown config key 'inbox_paths' (ignored)"],
+        "bibs": [],
+    })
+
+    text = "\n".join(lines)
+    assert "inbox_paths" in text
