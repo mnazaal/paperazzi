@@ -154,8 +154,25 @@ def export_json(bib_path: str) -> ExportResult:
     }
 
 
+#: Characters a spreadsheet treats as the start of a formula. A title that
+#: begins with one — legitimately, or because someone put it there — is executed
+#: on open in Excel/LibreOffice/Sheets rather than displayed.
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_safe(value: object) -> object:
+    """Neutralize a cell a spreadsheet would evaluate as a formula."""
+    if isinstance(value, str) and value.startswith(_CSV_FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+
 def export_csv(bib_path: str) -> ExportResult:
-    """Export a BibTeX library as CSV string."""
+    """Export a BibTeX library as CSV string.
+
+    Cells that would be read as formulas are prefixed with an apostrophe, the
+    convention spreadsheets understand as "this is text".
+    """
     raw, dropped = _read_for_export(bib_path)
     records = raw["records"]
     entries = raw["entries"]
@@ -181,7 +198,7 @@ def export_csv(bib_path: str) -> ExportResult:
             _normalize_tags(record.get("tags")),
             record.get("note", ""),
         ]
-        writer.writerow(row)
+        writer.writerow([_csv_safe(cell) for cell in row])
 
     return {
         "status": _export_status(dropped),

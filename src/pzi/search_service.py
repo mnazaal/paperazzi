@@ -68,8 +68,17 @@ def search_bib(
     normalized_tag = None
     if tag is not None:
         tag_norm = normalize_tags([tag])
-        if tag_norm:
-            normalized_tag = tag_norm[0]
+        if not tag_norm:
+            # `--tag "!!"` normalizes to nothing. Falling through with
+            # `normalized_tag = None` dropped the filter entirely and returned
+            # *every* entry — the opposite of a filter that matched nothing.
+            return {
+                "status": "error",
+                "bib_name": bib["name"],
+                "matches": [],
+                "errors": [f"tag {tag!r} contains no searchable characters"],
+            }
+        normalized_tag = tag_norm[0]
 
     read_result, dropped = read_bib_file_with_failures(bib["path"])
     records = read_result["records"]
@@ -148,7 +157,11 @@ def _match_record(
 
     if tag is not None:
         tags = record.get("tags")
-        if isinstance(tags, list) and tag in tags:
+        # Normalize both sides. The query was normalized and the stored tags
+        # were not, so a library tag written as "Machine Learning" could never
+        # be found by the normalized form the search had produced.
+        stored = normalize_tags(tags) if isinstance(tags, list) else []
+        if tag in stored:
             matched.append("tags")
         else:
             return None

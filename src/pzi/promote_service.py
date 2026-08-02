@@ -62,6 +62,11 @@ class PromoteItem(TypedDict):
     changed_fields: list[str]
     pdf_attached: bool | None
     note: str | None
+    #: Set when this preprint could not be promoted because something *went
+    #: wrong* (as opposed to nothing to do). The runner reports PARTIAL from
+    #: this; without it `exit_codes.PARTIAL` was unreachable and a run where
+    #: every promotion failed exited 0 with `errors: []`.
+    failed: NotRequired[bool]
     diff: NotRequired[str]
     metadata_diagnostics: NotRequired[list[str]]
     metadata_warnings: NotRequired[list[str]]
@@ -143,6 +148,8 @@ def promote_bib(
     }
 
     items: list[PromoteItem] = []
+
+    errors: list[str] = []
     summary = _empty_summary()
     resolved_preprints: list[str] = []
 
@@ -267,7 +274,10 @@ def promote_bib(
                 )
         except Exception as exc:  # noqa: BLE001 — one failing entry must not abort the run
             summary["skipped_failed"] += 1
-            items.append(_skip_item(preprint_ck, f"promotion failed: {exc}"))
+            items.append(
+                _skip_item(preprint_ck, f"promotion failed: {exc}", failed=True)
+            )
+            errors.append(f"{preprint_ck}: promotion failed: {exc}")
             continue
         if metadata_diagnostics:
             item["metadata_diagnostics"] = metadata_diagnostics
@@ -325,7 +335,9 @@ def promote_bib(
         "keep_preprint": keep_preprint,
         "items": items,
         "summary": summary,
-        "errors": [],
+        # Populated from the per-item failures above. Hardcoding `[]` meant a
+        # run in which every promotion raised reported no errors at all.
+        "errors": errors,
     }
 
 
@@ -734,8 +746,17 @@ def _promote_item(
     return item
 
 
-def _skip_item(preprint_ck: str, note: str, published_ck: str | None = None) -> PromoteItem:
-    return _promote_item(preprint_ck, published_ck, "skip", note=note)
+def _skip_item(
+    preprint_ck: str,
+    note: str,
+    published_ck: str | None = None,
+    *,
+    failed: bool = False,
+) -> PromoteItem:
+    item = _promote_item(preprint_ck, published_ck, "skip", note=note)
+    if failed:
+        item["failed"] = True
+    return item
 
 
 def _handle_keep_preprint(

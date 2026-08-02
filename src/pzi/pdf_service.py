@@ -181,7 +181,11 @@ def retry_pdf(
         "citekey": citekey,
         "local_pdf_path": local_pdf_path,
         "message": "fetched PDF",
-        "warnings": [],
+        # The chain's warning — notably FlareSolverr's "may violate publisher
+        # terms of service" notice. `pzi add` surfaces it; hardcoding `[]` here
+        # meant the same acquisition reported differently depending on which
+        # command performed it.
+        "warnings": [warning] if warning else [],
         "errors": [],
     }
 
@@ -253,6 +257,7 @@ def retry_failed_pdfs(
 
     succeeded = 0
     failures: list[dict[str, Any]] = []
+    warnings: list[str] = []
 
     for index, citekey, pdf_url in needs_retry:
         record = records[index] if index < len(records) else None
@@ -289,6 +294,8 @@ def retry_failed_pdfs(
             continue
 
         succeeded += 1
+        if warning:
+            warnings.append(f"{citekey}: {warning}")
 
     return {
         "status": "ok",
@@ -298,6 +305,9 @@ def retry_failed_pdfs(
         "skipped_already_has_pdf": skipped_already_has_pdf,
         "skipped_no_url": skipped_no_url,
         "failures": failures,
+        # Per-entry chain warnings — the FlareSolverr terms-of-service notice
+        # above all. `pzi add` has always surfaced these; this path dropped them.
+        "warnings": warnings,
     }
 
 

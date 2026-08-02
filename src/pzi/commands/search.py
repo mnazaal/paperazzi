@@ -41,9 +41,7 @@ def run_search_command(
     as_json = getattr(args, "json", False)
     ok = True
     found_any = False
-    all_matches: list[dict] = []
-    all_errors: list[str] = []
-    searched_bibs: list[str] = []
+    collected: list[tuple[str, dict]] = []
     for target in target_list(bib_selector):
         result = search_bib_fn(
             config_path=config_path,
@@ -58,34 +56,26 @@ def run_search_command(
             ok = False
         if result.get("matches"):
             found_any = True
+        collected.append((target or "default", dict(result)))
         if as_json:
-            # One document for the whole run, not one per library: `--target`
-            # may be repeated, and a consumer should not have to branch on how
-            # many were searched. Each match carries its own bib_name.
-            bib_name = result.get("bib_name")
-            if isinstance(bib_name, str):
-                searched_bibs.append(bib_name)
-            for match in result.get("matches") or []:
-                all_matches.append({**match, "bib_name": bib_name})
-            all_errors.extend(result.get("errors") or [])
-        elif result["status"] == "ok":
+            continue
+        if result["status"] == "ok":
             print_lines(_render_search_matches(result), stdout)
             print_read_warnings(result, stderr)
             if not result.get("matches"):
                 print("no matches", file=stderr)
         else:
-            print_lines(_error_lines("search failed", result["errors"]), stderr)
+            # Name the target: with `--target` repeated, "search failed" with no
+            # library named leaves the user to guess which one.
+            label = result.get("bib_name") or target or "default"
+            print_lines(_error_lines(f"search failed ({label})", result["errors"]), stderr)
     if as_json:
+        # One document for the whole run, not one per library, built by the
+        # shared merge so nothing the service reported is dropped — the
+        # hand-built envelope here silently lost `warnings`.
+        merged = cli_json.merge_target_results(collected, command="search")
         cli_json.emit_result(
-            {
-                "status": "ok" if ok else "error",
-                "bib_name": ", ".join(searched_bibs) if searched_bibs else None,
-                "errors": all_errors,
-                "searched_bibs": searched_bibs,
-            },
-            stdout,
-            command="search",
-            items=all_matches,
+            merged, stdout, command="search", items=merged["items"],
         )
     if not ok:
         return exit_codes.ENVIRONMENT

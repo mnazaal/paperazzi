@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, NotRequired, TypedDict
 
 from pzi.bib_repository import (
@@ -87,16 +88,18 @@ def find_duplicates(
         }
 
     # --- Exact duplicates via identity index ---
+    # One cluster per *connected component* of shared identities. Reporting one
+    # per index bucket repeated the same pair once for its DOI and again for its
+    # arXiv id, and split a genuine three-way duplicate (A~B by DOI, B~C by URL)
+    # into two overlapping clusters the user then had to reconcile by hand.
     identity_index = build_identity_index(records)
     seen_positions: set[int] = set()
     exact_duplicates: list[dict[str, Any]] = []
 
-    for positions in sorted(identity_index.values(), key=min):
-        if len(positions) < 2:
-            continue
+    for component in _identity_components(identity_index):
         citekeys = sorted({
             records[p].get("citekey", "")
-            for p in positions
+            for p in component
             if p < len(records)
         })
         if len(citekeys) < 2:
@@ -104,7 +107,7 @@ def find_duplicates(
         exact_duplicates.append({
             "citekeys": citekeys,
         })
-        seen_positions.update(positions)
+        seen_positions.update(component)
 
     # --- Fuzzy near-duplicates ---
     fuzzy_candidates: list[dict[str, Any]] = []
@@ -147,6 +150,44 @@ def find_duplicates(
         "errors": [],
         "warnings": dropped,
     }
+
+
+def _identity_components(
+    identity_index: Mapping[tuple[Any, str], list[int]],
+) -> list[list[int]]:
+    """Group record positions into connected components of shared identity.
+
+    Two records are in the same component when they share *any* identity, or
+    are joined transitively by a third. Returned in first-appearance order so
+    the report is stable.
+    """
+    parent: dict[int, int] = {}
+
+    def find(position: int) -> int:
+        parent.setdefault(position, position)
+        while parent[position] != position:
+            parent[position] = parent[parent[position]]
+            position = parent[position]
+        return position
+
+    def union(a: int, b: int) -> None:
+        root_a, root_b = find(a), find(b)
+        if root_a != root_b:
+            parent[root_b] = root_a
+
+    order: list[int] = []
+    for positions in identity_index.values():
+        for position in positions:
+            if position not in parent:
+                order.append(position)
+            find(position)
+        for other in positions[1:]:
+            union(positions[0], other)
+
+    components: dict[int, list[int]] = {}
+    for position in order:
+        components.setdefault(find(position), []).append(position)
+    return [members for members in components.values() if len(members) > 1]
 
 
 def merge_duplicates(

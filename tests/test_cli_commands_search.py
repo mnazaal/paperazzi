@@ -112,7 +112,9 @@ def test_run_search_command_returns_failure_when_any_target_fails(tmp_path: Path
     # A target that failed to load is an environment problem, not "no results".
     assert exit_code == exit_codes.ENVIRONMENT
     assert stdout.getvalue() == ""
-    assert stderr.getvalue() == "no matches\nsearch failed\n- missing bib\n"
+    # The failing target is named: with --target repeated, an unqualified
+    # "search failed" leaves the user to guess which library it was.
+    assert stderr.getvalue() == "no matches\nsearch failed (bad)\n- missing bib\n"
 
 
 def test_run_search_command_json_merges_targets_into_one_document(tmp_path: Path) -> None:

@@ -58,9 +58,7 @@ def run_update_command(
     as_json = getattr(args, "json", False)
     ok = True
     any_item_failed = False
-    json_items: list[Any] = []
-    json_errors: list[str] = []
-    searched_bibs: list[str] = []
+    collected: list[tuple[str, Mapping[str, Any]]] = []
     for target in target_list(args.target):
         if promote:
             result = promote_bib_fn(
@@ -91,15 +89,8 @@ def run_update_command(
         if any(item.get("failed") for item in result.get("items") or []):
             any_item_failed = True
 
+        collected.append((target or "default", dict(result)))
         if as_json:
-            # One document for the whole run, the same shape whether or not
-            # --promote was passed; each item names the library it came from.
-            bib_name = result.get("bib_name")
-            if isinstance(bib_name, str):
-                searched_bibs.append(bib_name)
-            for item in result.get("items") or []:
-                json_items.append({**item, "bib_name": bib_name})
-            json_errors.extend(result.get("errors") or [])
             continue
 
         if result["status"] == "ok":
@@ -110,20 +101,25 @@ def run_update_command(
             if args.verbose:
                 print_metadata_diagnostics(result, stdout)
         else:
-            print_lines(_error_lines(failure, result["errors"]), stderr)
+            # Name the failing target, as `search` does.
+            label = result.get("bib_name") or target or "default"
+            print_lines(_error_lines(f"{failure} ({label})", result["errors"]), stderr)
 
     if as_json:
+        # One document for the whole run, the same shape whether or not
+        # --promote was passed, built by the shared merge so nothing the
+        # service reported is dropped — the hand-built envelope here never
+        # copied `summary`, which is where promotion's provider_errors live.
+        merged = cli_json.merge_target_results(
+            collected, command="update --promote" if promote else "update"
+        )
+        merged["dry_run"] = bool(args.dry_run)
+        merged["promote"] = bool(promote)
         cli_json.emit_result(
-            {
-                "status": "ok" if ok else "error",
-                "bib_name": ", ".join(searched_bibs) if searched_bibs else None,
-                "errors": json_errors,
-                "dry_run": bool(args.dry_run),
-                "promote": bool(promote),
-            },
+            merged,
             stdout,
             command="update --promote" if promote else "update",
-            items=json_items,
+            items=merged["items"],
         )
     if not ok:
         return exit_codes.ENVIRONMENT

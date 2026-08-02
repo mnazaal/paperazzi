@@ -177,7 +177,11 @@ def test_update_bib_lookup_failure_recorded(tmp_path: Path) -> None:
         dry_run=True,
         fetch_search=_failing_search,
     )
-    assert result["status"] == "ok"
+    # The library holds one entry and its lookup failed, so *every* item failed
+    # — the run has nothing to report as done. (A partial failure stays `ok`
+    # and is reported through `errors`; the CLI turns that into PARTIAL.)
+    assert result["status"] == "error"
+    assert result["errors"] == ["smith2024graph: lookup failed: connection refused"]
     assert len(result["items"]) == 1
     assert result["items"][0]["applied"] is False
     assert "lookup failed" in result["items"][0]["note"]

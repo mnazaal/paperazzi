@@ -157,7 +157,7 @@ def test_run_update_command_returns_failure_when_any_target_fails(tmp_path: Path
 
     assert exit_code == exit_codes.ENVIRONMENT
     assert stdout.getvalue() == "no updates\n"
-    assert stderr.getvalue() == "update failed\n- missing bib\n"
+    assert stderr.getvalue() == "update failed (bad)\n- missing bib\n"
 
 
 def test_update_exits_partial_when_a_record_failed(tmp_path: Path) -> None:

@@ -308,7 +308,12 @@ def _run_batch(
                 # The documented failure channel: previously empty even when
                 # items had failed, leaving the reasons only inside `items[]`.
                 "errors": [
-                    f"{item['value']}: {first_error(item['result']) or 'failed'}"
+                    # `first_error` takes the *errors list*, not the whole
+                    # result — passing the result Mapping returned None every
+                    # time, so this documented failure channel was the literal
+                    # string "failed" for every item. Text mode has always read
+                    # `message` first and fallen back to the list; do the same.
+                    f"{item['value']}: {_failure_reason(item['result'])}"
                     for item in items
                     if _classify(item["result"]) == "failed"
                 ],
@@ -351,6 +356,14 @@ def _stream_line(
         else (),
         stderr=stderr,
     )
+
+
+def _failure_reason(result: Mapping[str, Any]) -> str:
+    """Why one `--from-file` item failed, in the same words text mode uses."""
+    message = result.get("message")
+    if isinstance(message, str) and message.strip():
+        return message.strip()
+    return first_error(result.get("errors")) or "failed"
 
 
 def _write_failures(failures: list[str], args: argparse.Namespace, from_file: str) -> Path:

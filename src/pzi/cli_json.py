@@ -92,3 +92,75 @@ def emit_error(message: str, errors: Sequence[str], stdout: TextIO, *, command: 
         stdout,
         command=command,
     )
+
+
+def merge_target_results(
+    results: Sequence[tuple[str, Mapping[str, Any]]],
+    *,
+    command: str,
+) -> dict[str, Any]:
+    """Combine per-library service results into one envelope-ready document.
+
+    ``--target`` may be repeated, and a consumer should not have to branch on
+    how many libraries were searched — but hand-building that document per
+    command is what silently dropped keys the service reported: `search --json`
+    lost the partial-parse `warnings` that text mode prints, and
+    `update --promote --json` lost the `summary` carrying `provider_errors`.
+
+    The rules are deliberately dull, so nothing needs to be remembered per
+    command:
+
+    - ``status`` is ``ok`` only when every target succeeded.
+    - Items are concatenated, each stamped with the ``bib_name`` it came from.
+    - Every *list*-valued key any result carried is concatenated under its own
+      name, so nothing a service reported disappears.
+    - Errors and warnings are prefixed with the target that produced them when
+      more than one was addressed — "search failed" without saying *which*
+      library failed is not actionable.
+    - Any other key is taken from the first result that carried it.
+    """
+    ok = True
+    names: list[str] = []
+    items: list[Any] = []
+    extras: dict[str, Any] = {}
+    multiple = len(results) > 1
+
+    for selector, result in results:
+        if result.get("status") != "ok":
+            ok = False
+        bib_name = result.get("bib_name")
+        label = bib_name if isinstance(bib_name, str) and bib_name else selector
+        if isinstance(label, str) and label:
+            names.append(label)
+
+        consumed: set[str] = set()
+        for key in _ITEM_KEYS:
+            value = result.get(key)
+            if isinstance(value, list):
+                items.extend({**item, "bib_name": bib_name} if isinstance(item, dict) else item
+                             for item in value)
+                consumed.add(key)
+                break
+
+        for key, value in result.items():
+            if key in consumed or key in {"status", "bib_name"}:
+                continue
+            if isinstance(value, list):
+                prefixed = [
+                    f"{label}: {entry}"
+                    if multiple and key in {"errors", "warnings"} and isinstance(entry, str)
+                    else entry
+                    for entry in value
+                ]
+                extras.setdefault(key, []).extend(prefixed)
+            else:
+                extras.setdefault(key, value)
+
+    return {
+        "status": "ok" if ok else "error",
+        "bib_name": ", ".join(names) if names else None,
+        "items": items,
+        "searched_bibs": names,
+        **{k: v for k, v in extras.items() if k != "searched_bibs"},
+        "command": command,
+    }

@@ -1,0 +1,346 @@
+"""Failures have to reach the caller, in the channel the caller reads.
+
+Every case here ran, failed, and reported success — or reported failure with the
+reason removed. The shared envelope merge exists because hand-building that
+document per command is what dropped the keys in the first place.
+"""
+
+from __future__ import annotations
+
+import io
+from pathlib import Path
+
+from pzi import cli_json, exit_codes
+
+# ---------------------------------------------------------------------------
+# One envelope, built once
+# ---------------------------------------------------------------------------
+
+
+def test_merging_targets_keeps_every_list_key_a_service_reported() -> None:
+    merged = cli_json.merge_target_results(
+        [
+            ("ml", {"status": "ok", "bib_name": "ml", "matches": [{"citekey": "a1"}],
+                    "warnings": ["duplicate citekey 'x'"], "errors": []}),
+            ("cs", {"status": "ok", "bib_name": "cs", "matches": [{"citekey": "b1"}],
+                    "warnings": [], "errors": []}),
+        ],
+        command="search",
+    )
+
+    assert merged["status"] == "ok"
+    assert [item["citekey"] for item in merged["items"]] == ["a1", "b1"]
+    # The partial-parse warning text mode prints is no longer lost in --json.
+    assert merged["warnings"] == ["ml: duplicate citekey 'x'"]
+    assert merged["searched_bibs"] == ["ml", "cs"]
+
+
+def test_merging_targets_names_the_one_that_failed() -> None:
+    merged = cli_json.merge_target_results(
+        [
+            ("ml", {"status": "ok", "bib_name": "ml", "matches": [], "errors": []}),
+            ("cs", {"status": "error", "bib_name": None, "matches": [],
+                    "errors": ["missing bib"]}),
+        ],
+        command="search",
+    )
+
+    assert merged["status"] == "error"
+    assert merged["errors"] == ["cs: missing bib"]
+
+
+def test_merging_a_single_target_does_not_prefix_its_errors() -> None:
+    merged = cli_json.merge_target_results(
+        [("ml", {"status": "error", "bib_name": "ml", "items": [],
+                 "errors": ["missing bib"]})],
+        command="update",
+    )
+
+    assert merged["errors"] == ["missing bib"]
+
+
+def test_promote_summary_survives_the_json_envelope() -> None:
+    """`summary` is where promotion's `provider_errors` live; the hand-built
+    envelope never copied it."""
+    merged = cli_json.merge_target_results(
+        [("ml", {"status": "ok", "bib_name": "ml", "items": [],
+                 "summary": {"provider_errors": 3}, "errors": []})],
+        command="update --promote",
+    )
+
+    assert merged["summary"] == {"provider_errors": 3}
+
+
+# ---------------------------------------------------------------------------
+# Status derived from item outcomes
+# ---------------------------------------------------------------------------
+
+
+def test_an_update_where_every_item_failed_is_not_ok(tmp_path: Path) -> None:
+    """`POST /update` returns this verbatim, so it answered 200
+    `{"status":"ok","errors":[]}` for a run in which nothing worked."""
+    from pzi.add_service import add_record_to_bib
+    from pzi.update_service import update_bib
+
+    bib_path = tmp_path / "ml.bib"
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\ndefault = true\n',
+        encoding="utf-8",
+    )
+    add_record_to_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        record={"citekey": "a2024", "title": "A", "arxiv_id": "2401.00001"},
+        bib_selector=None,
+        dry_run=False,
+    )
+
+    def _failing_search(query: str, *, server_url: str):
+        raise OSError("connection refused")
+
+    result = update_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        dry_run=False,
+        fetch_search=_failing_search,
+    )
+
+    assert result["status"] == "error"
+    assert result["errors"]
+
+
+def test_a_failed_quarantine_move_is_not_rendered_as_a_dry_run(tmp_path: Path) -> None:
+    from pzi.cli_render import _render_clean_result
+
+    lines = _render_clean_result(
+        {
+            "status": "error",
+            "bib_path": str(tmp_path / "main.bib"),
+            "papers_dir": str(tmp_path / "papers"),
+            "total_entries": 1,
+            "issues": [],
+            "actions": [
+                {
+                    "type": "move_orphan",
+                    "source": "a.pdf",
+                    "destination": ".orphans/a.pdf",
+                    "done": False,
+                    "error": "Permission denied",
+                }
+            ],
+            "errors": ["could not move a.pdf to .orphans/a.pdf: Permission denied"],
+        },
+        dry_run=False,
+    )
+
+    text = "\n".join(lines)
+    assert "would do" not in text
+    assert "failed: move_orphan: Permission denied" in text
+
+
+# ---------------------------------------------------------------------------
+# Reasons survive the trip
+# ---------------------------------------------------------------------------
+
+
+def test_from_file_json_reports_why_an_item_failed(tmp_path: Path) -> None:
+    """`first_error` was handed the whole result Mapping, which always returns
+    None, so this documented channel was the literal string "failed"."""
+    from pzi.commands.add import _failure_reason
+
+    assert _failure_reason({"message": "invalid input", "errors": []}) == "invalid input"
+    assert _failure_reason({"errors": ["connection refused"]}) == "connection refused"
+    assert _failure_reason({}) == "failed"
+
+
+def test_every_pdf_stage_contributes_a_failure_reason(monkeypatch) -> None:
+    """Only the direct stage did, so a broken browser_pdf_cmd or FlareSolverr
+    failure was stderr-only — under --json the operator could not tell which
+    stage broke, or whether it ran."""
+    from pzi import pdf as pdf_module
+
+    monkeypatch.setattr(
+        pdf_module,
+        "fetch_and_store_pdf",
+        lambda **_kwargs: (None, "HTTP 403"),
+    )
+    monkeypatch.setattr(
+        "pzi.browser_pdf.download_pdf_with_browser", lambda **_kwargs: b"<html>"
+    )
+    monkeypatch.setattr(
+        "pzi.flaresolverr.fetch_pdf_via_flaresolverr", lambda *_a, **_k: None
+    )
+
+    path, warning, error = pdf_module.fetch_and_store_pdf_with_fallbacks(
+        url="https://example.com/paper.pdf",
+        papers_dir="/tmp/pzi-does-not-exist",
+        citekey="k1",
+        browser_pdf_cmd="fake-cmd",
+        flaresolverr_url="http://127.0.0.1:8191",
+    )
+
+    assert path is None and warning is None
+    assert "direct download: HTTP 403" in error
+    assert "browser_pdf_cmd: response was not a PDF" in error
+    assert "FlareSolverr: no PDF returned" in error
+
+
+def test_semantic_scholar_reports_a_rate_limit_instead_of_no_result() -> None:
+    """S2 answers quota/rate-limit/auth failures with HTTP 200 and an `error`
+    key, which read as "no such paper"."""
+    from pzi.metadata_sources import fetch_semantic_scholar_record
+
+    errors: list[str] = []
+    record = fetch_semantic_scholar_record(
+        "10.1/x",
+        fetch_text=lambda url, **_kwargs: '{"error": "Too Many Requests"}',
+        errors=errors,
+    )
+
+    assert record is None
+    assert errors == ["semantic-scholar: Too Many Requests"]
+
+
+# ---------------------------------------------------------------------------
+# The extension's error channel
+# ---------------------------------------------------------------------------
+
+
+def test_the_extension_reads_the_servers_singular_error_key() -> None:
+    import subprocess
+
+    script = """
+import { responseErrors } from "./browser-extension/background/utils.js";
+const fromError = responseErrors({ error: "invalid API token" }, "failed");
+const fromErrors = responseErrors({ errors: ["a", "b"] }, "failed");
+const fallback = responseErrors({}, "failed");
+console.log(JSON.stringify([fromError, fromErrors, fallback]));
+"""
+    node = subprocess.run(
+        ["node", "--input-type=module", "-e", script],
+        capture_output=True,
+        text=True,
+        cwd=str(Path(__file__).resolve().parent.parent),
+    )
+    if node.returncode != 0:
+        import pytest
+
+        pytest.skip(f"node unavailable or failed: {node.stderr.strip()[:200]}")
+
+    import json
+
+    from_error, from_errors, fallback = json.loads(node.stdout)
+    assert from_error == ["invalid API token"]
+    assert from_errors == ["a", "b"]
+    assert fallback == ["failed"]
+
+
+# ---------------------------------------------------------------------------
+# Search and dedupe reporting
+# ---------------------------------------------------------------------------
+
+
+def test_a_tag_that_normalizes_to_nothing_is_refused_not_ignored(tmp_path: Path) -> None:
+    """It fell through as "no tag filter" and returned every entry."""
+    from pzi.search_service import search_bib
+
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text(
+        "@article{a1,\n  title = {A},\n  keywords = {ml},\n}\n", encoding="utf-8"
+    )
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\ndefault = true\n', encoding="utf-8"
+    )
+
+    result = search_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        query=None,
+        author=None,
+        year=None,
+        tag="!!",
+    )
+
+    assert result["status"] == "error"
+    assert result["matches"] == []
+
+
+def test_duplicate_clusters_are_connected_components() -> None:
+    """One cluster per index bucket repeated a pair once for its DOI and again
+    for its arXiv id, and split a transitive three-way duplicate in two."""
+    from pzi.dedupe_service import _identity_components
+
+    components = _identity_components(
+        {
+            ("doi", "10.1/x"): [0, 1],
+            ("arxiv", "2401.1"): [0, 1],
+            ("url", "https://example.com/p"): [1, 2],
+            ("doi", "10.1/other"): [3],
+        }
+    )
+
+    assert [sorted(component) for component in components] == [[0, 1, 2]]
+
+
+def test_csv_export_neutralizes_formula_cells(tmp_path: Path) -> None:
+    from pzi.export_service import export_csv
+
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text(
+        '@article{a1,\n  title = {=HYPERLINK("http://evil","click")},\n}\n',
+        encoding="utf-8",
+    )
+
+    content = export_csv(bib_path=str(bib_path))["content"]
+
+    assert "'=HYPERLINK" in content
+
+
+def test_exit_code_partial_is_reachable_for_promote() -> None:
+    """`PromoteItem` had no `failed` key, so the runner's PARTIAL branch could
+    never be taken and a run where every promotion failed exited 0."""
+    from pzi.commands.update import run_update_command
+
+    class _Args:
+        promote = True
+        replace = False
+        mark_resolved = False
+        dry_run = False
+        json = False
+        verbose = False
+        target = None
+
+    def _promote(**_kwargs):
+        return {
+            "status": "ok",
+            "bib_name": "ml",
+            "dry_run": False,
+            "keep_preprint": True,
+            "items": [
+                {
+                    "preprint_citekey": "a1",
+                    "published_citekey": None,
+                    "action": "skip",
+                    "changed_fields": [],
+                    "pdf_attached": None,
+                    "note": "promotion failed: boom",
+                    "failed": True,
+                }
+            ],
+            "errors": ["a1: promotion failed: boom"],
+        }
+
+    code = run_update_command(
+        _Args(),
+        home_dir="/tmp",
+        config_path="/tmp/c.toml",
+        stdout=io.StringIO(),
+        stderr=io.StringIO(),
+        promote_bib_fn=_promote,
+    )
+
+    assert code == exit_codes.PARTIAL

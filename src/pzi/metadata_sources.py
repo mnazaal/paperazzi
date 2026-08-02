@@ -322,7 +322,16 @@ def fetch_semantic_scholar_record(
     base = "https://api.semanticscholar.org/graph/v1/paper"
     url = f"{base}/DOI:{quote(doi, safe='')}?fields={fields}"
     data = _api_json(url, fn=fn, errors=errors)
-    if not isinstance(data, dict) or "error" in data or "message" in data:
+    if not isinstance(data, dict):
+        return None
+    s2_error = _s2_data_error(data)
+    if s2_error is not None:
+        # S2 reports quota, rate-limit and auth failures as a *200* body, which
+        # this read as "no such paper". `--strict-metadata` therefore never
+        # fired on an S2 rate-limit, and `check` recorded the source as
+        # consulted-and-silent — the fabricated-reference signal.
+        if errors is not None:
+            errors.append(f"semantic-scholar: {s2_error}")
         return None
     return _s2_normalize_paper(data)
 
@@ -347,6 +356,11 @@ def fetch_semantic_scholar_record_by_title(
     data = _api_json(url, fn=fn, errors=errors)
     if not isinstance(data, dict) or "error" in data or "message" in data:
         return None
+    s2_error = _s2_data_error(data)
+    if s2_error is not None:
+        if errors is not None:
+            errors.append(f"semantic-scholar: {s2_error}")
+        return None
     papers = data.get("data")
     if not isinstance(papers, list) or not papers:
         return None
@@ -354,6 +368,21 @@ def fetch_semantic_scholar_record_by_title(
     if not isinstance(paper, dict):
         return None
     return _s2_normalize_paper(paper)
+
+
+def _s2_data_error(data: dict[str, object]) -> str | None:
+    """The failure Semantic Scholar reported inside a 200 body, if any.
+
+    S2 answers quota exhaustion, rate limiting and bad credentials with HTTP
+    200 and an `error`/`message` key. That is why
+    `fetch_semantic_scholar_record_by_title_with_error` exists at all; the
+    plain fetchers dropped the same information on the floor.
+    """
+    for key in ("error", "message"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
 
 
 def _s2_normalize_paper(paper: dict[str, object]) -> NormalizedRecord:

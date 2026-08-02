@@ -195,6 +195,14 @@ def fetch_and_store_pdf_with_fallbacks(
     if result[0] is not None:
         return result[0], None, None
     direct_error = result[1]
+    # One line per stage that ran and did not produce a PDF. Only the direct
+    # stage used to contribute a reason, so a broken `browser_pdf_cmd`, a
+    # FlareSolverr failure or a server-browser returning HTML were stderr-only:
+    # under `--json` the operator could not tell which stage broke, or whether
+    # it ran at all.
+    stage_errors: list[str] = []
+    if direct_error:
+        stage_errors.append(f"direct download: {direct_error}")
 
     effective_browser_pdf_cmd = browser_pdf_cmd or _auto_browser_pdf_cmd_for_url(
         url, browser=browser, desktop_fallback_hosts=desktop_fallback_hosts
@@ -211,6 +219,10 @@ def fetch_and_store_pdf_with_fallbacks(
         pdf_bytes = download_via_server_api(
             api_url, url, auth_token=api_auth_token,
         )
+        if not pdf_bytes:
+            stage_errors.append("server browser: no PDF returned")
+        elif not is_pdf_bytes(pdf_bytes):
+            stage_errors.append("server browser: response was not a PDF")
         if pdf_bytes and is_pdf_bytes(pdf_bytes):
             local_path = write_pdf_bytes(
                 data=pdf_bytes,
@@ -230,6 +242,10 @@ def fetch_and_store_pdf_with_fallbacks(
         from pzi.browser_pdf import download_pdf_with_browser
 
         pdf_bytes = download_pdf_with_browser(command=effective_browser_pdf_cmd, pdf_url=url)
+        if not pdf_bytes:
+            stage_errors.append("browser_pdf_cmd: no PDF returned")
+        elif not is_pdf_bytes(pdf_bytes):
+            stage_errors.append("browser_pdf_cmd: response was not a PDF")
         if pdf_bytes and is_pdf_bytes(pdf_bytes):
             local_path = write_pdf_bytes(
                 data=pdf_bytes,
@@ -244,6 +260,10 @@ def fetch_and_store_pdf_with_fallbacks(
         from pzi.flaresolverr import fetch_pdf_via_flaresolverr
 
         pdf_bytes = fetch_pdf_via_flaresolverr(url, server_url=flaresolverr_url)
+        if not pdf_bytes:
+            stage_errors.append("FlareSolverr: no PDF returned")
+        elif not is_pdf_bytes(pdf_bytes):  # pragma: no cover — defensive
+            stage_errors.append("FlareSolverr: response was not a PDF")
         if pdf_bytes and is_pdf_bytes(pdf_bytes):  # pragma: no branch
             warning = (
                 "PDF downloaded via FlareSolverr (bypasses Cloudflare protection). "
@@ -274,10 +294,13 @@ def fetch_and_store_pdf_with_fallbacks(
         )
         if desktop_path is not None:
             return desktop_path, desktop_warning, None
+        stage_errors.append(
+            f"desktop browser download: {desktop_warning or 'no PDF appeared'}"
+        )
 
     detail = f"all download methods failed for {url}"
-    if direct_error:
-        detail = f"{detail} (direct download: {direct_error})"
+    if stage_errors:
+        detail = f"{detail} ({'; '.join(stage_errors)})"
     if not browser_pdf_cmd and not flaresolverr_url:
         detail = (
             f"{detail}; if this site is browser-protected, configure browser_pdf_cmd "

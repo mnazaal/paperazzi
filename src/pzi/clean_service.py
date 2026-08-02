@@ -106,7 +106,11 @@ def validate_library(
     # moving it would leave the entry's `file =` dangling.
     partial_parse = bool(duplicate_citekeys)
 
-    if not entries:
+    # An empty bibliography does not mean an empty papers directory: with no
+    # entries, *every* stored PDF is an orphan, which is exactly what the user
+    # needs told. Returning early here reported `orphan_pdfs: []` for a papers
+    # dir full of files.
+    if not entries and not _names_in_dir(Path(papers_dir)):
         return {
             "status": "ok",
             "bib_path": bib_path,
@@ -264,4 +268,15 @@ def clean_library(
                     action["error"] = str(exc)
 
     validation["actions"] = actions
+    failures = [
+        f"could not move {action['source']} to {action['destination']}: {action['error']}"
+        for action in actions
+        if action.get("error")
+    ]
+    if failures:
+        # An action that failed is an error of the run, not a detail of one
+        # item: `status: "ok"` with `errors: []` said the quarantine had
+        # happened when nothing had moved.
+        validation["errors"] = [*(validation.get("errors") or []), *failures]
+        validation["status"] = "error"
     return validation

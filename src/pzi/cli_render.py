@@ -169,6 +169,12 @@ def _render_clean_result(result: Mapping[str, Any], dry_run: bool) -> list[str]:
         lines.append(f"{prefix}actions ({len(result['actions'])}):")
         for action in result["actions"]:
             typ = action["type"]
+            if action.get("error"):
+                # A *failed* move rendered as "would do" — the dry-run wording —
+                # so a real run that could not move anything read exactly like a
+                # preview of one that would.
+                lines.append(f"  failed: {typ}: {action['error']}")
+                continue
             done = "done" if action.get("done") else "would do"
             lines.append(f"  {prefix}{done}: {typ}")
 

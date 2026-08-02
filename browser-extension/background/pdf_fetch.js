@@ -483,12 +483,18 @@ async function attachPdfToServer({ endpoint, citekey, bib, sourceUrl, bytes, pdf
   if (rawResponse.ok && rawResult && rawResult.status === "ok") return rawResult;
 
   const base64 = arrayBufferToBase64(bytes);
+  // Inherit the bib the capture actually wrote to. The raw URL above carries
+  // the plan's concrete library name, while this fallback used to send the
+  // popup's `bib` — which is null whenever the user left the selector on
+  // "default" — so the request was rejected and an already-downloaded PDF was
+  // discarded.
+  const effectiveBib = bib || pdfRequest?.bib || bibFromAttachUrl(pdfRequest) || undefined;
   const attachResponse = await fetch(endpointFor(endpoint, "/attach-pdf-bytes"), {
     method: "POST",
     headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
     body: JSON.stringify({
       citekey,
-      bib,
+      ...(effectiveBib ? { bib: effectiveBib } : {}),
       source_url: sourceUrl,
       pdf_base64: base64,
       ...attachSessionPayload(pdfRequest),
@@ -505,6 +511,17 @@ function rawAttachUrl(endpoint, { citekey, bib, sourceUrl, pdfRequest = null }) 
   if (bib && !url.searchParams.get("bib")) url.searchParams.set("bib", bib);
   url.searchParams.set("source_url", sourceUrl);
   return url.toString();
+}
+
+
+function bibFromAttachUrl(pdfRequest) {
+  const planned = pdfRequest?.attach?.url;
+  if (!planned) return null;
+  try {
+    return new URL(planned, "http://127.0.0.1").searchParams.get("bib");
+  } catch (_error) {
+    return null;
+  }
 }
 
 function attachTokenHeader(pdfRequest) {

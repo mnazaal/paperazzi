@@ -243,6 +243,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `"status": "ok"` for a run whose stdout envelope said `"error"` and which
   exited 5 — and the report file is the artifact CI archives.
 
+- **Multi-target `--json` output is built once, by a shared merge.** Each
+  command hand-built its own envelope, which is what dropped the keys:
+  `search --json` lost the partial-parse `warnings` text mode prints, and
+  `update --promote --json` lost `summary`, where `provider_errors` live.
+- **A failing `--target` is named.** "search failed" / "update failed" with
+  several targets left the user to work out which library it was.
+- **`POST /update` no longer answers 200 `{"status":"ok","errors":[]}` when
+  every item failed.** The status and the errors are derived from the item
+  outcomes, so the HTTP route and the CLI read one verdict. (A *partial*
+  failure stays `ok` and is reported through `errors`, which the CLI turns into
+  exit 4.)
+- **`update --promote` can report a partly-failed run.** `PromoteItem` had no
+  `failed` key, so `exit_codes.PARTIAL` was unreachable and a run where every
+  promotion raised exited 0 with `errors: []`.
+- **`fix clean --fix` no longer renders a *failed* quarantine move as
+  `would do`** — the dry-run wording — with `errors: []` and `status: "ok"`.
+- **`add --from-file --json` says why an item failed.** `first_error` was given
+  the whole result mapping, which always returns `None`, so the documented
+  failure channel was the literal string `failed` for every item.
+- **Every PDF fallback stage contributes a failure reason.** Only the direct
+  stage did, so a broken `browser_pdf_cmd`, a FlareSolverr failure, or the
+  server browser returning HTML were stderr-only — under `--json` the operator
+  could not tell which stage broke, or whether it ran.
+- **`pdf retry`/`attach` surface the chain's warning**, including FlareSolverr's
+  "may violate publisher terms of service" notice. `pzi add` always did, so the
+  same acquisition reported differently depending on the command.
+- **A Semantic Scholar rate-limit, quota or auth failure is reported as an
+  error** rather than as "no such paper". S2 answers those with HTTP 200 and an
+  `error` key, so `--strict-metadata` never fired on them.
+- **The `/attach-pdf-bytes` fallback inherits the capture's library** instead of
+  sending the popup's `null` and 403-ing, which discarded an
+  already-downloaded PDF.
+- **`pzi search --tag` refuses a tag that normalizes to nothing** instead of
+  dropping the filter and returning every entry, and compares normalized tags on
+  both sides.
+- **`fix clean` scans for orphan PDFs even when the bibliography is empty** —
+  the case where *every* stored PDF is an orphan was the one it skipped.
+- **`fix dedupe` reports one cluster per connected component**, instead of
+  repeating a pair once per shared identity and splitting a transitive
+  three-way duplicate in two.
+- **CSV export neutralizes cells a spreadsheet would evaluate as a formula.**
+
 ### Known limitations
 
 - A bibliography with more than one hard link keeps only the written name

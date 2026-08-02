@@ -135,11 +135,28 @@ def update_bib(
             items.append(item)
 
     return {
-        "status": "ok",
+        # A run where *every* item failed is not `ok`. A partial failure stays
+        # `ok` and is reported through `errors` and each item's `failed`, which
+        # is what the CLI runner turns into PARTIAL — promoting that to `error`
+        # here would make one failed lookup exit 5.
+        "status": (
+            "error"
+            if items and all(item.get("failed") for item in items)
+            else "ok"
+        ),
         "bib_name": bib["name"],
         "dry_run": dry_run,
         "items": items,
-        "errors": [],
+        # Derived from the item outcomes, not hardcoded: `POST /update` returns
+        # this verbatim, so a run in which every item failed answered 200
+        # `{"status":"ok","errors":[]}`. The CLI runner computed its own verdict
+        # from `failed`, so only the HTTP route was wrong — one list, read the
+        # same way by both.
+        "errors": [
+            f"{item['citekey']}: {item.get('note') or 'update failed'}"
+            for item in items
+            if item.get("failed")
+        ],
     }
 
 
