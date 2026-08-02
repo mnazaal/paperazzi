@@ -151,6 +151,13 @@ def _copy_extension_files(dest: Path) -> None:
             shutil.copytree(item, target, dirs_exist_ok=True)
         else:
             shutil.copy2(item, target)
+    # The extension is AGPL like the rest of the project, and the ZIPs are
+    # distributed on their own from the releases page — a copyleft artifact
+    # shipped without its license is the one packaging omission that actually
+    # matters.
+    license_path = SRC_DIR.parent / "LICENSE"
+    if license_path.is_file():
+        shutil.copy2(license_path, dest / "LICENSE")
 
 
 def _write_manifest(dest: Path, manifest: dict[str, Any]) -> None:

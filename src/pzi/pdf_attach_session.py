@@ -14,7 +14,6 @@ class AttachSession:
     token: str
     citekey: str
     bib: str | None
-    created_at: float
     expires_at: float
     max_bytes: int
     allowed_source_urls: tuple[str, ...]
@@ -37,7 +36,6 @@ def build_attach_session(
         token=token,
         citekey=citekey,
         bib=bib,
-        created_at=created_at,
         expires_at=created_at + max(0, ttl_seconds),
         max_bytes=max(0, max_bytes),
         allowed_source_urls=_unique_nonempty(allowed_source_urls),

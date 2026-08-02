@@ -89,6 +89,9 @@ Use this before calling the extension usable.
 
 ```sh
 tmpdir=$(mktemp -d)
+# `pzi init` reuses the API token already on disk, so this does not un-pair your
+# extension. (It used to mint a fresh one on every run — following this very
+# smoke test broke your own setup. Pass `--rotate-token` only when you mean it.)
 pzi init --setup --bib "$tmpdir/main.bib" --config "$tmpdir/config.toml" --force
 pzi server --config "$tmpdir/config.toml" --stop-after 30
 ```
@@ -132,7 +135,7 @@ python tools/build_extension.py
 ### 6. Expected failures
 
 - `PDF not saved: publisher blocked direct download`: metadata is saved; try opening the actual PDF page and capture again.
-- `invalid API token`: copy the same `api_auth_token` from pzi config into the popup.
+- `invalid API token`: copy the token from `<pzi-data-home>/api_token` (written by `pzi init`, mode 0600) into the popup. It is not in `config.toml` — that is what makes the config safe to commit.
 - Empty bib dropdown: ensure `pzi server --stop-after 30` is running and `/bibs` is reachable.
 
 ## Zotero-like parity checklist

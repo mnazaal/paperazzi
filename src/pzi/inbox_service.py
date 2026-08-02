@@ -25,7 +25,6 @@ from pzi.tag_service import normalize_tags
 
 @dataclass(frozen=True)
 class InboxLine:
-    raw: str
     value: str
     tags: list[str] = field(default_factory=list)
     target: str | None = None
@@ -71,7 +70,7 @@ def parse_inbox_line(raw: str) -> InboxLine | None:
     target = next(
         (t[1:] for t in tokens[1:] if t.startswith("@") and len(t) > 1), None
     )
-    return InboxLine(raw=raw, value=value, tags=tags, target=target)
+    return InboxLine(value=value, tags=tags, target=target)
 
 
 # ---------------------------------------------------------------------------

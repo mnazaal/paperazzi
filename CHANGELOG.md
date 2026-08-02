@@ -314,6 +314,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   preprint) and diffs `changed_fields` against the preprint rather than the
   candidate.
 
+### Documentation
+
+- `README.md` no longer claims *every* command accepts `--json`: `inbox`,
+  `export`, `server` and `init` do not, and `inbox` — a batch command with
+  per-item outcomes and a partial-failure exit code — is the real gap.
+- `browser-extension/README.md`'s smoke test no longer breaks your setup (see
+  the `pzi init` fix above), and points at `<data-home>/api_token` rather than
+  an `api_auth_token` config key that no longer exists there.
+- `docs/security.md` recommends the auto-provisioned token file rather than the
+  plaintext config key, and discloses that the Semantic Scholar key used to
+  reach every metadata provider.
+- `config.template.toml` documents `semantic_scholar_api_key`, the only config
+  key that was missing from it.
+
+### Packaging
+
+- The release workflow verifies that the tag, `pyproject.toml`'s version and
+  the `CHANGELOG.md` section agree, and runs the tests and linter, before
+  building. A `v*` tag used to publish whatever it pointed at.
+- CI and the release both install from the committed `uv.lock`, which nothing
+  consumed before.
+- The sdist ships `packaging/systemd/pzi.service`, which `README.md` tells the
+  user to copy, and the build requires `setuptools>=77` for the PEP 639 license
+  metadata this project uses.
+- Both browser-extension ZIPs ship the AGPL `LICENSE`.
+- `tools/publish_smoke.py` no longer invokes a nonexistent `pzi add --title`
+  (it exited 2 on every run) and sandboxes `XDG_DATA_HOME`, so a release check
+  cannot rotate the developer's own API token.
+
+### Removed
+
+- Dead code with no behaviour attached: the `_pdf_result_fields` alias,
+  `InboxLine.raw`, `AttachSession.created_at`, `browser_session_manager`'s
+  `_last_used` (the vestige of an idle-close that was never implemented), the
+  `discover_pdf_url(doi=)` parameter that silently discarded the extension's
+  hint, the `pdf_candidates` payload the server never read, a duplicate test
+  module, and a permanently-skipped empty test (replaced by a real one).
+
 ### Known limitations
 
 - A bibliography with more than one hard link keeps only the written name

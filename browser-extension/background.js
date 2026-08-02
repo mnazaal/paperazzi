@@ -134,8 +134,10 @@ export async function captureCurrentTab({ tags = [], bib = null, dryRun = false,
     verbose: true,
     force_new: forceNew,
     cookies: cookieHeader != null ? "<redacted>" : null,
+    // `pdf_url_candidates` is the key the server reads. The parallel
+    // `pdf_candidates` array (richer per-candidate objects) was computed and
+    // sent on every capture and read by nothing on either side.
     pdf_url_candidates: pdfUrlCandidates,
-    pdf_candidates: pdfCandidates.map(c => typeof c === "string" ? c : { url: candidateUrl(c), source: c.source, same_origin: c.same_origin, requires_cookies: c.requires_cookies }),
     page_title: pageMetadata.pageTitle,
     canonical_url: pageMetadata.canonicalUrl,
     source_url: pageMetadata.sourceUrl,
@@ -163,7 +165,7 @@ export async function captureCurrentTab({ tags = [], bib = null, dryRun = false,
   const response = await fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders },
-    body: JSON.stringify({...captureBody, cookies: cookieHeader, pdf_candidates: pdfCandidates}),
+    body: JSON.stringify({...captureBody, cookies: cookieHeader}),
   });
     const result = await jsonOrNull(response);
     result.extension_version = EXTENSION_VERSION;

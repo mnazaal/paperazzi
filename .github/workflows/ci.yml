@@ -32,9 +32,11 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Install package and dev tools
-        run: |
-          uv venv .venv
-          uv pip install -e ".[dev]"
+        # From `uv.lock`, which is committed and was consumed by nothing: CI
+        # resolved fresh on every run, so a dependency change nobody made could
+        # turn the suite red — or, worse, keep it green against a set the
+        # release will not use. `--frozen` fails if the lock is stale.
+        run: uv sync --frozen --extra dev
 
       - name: Ruff
         run: .venv/bin/ruff check src tools tests
@@ -124,9 +126,11 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Install package and dev tools
-        run: |
-          uv venv .venv
-          uv pip install -e ".[dev]"
+        # From `uv.lock`, which is committed and was consumed by nothing: CI
+        # resolved fresh on every run, so a dependency change nobody made could
+        # turn the suite red — or, worse, keep it green against a set the
+        # release will not use. `--frozen` fails if the lock is stale.
+        run: uv sync --frozen --extra dev
 
       - name: Live smoke tests
         env:

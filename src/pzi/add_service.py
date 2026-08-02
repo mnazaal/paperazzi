@@ -84,7 +84,6 @@ AddRecordResult: TypeAlias = dict[str, Any]
 _error_result = _add_planning.error_result
 _manual_record_from_overrides = _add_planning.manual_record_from_overrides
 _merge_fetched_record_with_overrides = _add_planning.merge_fetched_record_with_overrides
-_pdf_result_fields = _add_planning.pdf_result_fields
 
 def describe_invalid_add_input(value: str) -> str | None:
     """Return why *value* is not valid ``pzi add`` input, or ``None`` if it is.

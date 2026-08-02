@@ -14,6 +14,7 @@ api_listen_port = 8765
 # unpaywall_email_cmd = "pass show unpaywall-email" # optional override for Unpaywall OA PDF lookup
 # unpaywall_email = "your@email.com"
 # semantic_scholar_api_key_cmd = "pass show semantic-scholar" # Semantic Scholar API key
+# semantic_scholar_api_key = "..."          # plaintext alternative to the _cmd form above
 
 # Optional Zotero/Better BibTeX-style naming templates
 # citekey_format = "auth.lower + shorttitle(3,3) + year"

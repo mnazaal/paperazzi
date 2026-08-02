@@ -471,11 +471,13 @@ def _handle_browser_discover_post(
     normalized_page_url = page_url.strip()
     if not safe_public_http_url(normalized_page_url):
         return 400, {"error": "page_url must be a public http(s) URL"}
-    doi = body.get("doi") if isinstance(body.get("doi"), str) else None
     discover = getattr(browser_manager, "discover_pdf_url", None)
     if not callable(discover):
         return 503, {"error": "browser session not available"}
-    pdf_url = discover(normalized_page_url, doi=doi)
+    # No `doi=`: the manager accepted one and dropped it on the floor, because
+    # `browser_pdf_hook.discover_pdf_url` has no parameter to forward it to.
+    # Sending it implied a hint was being used that never was.
+    pdf_url = discover(normalized_page_url)
     if pdf_url:
         return 200, {"pdf_url": pdf_url}
     return 200, {"pdf_url": None}

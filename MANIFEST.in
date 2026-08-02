@@ -10,6 +10,9 @@ include pyproject.toml
 
 recursive-include src/pzi *.toml
 include src/pzi/py.typed
+# README's systemd section tells the user to copy this file; an sdist that
+# prunes it documents a file it does not ship.
+include packaging/systemd/pzi.service
 
 prune tests
 prune docs

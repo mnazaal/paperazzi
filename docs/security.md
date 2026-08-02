@@ -116,7 +116,9 @@ names — never PDFs, cookies, or HTML.
 - It is sent over plain HTTP on the loopback interface.
 - This is safe when `api_listen_host` is `127.0.0.1` (default).
 - Binding to `0.0.0.0` exposes the token to the local network.
-- **Recommendation**: always use loopback bind + `api_auth_token` together.
+- **Recommendation**: always use loopback bind + the auto-provisioned
+  `<data-home>/api_token` together. `api_auth_token` in `config.toml` is a
+  plaintext fallback, not the recommended form.
 
 ### What an attacker on the local machine could do
 
@@ -186,7 +188,9 @@ Treat the API token as the boundary for it.
 
 1. **Always use loopback** (`api_listen_host = "127.0.0.1"`). Never bind to
    `0.0.0.0` without transport encryption.
-2. **Set `api_auth_token`** for defense-in-depth even on loopback.
+2. **Keep the auth token** (`pzi init` writes `<data-home>/api_token`) for
+   defense-in-depth even on loopback. Prefer `api_auth_token_cmd` over the
+   plaintext `api_auth_token` if you use a password manager.
 3. **Keep extension up to date** — reload after `pzi` updates.
 4. **Review publisher host permissions** periodically — remove hosts you don't
    use.
@@ -200,6 +204,9 @@ Treat the API token as the boundary for it.
 
 - Metadata APIs (Crossref, OpenAlex, S2) see your IP address. If you use a
   VPN, those services see the VPN exit IP.
+- The Semantic Scholar API key is sent **only** to `api.semanticscholar.org`.
+  (Before 0.1.0b5 the shared metadata fetcher attached it to every provider, so
+  Crossref, OpenAlex, DBLP and OpenReview also received it.)
 - FlareSolverr (optional, opt-in) routes publisher page requests through a
   third-party service. paperazzi warns when it is configured.
 - Translation-server (Zotero) may make outbound HTTP requests to publisher

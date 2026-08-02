@@ -15,7 +15,6 @@ Usage:
 from __future__ import annotations
 
 import threading
-import time
 from typing import Any
 
 
@@ -42,7 +41,6 @@ class BrowserSessionManager:
         self._profile_path = profile_path
         self._headless = headless
         self._lock = threading.RLock()
-        self._last_used: float = 0.0
         self._session: Any = None
 
     # -- public interface -------------------------------------------------
@@ -56,7 +54,6 @@ class BrowserSessionManager:
             if self._session is not None:
                 try:
                     self._session._check_open()
-                    self._last_used = time.monotonic()
                     return self._session
                 except RuntimeError:
                     # session is closed / crashed — clean up and re-launch
@@ -66,16 +63,17 @@ class BrowserSessionManager:
                         pass
                     self._session = None
             self._session = self._launch()
-            self._last_used = time.monotonic()
             return self._session
 
-    def discover_pdf_url(
-        self,
-        page_url: str,
-        *,
-        doi: str | None = None,
-    ) -> str | None:
-        """Discover PDF URL from a page using the persistent browser session."""
+    def discover_pdf_url(self, page_url: str) -> str | None:
+        """Discover PDF URL from a page using the persistent browser session.
+
+        There is deliberately no `doi` parameter. One used to be accepted and
+        silently discarded — `browser_pdf_hook.discover_pdf_url` has nothing to
+        forward it to — so the extension's DOI hint went nowhere while the
+        signature implied it was used. Refusing it is honest; wiring it through
+        discovery would be a feature.
+        """
         from pzi.browser_pdf_hook import discover_pdf_url as _discover
 
         # Hold the lock for the whole operation: the shared Playwright page

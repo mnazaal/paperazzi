@@ -895,31 +895,6 @@ def test_pdf_metadata_from_text_limits_text_sample():
 # ── from test_pdf_metadata.py ──
 
 """Tests for PDF metadata extraction."""
-def _make_pdf_with_text(tmp_path: Path, text: str) -> Path:
-    """Create a minimal PDF with embedded text using pypdf."""
-    try:
-        from pypdf import PdfWriter
-        from pypdf.generic import DictionaryObject, NameObject
-    except ImportError:
-        pytest.skip("pypdf not installed")
-
-    writer = PdfWriter()
-    page = writer.add_blank_page(width=612, height=792)
-
-    # Add text via content stream (minimal approach)
-    content = f"BT /F1 12 Tf 100 700 Td ({text}) Tj ET".encode()
-    page["/Contents"] = writer._add_object(
-        DictionaryObject({NameObject("/Length"): len(content)})
-    )
-    # Note: this is a simplified mock; real text extraction may fail
-    # We'll use a different approach - create a real PDF with text
-
-    path = tmp_path / "test.pdf"
-    with path.open("wb") as f:
-        writer.write(f)
-    return path
-
-
 def test_extract_pdf_metadata_missing_file(tmp_path: Path) -> None:
     result = pdf_service.extract_pdf_metadata(str(tmp_path / "nonexistent.pdf"))
     assert result == {"doi": None, "title": None, "text_sample": None}

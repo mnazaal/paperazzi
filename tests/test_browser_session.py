@@ -169,8 +169,30 @@ def test_session_close_after_closed() -> None:
 
 
 # === open_browser_session context manager ===
+#
+# The permanently-skipped placeholder that used to sit here ("needs full
+# Playwright mock for launch") had an empty body and could never run. The
+# context manager is covered below through an injected session instead.
 
 
-@pytest.mark.skip(reason="needs full Playwright mock for launch")
-def test_open_browser_session_context(monkeypatch) -> None:
-    pass
+def test_open_browser_session_closes_on_exception(monkeypatch) -> None:
+    """Guaranteed cleanup is the whole point of the context manager."""
+    from pzi import browser_session
+
+    closed: list[bool] = []
+
+    class _Session:
+        def close(self) -> None:
+            closed.append(True)
+
+    monkeypatch.setattr(
+        browser_session, "_launch_browser", lambda *_a, **_k: _Session()
+    )
+
+    try:
+        with browser_session.open_browser_session():
+            raise RuntimeError("boom")
+    except RuntimeError:
+        pass
+
+    assert closed == [True]

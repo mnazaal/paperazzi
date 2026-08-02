@@ -22,7 +22,9 @@ def test_build_attach_session_is_bound_to_citekey_bib_and_expiry() -> None:
         token="tok-1",
         citekey="smith2024",
         bib="main",
-        created_at=100.0,
+        # `created_at` is a constructor argument of `build_attach_session` (it
+        # derives `expires_at`), not a field of the session — nothing ever read
+        # it back.
         expires_at=700.0,
         max_bytes=25_000_000,
         allowed_source_urls=("https://ieeexplore.ieee.org/stamp/stamp.jsp?arnumber=1",),

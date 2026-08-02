@@ -161,12 +161,24 @@ def run_local_smoke(repo_root: Path) -> list[SmokeResult]:
         config = tmp_path / "config.toml"
         bib = tmp_path / "main.bib"
         token = "local-smoke-token"
-        run_cmd(_pzi_cmd("init", "--setup", "--bib", str(bib), "--config", str(config), "--force"))
+        # Sandbox the data home before running `init`. It provisions
+        # `<data-home>/api_token`, and this smoke run has no business touching
+        # the token the developer's own browser extension is paired with.
+        smoke_env = {
+            **os.environ,
+            "XDG_DATA_HOME": str(tmp_path / "data"),
+            "XDG_CONFIG_HOME": str(tmp_path / "config-home"),
+        }
+        run_cmd(
+            _pzi_cmd("init", "--setup", "--bib", str(bib), "--config", str(config), "--force"),
+            env=smoke_env,
+        )
         config.write_text(config.read_text() + f'api_auth_token = "{token}"\n', encoding="utf-8")
-        run_cmd(_pzi_cmd("doctor", "--config", str(config)))
+        run_cmd(_pzi_cmd("doctor", "--config", str(config)), env=smoke_env)
 
         server = subprocess.Popen(
             _pzi_cmd("server", "--config", str(config), "--port", "8765"),
+            env=smoke_env,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             text=True,
@@ -177,16 +189,23 @@ def run_local_smoke(repo_root: Path) -> list[SmokeResult]:
             _expect_http_error("http://127.0.0.1:8765/bibs", expected=401)
             _expect_http_error("http://127.0.0.1:8765/bibs", expected=401, token="bad")
 
+            # `pzi add` has no `--title`; metadata for a manual entry goes
+            # through `--metadata-json`. The old invocation exited 2 every time,
+            # which the smoke run reported as a failed release check.
+            metadata = tmp_path / "smoke-metadata.json"
+            metadata.write_text(
+                json.dumps({"title": "Smoke Test", "year": 2026}), encoding="utf-8"
+            )
             run_cmd(_pzi_cmd(
                 "add",
                 "10.1234/smoke",
                 "--citekey",
                 "smoke2026",
-                "--title",
-                "Smoke Test",
+                "--metadata-json",
+                str(metadata),
                 "--config",
                 str(config),
-            ))
+            ), env=smoke_env)
             pdf = base64.b64encode(b"%PDF-1.4 smoke").decode("ascii")
             result = http_json(
                 "http://127.0.0.1:8765/attach-pdf-bytes",
