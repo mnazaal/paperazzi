@@ -22,7 +22,7 @@ import time
 from collections.abc import Callable, Mapping
 from typing import Literal, NotRequired, TypedDict
 
-from pzi.bib_repository import read_bib_file
+from pzi.bib_repository import read_bib_file_with_failures
 from pzi.bibtex import NormalizedRecord
 from pzi.capture_context import resolve_contact_email, resolve_optional_value
 from pzi.config import BibResolutionFailure, load_bib_target
@@ -34,7 +34,7 @@ from pzi.metadata_sources import (
     fetch_openreview_record_by_title,
     fetch_semantic_scholar_record_by_title,
 )
-from pzi.resolution_match import MatchScore, score_match
+from pzi.resolution_match import MatchScore, _title_similarity, score_match
 
 Verdict = Literal["verified", "could_not_verify", "problematic"]
 
@@ -54,6 +54,7 @@ _PROBLEMATIC_FLAGS = frozenset(
         "authors_swapped",
         "author_truncated",
         "future_year",
+        "year_mismatch",
         "doi_mismatch",
         "given_name_substitution",
     }
@@ -162,6 +163,7 @@ def _verify_entry(
 
     sources_checked: list[str] = []
     source_errors: list[str] = []
+    source_notes: list[str] = []
     scored: list[tuple[str, MatchScore]] = []
     for name, fetch in providers:
         provider_errors: list[str] = []
@@ -186,6 +188,15 @@ def _verify_entry(
         sources_checked.append(name)
         if candidate is None:
             continue
+        if _is_unrelated_hit(record, candidate):
+            # A by-title search returns its top hit whatever it is — Crossref
+            # always answers — so a paper a source does not index came back as
+            # some *other* paper, scored `title_mismatch`, and the tool accused
+            # a genuine citation of being fabricated. A hit this far from the
+            # title is a search miss, not evidence: the source simply does not
+            # have this work, which is `could_not_verify`.
+            source_notes.append(f"{name}: no matching record found")
+            continue
         # Authors confirmed by ≥2 sources earn a confidence bonus.
         confirming = 1 + sum(
             1 for _n, s in scored if s["author_similarity"] >= 60
@@ -204,6 +215,31 @@ def _verify_entry(
         base_mismatches=base_mismatches,
         source_errors=source_errors,
     )
+
+
+#: Below this title similarity the candidate is a different work, not a worse
+#: version of this one. `_TITLE_OK` (60) is where a *match* becomes suspicious;
+#: this is where a "match" stops being one at all.
+_UNRELATED_TITLE = 30
+
+
+def _is_unrelated_hit(
+    record: Mapping[str, object], candidate: Mapping[str, object]
+) -> bool:
+    """True when the candidate is plainly a different paper.
+
+    Only titles are compared: a by-title search that missed returns something
+    with a different title, while a genuine match with a *typo* stays well
+    above the floor.
+    """
+    return _title_similarity(
+        _record_title(record), _record_title(candidate)
+    ) < _UNRELATED_TITLE
+
+
+def _record_title(record: Mapping[str, object]) -> str | None:
+    title = record.get("title")
+    return title if isinstance(title, str) else None
 
 
 def _verdict_from_scores(
@@ -238,8 +274,12 @@ def _verdict_from_scores(
         }
 
     best_name, best = max(scored, key=lambda item: item[1]["score"])
-    flags = [*base_flags, *best["flags"]]
-    mismatches = [*base_mismatches, *_mismatch_lines(best)]
+    # Defect evidence is collected from *every* source that produced it, not
+    # only the top scorer. Taking flags from `best` alone let a sparse
+    # title-only record that happened to score higher suppress a Crossref
+    # record's `doi_mismatch` — the tool's whole job is to surface exactly that.
+    flags = [*base_flags, *_defect_flags_across_sources(scored)]
+    mismatches = [*base_mismatches, *_mismatch_lines_across_sources(scored)]
     bar = _VERIFIED_BAR_STRICT if strict else _VERIFIED_BAR
 
     if any(f in _PROBLEMATIC_FLAGS for f in flags):
@@ -263,6 +303,39 @@ def _verdict_from_scores(
         "sources_checked": sources_checked,
         "source_errors": errors,
     }
+
+
+def _defect_flags_across_sources(scored: list[tuple[str, MatchScore]]) -> list[str]:
+    """Every defect flag any source raised, in first-seen order.
+
+    Non-defect flags (`author_unknown`, `authors_swapped` from a sparse record)
+    are taken from the best match only — they describe *that* comparison, not
+    the reference.
+    """
+    best_name, best = max(scored, key=lambda item: item[1]["score"])
+    flags: list[str] = list(best["flags"])
+    for name, match in scored:
+        if name == best_name:
+            continue
+        for flag in match["flags"]:
+            if flag in _PROBLEMATIC_FLAGS and flag not in flags:
+                flags.append(flag)
+    return flags
+
+
+def _mismatch_lines_across_sources(scored: list[tuple[str, MatchScore]]) -> list[str]:
+    best_name, best = max(scored, key=lambda item: item[1]["score"])
+    lines = list(_mismatch_lines(best))
+    for name, match in scored:
+        if name == best_name:
+            continue
+        if not any(flag in _PROBLEMATIC_FLAGS for flag in match["flags"]):
+            continue
+        for line in _mismatch_lines(match):
+            annotated = f"{line} (per {name})"
+            if annotated not in lines and line not in lines:
+                lines.append(annotated)
+    return lines
 
 
 def _mismatch_lines(match: MatchScore) -> list[str]:
@@ -328,7 +401,14 @@ def check_bib(
         },
     )
 
-    records = read_bib_file(bib["path"])["records"]
+    # `read_bib_file` drops what the lenient parser could not turn into an
+    # entry — including a *duplicate citekey*, where the second block is simply
+    # not read. A 3-entry bib with one fabricated duplicate audited as
+    # `total: 1, verified: 1, problematic: 0, status: "ok"`, exit 0: an
+    # unaudited entry inside a clean bill of health. An audit tool cannot report
+    # on a file it only partly read.
+    read_result, dropped_blocks = read_bib_file_with_failures(bib["path"])
+    records = read_result["records"]
     effective_year = now_year if now_year is not None else time.gmtime().tm_year
     counts = {"verified": 0, "could_not_verify": 0, "problematic": 0}
     items: list[CheckItem] = []
@@ -350,9 +430,14 @@ def check_bib(
     run_errors = [
         f"{name}: unreachable for some or all entries" for name in failed_sources
     ]
+    run_errors.extend(
+        f"not audited: {message}" for message in dropped_blocks
+    )
 
     return {
-        "status": "ok",
+        # A run that could not read part of the file has not audited it, and
+        # `ok` would be read as "everything here is fine".
+        "status": "ok" if not dropped_blocks else "error",
         "bib_name": bib["name"],
         "strict": strict,
         "total": len(items),

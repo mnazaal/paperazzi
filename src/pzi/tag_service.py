@@ -9,6 +9,7 @@ from typing import Literal, NotRequired, TypedDict, cast
 from pzi.bib_repository import (
     find_entry_index,
     read_bib_file,
+    read_bib_file_with_failures,
     update_bib_entry,
 )
 from pzi.bibtex import NormalizedRecord, apply_record_to_entry
@@ -52,6 +53,10 @@ class TagListResult(TypedDict):
     citekey: str | None
     tags: list[str]
     errors: list[str]
+    #: Blocks the parser dropped (a duplicate citekey, an unparseable block).
+    #: `tag list` reports the tags it *could* read; without this, an entry the
+    #: read silently skipped looked like an entry with no tags.
+    warnings: NotRequired[list[str]]
     # Same structured failure kind as `TagChangeResult`, so `tag list` can
     # distinguish an unknown citekey (exit 3) from a bad --target (exit 5)
     # without matching on message text.
@@ -91,7 +96,8 @@ def list_tags(
             "errors": resolved.errors,
         }
     _config, bib = resolved
-    records = read_bib_file(bib["path"])["records"]
+    read_result, dropped_blocks = read_bib_file_with_failures(bib["path"])
+    records = read_result["records"]
 
     if citekey is not None:
         matching = [r for r in records if r.get("citekey") == citekey]
@@ -111,6 +117,7 @@ def list_tags(
             "citekey": citekey,
             "tags": sorted({t for t in raw_tags if isinstance(t, str)}),
             "errors": [],
+            "warnings": dropped_blocks,
         }
 
     all_tags: set[str] = set()
@@ -124,6 +131,7 @@ def list_tags(
         "citekey": None,
         "tags": sorted(all_tags),
         "errors": [],
+        "warnings": dropped_blocks,
     }
 
 

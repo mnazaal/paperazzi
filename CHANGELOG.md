@@ -213,6 +213,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   record the repository handed them under it, so another writer's corrections
   were silently written back to their old values at `status: ok`.
 
+- **`pzi check` compares the year.** `README.md` and the module docstring have
+  always advertised a title/author/**year** mismatch check and nothing ever
+  compared it, so an entry claiming `year = {1999}` for a 2017 paper scored
+  `verified, confidence 100, flags: []` in strict and loose mode alike. A wrong
+  year is one of the commonest fingerprints of a hallucinated citation. A
+  one-year gap is still fine — online-first and print years differ.
+- **`pzi check` no longer hides entries the parser dropped.** A three-entry
+  bibliography containing a duplicate citekey audited as `total: 1,
+  verified: 1, problematic: 0, status: "ok"` at exit 0 — an unaudited entry
+  inside a clean bill of health. The same read now reports what it could not
+  read, in `check` and in `tag list`.
+- **`pzi check` no longer suppresses defect evidence from a lower-scoring
+  source.** Flags were taken from the best match alone, so a sparse title-only
+  record that happened to score higher hid a Crossref record's `doi_mismatch`.
+- **`pzi check` stops accusing correct entries.** Three separate causes:
+  `Jan van der Berg` and `van der Berg, Jan` split to different family names
+  (particles are now absorbed); `Mueller` and `Müller` did not match (umlauts
+  are transliterated, not just stripped); and an entry listing 2 of a paper's 4
+  authors scored 50 under symmetric Jaccard (author agreement is now
+  containment — how much of the entry's claim the source confirms). Under
+  `--strict` each of these failed CI on a correct bibliography.
+- **An unindexed-but-real reference is `could_not_verify`, not
+  `problematic`.** The by-title fetchers ask for one row and return the top hit
+  with no relevance gate, and Crossref always answers — so a workshop paper a
+  source does not index came back as a *different* paper and the tool called a
+  genuine citation fabricated.
+- **`pzi check --report PATH` records the same status as the run.** It wrote
+  `"status": "ok"` for a run whose stdout envelope said `"error"` and which
+  exited 5 — and the report file is the artifact CI archives.
+
 ### Known limitations
 
 - A bibliography with more than one hard link keeps only the written name

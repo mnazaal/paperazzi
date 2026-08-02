@@ -65,6 +65,19 @@ def run_check_command(
             _error_lines("metadata sources unavailable", result["errors"]), stderr
         )
 
+    # An audit that reached no source audited nothing, and the run exits 5 for
+    # it below — so the envelope must not report a clean `ok`. Decided *before*
+    # anything is written or printed: the report file is the artifact CI
+    # archives, and it used to persist `"status": "ok"` for a run whose stdout
+    # envelope said `"error"` and whose exit code was 5.
+    audited_nothing = bool(
+        result["items"]
+        and result["errors"]
+        and not any(item.get("sources_checked") for item in result["items"])
+    )
+    if audited_nothing:
+        result = {**result, "status": "error"}
+
     report_path: str | None = getattr(args, "report", None)
     if report_path:
         with open(report_path, "w", encoding="utf-8") as f:
@@ -81,16 +94,6 @@ def run_check_command(
             with open(jsonl_path, "w", encoding="utf-8") as f:
                 for line in lines:
                     f.write(line + "\n")
-
-    # An audit that reached no source audited nothing, and the run exits 5 for
-    # it below — so the envelope must not report a clean `ok`.
-    audited_nothing = bool(
-        result["items"]
-        and result["errors"]
-        and not any(item.get("sources_checked") for item in result["items"])
-    )
-    if audited_nothing:
-        result = {**result, "status": "error"}
 
     if getattr(args, "json", False):
         cli_json.emit_result(result, stdout, command="check")

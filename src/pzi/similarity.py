@@ -133,10 +133,31 @@ def jaccard_similarity(a: set[str], b: set[str]) -> float:
     return len(a & b) / union if union else 0.0
 
 
+#: German/Nordic vowels have a conventional two-letter spelling that authors and
+#: publishers use interchangeably. Stripping the diacritic alone maps `Müller`
+#: to `muller`, which then does not match the `Mueller` the same person is
+#: published under — scored 50, reported `problematic`.
+_TRANSLITERATIONS = {
+    ord("ä"): "ae", ord("ö"): "oe", ord("ü"): "ue", ord("ß"): "ss",
+    ord("Ä"): "Ae", ord("Ö"): "Oe", ord("Ü"): "Ue",
+    ord("æ"): "ae", ord("Æ"): "Ae", ord("ø"): "oe", ord("Ø"): "Oe",
+    ord("å"): "aa", ord("Å"): "Aa",
+}
+
+
 def _to_ascii(text: str) -> str:
     """Decode HTML entities (DBLP emits ``&apos;``/``&amp;``) then strip diacritics."""
-    decoded = html.unescape(text)
+    decoded = html.unescape(text).translate(_TRANSLITERATIONS)
     return unicodedata.normalize("NFKD", decoded).encode("ascii", "ignore").decode("ascii")
+
+
+#: Lowercase particles that belong to the family name, not the given name.
+#: Only absorbed when lowercase: "Van" starting a name is usually the family
+#: name itself (as in "Van Rossum").
+_NAME_PARTICLES = frozenset({
+    "van", "von", "der", "den", "de", "del", "della", "di", "da", "dos", "du",
+    "la", "le", "ten", "ter", "bin", "ibn", "al", "st", "mac", "mc",
+})
 
 
 def _split_family_given(name: str) -> tuple[str, str]:
@@ -151,7 +172,16 @@ def _split_family_given(name: str) -> tuple[str, str]:
     parts = ascii_name.split()
     if not parts:
         return "", ""
-    return parts[-1].lower(), " ".join(parts[:-1]).lower()
+    # Absorb nobiliary particles into the family name. Taking `parts[-1]` alone
+    # made "Jan van der Berg" a `berg` while "van der Berg, Jan" — the same
+    # person, written the other way round — was a `van der berg`, so the two
+    # spellings of one author never matched and the entry scored 66 with a
+    # `chimeric` flag.
+    start = len(parts) - 1
+    while start > 0 and parts[start - 1].lower() in _NAME_PARTICLES:
+        start -= 1
+    family = " ".join(parts[start:]).lower()
+    return family, " ".join(parts[:start]).lower()
 
 
 def _normalize_author(name: str) -> str:

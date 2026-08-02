@@ -43,6 +43,11 @@ _PENALTY_VENUE = 15
 # Higher than venue: a DOI is an exact identifier, so two different ones are a
 # contradiction rather than a naming difference.
 _PENALTY_DOI = 25
+# A wrong year is one of the commonest fingerprints of a hallucinated citation,
+# but online-first and print years legitimately differ by one, so only a gap
+# wider than that counts.
+_PENALTY_YEAR = 20
+_YEAR_TOLERANCE = 1
 _PENALTY_GIVEN_SUB = 20
 _PENALTY_FAB_EACH = 10
 _PENALTY_FAB_CAP = 20
@@ -72,10 +77,20 @@ def _title_similarity(a: str | None, b: str | None) -> int:
 
 
 def _author_similarity(entry: Sequence[str], candidate: Sequence[str]) -> int:
+    """How much of the *entry's* author list the candidate confirms.
+
+    Containment, not symmetric Jaccard. The question is "does the source back
+    up what the entry claims", which is asymmetric: an entry listing 2 of a
+    paper's 4 authors — an ordinary abbreviated citation — scored 50 under
+    Jaccard and was reported `problematic`, which under `--strict` fails CI on
+    a correct bibliography. Authors the entry claims and the source does not
+    have still lower the score, and `_fabricated_surnames` flags them
+    separately.
+    """
     a, b = set(author_surnames(entry)), set(author_surnames(candidate))
     if not a or not b:
         return 0
-    return round(jaccard_similarity(a, b) * 100)
+    return round(len(a & b) / len(a) * 100)
 
 
 def _fabricated_surnames(entry: Sequence[str], candidate: Sequence[str]) -> list[str]:
@@ -208,6 +223,14 @@ def score_match(
         flags.append("doi_mismatch")
         contributions.append(f"DOI disagrees with the matched record -{_PENALTY_DOI}")
 
+    year_gap = _year_gap(entry, candidate)
+    if year_gap is not None and year_gap > _YEAR_TOLERANCE:
+        score -= _PENALTY_YEAR
+        flags.append("year_mismatch")
+        contributions.append(
+            f"year disagrees with the matched record by {year_gap} -{_PENALTY_YEAR}"
+        )
+
     fabricated = _fabricated_surnames(entry_authors, cand_authors) if author_evidence else []
     if len(fabricated) >= 2:
         penalty = min(len(fabricated) * _PENALTY_FAB_EACH, _PENALTY_FAB_CAP)
@@ -296,6 +319,31 @@ def _apply_strict_checks(
         )
         penalty += _PENALTY_AUTHOR
     return penalty
+
+
+def _year(record: Mapping[str, object]) -> int | None:
+    value = record.get("year")
+    if isinstance(value, bool):  # `bool` is an `int` subclass
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
+
+
+def _year_gap(entry: Mapping[str, object], candidate: Mapping[str, object]) -> int | None:
+    """How far apart the two years are, or None when either side has none.
+
+    The module docstring and `README.md` have always advertised a title/author/
+    **year** mismatch check; nothing ever compared the year, so an entry
+    claiming `year = {1999}` for a 2017 paper scored `verified, confidence 100,
+    flags: []` in both strict and loose mode.
+    """
+    e, c = _year(entry), _year(candidate)
+    if e is None or c is None:
+        return None
+    return abs(e - c)
 
 
 def _venue_mismatch(entry: Mapping[str, object], candidate: Mapping[str, object]) -> bool:
