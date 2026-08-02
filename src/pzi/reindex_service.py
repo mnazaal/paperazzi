@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict
 
 from pzi.bib_repository import (
+    backup_path_for,
     read_bib_file_raw,
     rewrite_entries_in_order_locked,
     with_bib_lock,
@@ -44,6 +46,9 @@ class ReindexResult(TypedDict):
     total_entries: int
     changed: list[dict[str, Any]]
     errors: list[str]
+    #: Where the pre-rewrite library was copied, or ``None`` when nothing was
+    #: rewritten (a dry run, or a library already matching ``citekey_format``).
+    backup_path: NotRequired[str | None]
 
 
 def plan_reindex(
@@ -208,6 +213,7 @@ def reindex_library(
                 "total_entries": 0,
                 "changed": [],
                 "errors": [],
+                "backup_path": None,
             }
 
         changes = plan_reindex(
@@ -218,6 +224,7 @@ def reindex_library(
             pdf_filename_format=pdf_filename_format,
         )
         errors: list[str] = []
+        backup_path: Path | None = None
 
         if dry_run:
             # Apply the real run's tests, not a weaker subset: it also refuses
@@ -240,6 +247,15 @@ def reindex_library(
                 change["renamed_pdf"] = will_rename
         elif changes:
             renamed = _rename_planned_pdfs(changes, entries, errors)
+            # Every citekey in the library is about to change, breaking any
+            # `\cite{}` that used the old ones, and there is no undo. `delete`
+            # and `fix merge` — the other two commands that destroy something
+            # the user cannot reconstruct — both leave a `.bak`, and both write
+            # it under the lock immediately before the write so it is exactly
+            # the content being replaced.
+            backup_path = backup_path_for(bib_path, "reindex")
+            backup_path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+            shutil.copy2(bib_path, backup_path)
             try:
                 rewrite_entries_in_order_locked(
                     bib_path, entries, file_path_style=file_path_style
@@ -250,6 +266,8 @@ def reindex_library(
                         os.rename(new_pdf, old_pdf)
                     except OSError:  # pragma: no cover - best-effort undo
                         pass
+                backup_path.unlink(missing_ok=True)
+                backup_path = None
                 raise
 
         return {
@@ -258,4 +276,5 @@ def reindex_library(
             "total_entries": len(entries),
             "changed": [dict(change) for change in changes],
             "errors": errors,
+            "backup_path": str(backup_path) if backup_path is not None else None,
         }

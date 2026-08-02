@@ -713,6 +713,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true",
         help="with --rename-citekeys, preview the renames without applying",
     )
+    reindex_parser.add_argument(
+        "--force", action="store_true", help="skip confirmation prompt",
+    )
 
     # ── export / import ──────────────────────────────────────────────────
     export_parser = subparsers.add_parser(

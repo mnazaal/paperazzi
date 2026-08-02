@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`pzi doctor --reinstall-server` no longer deletes a translation-server
+  directory pzi did not install.** The ownership sentinel was skipped whenever
+  `force` was set, and `doctor` is the sole caller that sets it — so the one
+  command a user runs to repair an install destroyed an unrelated checkout at
+  the same path. `force` now means only what it says: reinstall even though the
+  sentinel reports the install current.
+- **`pzi fix reindex --rename-citekeys` confirms first and leaves a backup.** It
+  rewrites every citekey in the library and breaks any `\cite{}` that used the
+  old ones, with no undo — while `delete` and `fix merge`, which destroy far
+  less, both prompt and write a `.bak`. It now prompts (or takes `--force`,
+  refusing to prompt into a pipe) and copies the library under the lock
+  immediately before the rewrite.
 - **A year the record model cannot represent is no longer deleted.**
   `NormalizedRecord.year` is an `int`, so `2020a` (the standard same-author
   disambiguator), `in press` and `{\noopsort{1997}}1997` parsed to `None`, were

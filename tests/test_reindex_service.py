@@ -338,3 +338,57 @@ def test_reindex_dry_run_matches_what_the_real_run_will_do() -> None:
         assert preview["changed"][0]["renamed_pdf"] is False
         assert real["changed"][0]["renamed_pdf"] is False
         assert preview["errors"] and real["errors"]
+
+
+def test_reindex_writes_a_backup_before_rewriting_the_library() -> None:
+    """`--rename-citekeys` rewrites every entry key and has no undo otherwise.
+
+    `delete` and `fix merge` — the other two commands that destroy something a
+    user cannot reconstruct — both leave a `.bak` under the lock. This one
+    rewrote the whole library with none.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "change.bib")
+        papers = os.path.join(td, "papers")
+        _write_bib(
+            bib,
+            '@article{oldkey, title = {New Test}, author = {Doe, John}, year = {2025}}',
+        )
+        before = Path(bib).read_text()
+
+        result = reindex_library(bib_path=bib, papers_dir=papers, dry_run=False)
+
+        backup = result["backup_path"]
+        assert backup is not None
+        assert Path(backup).read_text() == before
+        assert "oldkey" not in Path(bib).read_text()
+
+
+def test_reindex_dry_run_writes_no_backup() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "change.bib")
+        papers = os.path.join(td, "papers")
+        _write_bib(
+            bib,
+            '@article{oldkey, title = {New Test}, author = {Doe, John}, year = {2025}}',
+        )
+
+        result = reindex_library(bib_path=bib, papers_dir=papers, dry_run=True)
+
+        assert result["backup_path"] is None
+        assert list(Path(td).glob("*.bak")) == []
+
+
+def test_reindex_with_nothing_to_change_writes_no_backup() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "clean.bib")
+        papers = os.path.join(td, "papers")
+        _write_bib(
+            bib,
+            '@article{smith2024test, title = {Test}, author = {Smith}, year = {2024}}',
+        )
+
+        result = reindex_library(bib_path=bib, papers_dir=papers, dry_run=False)
+
+        assert result["backup_path"] is None
+        assert list(Path(td).glob("*.bak")) == []

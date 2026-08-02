@@ -1216,7 +1216,7 @@ def test_reindex_rename_citekeys_applies_with_warning(tmp_path: Path) -> None:
     config_path, bib_path = _reindex_config(tmp_path)
     stderr = StringIO()
     exit_code = run_cli(
-        ["fix", "reindex", "--rename-citekeys", "--config", str(config_path)],
+        ["fix", "reindex", "--rename-citekeys", "--force", "--config", str(config_path)],
         home_dir=str(tmp_path), stdout=StringIO(), stderr=stderr,
     )
     assert exit_code == 0

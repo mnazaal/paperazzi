@@ -72,6 +72,70 @@ def test_read_sentinel_parses_correctly(tmp_path: Path) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# ensure_translation_server — ownership
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _foreign_ts_dir(tmp_path: Path) -> Path:
+    """A populated `ts/` that pzi did not install — no `.pzi-installed` marker."""
+    ts_dir = tmp_path / "ts"
+    ts_dir.mkdir()
+    (ts_dir / "someone-elses-work.txt").write_text("do not delete", encoding="utf-8")
+    return ts_dir
+
+
+def test_reinstalling_refuses_a_directory_pzi_did_not_install(tmp_path: Path) -> None:
+    ts_dir = _foreign_ts_dir(tmp_path)
+    out, err = io.StringIO(), io.StringIO()
+
+    result = ts_backend.ensure_translation_server(
+        tmp_path, "node", stdout=out, stderr=err
+    )
+
+    assert result is None
+    assert "refusing to replace" in err.getvalue()
+    assert (ts_dir / "someone-elses-work.txt").exists()
+
+
+def test_force_reinstall_still_refuses_a_directory_pzi_did_not_install(
+    tmp_path: Path,
+) -> None:
+    """`force` means "reinstall even if current", never "ignore ownership".
+
+    `pzi doctor --reinstall-server` is the only caller that passes it, and it
+    short-circuited the ownership check — deleting a translation-server checkout
+    pzi never created.
+    """
+    ts_dir = _foreign_ts_dir(tmp_path)
+    out, err = io.StringIO(), io.StringIO()
+
+    result = ts_backend.ensure_translation_server(
+        tmp_path, "node", stdout=out, stderr=err, force=True
+    )
+
+    assert result is None
+    assert "refusing to replace" in err.getvalue()
+    assert (ts_dir / "someone-elses-work.txt").exists()
+
+
+def test_force_reinstall_proceeds_on_a_directory_pzi_did_install(
+    tmp_path: Path,
+) -> None:
+    """The point of `force`: reinstall even though the sentinel says it is current."""
+    ts_dir = tmp_path / "ts"
+    ts_dir.mkdir()
+    ts_backend._write_sentinel(ts_dir)
+    out, err = io.StringIO(), io.StringIO()
+
+    with patch("pzi.ts_backend._build_translation_server", return_value=ts_dir) as build:
+        result = ts_backend.ensure_translation_server(
+            tmp_path, "node", stdout=out, stderr=err, force=True
+        )
+
+    assert result == ts_dir
+    assert build.called
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # _apply_cookie_patch
 # ═══════════════════════════════════════════════════════════════════════════════
 

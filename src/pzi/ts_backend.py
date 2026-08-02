@@ -328,12 +328,13 @@ def ensure_translation_server(
     # An existing directory is only ours to replace if a previous pzi install
     # left its sentinel there. Anything else is the user's, and deleting it —
     # which this used to do unconditionally — destroys work pzi never created.
-    if (
-        not force
-        and ts_dir.exists()
-        and _read_sentinel(ts_dir) is None
-        and any(ts_dir.iterdir())
-    ):
+    #
+    # `force` does not exempt anything from this. It means "reinstall even
+    # though the sentinel says the install is current", which is a statement
+    # about *our* install; it was reading as "ignore ownership", so
+    # `pzi doctor --reinstall-server` — its only caller — deleted a
+    # translation-server checkout pzi had never installed.
+    if ts_dir.exists() and _read_sentinel(ts_dir) is None and any(ts_dir.iterdir()):
         print(
             f"refusing to replace {ts_dir}: it was not installed by pzi "
             "(no .pzi-installed marker). Move it aside and retry.",

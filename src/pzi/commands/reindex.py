@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import sys
+
 from pzi import cli_json, exit_codes
 from pzi.cli_render import _error_lines, _render_reindex_result
-from pzi.commands.common import print_lines, resolve_target
+from pzi.commands.common import emit_usage_error, print_lines, resolve_target
 from pzi.reindex_service import reindex_library
 
 
@@ -13,15 +15,43 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector,
     )
 
+    as_json = getattr(args, "json", False)
     rename = getattr(args, "rename_citekeys", False)
     # Default is a read-only audit: keep citekeys stable unless explicitly asked.
     apply = rename and not args.dry_run
-    if rename and apply:
+    if apply:
         print(
             "warning: rewriting citekeys will break any \\cite{} references that use "
             "the old keys (in LaTeX documents, notes, etc.).",
             file=stderr,
         )
+    if apply and not getattr(args, "force", False):
+        # Same gate as `delete`: this rewrites every citekey in the library and
+        # the damage lands outside pzi, in whatever cites them. Never prompt
+        # into a pipe — reading the answer would eat a line of the caller's
+        # data, and answering "no" for them turns a forgotten --force into a
+        # silent no-op reported as success.
+        if not sys.stdin.isatty():
+            return emit_usage_error(
+                args,
+                "refusing to prompt for confirmation with stdin not a terminal; "
+                "pass --force to rewrite citekeys or --dry-run to preview",
+                command_path=("fix", "reindex"),
+                stdout=stdout,
+                stderr=stderr,
+            )
+        print(
+            f"Rewrite every citekey in {target['path']}? [y/N] ", end="", file=stderr
+        )
+        if sys.stdin.readline().strip().lower() not in ("y", "yes"):
+            if as_json:
+                cli_json.emit_result(
+                    {"status": "ok", "bib_path": target["path"], "message": "cancelled"},
+                    stdout, command="fix reindex", items=[],
+                )
+            else:
+                print("cancelled", file=stderr)
+            return exit_codes.OK
 
     result = reindex_library(
         bib_path=target["path"],
@@ -40,7 +70,7 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
     # is done and the caller has nothing left to act on.
     findings = bool(result.get("errors")) or (not apply and bool(result.get("changed")))
 
-    if getattr(args, "json", False):
+    if as_json:
         cli_json.emit_result(
             result, stdout, command="fix reindex", items=result.get("changed") or [],
         )
@@ -53,6 +83,9 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
         return exit_codes.ENVIRONMENT
 
     print_lines(_render_reindex_result(result, dry_run=not apply), stdout)
+    backup = result.get("backup_path")
+    if isinstance(backup, str):
+        print(f"backup saved to {backup}", file=stderr)
     if not rename and result.get("changed"):
         print(
             "run with --rename-citekeys to apply "

@@ -291,3 +291,58 @@ def test_promote_keep_dry_run_previews_both_writes(tmp_path: Path) -> None:
 
     diff = result["items"][0].get("diff") or ""
     assert "Published version:" in diff, diff
+
+
+# ---------------------------------------------------------------------------
+# Destructive commands ask first
+# ---------------------------------------------------------------------------
+
+_RENAMEABLE = "@article{oldkey,\n  title = {New Test},\n  author = {Doe, John},\n  year = {2025},\n}\n"
+
+
+def test_reindex_rename_without_force_refuses_when_stdin_is_not_a_terminal(
+    tmp_path: Path,
+) -> None:
+    """It rewrites every citekey in the library, breaking `\\cite{}` outside pzi.
+
+    `delete` and `fix merge` both confirm first; this one applied straight away,
+    so a mistyped command was unrecoverable.
+    """
+    config_path, bib = _library(tmp_path, _RENAMEABLE)
+
+    code, _stdout, stderr = _run(
+        ["fix", "reindex", "--rename-citekeys", "--config", str(config_path)], tmp_path
+    )
+
+    assert code == exit_codes.USAGE
+    assert "--force" in stderr
+    assert bib.read_text(encoding="utf-8") == _RENAMEABLE
+
+
+def test_reindex_rename_with_force_rewrites_and_leaves_a_backup(tmp_path: Path) -> None:
+    config_path, bib = _library(tmp_path, _RENAMEABLE)
+
+    code, _stdout, stderr = _run(
+        ["fix", "reindex", "--rename-citekeys", "--force", "--config", str(config_path)],
+        tmp_path,
+    )
+
+    assert code == exit_codes.OK
+    assert "oldkey" not in bib.read_text(encoding="utf-8")
+    assert "backup saved to" in stderr
+    backups = list(tmp_path.glob("*.bak"))
+    assert len(backups) == 1
+    assert backups[0].read_text(encoding="utf-8") == _RENAMEABLE
+
+
+def test_reindex_audit_needs_no_confirmation(tmp_path: Path) -> None:
+    """The default run changes nothing, so it must not demand --force."""
+    config_path, bib = _library(tmp_path, _RENAMEABLE)
+
+    code, stdout, _stderr = _run(
+        ["fix", "reindex", "--config", str(config_path)], tmp_path
+    )
+
+    assert code == exit_codes.FINDINGS
+    assert "--rename-citekeys" in stdout
+    assert bib.read_text(encoding="utf-8") == _RENAMEABLE

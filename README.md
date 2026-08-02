@@ -222,7 +222,7 @@ pzi delete <citekey> [--dry-run] [--force]
 pzi fix clean [--dry-run] [--fix]            # check integrity; --fix relocates orphan PDFs
 pzi fix dedupe
 pzi fix merge <citekey_a> <citekey_b> [--dry-run]
-pzi fix reindex [--rename-citekeys [--dry-run]]  # audit citekeys; rename only on explicit opt-in
+pzi fix reindex [--rename-citekeys [--dry-run] [--force]]  # audit citekeys; rename only on explicit opt-in
 pzi export [--format bibtex|csv|json|ris] [-o <output>] [--force]
 pzi import <source.bib> [--dry-run] [--force-new]
 pzi doctor [--config-only] [--reinstall-server]  # health check; --reinstall-server reinstalls the translation-server
