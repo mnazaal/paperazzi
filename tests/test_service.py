@@ -1863,3 +1863,48 @@ def test_a_metadata_lookup_failure_is_not_called_a_translation_server_error(
 
     assert result["status"] == "error"
     assert result.get("message") == "metadata lookup failed"
+
+
+def test_a_pdf_failure_does_not_lose_the_metadata(tmp_path, monkeypatch) -> None:
+    """Attaching a PDF is enrichment; the entry is the point of `pzi add`.
+
+    An exception out of the PDF stage — a dead `browser_pdf_cmd`, a full disk, a
+    provider hanging up mid-download — aborted the whole add, so the metadata
+    that had already been resolved was thrown away and the user had to re-fetch
+    it. The PDF is retryable with `pzi pdf retry`; the capture is not.
+    """
+    from pzi import add_service
+
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text("", encoding="utf-8")
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\n'
+        f'papers_dir = "{papers}"\ndefault = true\n',
+        encoding="utf-8",
+    )
+
+    def _explode(**_kwargs):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(add_service, "attach_pdf_if_available", _explode)
+
+    result = add_service.add_record_to_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        record={
+            "citekey": "smith2024graph",
+            "title": "Graph Parsers",
+            "year": 2024,
+            "pdf_url": "https://example.com/paper.pdf",
+        },
+        bib_selector=None,
+        dry_run=False,
+    )
+
+    assert result["status"] == "ok"
+    assert result["citekey"] == "smith2024graph"
+    assert "Graph Parsers" in bib_path.read_text(encoding="utf-8")
+    assert any("No space left" in w for w in result["warnings"]), result["warnings"]

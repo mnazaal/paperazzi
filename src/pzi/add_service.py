@@ -519,21 +519,29 @@ def add_record_with_bib(
     # tail below may run twice (concurrent-edit retry), but never re-downloads:
     # ``record_with_pdf`` already carries ``local_pdf_path``, so the reuse
     # helpers short-circuit on the second pass.
-    record_with_pdf, warnings = attach_pdf_if_available(
-        record=typed_record,
-        papers_dir=bib["papers_dir"],
-        dry_run=dry_run,
-        fetch_binary=fetch_binary,
-        flaresolverr_url=flaresolverr_url,
-        browser_pdf_cmd=browser_pdf_cmd,
-        browser=browser,
-        browser_hook=browser_hook,
-        pdf_filename_format=pdf_filename_format,
-        api_url=api_url,
-        api_auth_token=api_auth_token,
-        desktop_fallback_hosts=desktop_fallback_hosts,
-        ezproxy_host=ezproxy_host,
-    )
+    try:
+        record_with_pdf, warnings = attach_pdf_if_available(
+            record=typed_record,
+            papers_dir=bib["papers_dir"],
+            dry_run=dry_run,
+            fetch_binary=fetch_binary,
+            flaresolverr_url=flaresolverr_url,
+            browser_pdf_cmd=browser_pdf_cmd,
+            browser=browser,
+            browser_hook=browser_hook,
+            pdf_filename_format=pdf_filename_format,
+            api_url=api_url,
+            api_auth_token=api_auth_token,
+            desktop_fallback_hosts=desktop_fallback_hosts,
+            ezproxy_host=ezproxy_host,
+        )
+    except Exception as exc:
+        # Attaching a PDF is enrichment; the entry is what `pzi add` is for. A
+        # dead `browser_pdf_cmd`, a full disk or a provider hanging up mid-
+        # download used to abort the whole add, throwing away metadata that had
+        # already been resolved over the network. The PDF is retryable with
+        # `pzi pdf retry`; re-resolving the capture is the expensive half.
+        record_with_pdf, warnings = typed_record, [f"PDF not attached: {exc}"]
 
     def _build_plan(
         existing_records: list[NormalizedRecord],

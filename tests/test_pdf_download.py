@@ -1,6 +1,8 @@
 import http.client
 from pathlib import Path
 
+import pytest
+
 import pzi.pdf_download as pdf_download
 from pzi.pdf_download import fetch_and_store_pdf
 
@@ -93,3 +95,54 @@ def test_fetch_and_store_reports_content_length_truncation(tmp_path) -> None:
     assert path is None
     assert error is not None and "truncated response body" in error
     assert list(tmp_path.iterdir()) == []
+
+
+# ---------------------------------------------------------------------------
+# Storing a PDF on a filesystem, and when storing fails
+# ---------------------------------------------------------------------------
+
+
+def test_a_failed_write_leaves_no_temp_file_behind(tmp_path, monkeypatch) -> None:
+    """`temp_path` was bound *after* the write, so a write that raised skipped
+    the `finally` that removes the temp file — one leaked `.pdf-*.tmp` per
+    failure, in the user's papers directory."""
+    from pzi import pdf_download
+
+    def _boom(_fd, _data):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(pdf_download, "_write_all", _boom)
+
+    with pytest.raises(OSError):
+        pdf_download.write_pdf_bytes(
+            data=b"%PDF-1.4\nx\n", papers_dir=str(tmp_path), citekey="k1"
+        )
+
+    assert list(tmp_path.glob(".pdf-*.tmp")) == []
+
+
+def test_a_filesystem_without_hardlinks_still_stores_the_pdf(tmp_path, monkeypatch) -> None:
+    """exFAT, many CIFS mounts and some FUSE filesystems reject `os.link`.
+
+    Only `FileExistsError` was handled, so `EPERM`/`EOPNOTSUPP` aborted the
+    whole store — `pzi add` could not attach a PDF at all on such a papers_dir.
+    """
+    import errno
+    import os as _os
+
+    from pzi import pdf_download
+
+    real_replace = _os.replace
+
+    def _no_hardlinks(_src, _dst):
+        raise OSError(errno.EPERM, "Operation not permitted")
+
+    monkeypatch.setattr(pdf_download.os, "link", _no_hardlinks)
+    monkeypatch.setattr(pdf_download.os, "replace", real_replace)
+
+    stored = pdf_download.write_pdf_bytes(
+        data=b"%PDF-1.4\nx\n", papers_dir=str(tmp_path), citekey="k1"
+    )
+
+    assert Path(stored).read_bytes() == b"%PDF-1.4\nx\n"
+    assert list(tmp_path.glob(".pdf-*.tmp")) == []

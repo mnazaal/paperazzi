@@ -32,6 +32,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for `problematic` and only under `--strict`, so a CI gate written from that
   table passed a library of fabricated references. `--strict` keeps its real
   meaning: harder checks, not whether findings are reported.
+- **A PDF failure no longer throws away the metadata that was just fetched.** An
+  exception out of the PDF stage — a dead `browser_pdf_cmd`, a full disk, a
+  provider hanging up mid-download — aborted the whole `pzi add`, so the record
+  resolved over the network was discarded and had to be fetched again. The entry
+  is written, the failure is reported as a warning, and the PDF stays retryable
+  with `pzi pdf retry`.
+- **PDFs can be stored on a filesystem without hardlinks.** `os.link` is what
+  makes "create only if absent" atomic, but exFAT, many CIFS mounts and some
+  FUSE filesystems reject it outright — and only `FileExistsError` was handled,
+  so `pzi add` could not attach a PDF at all on such a `papers_dir`. It now
+  falls back to a checked rename.
+- **A failed PDF write no longer leaks a temp file.** `temp_path` was bound
+  after the write, so a write that raised skipped the cleanup entirely, leaving
+  one `.pdf-*.tmp` in the papers directory per failure.
+- **The desktop-download watcher survives a file that vanishes mid-scan.** It
+  called `stat` inside a sort key over a directory the browser is actively
+  writing to, so a partial download being renamed at that instant killed the
+  fallback with `FileNotFoundError` — at the moment it was about to succeed.
 - **`pzi server` refuses to start without an API token.** Without one every
   route — search, export, the stored PDFs, `capture`, `update` and `delete` —
   was reachable by any process on the machine, behind a printed warning the

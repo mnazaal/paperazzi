@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import errno
 import http.client
 import os
 import tempfile
@@ -198,24 +199,28 @@ def write_pdf_bytes(
         temp_fd, temp_name = tempfile.mkstemp(
             dir=str(destination.parent), prefix=".pdf-", suffix=".tmp"
         )
-        try:
-            os.fchmod(temp_fd, 0o600)
-            _write_all(temp_fd, data)
-        finally:
-            os.close(temp_fd)
+        # Bound before the write, not after: a write that raised (ENOSPC, EIO)
+        # skipped the cleanup below entirely, leaking one `.pdf-*.tmp` into the
+        # user's papers directory per failure.
         temp_path = Path(temp_name)
         try:
-            os.link(temp_path, destination)
-            return str(destination)
-        except FileExistsError:
             try:
-                if destination.read_bytes() == data:
-                    return str(destination)
-            except OSError:
-                pass
-            destination = resolve_pdf_destination(destination, data)
-            if destination.exists():
+                os.fchmod(temp_fd, 0o600)
+                _write_all(temp_fd, data)
+            finally:
+                os.close(temp_fd)
+            try:
+                _link_or_replace(temp_path, destination)
                 return str(destination)
+            except FileExistsError:
+                try:
+                    if destination.read_bytes() == data:
+                        return str(destination)
+                except OSError:
+                    pass
+                destination = resolve_pdf_destination(destination, data)
+                if destination.exists():
+                    return str(destination)
         finally:
             try:
                 temp_path.unlink(missing_ok=True)
@@ -226,6 +231,46 @@ def write_pdf_bytes(
         f"{_MAX_PDF_COLLISION_SUFFIX} candidate filenames were all taken",
         code=exit_codes.ENVIRONMENT,
     )
+
+
+#: `os.link` failures that mean "this filesystem has no hardlinks", as opposed
+#: to "that name is taken". exFAT and FAT have none at all; many CIFS mounts and
+#: some FUSE filesystems refuse them too.
+_NO_HARDLINK_ERRNOS = frozenset(
+    code
+    for code in (
+        getattr(errno, name, None)
+        for name in ("EPERM", "EOPNOTSUPP", "ENOTSUP", "ENOSYS", "EXDEV", "EMLINK")
+    )
+    if code is not None
+)
+
+
+def _link_or_replace(temp_path: Path, destination: Path) -> None:
+    """Put *temp_path* at *destination*, refusing to overwrite an existing file.
+
+    ``os.link`` is the primitive that gives "create if absent" atomically, which
+    is what stops one paper's PDF replacing another's. Where the filesystem has
+    no hardlinks it raises rather than answering the question, and only
+    ``FileExistsError`` used to be handled — so on an exFAT or CIFS
+    ``papers_dir``, ``pzi add`` could not store a PDF at all.
+
+    The fallback checks first and renames, which is not atomic: two writers
+    racing on one name can have the second overwrite the first. That window is
+    narrow, only opens on filesystems that cannot do better, and is preferable
+    to refusing to store the file.
+    """
+    try:
+        os.link(temp_path, destination)
+        return
+    except FileExistsError:
+        raise
+    except OSError as exc:
+        if exc.errno not in _NO_HARDLINK_ERRNOS:
+            raise
+    if destination.exists():
+        raise FileExistsError(errno.EEXIST, "File exists", str(destination))
+    os.replace(temp_path, destination)
 
 
 def _write_all(fd: int, data: bytes) -> None:

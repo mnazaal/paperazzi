@@ -48,6 +48,25 @@ def _wait_for_stable_file(path: Path, *, stable_seconds: float = 0.35) -> bool:
     return first.st_size == second.st_size and first.st_mtime == second.st_mtime
 
 
+def _newest_first(download_dir: Path) -> list[Path]:
+    """PDFs in *download_dir*, newest first, skipping any that vanish mid-scan.
+
+    The browser is writing into this directory while we watch it, so a partial
+    download that completes and is renamed between the glob and the sort used to
+    raise ``FileNotFoundError`` out of ``sorted``'s key — killing the fallback at
+    the moment it was about to succeed. The loop body already re-stats each
+    candidate and tolerates one disappearing.
+    """
+    dated: list[tuple[float, Path]] = []
+    for path in download_dir.glob("*.pdf"):
+        try:
+            dated.append((path.stat().st_mtime, path))
+        except OSError:
+            continue
+    dated.sort(key=lambda item: item[0], reverse=True)
+    return [path for _mtime, path in dated]
+
+
 def fetch_pdf_via_desktop_browser_download(
     *,
     url: str,
@@ -91,11 +110,7 @@ def fetch_pdf_via_desktop_browser_download(
     deadline = _time.monotonic() + timeout
     seen: set[Path] = set()
     while _time.monotonic() < deadline:
-        candidates = sorted(
-            download_dir.glob("*.pdf"),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
+        candidates = _newest_first(download_dir)
         for candidate in candidates:
             if candidate in seen:
                 continue
