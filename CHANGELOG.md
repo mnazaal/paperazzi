@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A year the record model cannot represent is no longer deleted.**
+  `NormalizedRecord.year` is an `int`, so `2020a` (the standard same-author
+  disambiguator), `in press` and `{\noopsort{1997}}1997` parsed to `None`, were
+  omitted from the projection, and were then removed from the entry — on every
+  `add` onto an existing paper, every `update`, and every import onto a
+  duplicate. A year the record *can* model is still cleared when the record
+  clears it.
 - **A field value ending in a backslash no longer destroys its entry.**
   `title = {Graph Networks\ }` — a legal LaTeX forced inter-word space — was read
   as `Graph Networks\` and written back as `{Graph Networks\}`, where the

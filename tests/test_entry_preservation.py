@@ -62,6 +62,43 @@ def _config(tmp_path: Path, bib_path: Path) -> Path:
     return config_path
 
 
+def test_a_year_the_record_cannot_model_survives_an_update() -> None:
+    """`2020a` and `in press` are ordinary library content, not junk.
+
+    `NormalizedRecord.year` is an `int`, so a year that is not all digits parsed
+    to `None`, the projection omitted it, and `merge_projected_entry` then
+    *removed* the field — deleting it outright on any `add` onto an existing
+    paper, `update`, or import onto a duplicate.
+    """
+    from pzi.bibtex import BibtexEntry, apply_record_to_entry, bibtex_entry_to_record
+
+    for year in ("2020a", "in press", "{\\noopsort{1997}}1997"):
+        entry: BibtexEntry = {  # type: ignore[assignment]
+            "entry_type": "article",
+            "citekey": "a1",
+            "fields": {"title": "T", "year": year},
+        }
+        updated = apply_record_to_entry(entry, bibtex_entry_to_record(entry))
+        assert updated["fields"]["year"] == year
+
+
+def test_a_record_that_clears_an_ordinary_year_still_clears_it() -> None:
+    """Preserving the unmodelled case must not turn `year` into a write-once field."""
+    from pzi.bibtex import BibtexEntry, apply_record_to_entry, bibtex_entry_to_record
+
+    entry: BibtexEntry = {  # type: ignore[assignment]
+        "entry_type": "article",
+        "citekey": "a1",
+        "fields": {"title": "T", "year": "2020"},
+    }
+    record = bibtex_entry_to_record(entry)
+    record["year"] = None
+
+    updated = apply_record_to_entry(entry, record)
+
+    assert "year" not in updated["fields"]
+
+
 def test_import_preserves_every_unmodelled_field(tmp_path: Path) -> None:
     source = tmp_path / "source.bib"
     source.write_text(RICH_SOURCE, encoding="utf-8")

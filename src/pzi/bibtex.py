@@ -205,6 +205,14 @@ def merge_projected_entry(entry: BibtexEntry, projected_entry: BibtexEntry) -> B
     for key in _RECORD_OWNED_FIELDS:
         if key in projected:
             fields[key] = projected[key]
+        elif key == "year" and not _is_modelled_year(existing.get("year")):
+            # The record models `year` as an int, so a year it cannot represent
+            # — `2020a`, `in press`, `{\noopsort{1997}}1997` — is missing from
+            # *every* projection, not because anyone cleared it. Removing it
+            # would delete ordinary library content on an update that merely
+            # touched a neighbouring field. A year the record can model is still
+            # removed when the record cleared it, so `year` stays writable.
+            continue
         else:
             fields.pop(key, None)
 
@@ -299,6 +307,11 @@ def _parse_year(value: str | None) -> int | None:
         return None
     stripped = value.strip()
     return int(stripped) if stripped.isdigit() else None
+
+
+def _is_modelled_year(value: str | None) -> bool:
+    """Whether :func:`_parse_year` can carry *value* through the record model."""
+    return _parse_year(value) is not None
 
 
 def _empty_to_none(value: str | None) -> str | None:
