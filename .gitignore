@@ -22,3 +22,4 @@ dist/
 # Personal dev-workflow docs: agent session plan/log, not project documentation.
 PLAN.md
 LOG.md
+notes/
