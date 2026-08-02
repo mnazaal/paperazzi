@@ -600,6 +600,13 @@ def resolve_library_target(
             return bib
 
     if normalized_selector.endswith(".bib"):
+        # A direct path must exist. `pzi entries --target typo.bib` used to
+        # report `entries: 0` at exit 0 — indistinguishable from a clean
+        # library, and `README.md` promises exit 5 for an unknown target.
+        # A *configured* name pointing at a not-yet-created file still resolves
+        # above: that is a library the user declared and pzi will create.
+        if not os.path.exists(normalized_path):
+            return None
         return {
             "name": os.path.splitext(os.path.basename(normalized_path))[0],
             "path": normalized_path,
@@ -713,6 +720,22 @@ def default_config_path(home_dir: str) -> str:
     return os.path.join(xdg_config_home(home_dir), "pzi", "config.toml")
 
 
+def unknown_config_keys(raw: Mapping[str, object]) -> list[str]:
+    """Warn about top-level keys pzi does not know.
+
+    A *warning*, not an error, so a config written for a newer pzi still loads.
+    Silently ignoring them meant a typo in `capture_source_dirs`,
+    `inbox_path`, `promote_confidence_threshold` or `pdf_file_path_style` left
+    the default in place with no diagnostic — the setting simply did nothing.
+    """
+    known = set(AppConfig.__annotations__) | {"bibs"}
+    return [
+        f"unknown config key {key!r} (ignored)"
+        for key in sorted(raw)
+        if key not in known
+    ]
+
+
 def load_config_file(path: str, *, home_dir: str) -> LoadConfigResult:
     """Load, parse, and validate a TOML config file."""
     config_path = Path(path)
@@ -748,7 +771,12 @@ def load_config_file(path: str, *, home_dir: str) -> LoadConfigResult:
         }
 
     config, errors = validate_app_config(raw_config, home_dir=home_dir)
-    return {"config": config, "errors": errors, "path": str(config_path)}
+    return {
+        "config": config,
+        "errors": errors,
+        "warnings": unknown_config_keys(raw_config),
+        "path": str(config_path),
+    }
 
 
 # ---------------------------------------------------------------------------

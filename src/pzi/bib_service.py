@@ -154,6 +154,14 @@ def list_entries(
     read_result, dropped = read_bib_file_with_failures(bib_path)
 
     records = read_result["records"]
+    # `entry_type` is a property of the BibTeX entry; `bibtex_entry_to_record`
+    # deliberately never sets it, so reading it off the record reported
+    # `"unknown"` for every entry, always. `--stats` and `export` have always
+    # reported the real types.
+    entry_types = {
+        id(record): str(entry.get("entry_type") or "unknown")
+        for record, entry in zip(records, read_result["entries"])
+    }
     total = len(records)
 
     sort_field: str = sort.lower().strip()
@@ -192,7 +200,7 @@ def list_entries(
             "title": str(r.get("title", "")),
             "year": r.get("year"),
             "authors": _author_names(r),
-            "entry_type": str(r.get("entry_type", "unknown")),
+            "entry_type": entry_types.get(id(r), "unknown"),
             "has_pdf": pdf_file_present(r.get("local_pdf_path")),
             "doi": r.get("doi"),
         }

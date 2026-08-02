@@ -318,7 +318,15 @@ def _auto_browser_pdf_cmd_for_url(
     from pzi.config import DEFAULT_DESKTOP_FALLBACK_HOSTS
 
     hostname = normalized_hostname(url)
-    effective_hosts = desktop_fallback_hosts or set(DEFAULT_DESKTOP_FALLBACK_HOSTS)
+    # `is None`, not truthiness: an explicitly configured
+    # `desktop_fallback_hosts = []` means "never launch the browser for this",
+    # and `or` re-expanded it to the built-in list — the fifth site of a class
+    # fixed at four others.
+    effective_hosts = (
+        set(DEFAULT_DESKTOP_FALLBACK_HOSTS)
+        if desktop_fallback_hosts is None
+        else desktop_fallback_hosts
+    )
     if hostname in effective_hosts:
         return _auto_browser_pdf_cmd(browser=browser)
     return None

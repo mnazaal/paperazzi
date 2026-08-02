@@ -35,6 +35,12 @@ from pzi.tag_service import parse_tag_csv
 
 # Single-item-only flags (defined on the `add` parser) that have no meaning
 # when capturing a whole batch via --from-file.
+#: Flags that only mean something when iterating a list of inputs.
+_SINGLE_INCOMPATIBLE = (
+    ("delay", "--delay"),
+    ("failures_out", "--failures-out"),
+)
+
 _BATCH_INCOMPATIBLE = (
     ("citekey", "--citekey"),
     ("metadata_json", "--metadata-json"),
@@ -120,6 +126,13 @@ def _validate_add_args(args: argparse.Namespace, *, from_file: str | None) -> st
     if not from_file:
         if not value:
             return "provide a DOI, URL, or PDF path, or use --from-file PATH"
+        # The mirror of the check below, which was missing: batch-only flags
+        # were accepted and ignored on a single add. `--delay` and
+        # `--failures-out` describe iterating over a list of inputs; there is no
+        # list here.
+        for attr, flag in _SINGLE_INCOMPATIBLE:
+            if getattr(args, attr, None) is not None:
+                return f"{flag} applies to --from-file mode only"
         return None
     if value:
         return "provide either a value or --from-file, not both"
@@ -232,7 +245,8 @@ def _run_batch(
     if fetch_search is not None:
         service_kwargs["fetch_search"] = fetch_search
 
-    delay = max(0.0, getattr(args, "delay", 1.0) or 0.0)
+    raw_delay = getattr(args, "delay", None)
+    delay = max(0.0, 1.0 if raw_delay is None else raw_delay)
     total = len(values)
     counts = {"added": 0, "exists": 0, "failed": 0}
     failures: list[str] = []

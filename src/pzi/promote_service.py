@@ -13,6 +13,7 @@ from pzi.bib_repository import (
     WritePlan,
     batch_write_session,
     plan_bib_write,
+    preview_batch_write,
     preview_write_plan,
     read_bib_file,
     resolve_entry_type,
@@ -21,6 +22,7 @@ from pzi.bib_repository import (
 from pzi.bibtex import (
     BibtexEntry,
     NormalizedRecord,
+    bibtex_entry_to_record,
     generate_citekey,
     merge_projected_entry,
     normalize_authors,
@@ -805,17 +807,27 @@ def _handle_keep_preprint(
         browser_hook=browser_hook,
     )
 
+    # Diffed against the *preprint*, which is what the promotion changes — not
+    # against the candidate, which listed the fields the candidate did not
+    # supply and called them changes.
     changed_fields = sorted(
-        key for key in published if published.get(key) != candidate.get(key)
+        key for key in published if published.get(key) != preprint_record.get(key)
     ) or ["venue", "doi"]
 
     diff: str | None = None
     if dry_run:
         # Same `force_new` as the real write, so the preview shows the insert
         # the run will actually perform rather than a spurious in-place update.
-        plan = plan_bib_write(published, records, force_new=True)
-        diff = preview_write_plan(
-            bib_path, plan, file_path_style=file_path_style
+        # Both writes, through the same builder the real run uses: the preview
+        # used to show only the insert and omit the cross-reference note
+        # stamped onto the preprint.
+        diff = preview_batch_write(
+            bib_path,
+            lambda session: _apply_published_fork(
+                session, published, preprint_ck, published_ck,
+                bib_path=bib_path, check_collision=False,
+            ),
+            file_path_style=file_path_style,
         )["diff"]
     else:
         try:
@@ -877,28 +889,53 @@ def _write_published_fork(
     rollback had just deleted) behind a reported ``created 0``.
     """
     with batch_write_session(bib_path, file_path_style=file_path_style) as session:
+        _apply_published_fork(
+            session,
+            published,
+            preprint_ck,
+            published_ck,
+            bib_path=bib_path,
+            check_collision=True,
+        )
+
+
+def _apply_published_fork(
+    session: BatchWriteSession,
+    published: NormalizedRecord,
+    preprint_ck: str,
+    published_ck: str,
+    *,
+    bib_path: str,
+    check_collision: bool,
+) -> None:
+    """Fold both of the fork's writes into *session*.
+
+    Shared by the real write and the dry-run preview, so the preview cannot
+    show a different pair of writes than the run performs.
+    """
+    if check_collision and any(
+        record.get("citekey") == published_ck for record in session.records
+    ):
         # `published_ck` was generated against the snapshot read at the top of
         # the run, but this session re-reads under the lock. `execute_write_plan`
         # caught that drift with its own ConcurrentEditError; a batch session
         # reads fresh instead, so the collision is checked here — with
         # `force_new` set, nothing else would.
-        if any(record.get("citekey") == published_ck for record in session.records):
-            raise ConcurrentEditError(
-                f"citekey {published_ck} appeared in {bib_path} while promoting "
-                f"{preprint_ck}; aborting rather than writing a duplicate entry"
-            )
-        # force_new: the published record is forked from the preprint and can
-        # still share an identity with it, so an identity-matched plan would
-        # turn this insert into an in-place update of the preprint itself. The
-        # candidate was already checked against the library by
-        # `_find_duplicate_citekey`, so there is nothing legitimate to match.
-        plan = plan_bib_write(published, session.records, force_new=True)
-        session.apply_plan(plan)
-        note_plan = _plan_note_update(
-            session, preprint_ck, f"Published version: {published_ck}"
+        raise ConcurrentEditError(
+            f"citekey {published_ck} appeared in {bib_path} while promoting "
+            f"{preprint_ck}; aborting rather than writing a duplicate entry"
         )
-        if note_plan is not None:
-            session.apply_plan(note_plan)
+    # force_new: the published record is forked from the preprint and can
+    # still share an identity with it, so an identity-matched plan would
+    # turn this insert into an in-place update of the preprint itself. The
+    # candidate was already checked against the library by
+    # `_find_duplicate_citekey`, so there is nothing legitimate to match.
+    session.apply_plan(plan_bib_write(published, session.records, force_new=True))
+    note_plan = _plan_note_update(
+        session, preprint_ck, f"Published version: {published_ck}"
+    )
+    if note_plan is not None:
+        session.apply_plan(note_plan)
 
 
 def _plan_note_update(
@@ -938,6 +975,71 @@ def _entry_for_citekey(bib_path: str, citekey: str) -> BibtexEntry | None:
     return None
 
 
+def _promoted_entry(
+    entry: BibtexEntry,
+    current_record: NormalizedRecord,
+    candidate: NormalizedRecord,
+    *,
+    pdf_source: NormalizedRecord | None = None,
+) -> BibtexEntry:
+    """The entry a promotion writes in place. Shared by the write and the preview.
+
+    Merges the published metadata onto the record as it is on disk *now*, not
+    onto the pre-lock snapshot: `update_bib_entry` re-reads under the exclusive
+    lock precisely so a concurrent edit is not thrown away.
+    """
+    locked = _merge_published_metadata(
+        cast(NormalizedRecord, dict(current_record)), candidate
+    )
+    # The PDF is acquired before the lock is taken, so its path lives on the
+    # pre-lock record and has to be carried over onto the fresh merge.
+    for pdf_field in ("local_pdf_path", "pdf_url"):
+        value = (pdf_source or {}).get(pdf_field)
+        if value:
+            locked[pdf_field] = value  # type: ignore[literal-required]
+    # Project onto the entry rather than replacing it: a rebuild from the record
+    # drops every field `NormalizedRecord` does not model (`volume`, `pages`,
+    # `publisher`, ...).
+    projected = record_to_bibtex_entry(locked, entry_type=resolve_entry_type(locked))
+    merged = merge_projected_entry(entry, projected)
+    # `merge_projected_entry` keeps the on-disk entry type, because an ordinary
+    # update has no business retyping an entry. Promotion is the exception — the
+    # preprint has become a published paper — so the type is resolved from the
+    # promoted record rather than left as `@unpublished`.
+    if projected["entry_type"] != merged["entry_type"]:
+        merged["entry_type"] = projected["entry_type"]
+        _relocate_venue_for_entry_type(merged)
+    return merged
+
+
+def _preview_in_place_update(
+    bib_path: str,
+    preprint_ck: str,
+    candidate: NormalizedRecord,
+    *,
+    file_path_style: str,
+) -> str | None:
+    """The diff `--replace` will produce, built from the same entry projection."""
+    read_result = read_bib_file(bib_path)
+    entries = read_result["entries"]
+    records = read_result["records"]
+    index = next(
+        (i for i, entry in enumerate(entries) if entry["citekey"] == preprint_ck),
+        None,
+    )
+    if index is None:  # pragma: no cover — the caller just read this citekey
+        return None
+    merged_entry = _promoted_entry(entries[index], records[index], candidate)
+    plan: WritePlan = {
+        "action": "update",
+        "index": index,
+        "record": bibtex_entry_to_record(merged_entry),
+        "entry": merged_entry,
+        "changed_fields": [],
+    }
+    return preview_write_plan(bib_path, plan, file_path_style=file_path_style)["diff"]
+
+
 def _handle_update_in_place(
     *,
     bib_path: str,
@@ -960,18 +1062,17 @@ def _handle_update_in_place(
     pdf_attached = False
     diff: str | None = None
     if dry_run:
-        # Pre-merge against the preprint's entry on disk, or the preview shows
-        # the write as deleting every unmodelled field and retyping the entry —
-        # neither of which the real run does.
-        preprint_entry = _entry_for_citekey(bib_path, preprint_ck)
-        plan = plan_bib_write(
-            updated,
-            [preprint_record],
-            existing_entries=[preprint_entry] if preprint_entry is not None else None,
+        # Target the preprint *by citekey*, exactly as the real write does with
+        # `update_bib_entry`. Relying on identity matching produced an INSERT
+        # here — `_merge_published_metadata` strips `arxiv_id`, so nothing
+        # matched — and the preview told the user their original entry survived
+        # when `--replace` overwrites it.
+        diff = _preview_in_place_update(
+            bib_path,
+            preprint_ck,
+            candidate,
+            file_path_style=file_path_style,
         )
-        diff = preview_write_plan(
-            bib_path, plan, file_path_style=file_path_style
-        )["diff"]
     else:
         existing_pdf_paths = _snapshot_pdf_paths(papers_dir)
         updated, pdf_attached = _maybe_attach_pdf(
@@ -987,35 +1088,7 @@ def _handle_update_in_place(
         )
 
         def _updater(entry, current):
-            # Merge the published metadata onto the record as it is on disk
-            # *now*, not onto the pre-lock snapshot: `update_bib_entry` re-reads
-            # under the exclusive lock precisely so a concurrent edit is not
-            # thrown away, and discarding its `record` argument reverted one.
-            locked = _merge_published_metadata(
-                cast(NormalizedRecord, dict(current)), candidate
-            )
-            # The PDF was acquired before the lock was taken, so its path lives
-            # on `updated` and has to be carried over onto the fresh merge.
-            for pdf_field in ("local_pdf_path", "pdf_url"):
-                value = updated.get(pdf_field)
-                if value:
-                    locked[pdf_field] = value  # type: ignore[literal-required]
-            # Project onto the entry rather than replacing it: a rebuild from
-            # the record drops every field `NormalizedRecord` does not model
-            # (`volume`, `pages`, `publisher`, ...).
-            projected = record_to_bibtex_entry(
-                locked, entry_type=resolve_entry_type(locked)
-            )
-            merged = merge_projected_entry(entry, projected)
-            # `merge_projected_entry` keeps the on-disk entry type, because an
-            # ordinary update has no business retyping an entry. Promotion is
-            # the exception — the preprint has become a published paper — so the
-            # type is resolved from the promoted record (the same path keep-mode
-            # takes) rather than left as `@unpublished` or hardcoded `@article`.
-            if projected["entry_type"] != merged["entry_type"]:
-                merged["entry_type"] = projected["entry_type"]
-                _relocate_venue_for_entry_type(merged)
-            return merged
+            return _promoted_entry(entry, current, candidate, pdf_source=updated)
 
         update_result = update_bib_entry(
             bib_path, preprint_ck, _updater, file_path_style=file_path_style

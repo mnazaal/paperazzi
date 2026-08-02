@@ -6,6 +6,7 @@ from pzi import cli_json, exit_codes
 from pzi.bib_service import bib_stats, entry_detail, list_entries
 from pzi.cli_render import _error_lines, _render_bib_stats
 from pzi.commands.common import (
+    emit_usage_error,
     exit_code_for_error,
     print_lines,
     print_read_warnings,
@@ -15,6 +16,18 @@ from pzi.commands.common import (
 
 def run_entries_command(args, *, home_dir, config_path, stdout, stderr, bib_selector) -> int:
     if getattr(args, "stats", False):
+        if getattr(args, "citekey", None):
+            # `--stats` summarizes the whole library, so a citekey alongside it
+            # asks for two different things. It used to be discarded silently:
+            # `pzi entries smith2024 --stats` printed library-wide statistics
+            # under a command line that named one entry.
+            return emit_usage_error(
+                args,
+                "--stats summarizes the library and cannot be combined with a citekey",
+                command_path=("entries",),
+                stdout=stdout,
+                stderr=stderr,
+            )
         return _run_stats(args, home_dir, config_path, stdout, stderr, bib_selector)
     if getattr(args, "citekey", None):
         return _run_detail(args, home_dir, config_path, stdout, stderr, bib_selector)
@@ -36,7 +49,18 @@ def _run_list(args, home_dir, config_path, stdout, stderr, bib_selector) -> int:
     if result["status"] == "ok":
         items = result["items"]
         if not items:
-            print("(no entries)", file=stderr)
+            # Name the total even when this page is empty: `--offset` past the
+            # end printed a bare "(no entries)", indistinguishable from an empty
+            # library. `--json` has always carried the total.
+            total = result.get("total", 0)
+            if total:
+                print(
+                    f"(no entries at offset {result.get('offset', 0)}; "
+                    f"{total} in {result['bib_name']})",
+                    file=stderr,
+                )
+            else:
+                print("(no entries)", file=stderr)
             return exit_codes.OK
         for item in items:
             ck = item["citekey"]

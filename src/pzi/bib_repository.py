@@ -726,6 +726,45 @@ def preview_write_plan(
         }
 
 
+def preview_batch_write(
+    path: str,
+    apply_plans: Callable[[BatchWriteSession], None],
+    *,
+    file_path_style: str = "absolute",
+) -> dict[str, Any]:
+    """Render the diff a *batch* of plans would produce, without writing.
+
+    :func:`preview_write_plan` previews one plan, so a command that performs two
+    writes in one session could only ever preview half of what it does — which
+    is how ``update --promote``'s keep mode came to show the new published entry
+    while omitting the cross-reference note it also writes onto the preprint.
+    *apply_plans* receives the same session the real write uses, so preview and
+    write build their plans in one place.
+    """
+    with with_bib_lock(path, shared=True):
+        source = _read_bib_source(path)
+        library = _parse_bib_library(source)
+        _validate_library_parseable(library)
+        entries, records = _library_to_entries_records(library, path)
+        session = BatchWriteSession(
+            entries=entries, records=records, index=build_identity_index(records),
+        )
+        apply_plans(session)
+        new_library = _update_library_blocks(
+            library,
+            session.entries,
+            path,
+            file_path_style=file_path_style,
+            touched_indices=session.touched,
+        )
+        new_source = _serialize_library(new_library)
+        return {
+            "changed": new_source != source,
+            "diff": _source_diff(source, new_source, path),
+            "new_source": new_source,
+        }
+
+
 def _source_diff(old_source: str, new_source: str, path: str) -> str:
     return "".join(
         difflib.unified_diff(

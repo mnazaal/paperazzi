@@ -251,6 +251,15 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=_PziHelpFormatter,
     )
     parser.add_argument("--version", action="version", version=cli_version_text())
+    # Also accepted before the subcommand. `pzi --config X entries` is a natural
+    # invocation and used to fail with `argument command: invalid choice:
+    # '/path.toml'` — argparse reading the path as the command name. The
+    # subcommand-level `--config` still wins when both are given, since it is
+    # the more specific one.
+    parser.add_argument(
+        "--config", metavar="PATH", dest="top_level_config",
+        help="path to the pzi config file (may also be given after the command)",
+    )
     # prog="pzi" so subcommands show `usage: pzi <command> ...`, not the parent usage.
     subparsers = parser.add_subparsers(
         dest="command", metavar="command", prog="pzi", parser_class=_PziParser
@@ -297,6 +306,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--strict-metadata", action="store_true",
         help="fail if any metadata provider returns an error instead of falling back silently",
     )
+    # The capture path has always read `force_new`, and the HTTP API and the
+    # browser extension both expose it — but it was registered only on
+    # `import`, so `getattr(args, "force_new", False)` on the add path could
+    # never be true. Registering it closes the CLI/extension parity gap rather
+    # than deleting a working capability.
+    add_parser.add_argument(
+        "--force-new", action="store_true",
+        help="add as a new entry even if it looks like a duplicate",
+    )
 
     add_batch = add_parser.add_argument_group("bulk capture")
     add_batch.add_argument(
@@ -304,7 +322,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="capture each DOI/URL listed in a file (one per line, '#' comments; '-' for stdin)",
     )
     add_batch.add_argument(
-        "--delay", type=_non_negative_float, default=1.0, metavar="SECONDS",
+        # No default here: the runner needs to tell "the user asked for a delay"
+        # from "nobody said", so that `--delay` outside --from-file mode can be
+        # refused rather than silently ignored. The 1.0s default is applied in
+        # the batch path.
+        "--delay", type=_non_negative_float, metavar="SECONDS",
         help="pause between items in --from-file mode, with jitter (default: 1.0)",
     )
     add_batch.add_argument(

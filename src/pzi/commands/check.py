@@ -79,7 +79,12 @@ def run_check_command(
         result = {**result, "status": "error"}
 
     report_path: str | None = getattr(args, "report", None)
-    if report_path:
+    if report_path == "-":
+        # `-` is stdout, the marker this CLI already uses in six other places
+        # (`--jsonl -`, `pzi import -`). It used to create a file named `-`.
+        json.dump(result, stdout, indent=2, default=str)
+        print(file=stdout)
+    elif report_path:
         with open(report_path, "w", encoding="utf-8") as f:
             json.dump(result, f, indent=2, default=str)
 

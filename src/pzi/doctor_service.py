@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import stat
-from typing import Any, TypedDict
+from typing import Any, NotRequired, TypedDict
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -33,6 +33,7 @@ class DoctorResult(TypedDict):
     config_path: str
     config_ok: bool
     config_errors: list[str]
+    config_warnings: NotRequired[list[str]]
     bibs: list[DoctorBibStatus]
     translation_server_url: str | None
     translation_server_reachable: bool
@@ -182,6 +183,9 @@ def doctor_check(
         "config_path": config_result["path"],
         "config_ok": True,
         "config_errors": [],
+        #: Keys pzi does not recognize. Non-fatal, but a typo'd key silently
+        #: reverts to the default — reporting them is what `doctor` is for.
+        "config_warnings": list(config_result.get("warnings") or []),
         "bibs": bibs,
         "translation_server_url": translation_server_url,
         "translation_server_reachable": reachable,

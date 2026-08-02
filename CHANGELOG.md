@@ -285,6 +285,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   three-way duplicate in two.
 - **CSV export neutralizes cells a spreadsheet would evaluate as a formula.**
 
+- **Flags that were accepted and ignored are now refused or honoured.**
+  `entries CITEKEY --stats` discarded the citekey and printed library-wide
+  statistics; `add --delay`/`--failures-out` were silently ignored outside
+  `--from-file` mode; `init`'s library flags without `--setup` and
+  `doctor --config-only --reinstall-server` are covered above.
+- **`--config` may precede the subcommand.** `pzi --config X entries` failed
+  with `argument command: invalid choice: '/path.toml'`.
+- **A nonexistent direct `--target` path is an environment error (exit 5)**, as
+  `README.md` promises, instead of reading as an empty library at exit 0.
+- **`-` means stdout for `check --report` and `export -o`**, as it already does
+  in six other places; both used to create a file literally named `-`.
+- **`entries --offset` past the end reports the total** instead of a bare
+  `(no entries)` indistinguishable from an empty library.
+- **`entries --json` reports the real entry type.** It read `entry_type` off a
+  normalized record, which never carries one, so every entry was `"unknown"`.
+- **`pzi add --force-new` exists.** The capture path has always read the flag
+  and the browser extension exposes it, but it was registered only on `import`.
+- **An explicitly empty `desktop_fallback_hosts = []` is honoured** rather than
+  re-expanded to the built-in host list.
+- **Unknown config keys are reported.** A typo in `capture_source_dirs` or
+  `pdf_file_path_style` silently reverted to the default; `pzi doctor` now says
+  so. Still a warning, not an error, so a config written for a newer pzi loads.
+- **`update --promote --replace --dry-run` previews the in-place rewrite it
+  performs**, not a duplicate insert — it told the user their original entry
+  would survive when `--replace` overwrites it. **Keep mode previews both
+  writes** (the new entry *and* the cross-reference note stamped on the
+  preprint) and diffs `changed_fields` against the preprint rather than the
+  candidate.
+
 ### Known limitations
 
 - A bibliography with more than one hard link keeps only the written name

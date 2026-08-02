@@ -52,6 +52,11 @@ def run_export_command(
         return exit_codes.ENVIRONMENT
 
     content = result["content"]
+    if args.output == "-":
+        # `-` is stdout, as everywhere else in this CLI; it used to create a
+        # file named `-` in the working directory.
+        print(content, file=stdout)
+        return exit_codes.OK
     if args.output:
         output_path = Path(args.output)
         if output_path.exists() and not getattr(args, "force", False):

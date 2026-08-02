@@ -172,6 +172,7 @@ def run_cli(
     # without threading --config through every invocation.
     config_path: str = (
         getattr(args, "config", None)
+        or getattr(args, "top_level_config", None)
         or os.environ.get("PZI_CONFIG")
         or default_config_path(effective_home)
     )

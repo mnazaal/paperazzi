@@ -41,12 +41,18 @@ def run_doctor_command(args, *, home_dir, config_path, stdout, stderr) -> int:
                     "config_path": cfg["path"],
                     "config_ok": valid,
                     "errors": list(cfg["errors"]),
+                    # Keys pzi does not know: not fatal (a config written for a
+                    # newer pzi still loads) but a typo'd key silently did
+                    # nothing, which is exactly what `doctor` is for.
+                    "warnings": list(cfg.get("warnings") or []),
                 },
                 stdout,
                 command="doctor --config-only",
                 items=[],
             )
             return exit_codes.OK if valid else exit_codes.ENVIRONMENT
+        for warning in cfg.get("warnings") or []:
+            print(f"warning: {warning}", file=stderr)
         if valid:
             print(f"config valid: {cfg['path']}", file=stdout)
             return exit_codes.OK
