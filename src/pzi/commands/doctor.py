@@ -25,7 +25,7 @@ def run_doctor_command(args, *, home_dir, config_path, stdout, stderr) -> int:
             )
             return exit_codes.USAGE
         return _reinstall_server(config_path=config_path, home_dir=home_dir,
-                                 stdout=stdout, stderr=stderr)
+                                 stdout=stdout, stderr=stderr, args=args)
 
     if getattr(args, "config_only", False):
         # Offline config check (no live service probes) — formerly `config validate`.
@@ -71,16 +71,43 @@ def run_doctor_command(args, *, home_dir, config_path, stdout, stderr) -> int:
     return exit_codes.OK if result["status"] == "ok" else exit_codes.ENVIRONMENT
 
 
-def _reinstall_server(*, config_path, home_dir, stdout, stderr) -> int:
-    """Reinstall the translation-server with the latest pinned versions."""
+def _reinstall_server(*, config_path, home_dir, stdout, stderr, args=None) -> int:
+    """Reinstall the translation-server with the latest pinned versions.
+
+    This branch returns before the `--json` check in the caller, so it used
+    to answer a documented `--json` invocation with prose on stdout. Progress
+    goes to stderr under `--json` for the same reason: stdout carries exactly
+    one document.
+    """
+    as_json = bool(getattr(args, "json", False))
+    progress = stderr if as_json else stdout
+
+    def _finish(code: int, message: str, errors: list[str]) -> int:
+        if as_json:
+            cli_json.emit_result(
+                {
+                    "status": "ok" if code == exit_codes.OK else "error",
+                    "message": message,
+                    "errors": errors,
+                },
+                stdout,
+                command="doctor --reinstall-server",
+                items=[],
+            )
+        elif code == exit_codes.OK:
+            print(message, file=stdout)
+        return code
     from pzi.node_runtime import ensure_node
     from pzi.ts_backend import ensure_translation_server, is_ts_reachable
 
     cfg = load_config_file(config_path, home_dir=home_dir)
     config = cfg["config"]
     if config is None:
-        print_lines(_error_lines("failed to load config", cfg["errors"]), stderr)
-        return exit_codes.ENVIRONMENT
+        if not as_json:
+            print_lines(_error_lines("failed to load config", cfg["errors"]), stderr)
+        return _finish(
+            exit_codes.ENVIRONMENT, "failed to load config", list(cfg["errors"])
+        )
 
     # Subscript, not `.get` + guard: `AppConfig` is a total TypedDict and
     # `validate_app_config` rejects the config outright unless this is an
@@ -88,17 +115,19 @@ def _reinstall_server(*, config_path, home_dir, stdout, stderr) -> int:
     ts_url = config["translation_server_url"]
 
     data_home = Path(config["pzi_data_home"])
-    print("reinstalling translation-server …", file=stdout)
+    print("reinstalling translation-server …", file=progress)
     node_path = config.get("node_path")
     node = ensure_node(
         data_home,
         interactive=True,
         node_path=node_path if isinstance(node_path, str) else None,
-        stdout=stdout,
+        stdout=progress,
         stderr=stderr,
     )
     if node is None:
-        return exit_codes.ENVIRONMENT
+        return _finish(
+            exit_codes.ENVIRONMENT, "Node.js is not available", ["Node.js is not available"]
+        )
     ts_dir = data_home / "ts"
     if ts_dir.exists() and is_ts_reachable(ts_url):
         print(
@@ -111,9 +140,16 @@ def _reinstall_server(*, config_path, home_dir, stdout, stderr) -> int:
     # a failed clone left the user with no translation-server at all — strictly
     # worse than before, on the command they ran to repair something.
     installed = ensure_translation_server(
-        data_home, node, stdout=stdout, stderr=stderr, force=True
+        data_home, node, stdout=progress, stderr=stderr, force=True
     )
     if installed is None:
-        return exit_codes.ENVIRONMENT
-    print("translation-server reinstalled. Run `pzi server` to start.", file=stdout)
-    return exit_codes.OK
+        return _finish(
+            exit_codes.ENVIRONMENT,
+            "translation-server reinstall failed",
+            ["translation-server reinstall failed (see messages above)"],
+        )
+    return _finish(
+        exit_codes.OK,
+        "translation-server reinstalled. Run `pzi server` to start.",
+        [],
+    )

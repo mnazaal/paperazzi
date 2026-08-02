@@ -23,6 +23,7 @@ from pzi.cli_parser import (
 )
 from pzi.cli_render import _error_lines, _render_add_success
 from pzi.commands.common import (
+    command_label,
     first_error,
     print_capture_stream_line,
     print_capture_summary,
@@ -59,6 +60,7 @@ def run_add_command(
     bib_selector: str | None,
     fetch_web=None,
     fetch_search=None,
+    backend_session_fn=None,
 ) -> int:
     from_file = getattr(args, "from_file", None)
     invalid = _validate_add_args(args, from_file=from_file)
@@ -102,18 +104,32 @@ def run_add_command(
         )
 
     if config is not None and fetch_web is None and fetch_search is None:
-        from pzi.ts_backend import backend_session
+        if backend_session_fn is None:
+            from pzi.ts_backend import backend_session
 
-        with backend_session(
+            backend_session_fn = backend_session
+
+        # Bootstrap progress goes to stderr even here: under `--json` stdout
+        # carries exactly one document, and "cloning translation-server …"
+        # printed ahead of it made that document unparseable.
+        with backend_session_fn(
             config, config_path, home_dir,
-            interactive=True, stdout=stdout, stderr=stderr,
+            interactive=True, stdout=stderr, stderr=stderr,
         ) as backend:
             if not backend["ready"]:
-                print(
-                    "translation server is not running — cannot add paper.\n"
-                    "  Run 'pzi server' (it starts the translation-server), then retry.",
-                    file=stderr,
+                message = (
+                    "translation server is not running — cannot add paper. "
+                    "Run 'pzi server' (it starts the translation-server), then retry."
                 )
+                # The commonest failure there is, and `--json` promised a
+                # parseable document on every outcome. This one printed prose to
+                # stderr and nothing at all to stdout.
+                if getattr(args, "json", False):
+                    cli_json.emit_error(
+                        message, [message], stdout, command=command_label(args),
+                    )
+                else:
+                    print(message, file=stderr)
                 return exit_codes.ENVIRONMENT
             return _work()
 
@@ -291,6 +307,12 @@ def _run_batch(
         if bucket == "failed":
             failures.append(value)
         _stream_line(index, total, value, result, bucket, stderr)
+        if getattr(args, "verbose", False) and not getattr(args, "json", False):
+            # `--verbose` was parsed here and never read, so the one mode where
+            # per-item provider choices are hardest to follow was the mode that
+            # would not explain them. Suppressed under `--json`, where stdout
+            # carries exactly one document.
+            print_metadata_diagnostics(result, stdout)
         items.append({"value": value, "status": result["status"], "result": result})
 
     # `--dry-run` announces "nothing will be written" above, and the failures

@@ -20,6 +20,8 @@ from typing import NotRequired, TextIO, TypedDict
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+import portalocker
+
 from pzi.node_runtime import ensure_node
 from pzi.pdf_planning import env_flag
 
@@ -230,6 +232,24 @@ def _find_endpoint_anchor(content: str) -> re.Match[str] | None:
     return m
 
 
+#: Bootstrap subprocesses run unattended inside `pzi add`/`pzi server`, so every
+#: one gets a deadline and an environment that cannot ask a question. Without
+#: `GIT_TERMINAL_PROMPT=0` a private or moved repo makes git prompt for
+#: credentials on a terminal nobody is watching, and the whole command hangs
+#: with no output; without a timeout, a stalled fetch hangs just as silently.
+_GIT_TIMEOUT_SECONDS = 300
+#: `npm install --production` on a cold cache is slow but not unbounded.
+_NPM_TIMEOUT_SECONDS = 900
+
+
+def _run_git(args: list[str]) -> subprocess.CompletedProcess[str]:
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "", "SSH_ASKPASS": ""}
+    return subprocess.run(
+        args, check=True, capture_output=True, text=True,
+        timeout=_GIT_TIMEOUT_SECONDS, env=env,
+    )
+
+
 def _clone_repo(
     url: str,
     ref: str,
@@ -251,38 +271,22 @@ def _clone_repo(
 
     _ref_is_hash = bool(re.fullmatch(r"[0-9a-f]{40}", ref))
 
-    last_exc: subprocess.CalledProcessError | None = None
+    last_exc: subprocess.SubprocessError | None = None
     for attempt in range(max_retries + 1):
         try:
             if _ref_is_hash:
                 # Clone default branch, then checkout the specific commit.
-                subprocess.run(
-                    ["git", "clone", "--depth=1", url, str(dest)],
-                    check=True,
-                    capture_output=True,
-                    text=True,
+                _run_git(["git", "clone", "--depth=1", url, str(dest)])
+                _run_git(
+                    ["git", "-C", str(dest), "fetch", "--depth=1", "origin", ref]
                 )
-                subprocess.run(
-                    ["git", "-C", str(dest), "fetch", "--depth=1", "origin", ref],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
-                subprocess.run(
-                    ["git", "-C", str(dest), "checkout", "--detach", ref],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
+                _run_git(["git", "-C", str(dest), "checkout", "--detach", ref])
             else:
-                subprocess.run(
-                    ["git", "clone", "--depth=1", "--branch", ref, url, str(dest)],
-                    check=True,
-                    capture_output=True,
-                    text=True,
+                _run_git(
+                    ["git", "clone", "--depth=1", "--branch", ref, url, str(dest)]
                 )
             return
-        except subprocess.CalledProcessError as exc:
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
             last_exc = exc
             if attempt < max_retries:
                 import time as _time
@@ -347,16 +351,50 @@ def ensure_translation_server(
     # meant a failed clone left the user with nothing, on the very command they
     # ran *because* something was already broken.
     ts_dir.parent.mkdir(parents=True, exist_ok=True)
-    build_dir = data_home / "ts.new"
-    shutil.rmtree(build_dir, ignore_errors=True)
-    build_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        return _build_translation_server(
-            ts_dir, build_dir, node_bin, stdout=stdout, stderr=stderr
-        )
-    except BaseException:
+    # Per-process staging directory, and one cross-process lock around the whole
+    # install. Two `pzi add` runs starting together — easy, since the bootstrap
+    # is implicit — shared a single `ts.new`: the second `rmtree` deleted the
+    # first's half-finished clone, and both then raced to rename their tree over
+    # `ts`. The lock makes the second wait and find the install already current.
+    with _install_lock(data_home, stderr=stderr):
+        if not force and not _needs_reinstall(ts_dir):
+            # The other process finished while this one waited.
+            return ts_dir
+        build_dir = data_home / f"ts.new.{os.getpid()}"
         shutil.rmtree(build_dir, ignore_errors=True)
-        raise
+        build_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            return _build_translation_server(
+                ts_dir, build_dir, node_bin, stdout=stdout, stderr=stderr
+            )
+        except BaseException:
+            shutil.rmtree(build_dir, ignore_errors=True)
+            raise
+
+
+@contextmanager
+def _install_lock(data_home: Path, *, stderr: TextIO) -> Iterator[None]:
+    """Serialize translation-server installs across processes.
+
+    Advisory `flock` on a sidecar file, like `with_bib_lock`. A holder that dies
+    releases it in the kernel, so there is nothing to clean up by hand.
+    """
+    data_home.mkdir(parents=True, exist_ok=True)
+    lock_path = data_home / "ts.install.lock"
+    with open(lock_path, "a") as handle:
+        try:
+            portalocker.lock(handle, portalocker.LOCK_EX | portalocker.LOCK_NB)
+        except portalocker.exceptions.BaseLockException:
+            print(
+                "waiting for another pzi process to finish installing the "
+                "translation-server …",
+                file=stderr,
+            )
+            portalocker.lock(handle, portalocker.LOCK_EX)
+        try:
+            yield
+        finally:
+            portalocker.unlock(handle)
 
 
 def _build_translation_server(
@@ -430,7 +468,18 @@ def _build_translation_server(
             check=True,
             capture_output=True,
             text=True,
+            # Bounded like the git steps: a stalled registry left `pzi add`
+            # hanging with no output and no way to tell it apart from a slow
+            # install.
+            timeout=_NPM_TIMEOUT_SECONDS,
         )
+    except subprocess.TimeoutExpired:
+        print(
+            f"npm install timed out after {_NPM_TIMEOUT_SECONDS}s "
+            "(registry unreachable?)",
+            file=stderr,
+        )
+        return None
     except subprocess.CalledProcessError as exc:
         print(f"npm install failed: {exc.stderr.strip()}", file=stderr)
         return None

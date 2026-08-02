@@ -458,3 +458,54 @@ def test_errors_a_service_did_report_are_left_alone() -> None:
     )
 
     assert envelope["errors"] == ["the real reason"]
+
+
+def test_add_json_emits_an_envelope_when_the_backend_is_not_ready(tmp_path: Path) -> None:
+    """`--json` promises exactly one parseable document on every outcome.
+
+    The commonest failure of all — the translation server not running — printed
+    prose to stderr and nothing at all to stdout, so a script driving `pzi add
+    --json` got an empty document and had to scrape stderr to find out why.
+    """
+    import json
+    from argparse import Namespace
+
+    from pzi.commands.add import run_add_command
+
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text("", encoding="utf-8")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\ndefault = true\n', encoding="utf-8"
+    )
+
+    args = Namespace(
+        value="10.1145/3372297", tags=None, bib=None, dry_run=False, json=True,
+        verbose=False, citekey=None, force_new=False, from_file=None, delay=None,
+        failures_out=None, metadata_json=None, cookie_file=None, pdf_candidate=None,
+        page_html=None, strict_metadata=False, browser=None, target=None,
+    )
+    stdout, stderr = io.StringIO(), io.StringIO()
+
+    code = run_add_command(
+        args,
+        home_dir=str(tmp_path),
+        config_path=str(config_path),
+        stdout=stdout,
+        stderr=stderr,
+        bib_selector=None,
+        backend_session_fn=lambda *_a, **_k: _NotReadyBackend(),
+    )
+
+    assert code == exit_codes.ENVIRONMENT
+    envelope = json.loads(stdout.getvalue())
+    assert envelope["status"] == "error"
+    assert any("translation server" in e.lower() for e in envelope["errors"])
+
+
+class _NotReadyBackend:
+    def __enter__(self):
+        return {"ready": False}
+
+    def __exit__(self, *_exc):
+        return False

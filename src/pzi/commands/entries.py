@@ -13,8 +13,32 @@ from pzi.commands.common import (
     resolve_target,
 )
 
+#: Flags that describe *which page of a list* to show. `entries <citekey>` and
+#: `entries --stats` produce no list, so they parsed these and did nothing —
+#: which reads as a working filter that silently is not one.
+_LIST_ONLY_FLAGS = (("offset", "--offset"), ("limit", "--limit"), ("sort", "--sort"))
+
+
+def _list_only_flag_used(args) -> str | None:
+    for attr, flag in _LIST_ONLY_FLAGS:
+        if getattr(args, attr, None) is not None:
+            return flag
+    return None
+
 
 def run_entries_command(args, *, home_dir, config_path, stdout, stderr, bib_selector) -> int:
+    if getattr(args, "stats", False) or getattr(args, "citekey", None):
+        used = _list_only_flag_used(args)
+        if used is not None:
+            subject = "--stats" if getattr(args, "stats", False) else "a citekey"
+            return emit_usage_error(
+                args,
+                f"{used} selects a page of the entry list and cannot be combined "
+                f"with {subject}",
+                command_path=("entries",),
+                stdout=stdout,
+                stderr=stderr,
+            )
     if getattr(args, "stats", False):
         if getattr(args, "citekey", None):
             # `--stats` summarizes the whole library, so a citekey alongside it
@@ -39,9 +63,9 @@ def _run_list(args, home_dir, config_path, stdout, stderr, bib_selector) -> int:
         config_path=config_path,
         home_dir=home_dir,
         bib_selector=bib_selector,
-        offset=max(0, args.offset),
-        limit=max(1, min(args.limit, 500)),
-        sort=args.sort,
+        offset=max(0, args.offset if args.offset is not None else 0),
+        limit=max(1, min(args.limit if args.limit is not None else 50, 500)),
+        sort=args.sort if args.sort is not None else "citekey",
     )
     if getattr(args, "json", False):
         cli_json.emit_result(result, stdout, command="entries")

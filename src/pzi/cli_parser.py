@@ -634,17 +634,22 @@ def build_parser() -> argparse.ArgumentParser:
     entries_parser.add_argument(
         "--stats", action="store_true", help="show library statistics instead of listing entries"
     )
+    # These three default to None, not to their effective values, so the runner
+    # can tell "the user asked for this" from "nobody said" — and refuse them on
+    # the detail and stats subpaths, which parse them and cannot apply them. The
+    # `init` parser defaults its four flags to None for the same reason.
     entries_parser.add_argument(
-        "--offset", type=_non_negative_int, default=0, help="pagination offset (default: 0)"
+        "--offset", type=_non_negative_int, default=None,
+        help="pagination offset (default: 0)",
     )
     entries_parser.add_argument(
         "--limit",
         type=_positive_int,
-        default=50,
+        default=None,
         help="entries per page, 1-500 (default: 50; larger values are capped at 500)",
     )
     entries_parser.add_argument(
-        "--sort", default="citekey", choices=["citekey", "title", "year", "author"],
+        "--sort", default=None, choices=["citekey", "title", "year", "author"],
         help="sort field (default: citekey)",
     )
     add_single_target(entries_parser)

@@ -32,6 +32,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for `problematic` and only under `--strict`, so a CI gate written from that
   table passed a library of fabricated references. `--strict` keeps its real
   meaning: harder checks, not whether findings are reported.
+- **`pzi add --json` answers with an envelope when the backend is not ready.**
+  The commonest failure of all printed prose to stderr and nothing to stdout, so
+  a script driving `--json` got an empty document. Translation-server bootstrap
+  progress now goes to stderr too, where it cannot precede that document.
+- **`pzi doctor --reinstall-server --json` emits an envelope.** That subpath
+  returned before the `--json` branch and answered a documented invocation with
+  prose on stdout.
+- **`pzi check --report - --json` is refused.** Both write to stdout, so together
+  they produced neither a valid report nor the single document `--json`
+  promises; the `--jsonl -` twin of this guard already existed.
+- **`entries <citekey>` and `entries --stats` refuse the list-only flags.**
+  `--limit`, `--offset` and `--sort` were parsed on every form and applied only
+  to the list, which reads as a working filter that silently is not one.
+- **`pzi add --from-file --verbose` prints its metadata diagnostics.** The flag
+  was parsed and never read on the batch path — the mode where per-item provider
+  choices are hardest to follow was the one that would not explain them.
+- **Two concurrent bootstraps no longer corrupt each other.** They shared one
+  `ts.new` staging directory, so the second deleted the first's half-finished
+  clone and both raced to rename over `ts`. Staging is now per-process under one
+  cross-process lock. Git and npm steps also get timeouts and
+  `GIT_TERMINAL_PROMPT=0`, so a private repo or a stalled registry fails with a
+  message instead of hanging forever on a prompt nobody can see.
 - **Bulk capture no longer reads and uploads cookies for every search result.**
   Each result is a *different* site the user is not on; their cookies were read
   and forwarded to the server, which forwards them to the publisher. The comment

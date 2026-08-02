@@ -401,3 +401,106 @@ def test_entries_output_stays_five_tab_separated_columns(tmp_path: Path) -> None
     rows = [line for line in stdout.splitlines() if line.strip()]
     assert len(rows) == 1
     assert rows[0].count("\t") == 4
+
+
+# ---------------------------------------------------------------------------
+# Flags that were accepted on some subpaths and ignored on others
+# ---------------------------------------------------------------------------
+
+
+def test_doctor_reinstall_server_json_emits_an_envelope(tmp_path: Path) -> None:
+    """`--json` is documented for `doctor`, and `--reinstall-server` returns
+    before the JSON branch — so this one subpath printed prose to stdout."""
+    import json
+
+    from pzi import ts_backend
+
+    config_path, _bib = _library(tmp_path)
+    ts_dir = tmp_path / ".local" / "share" / "pzi" / "ts"
+    ts_dir.mkdir(parents=True)
+    (ts_dir / "someone-elses-work.txt").write_text("x", encoding="utf-8")
+
+    original = ts_backend.ensure_translation_server
+    try:
+        code, stdout, _stderr = _run(
+            ["doctor", "--reinstall-server", "--json", "--config", str(config_path)],
+            tmp_path,
+        )
+    finally:
+        ts_backend.ensure_translation_server = original
+
+    envelope = json.loads(stdout)
+    assert envelope["command"].startswith("doctor")
+    assert envelope["status"] in {"ok", "error"}
+    assert code in {exit_codes.OK, exit_codes.ENVIRONMENT}
+
+
+def test_check_report_to_stdout_conflicts_with_json(tmp_path: Path) -> None:
+    """Both write to stdout, so together they produce neither a valid report nor
+    the single document `--json` promises. `--jsonl -` already had this guard."""
+    config_path, _bib = _library(tmp_path, "@article{a1,\n  title = {A},\n}\n")
+
+    code, stdout, stderr = _run(
+        ["check", "--report", "-", "--json", "--config", str(config_path)], tmp_path
+    )
+
+    assert code == exit_codes.USAGE
+    assert "--report" in stderr or "--report" in stdout
+
+
+def test_entries_detail_honours_the_output_flags_it_accepts(tmp_path: Path) -> None:
+    """`--limit/--offset/--sort` are parsed for every `entries` form but only
+    applied to the list — the detail and stats subpaths took them and did
+    nothing, which reads as a working filter that silently is not one."""
+    config_path, _bib = _library(
+        tmp_path, "@article{a1,\n  title = {A},\n}\n@article{b2,\n  title = {B},\n}\n"
+    )
+
+    code, _stdout, stderr = _run(
+        ["entries", "a1", "--limit", "1", "--config", str(config_path)], tmp_path
+    )
+
+    assert code == exit_codes.USAGE
+    assert "--limit" in stderr
+
+
+def test_add_from_file_verbose_prints_the_diagnostics_it_promises(tmp_path: Path) -> None:
+    """`--verbose` prints the metadata-selection diagnostics — on a single add.
+
+    The batch path parsed the flag and never looked at it, so the one mode where
+    per-item provider choices are hardest to follow was the one that would not
+    explain them.
+    """
+    from pzi import capture_core
+
+    config_path, _bib = _library(tmp_path)
+    inputs = tmp_path / "inputs.txt"
+    inputs.write_text("10.1145/3372297\n", encoding="utf-8")
+
+    def _fake_capture(_input, _options, **_kwargs):
+        return {
+            "status": "ok", "action": "insert", "citekey": "a2024",
+            "bib_name": "ml", "dry_run": False, "warnings": [], "errors": [],
+            "metadata_diagnostics": ["selected result 1/2: score=41; crossref"],
+        }
+
+    original = capture_core.capture_to_bib
+    capture_core.capture_to_bib = _fake_capture
+    try:
+        from pzi.commands import add as add_command
+
+        original_cmd = add_command.capture_to_bib
+        add_command.capture_to_bib = _fake_capture
+        try:
+            code, stdout, _stderr = _run(
+                ["add", "--from-file", str(inputs), "--verbose",
+                 "--config", str(config_path)],
+                tmp_path,
+            )
+        finally:
+            add_command.capture_to_bib = original_cmd
+    finally:
+        capture_core.capture_to_bib = original
+
+    assert code == exit_codes.OK
+    assert "selected result 1/2" in stdout

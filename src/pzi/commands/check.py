@@ -28,6 +28,18 @@ def run_check_command(
     2 for a conflicting invocation; 1 when any entry is problematic or could not
     be verified (so CI can gate on it); 0 otherwise.
     """
+    report_path: str | None = getattr(args, "report", None)
+    if report_path == "-" and getattr(args, "json", False):
+        # The `--jsonl -` twin of this guard existed; this one did not, so
+        # `--report - --json` wrote the full report and the envelope to the same
+        # stream and produced neither.
+        return emit_usage_error(
+            args,
+            "--report - writes the report to stdout and cannot be combined with --json",
+            command_path=("check",),
+            stdout=stdout,
+            stderr=stderr,
+        )
     jsonl_path: str | None = getattr(args, "jsonl", None)
     if jsonl_path == "-" and getattr(args, "json", False):
         # Both write to stdout: the NDJSON stream plus the pretty envelope is
@@ -78,7 +90,6 @@ def run_check_command(
     if audited_nothing:
         result = {**result, "status": "error"}
 
-    report_path: str | None = getattr(args, "report", None)
     if report_path == "-":
         # `-` is stdout, the marker this CLI already uses in six other places
         # (`--jsonl -`, `pzi import -`). It used to create a file named `-`.
