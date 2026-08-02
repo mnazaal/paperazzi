@@ -59,4 +59,20 @@ def run_merge_command(args, *, home_dir, config_path, stdout, stderr, bib_select
         # the way `pdf retry --failed-only`'s JSON and text paths did.
         return exit_code_for_error(result)
     print(result["message"], file=stdout)
+    # Name what happens to the fields the record model cannot show. In a dry run
+    # this is the only place the user can learn what the merge costs.
+    carried = result.get("carried_fields") or []
+    if carried:
+        print(f"  fields carried from {result['citekey_a']}: {', '.join(carried)}",
+              file=stdout)
+    conflicting = result.get("dropped_fields") or []
+    if conflicting:
+        print(
+            f"  fields kept from {result['citekey_b']} (conflict): "
+            f"{', '.join(conflicting)}",
+            file=stdout,
+        )
+    backup = result.get("backup_path")
+    if backup:
+        print(f"  backup: {backup}", file=stdout)
     return exit_codes.OK

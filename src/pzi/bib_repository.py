@@ -938,12 +938,24 @@ def merge_bib_entries(
     citekey_a: str,
     citekey_b: str,
     file_path_style: str = "absolute",
+    backup_path: Path | None = None,
 ) -> dict[str, Any]:
     """Merge entry A into B (keeping B's citekey) under one exclusive lock.
 
     Reads fresh records, runs the conservative :func:`merge_entries`, replaces
     B's block in place and drops A's block, preserving every other block.
-    Returns ``{"found", "merged_record", "changed_fields"}``.
+    Returns ``{"found", "merged_record", "changed_fields", "dropped_fields"}``.
+
+    Fields only A carries — ``volume``, ``pages``, ``publisher``, ``isbn`` and
+    any custom key — are copied onto the survivor rather than deleted with A's
+    block. B wins every conflict, matching :func:`merge_entries`' record
+    semantics. ``dropped_fields`` names the ones that could not be carried
+    (a conflict B already answers differently), so a caller can preview the
+    loss instead of discovering it afterwards.
+
+    *backup_path* is written from the on-disk file **inside this lock**,
+    immediately before the write, exactly as :func:`delete_bib_entry` does — a
+    merge destroys a block just as a delete does.
     """
     with with_bib_lock(path):
         source = _read_bib_source(path)
@@ -962,10 +974,12 @@ def merge_bib_entries(
         )
         merged_record = decision["merged"]
         # Merge onto B's on-disk entry (B is the survivor), so fields the record
-        # model does not carry survive the merge. A's unmodelled fields are not
-        # carried over — survivor-wins, matching merge_entries' record semantics.
+        # model does not carry survive the merge.
         merged_entry = apply_record_to_entry(
             entries[idx_b], cast(NormalizedRecord, merged_record)
+        )
+        merged_entry, dropped_fields = _carry_unmodelled_fields(
+            merged_entry, entries[idx_a]
         )
         _validate_bibtex_roundtrip([merged_entry])
         merged_block = _bibtex_entry_to_library_entry(
@@ -989,12 +1003,59 @@ def merge_bib_entries(
         new_library = build_library(new_blocks)
         new_source = _serialize_library(new_library)
         if new_source != source:
+            if backup_path is not None:
+                backup_path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+                shutil.copy2(path, backup_path)
             _write_bib_text_atomic(path, new_source)
         return {
             "found": True,
             "merged_record": merged_record,
             "changed_fields": decision["changed_fields"],
+            "dropped_fields": dropped_fields,
         }
+
+
+def backup_path_for(bib_path: str, citekey: str) -> Path:
+    """A non-existing ``<bib>.<citekey>.bak`` path beside the bib.
+
+    Shared by the two commands that destroy a block — ``delete`` and ``fix
+    merge`` — so both leave the same kind of trace under the same lock.
+    """
+    source = Path(bib_path)
+    safe_citekey = "".join(
+        ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in citekey
+    )
+    base = source.with_name(f"{source.name}.{safe_citekey}.bak")
+    if not base.exists():
+        return base
+    suffix = 2
+    while True:
+        candidate = source.with_name(f"{source.name}.{safe_citekey}.bak{suffix}")
+        if not candidate.exists():
+            return candidate
+        suffix += 1
+
+
+def _carry_unmodelled_fields(
+    survivor: BibtexEntry, dropped: BibtexEntry
+) -> tuple[BibtexEntry, list[str]]:
+    """Copy fields only *dropped* has onto *survivor*; name the ones in conflict.
+
+    A merge deletes one of the two blocks, and the record model cannot hold
+    ``volume``/``pages``/``publisher``/``isbn``/a custom key — so everything the
+    dropped entry knew that the survivor does not was silently destroyed, with
+    no ``.bak`` and no way for the dry run to show it. Conflicts stay
+    survivor-wins; they are reported rather than resolved.
+    """
+    merged_fields = dict(survivor["fields"])
+    conflicts: list[str] = []
+    for key, value in dropped["fields"].items():
+        if key not in merged_fields:
+            merged_fields[key] = value
+        elif merged_fields[key] != value:
+            conflicts.append(key)
+    carried: BibtexEntry = {**survivor, "fields": merged_fields}  # type: ignore[typeddict-item]
+    return carried, sorted(conflicts)
 
 
 def rewrite_entries_in_order_locked(
@@ -1111,6 +1172,7 @@ def plan_bib_write(
     force_new: bool = False,
     index: dict[tuple[Any, str], list[int]] | None = None,
     existing_entries: list[BibtexEntry] | None = None,
+    source_entry: BibtexEntry | None = None,
 ) -> WritePlan:
     """Plan an insert or update operation for a normalized record.
 
@@ -1124,29 +1186,41 @@ def plan_bib_write(
     or not at all: a plan built without it carries a bare projection of the
     record, and applying that drops every BibTeX field the record model does not
     carry (``volume``, ``pages``, ``publisher``, ...).
+
+    *source_entry* is the BibTeX entry the record was *read from*, when there is
+    one — i.e. an import. An insert then carries the source entry with the
+    projection merged onto it, so the same unmodelled fields survive the copy
+    into the library. Without it, ``pzi import`` reported a clean success while
+    dropping ``volume``, ``pages``, ``publisher``, ``editor``, ``series``,
+    ``isbn`` and ``crossref`` (whose loss also breaks the inheritance link to
+    an ``@proceedings`` entry imported alongside it).
     """
     if entry_type == "article":
         entry_type = resolve_entry_type(incoming_record)
 
+    def _insert_entry() -> BibtexEntry:
+        projection = record_to_bibtex_entry(incoming_record, entry_type=entry_type)
+        if source_entry is None:
+            return projection
+        return merge_projected_entry(source_entry, projection)
+
     if force_new:
-        entry = record_to_bibtex_entry(incoming_record, entry_type=entry_type)
         return {
             "action": "insert",
             "index": None,
             "record": incoming_record,
-            "entry": entry,
+            "entry": _insert_entry(),
             "changed_fields": sorted(incoming_record.keys()),
             "force_new": True,
         }
 
     match_index = find_exact_match(incoming_record, list(existing_records), index=index)
     if match_index is None:
-        entry = record_to_bibtex_entry(incoming_record, entry_type=entry_type)
         return {
             "action": "insert",
             "index": None,
             "record": incoming_record,
-            "entry": entry,
+            "entry": _insert_entry(),
             "changed_fields": sorted(incoming_record.keys()),
         }
 

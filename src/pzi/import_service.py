@@ -23,6 +23,10 @@ class ImportResult(TypedDict):
     skipped_errors: int
     results: list[dict[str, Any]]
     skipped_in_source: NotRequired[int]
+    #: Whether this was a preview. `update` and `add` both carry it; without it
+    #: a dry run's `"imported": 0` was indistinguishable from a real run that
+    #: imported nothing.
+    dry_run: bool
 
 
 def import_from_bibtex(
@@ -48,6 +52,7 @@ def import_from_bibtex(
         return {
             "status": "error",
             "source_path": source_path,
+            "dry_run": dry_run,
             "message": "source file not found",
             "errors": [f"file not found: {source_path}"],
             "total_source": 0,
@@ -69,6 +74,7 @@ def import_from_bibtex(
         return {
             "status": "error",
             "source_path": source_path,
+            "dry_run": dry_run,
             "message": "failed to parse source BibTeX",
             "errors": dropped_blocks,
             "total_source": 0,
@@ -82,6 +88,7 @@ def import_from_bibtex(
         return {
             "status": "ok",
             "source_path": source_path,
+            "dry_run": dry_run,
             "message": "no entries found in source file",
             "errors": [],
             "total_source": 0,
@@ -93,6 +100,11 @@ def import_from_bibtex(
 
     # Convert to records, dedupe within source by citekey (keep first)
     records: list[dict[str, Any]] = []
+    # The entry each record was read from, positionally aligned with `records`.
+    # Carried through to the write so the fields `NormalizedRecord` does not
+    # model — `volume`, `pages`, `publisher`, `editor`, `series`, `isbn`,
+    # `crossref` — are copied into the library rather than projected away.
+    record_source_entries: list[Any] = []
     seen_citekeys: set[str] = set()
     skipped_in_source = 0
 
@@ -105,6 +117,7 @@ def import_from_bibtex(
         record = bibtex_entry_to_record(entry)
         record["entry_type"] = entry.get("entry_type", "article")
         records.append(record)  # type: ignore[arg-type]
+        record_source_entries.append(entry)
 
     # Resolve config + target once, then plan/write every record under a single
     # lock with one atomic write (see add_records_to_bib_batch) instead of
@@ -132,6 +145,7 @@ def import_from_bibtex(
         return {
             "status": "error",
             "source_path": source_path,
+            "dry_run": dry_run,
             "message": "failed to resolve target library",
             "errors": resolved.errors,
             "total_source": len(source_entries) + len(dropped_blocks),
@@ -146,6 +160,7 @@ def import_from_bibtex(
         batch_results = add_records_to_bib_batch(
             bib=bib,
             records=records,
+            source_entries=record_source_entries,
             dry_run=dry_run,
             force_new=force_new,
             browser_hook=config.get("browser_hook", True),
@@ -161,6 +176,7 @@ def import_from_bibtex(
         return {
             "status": "error",
             "source_path": source_path,
+            "dry_run": dry_run,
             "message": "failed to write imported records",
             "errors": [str(exc)],
             "total_source": len(source_entries) + len(dropped_blocks),
@@ -215,6 +231,7 @@ def import_from_bibtex(
     return {
         "status": "ok",
         "source_path": source_path,
+            "dry_run": dry_run,
         "message": (
             f"{prefix}imported {imported}, skipped {skipped_dupes} duplicates"
             f"{', ' + str(skipped_errors) + ' errors' if skipped_errors else ''}"

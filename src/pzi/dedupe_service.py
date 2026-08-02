@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, NotRequired, TypedDict
 
 from pzi.bib_repository import (
+    backup_path_for,
     merge_bib_entries,
     merge_entries,
     read_bib_file,
@@ -41,6 +42,15 @@ class MergeResult(TypedDict):
     dropped_citekey: NotRequired[str]
     changed_fields: NotRequired[list[str]]
     merged_record: NotRequired[dict[str, Any]]
+    #: BibTeX fields of the dropped entry that the survivor takes over, and the
+    #: ones it cannot (a conflict the survivor already answers differently).
+    #: Both are computed from the *entries*, not from the record projection —
+    #: a `NormalizedRecord` structurally cannot show `volume`/`pages`/`isbn`,
+    #: which is why the dry run used to be unable to preview the loss.
+    carried_fields: NotRequired[list[str]]
+    dropped_fields: NotRequired[list[str]]
+    #: Where the pre-merge file was copied, mirroring `delete`.
+    backup_path: NotRequired[str]
     # Structured failure kind, so the runner picks an exit code without matching
     # on message text. Only "not_found" today; its absence means ENVIRONMENT.
     reason: NotRequired[str]
@@ -200,6 +210,17 @@ def merge_duplicates(
     merged_record = merge_decision["merged"]
     changed_fields = merge_decision.get("changed_fields", [])
 
+    # What happens to the BibTeX fields the record model does not carry. Read
+    # off the entries so the preview can name them; the real merge recomputes
+    # the same thing under the lock.
+    fields_a = entries[idx_a].get("fields", {})
+    fields_b = entries[idx_b].get("fields", {})
+    carried_fields = sorted(key for key in fields_a if key not in fields_b)
+    conflicting_fields = sorted(
+        key for key, value in fields_a.items()
+        if key in fields_b and fields_b[key] != value
+    )
+
     if dry_run:
         return {
             "status": "ok",
@@ -209,18 +230,24 @@ def merge_duplicates(
             "dry_run": True,
             "message": f"would merge {citekey_a} into {citekey_b}",
             "changed_fields": changed_fields,
+            "carried_fields": carried_fields,
+            "dropped_fields": conflicting_fields,
             "merged_record": {
                 k: v for k, v in merged_record.items() if k != "citekey"
             },
         }
 
     # Execute: merge A into B atomically under one lock, preserving comments,
-    # @string/@preamble macros, and every other entry's source.
+    # @string/@preamble macros, and every other entry's source. The `.bak` is
+    # written inside that lock, immediately before the write, exactly as
+    # `delete` does — a merge destroys a block just as a delete does.
+    backup_path = backup_path_for(bib_path, citekey_a)
     merge_result = merge_bib_entries(
         bib_path,
         citekey_a=citekey_a,
         citekey_b=citekey_b,
         file_path_style=file_path_style,
+        backup_path=backup_path,
     )
     if not merge_result["found"]:
         return {
@@ -236,4 +263,8 @@ def merge_duplicates(
         "dropped_citekey": citekey_a,
         "dry_run": False,
         "message": f"merged {citekey_a} into {citekey_b}",
+        "changed_fields": changed_fields,
+        "carried_fields": carried_fields,
+        "dropped_fields": merge_result.get("dropped_fields", conflicting_fields),
+        "backup_path": str(backup_path),
     }

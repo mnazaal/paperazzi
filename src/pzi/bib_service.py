@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, NotRequired, TypeAlias, TypedDict
 
 from pzi.bib_repository import (
+    backup_path_for,
     delete_bib_entry,
     find_entry_index,
     parse_bib_library,
@@ -307,21 +307,6 @@ def _first_author_sort_key(record: dict[str, Any]) -> str:
     return ""
 
 
-def _backup_path_for_delete(bib_path: str, citekey: str) -> Path:
-    """Return non-existing backup path beside target bib."""
-    source = Path(bib_path)
-    safe_citekey = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in citekey)
-    base = source.with_name(f"{source.name}.{safe_citekey}.bak")
-    if not base.exists():
-        return base
-    suffix = 2
-    while True:
-        candidate = source.with_name(f"{source.name}.{safe_citekey}.bak{suffix}")
-        if not candidate.exists():
-            return candidate
-        suffix += 1
-
-
 def delete_entry(
     *,
     bib_path: str,
@@ -373,7 +358,7 @@ def delete_entry(
     # could rewrite the bib, making this `.bak` — which the result advertises as
     # the undo artifact — a snapshot of a version that no longer existed, so
     # restoring it would revert the other writer's work too.
-    backup_path = _backup_path_for_delete(bib_path, citekey)
+    backup_path = backup_path_for(bib_path, citekey)
     delete_result = delete_bib_entry(bib_path, citekey, backup_path=backup_path)
     if not delete_result["found"]:
         return {

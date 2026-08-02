@@ -9,10 +9,16 @@ from typing import Any, TypedDict
 
 from pzi.bib_repository import (
     ReadBibResult,
+    parse_bib_library,
     read_bib_file_raw_with_failures,
+    read_bib_source,
     with_bib_lock,
 )
-from pzi.bib_serialize import serialize_bibtex
+from pzi.bib_serialize import (
+    _library_entry_to_bibtex_entry,
+    _serialize_library,
+    describe_failed_blocks,
+)
 
 
 class ExportResult(TypedDict):
@@ -96,10 +102,23 @@ def _export_status(dropped: list[str]) -> str:
 
 
 def export_bibtex(bib_path: str) -> ExportResult:
-    """Export a BibTeX library as formatted BibTeX text string."""
-    raw, dropped = _read_for_export(bib_path)
-    entries = raw["entries"]
-    bibtex_str = serialize_bibtex(entries)
+    """Export a BibTeX library as formatted BibTeX text string.
+
+    Re-serializes the parsed library rather than the projected entry list.
+    Building a fresh library out of entries alone dropped every non-entry block
+    — ``@preamble``, ``@string``, ``@comment`` and every ``%`` comment — and,
+    because the entry list carries resolved values with no record of their
+    enclosing, turned ``publisher = acm # { Press}`` into the literal
+    ``{acm # { Press}}``. For a command billed as a backup that is data loss.
+    """
+    with with_bib_lock(bib_path, shared=True):
+        source = read_bib_source(bib_path)
+        library = parse_bib_library(source)
+        entries = [
+            _library_entry_to_bibtex_entry(entry) for entry in library.entries
+        ]
+        dropped = describe_failed_blocks(library)
+        bibtex_str = _serialize_library(library)
     return {
         "status": _export_status(dropped),
         "bib_path": bib_path,

@@ -649,6 +649,7 @@ def add_records_to_bib_batch(
     pdf_filename_format: str | None = None,
     file_path_style: str = "absolute",
     fetch_binary: BinaryFetcher | None = None,
+    source_entries: Sequence[BibtexEntry | None] | None = None,
 ) -> list[AddRecordResult]:
     """Plan and write many records into one bib under a single lock and write.
 
@@ -664,6 +665,11 @@ def add_records_to_bib_batch(
     PDF downloads), so the import is all-or-nothing rather than committed
     per entry.  Bad records are skipped with an error result; good ones still
     write.  This is the bulk path behind :func:`pzi.import_service`.
+
+    *source_entries*, when given, is the parsed BibTeX entry each record came
+    from, positionally aligned with *records*.  It is what lets an import carry
+    a source entry's unmodelled fields (``volume``, ``pages``, ``crossref``, …)
+    into the library instead of projecting them away.
     """
     papers_dir = bib["papers_dir"]
     existing_pdf_paths = _snapshot_pdf_paths(papers_dir)
@@ -683,8 +689,13 @@ def add_records_to_bib_batch(
             existing_records = session.records
             index = session.index
 
-            for raw in records:
+            for position, raw in enumerate(records):
                 record_pdf: str | None = None
+                source_entry = (
+                    source_entries[position]
+                    if source_entries is not None and position < len(source_entries)
+                    else None
+                )
                 try:
                     typed = ensure_citekey_for_write(
                         cast(NormalizedRecord, dict(raw)), existing_records,
@@ -709,6 +720,7 @@ def add_records_to_bib_batch(
                     plan = plan_bib_write(
                         typed, existing_records, force_new=force_new, index=index,
                         existing_entries=session.entries,
+                        source_entry=source_entry,
                     )
                     validate_bibtex_roundtrip([plan["entry"]])
                 except Exception as exc:

@@ -65,6 +65,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cleanly — so the write gate saw nothing wrong. pzi now refuses to rewrite such
   a file and says which entry to fix.
 
+- **`pzi import` no longer discards every field the record model does not
+  carry.** `volume`, `pages`, `publisher`, `editor`, `series`, `isbn` and
+  `crossref` were dropped and the run reported
+  `{"status":"ok","imported":2,"errors":[]}`; losing `crossref` also broke the
+  inheritance link to an `@proceedings` entry imported alongside it. The source
+  entry is now carried through the write and the projection merged onto it.
+- **`pzi fix merge` no longer destroys the dropped entry's unmodelled fields**,
+  and writes a `.bak` inside the lock the way `delete` does. The dry run now
+  names both the fields the survivor will take over and the ones it cannot
+  (a conflict) — it previously returned a `NormalizedRecord`, which
+  structurally cannot show `volume`/`pages`/`isbn`.
+- **`pzi export --format bibtex` — billed as a backup — no longer drops
+  `@preamble`, `@string`, `@comment` and `%` comments, or breaks macro
+  concatenation** (`publisher = acm # { Press}` became the literal
+  `{acm # { Press}}`). It re-serializes the parsed library instead of a
+  projection of its entries.
+- **`pzi export -o` writes all-or-nothing.** It truncated the destination
+  before the replacement was complete, so a failed export could destroy the
+  backup it was overwriting.
+- `pzi import --json` now reports `dry_run`, as `add` and `update` do. A
+  preview's `"imported": 0` was indistinguishable from a real run.
+
 ### Known limitations
 
 - A bibliography with more than one hard link keeps only the written name
