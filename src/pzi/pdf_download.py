@@ -11,6 +11,8 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from pzi import exit_codes
+from pzi.errors import PziError
 from pzi.fetch_helpers import fetch_binary as _fetch_binary
 from pzi.pdf_planning import (
     is_pdf_bytes,
@@ -133,20 +135,37 @@ def fetch_and_store_pdf(
 # ---------------------------------------------------------------------------
 
 
+#: How many ``-1``, ``-2``, … names to try before giving up. A papers dir with
+#: this many collisions for one citekey is a bug or an attack, not a library.
+_MAX_PDF_COLLISION_SUFFIX = 1000
+
+
 def resolve_pdf_destination(destination: Path, data: bytes) -> Path:
-    """Return existing identical path or first free suffixed path."""
+    """Return existing identical path or first free suffixed path.
+
+    "Free" is decided with :func:`os.path.lexists`, not ``Path.exists()``: a
+    *dangling* symlink does not exist by the latter but very much occupies the
+    name, so ``os.link`` below refuses it. The two disagreeing made
+    ``write_pdf_bytes`` hand back the same occupied path forever — a 100%-CPU
+    hang in ``pzi add``, ``pzi pdf retry``, ``pzi pdf attach`` and any HTTP
+    worker that reached them. Symlinked papers directories are a normal way to
+    keep PDFs on another volume.
+    """
     candidate = destination
-    n = 0
-    while True:
-        if not candidate.exists():
+    for n in range(_MAX_PDF_COLLISION_SUFFIX + 1):
+        if not os.path.lexists(candidate):
             return candidate
         try:
             if candidate.read_bytes() == data:
                 return candidate
         except OSError:
             pass
-        n += 1
-        candidate = destination.with_stem(f"{destination.stem}-{n}")
+        candidate = destination.with_stem(f"{destination.stem}-{n + 1}")
+    raise PziError(
+        f"could not find a free filename for {destination.name} in "
+        f"{destination.parent} after {_MAX_PDF_COLLISION_SUFFIX} attempts",
+        code=exit_codes.ENVIRONMENT,
+    )
 
 
 def write_pdf_bytes(
@@ -172,7 +191,10 @@ def write_pdf_bytes(
     if destination.exists():
         return str(destination)
 
-    while True:
+    # Bounded: every iteration must either return or move to a *new* name, and
+    # an unbounded retry loop with no progress guarantee has no business on a
+    # write path — that is exactly how the dangling-symlink case span forever.
+    for _attempt in range(_MAX_PDF_COLLISION_SUFFIX):
         temp_fd, temp_name = tempfile.mkstemp(
             dir=str(destination.parent), prefix=".pdf-", suffix=".tmp"
         )
@@ -199,6 +221,11 @@ def write_pdf_bytes(
                 temp_path.unlink(missing_ok=True)
             except OSError:
                 pass
+    raise PziError(
+        f"could not store the PDF in {destination.parent}: "
+        f"{_MAX_PDF_COLLISION_SUFFIX} candidate filenames were all taken",
+        code=exit_codes.ENVIRONMENT,
+    )
 
 
 def _write_all(fd: int, data: bytes) -> None:

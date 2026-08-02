@@ -259,3 +259,82 @@ def test_reindex_collision_avoids_duplicate() -> None:
         # The bad citekey should change but NOT collide with the first one
         for ch in changed:
             assert ch["new_citekey"] != "doe2025test" or ch["old_citekey"] == "doe2025test"
+
+
+def test_reindex_repoints_a_shared_pdf_instead_of_leaving_it_dangling() -> None:
+    """Two entries referencing one PDF: the second must not be left pointing at
+    a path the first rename already moved away."""
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "shared.bib")
+        papers = os.path.join(td, "papers")
+        os.makedirs(papers, exist_ok=True)
+        shared = os.path.join(papers, "shared.pdf")
+        Path(shared).write_bytes(b"%PDF-1.4\nSHARED\n")
+        _write_bib(
+            bib,
+            f'@article{{k1, title = {{First Paper}}, author = {{Smith, Jane}},'
+            f' year = {{2020}}, file = {{{shared}}}}}\n'
+            f'@article{{k2, title = {{Second Paper}}, author = {{Jones, Ann}},'
+            f' year = {{2021}}, file = {{{shared}}}}}',
+        )
+
+        result = reindex_library(bib_path=bib, papers_dir=papers, dry_run=False)
+
+        written = Path(bib).read_text()
+        referenced = [
+            line.split("{", 1)[1].rstrip("},")
+            for line in written.splitlines()
+            if line.strip().startswith("file = ")
+        ]
+        assert referenced, written
+        for path in referenced:
+            assert Path(path).exists(), f"dangling file reference: {path}"
+        # And the conflict is reported rather than silently swallowed.
+        assert result["errors"]
+
+
+def test_reindex_leaves_a_pdf_outside_papers_dir_where_it_is() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "external.bib")
+        papers = os.path.join(td, "papers")
+        os.makedirs(papers, exist_ok=True)
+        elsewhere = os.path.join(td, "Documents")
+        os.makedirs(elsewhere, exist_ok=True)
+        external = os.path.join(elsewhere, "my-important-paper.pdf")
+        Path(external).write_bytes(b"%PDF-1.4\nEXTERNAL\n")
+        _write_bib(
+            bib,
+            f'@article{{oldkey, title = {{New Test}}, author = {{Doe, John}},'
+            f' year = {{2025}}, file = {{{external}}}}}',
+        )
+
+        result = reindex_library(bib_path=bib, papers_dir=papers, dry_run=False)
+
+        assert result["changed"][0]["new_citekey"] == "doe2025new"
+        assert Path(external).exists()
+        assert list(Path(papers).glob("*.pdf")) == []
+        assert external in Path(bib).read_text()
+
+
+def test_reindex_dry_run_matches_what_the_real_run_will_do() -> None:
+    """The real run refuses to overwrite an occupied destination; the preview
+    used to promise the rename anyway."""
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "occupied.bib")
+        papers = os.path.join(td, "papers")
+        os.makedirs(papers, exist_ok=True)
+        real_pdf = os.path.join(papers, "real-paper.pdf")
+        Path(real_pdf).write_bytes(b"%PDF-1.4\nREAL\n")
+        Path(os.path.join(papers, "doe2025new.pdf")).write_bytes(b"%PDF-1.4\nOTHER\n")
+        _write_bib(
+            bib,
+            '@article{oldkey, title = {New Test}, author = {Doe, John}, year = {2025},'
+            f' file = {{{real_pdf}}}}}',
+        )
+
+        preview = reindex_library(bib_path=bib, papers_dir=papers, dry_run=True)
+        real = reindex_library(bib_path=bib, papers_dir=papers, dry_run=False)
+
+        assert preview["changed"][0]["renamed_pdf"] is False
+        assert real["changed"][0]["renamed_pdf"] is False
+        assert preview["errors"] and real["errors"]

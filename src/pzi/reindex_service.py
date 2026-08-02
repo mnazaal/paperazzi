@@ -25,6 +25,17 @@ class CitekeyChange(TypedDict):
     renamed_pdf: bool
     old_pdf: NotRequired[str]
     new_pdf: NotRequired[str]
+    #: A stored PDF outside ``papers_dir``, left exactly where it is.
+    kept_external_pdf: NotRequired[str]
+
+
+def _is_under(path: str, directory: str) -> bool:
+    """Is *path* inside *directory*? Compared without touching the filesystem."""
+    try:
+        Path(os.path.abspath(path)).relative_to(Path(os.path.abspath(directory)))
+    except ValueError:
+        return False
+    return True
 
 
 class ReindexResult(TypedDict):
@@ -74,15 +85,22 @@ def plan_reindex(
         stored_pdf = record.get("local_pdf_path")
         if isinstance(stored_pdf, str) and stored_pdf.strip():
             old_pdf = str(Path(stored_pdf).expanduser())
-            new_pdf = plan_pdf_path(
-                papers_dir=papers_dir,
-                citekey=new_citekey,
-                record=record,
-                filename_format=pdf_filename_format,
-            )
-            if old_pdf != new_pdf:
-                change["old_pdf"] = old_pdf
-                change["new_pdf"] = new_pdf
+            if _is_under(old_pdf, papers_dir):
+                new_pdf = plan_pdf_path(
+                    papers_dir=papers_dir,
+                    citekey=new_citekey,
+                    record=record,
+                    filename_format=pdf_filename_format,
+                )
+                if old_pdf != new_pdf:
+                    change["old_pdf"] = old_pdf
+                    change["new_pdf"] = new_pdf
+            else:
+                # A PDF the user keeps elsewhere is theirs. The destination is
+                # computed from `papers_dir` regardless of where the file
+                # actually lives, so renaming a citekey used to *move*
+                # ~/Documents/my-paper.pdf into the library, silently.
+                change["kept_external_pdf"] = old_pdf
 
         changes.append(change)
 
@@ -96,6 +114,9 @@ def _rename_planned_pdfs(
 ) -> list[tuple[str, str]]:
     """Apply each planned PDF move, returning the moves that succeeded."""
     renamed: list[tuple[str, str]] = []
+    #: Absolute source path -> where this batch moved it. Lets a second entry
+    #: referencing the same PDF follow it instead of dangling.
+    already_renamed: dict[str, str] = {}
 
     for change in changes:
         entry = entries[change["entry_index"]]
@@ -103,7 +124,27 @@ def _rename_planned_pdfs(
 
         old_pdf = change.get("old_pdf")
         new_pdf = change.get("new_pdf")
-        if not old_pdf or not new_pdf or not os.path.exists(old_pdf):
+        if not old_pdf or not new_pdf:
+            continue
+        if not os.path.exists(old_pdf):
+            # Silently skipping this left the entry pointing at a path an
+            # earlier change in the same batch had already renamed away — two
+            # entries sharing one PDF produced a dangling `file =` with
+            # `errors: []`, and a later `fix clean` reported it as missing with
+            # no explanation.
+            moved_to = already_renamed.get(os.path.abspath(old_pdf))
+            if moved_to is not None:
+                entry["fields"]["file"] = moved_to
+                errors.append(
+                    f"{change['old_citekey']} shares its PDF with another entry: "
+                    f"{old_pdf} was renamed to {moved_to}, and the reference was "
+                    "repointed there"
+                )
+            else:
+                errors.append(
+                    f"PDF for {change['old_citekey']} not found at {old_pdf}: "
+                    "the reference was left as it was"
+                )
             continue
 
         # os.rename replaces the destination silently; never trade one stored
@@ -126,6 +167,7 @@ def _rename_planned_pdfs(
             continue
 
         renamed.append((old_pdf, new_pdf))
+        already_renamed[os.path.abspath(old_pdf)] = new_pdf
         # Repoint the entry's file= field at the renamed PDF so the reference
         # does not dangle (write honors file_path_style).
         entry["fields"]["file"] = new_pdf
@@ -178,9 +220,24 @@ def reindex_library(
         errors: list[str] = []
 
         if dry_run:
+            # Apply the real run's tests, not a weaker subset: it also refuses
+            # to overwrite an existing destination, so previewing a rename the
+            # real run declines is a preview of a different command.
+            planned_destinations: set[str] = set()
             for change in changes:
                 old_pdf = change.get("old_pdf")
-                change["renamed_pdf"] = bool(old_pdf) and os.path.exists(str(old_pdf))
+                new_pdf = change.get("new_pdf")
+                will_rename = bool(old_pdf) and os.path.exists(str(old_pdf))
+                if will_rename and new_pdf:
+                    if os.path.exists(new_pdf) or new_pdf in planned_destinations:
+                        will_rename = False
+                        errors.append(
+                            f"would keep PDF for {change['old_citekey']} at "
+                            f"{old_pdf}: {new_pdf} already exists"
+                        )
+                    else:
+                        planned_destinations.add(new_pdf)
+                change["renamed_pdf"] = will_rename
         elif changes:
             renamed = _rename_planned_pdfs(changes, entries, errors)
             try:

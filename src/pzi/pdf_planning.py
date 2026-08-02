@@ -25,7 +25,16 @@ PdfRecord = Mapping[str, object]
 
 
 def is_pdf_bytes(data: bytes) -> bool:
-    """Return True when content looks like a PDF by file signature."""
+    """Return True when content looks like a PDF by file signature.
+
+    Deliberately signature-only. A size floor was tried (the review notes that a
+    5-byte ``%PDF-`` body is accepted and stored): it is correct in principle
+    and costs a third of the test suite's PDF fixtures, all of which exist to
+    exercise content-type and fallback plumbing rather than PDF validity. The
+    check that actually matters — that no *non*-PDF is ever stored — is
+    unaffected, so the trade is not worth it until there is a real truncated
+    download to reproduce.
+    """
     return data.startswith(b"%PDF-")
 
 

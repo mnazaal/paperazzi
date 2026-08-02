@@ -746,9 +746,19 @@ def extract_title_from_text(text: str) -> str | None:
 
 
 def extract_pdf_metadata(path: str) -> PdfExtractionResult:
-    """Extract DOI and title candidate from first pages of a PDF."""
+    """Extract DOI and title candidate from first pages of a PDF.
+
+    A PDF that cannot be read yields no metadata — never an exception. pypdf
+    raises its own ``PyPdfError`` subclasses (``PdfReadError``,
+    ``EmptyFileError``, ``FileNotDecryptedError``, ``PdfStreamError``, …), none
+    of which derive from ``OSError`` or ``ValueError``, so a 0-byte, truncated
+    or encrypted PDF used to surface as a raw traceback from ``pzi add`` and a
+    ``500`` from ``POST /capture``. Reading ``reader.pages`` is inside the guard
+    too: the constructor is lazy, so an encrypted file only fails there.
+    """
     try:
         from pypdf import PdfReader
+        from pypdf.errors import PyPdfError
     except ImportError:
         return empty_pdf_metadata()
 
@@ -756,18 +766,19 @@ def extract_pdf_metadata(path: str) -> PdfExtractionResult:
     if not file_path.exists():
         return empty_pdf_metadata()
 
+    text_pages: list[str] = []
     try:
         reader = PdfReader(str(file_path))
-    except (OSError, ValueError):
+        pages = list(reader.pages[:3])
+    except (OSError, ValueError, PyPdfError):
         return empty_pdf_metadata()
 
-    text_pages: list[str] = []
-    for page in reader.pages[:3]:
+    for page in pages:
         try:
             text = page.extract_text()
             if text:
                 text_pages.append(text)
-        except (OSError, ValueError, AttributeError):
+        except (OSError, ValueError, AttributeError, PyPdfError):
             continue
 
     full_text = "\n".join(text_pages)

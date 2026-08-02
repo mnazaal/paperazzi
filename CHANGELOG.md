@@ -87,6 +87,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `pzi import --json` now reports `dry_run`, as `add` and `update` do. A
   preview's `"imported": 0` was indistinguishable from a real run.
 
+- **Storing a PDF no longer hangs on a dangling symlink.** `Path.exists()` is
+  false for a broken symlink but `os.link` still refuses the name, so
+  `write_pdf_bytes` kept choosing the same occupied path — ~16k iterations a
+  second, forever, at 100% CPU. It wedged `pzi add`, `pzi pdf retry`,
+  `pzi pdf attach` and any HTTP worker that reached them, and a papers
+  directory holding a link into a moved or unmounted store is an ordinary way
+  to organize a library. Occupancy is now decided with `lexists` and the
+  collision search is bounded.
+- **A corrupt, empty or encrypted PDF is no longer a traceback (CLI) or a 500
+  (HTTP).** pypdf raises its own `PyPdfError` subclasses, none of which derive
+  from `OSError` or `ValueError`; the page access was outside the guard as well,
+  which is where an encrypted file actually fails.
+- **`pzi fix reindex --rename-citekeys` no longer leaves a dangling `file =`
+  when two entries share a PDF** — the second entry is repointed at where the
+  first rename moved it, and the conflict is reported instead of silently
+  skipped — **and no longer relocates PDFs stored outside `papers_dir`**
+  (a citekey rename used to move `~/Documents/my-paper.pdf` into the library).
+- **`pzi fix reindex --dry-run` applies the same tests as the real run**, so it
+  no longer promises a rename the real run refuses because the destination is
+  occupied.
+
 ### Known limitations
 
 - A bibliography with more than one hard link keeps only the written name
