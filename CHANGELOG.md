@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`pzi tag` matches a stored tag however it was spelled.** `--tags` is
+  normalized to a slug on the way in and stored tags were compared raw, so a tag
+  written `Machine Learning` could not be removed by any input — `pzi tag remove`
+  reported "no changes" and exited 0 forever — and adding it again left the entry
+  carrying both spellings. Both sides are now normalized for the comparison, and
+  the stored spelling is kept: this fixes the matching without rewriting tags the
+  user typed.
+- **Two `pzi tag add` runs on one entry no longer lose one of the tags.** The new
+  tag set was computed from the pre-lock snapshot and written verbatim inside the
+  lock, so the second writer silently reverted the first — and reported success.
+  The arithmetic now runs against the entry as it is under the lock, and the
+  result reports what was actually written.
+- **One provider's search miss no longer condemns an entry two others
+  confirmed.** `pzi check` unioned defect flags across every source that returned
+  anything, including one whose own match was flagged `title_mismatch` — so
+  `--strict` reported `problematic` alongside `confidence_score: 100`. A source
+  that did not identify the work no longer testifies about it; one that *did* and
+  disagrees still does.
+- **`pzi check` now exits 1 whenever an entry is problematic or could not be
+  verified**, as `exit_codes` and the README's table always said. It fired only
+  for `problematic` and only under `--strict`, so a CI gate written from that
+  table passed a library of fabricated references. `--strict` keeps its real
+  meaning: harder checks, not whether findings are reported.
 - **`pzi doctor --reinstall-server` no longer deletes a translation-server
   directory pzi did not install.** The ownership sentinel was skipped whenever
   `force` was set, and `doctor` is the sole caller that sets it — so the one

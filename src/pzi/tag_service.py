@@ -232,15 +232,27 @@ def _mutate_entry_tags(
 
     current_record = cast(NormalizedRecord, dict(read_result["records"][match_index]))
     current_tags = list(current_record.get("tags") or [])
-    current_set = set(current_tags)
-    new_set = set(current_set)
-    if mode == "add":
-        new_set.update(normalized_tags)
-    else:
-        new_set.difference_update(normalized_tags)
 
-    merged_sorted = sorted(new_set)
-    changed = merged_sorted != sorted(current_set)
+    def _apply(existing: list[str]) -> list[str]:
+        """Add or remove *normalized_tags*, matching on normalized form.
+
+        Both sides are normalized for the *comparison* only, as
+        ``search_service`` already does: a tag stored as ``Machine Learning``
+        was unreachable from any input, so it could never be removed and adding
+        it again left the entry carrying both spellings.
+
+        The stored spelling itself is kept. Rewriting 157 of a real library's
+        162 tags is not something ``pzi tag add`` was asked to do; a tag pzi
+        *composes* is a slug, as it always was.
+        """
+        requested = set(normalized_tags)
+        if mode != "add":
+            return sorted(tag for tag in existing if normalize_tag(tag) not in requested)
+        present = {normalize_tag(tag) for tag in existing}
+        return sorted([*existing, *(tag for tag in normalized_tags if tag not in present)])
+
+    merged_sorted = _apply(current_tags)
+    changed = merged_sorted != sorted(current_tags)
 
     if not changed:
         return {
@@ -267,8 +279,13 @@ def _mutate_entry_tags(
             # made in between — a different title and abstract were restored
             # while the command reported `status: ok`. `update_service`
             # already does it this way and says why.
+            #
+            # That includes the tag arithmetic itself: computing the new set
+            # from the pre-lock tags and writing it verbatim meant two `tag add`
+            # runs racing on one entry kept only the second one's tag, with the
+            # loser reporting success.
             locked_record = cast(NormalizedRecord, dict(record))
-            locked_record["tags"] = merged_sorted
+            locked_record["tags"] = _apply(list(record.get("tags") or []))
             return apply_record_to_entry(entry, locked_record)
 
         update_result = update_bib_entry(
@@ -286,6 +303,11 @@ def _mutate_entry_tags(
                 "reason": "not_found",
                 "errors": [f"citekey not found: {citekey}"],
             }
+        # Report what was written under the lock, not what the pre-lock snapshot
+        # predicted — those differ exactly when another writer got there first,
+        # which is the case the caller most needs told about.
+        written = update_result.get("record") or {}
+        merged_sorted = list(written.get("tags") or [])
 
     if dry_run:
         message = f"would {'add' if mode == 'add' else 'remove'} tags"

@@ -484,7 +484,7 @@ def build_parser() -> argparse.ArgumentParser:
     check_parser.add_argument(
         "--strict",
         action="store_true",
-        help="tighten the verdict gate and exit non-zero if any entry is problematic",
+        help="tighten the verdict gate and add the single-edit title / truncated author checks",
     )
     check_parser.add_argument(
         "--report", metavar="PATH", help="write the full result as JSON to PATH"

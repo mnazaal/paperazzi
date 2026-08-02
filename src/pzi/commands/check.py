@@ -25,8 +25,8 @@ def run_check_command(
     """Run `pzi check`: audit each entry, report verdicts, never write the bib.
 
     Exit codes: 5 when the service could not run or no source could be reached;
-    2 for a conflicting invocation; in --strict mode, 1 when any entry is
-    problematic (so CI can gate on it); 0 otherwise.
+    2 for a conflicting invocation; 1 when any entry is problematic or could not
+    be verified (so CI can gate on it); 0 otherwise.
     """
     jsonl_path: str | None = getattr(args, "jsonl", None)
     if jsonl_path == "-" and getattr(args, "json", False):
@@ -112,5 +112,13 @@ def run_check_command(
     if audited_nothing:
         return exit_codes.ENVIRONMENT
 
-    problematic = result["counts"]["problematic"]
-    return exit_codes.FINDINGS if (strict and problematic) else exit_codes.OK
+    # Anything other than "verified" is something to report, in both modes.
+    # `FINDINGS` is documented — in `exit_codes` and in the README's table — as
+    # covering "entries `check` could not verify", but it fired only for
+    # `problematic` and only under `--strict`. A CI gate written from that table
+    # therefore passed a library of fabricated references. `--strict` selects
+    # *harder checks* (single-edit title typos, truncated author lists); making
+    # it also decide whether a finding is reported is what opened the hole.
+    counts = result["counts"]
+    findings = counts["problematic"] + counts["could_not_verify"]
+    return exit_codes.FINDINGS if findings else exit_codes.OK

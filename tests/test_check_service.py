@@ -382,3 +382,95 @@ def test_a_source_that_answers_is_still_checked_when_another_fails(tmp_path):
     assert "openalex" in item["sources_checked"]
     assert "crossref" not in item["sources_checked"]
     assert any("crossref" in err for err in item["source_errors"])
+
+
+def test_a_search_miss_from_one_source_does_not_condemn_a_confirmed_entry(tmp_path):
+    """`--strict` reported `problematic` with `confidence_score: 100`.
+
+    Defect flags were unioned across *every* source that returned something, so
+    one provider's search landing on a different paper — close enough to survive
+    the "unrelated hit" filter, far enough to be flagged `title_mismatch` — voted
+    down two sources that had confirmed the entry exactly. A source whose own
+    match does not identify the work cannot testify about it.
+    """
+    config_path = _setup(
+        tmp_path,
+        citekey="he2016deep",
+        title="Deep Residual Learning for Image Recognition",
+        authors=["He, Kaiming", "Zhang, Xiangyu"],
+        year=2016,
+    )
+
+    def _correct(_title, **_kw):
+        return {
+            "title": "Deep Residual Learning for Image Recognition",
+            "authors": ["Kaiming He", "Xiangyu Zhang"],
+            "year": 2016,
+            "venue": "CVPR",
+        }
+
+    def _wrong_paper(_title, **_kw):
+        return {
+            "title": "Deep Residual Networks for Image Classification",
+            "authors": ["Kaiming He", "Xiangyu Zhang"],
+            "year": 2016,
+            "venue": "CVPR",
+        }
+
+    result = check_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        fetch_crossref=_correct,
+        fetch_openalex=_correct,
+        fetch_dblp=_wrong_paper,
+        fetch_openreview=_no_source,
+        fetch_s2=_no_source,
+        now_year=2026,
+        strict=True,
+    )
+
+    item = result["items"][0]
+    assert item["verdict"] == "verified", item
+    assert "title_mismatch" not in item["flags"]
+
+
+def test_a_defect_from_a_source_that_did_identify_the_work_still_counts(tmp_path):
+    """The union exists for a reason: a sparse title-only record can outscore a
+    Crossref record that found the same paper under a *different* DOI, and that
+    `doi_mismatch` is exactly what `pzi check` is for."""
+    config_path = _setup(
+        tmp_path,
+        citekey="vaswani2017",
+        title="Attention Is All You Need",
+        authors=["Vaswani, Ashish", "Shazeer, Noam"],
+        year=2017,
+        doi="10.1/wrong",
+    )
+
+    def _title_only(_title, **_kw):
+        return {"title": "Attention Is All You Need", "venue": "NeurIPS"}
+
+    def _same_paper_other_doi(_title, **_kw):
+        return {
+            "title": "Attention Is All You Need",
+            "authors": ["Ashish Vaswani", "Noam Shazeer"],
+            "year": 2017,
+            "doi": "10.5555/3295222.3295349",
+        }
+
+    result = check_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        fetch_crossref=_same_paper_other_doi,
+        fetch_openalex=_title_only,
+        fetch_dblp=_no_source,
+        fetch_openreview=_no_source,
+        fetch_s2=_no_source,
+        now_year=2026,
+    )
+
+    item = result["items"][0]
+    assert item["verdict"] == "problematic"
+    assert "doi_mismatch" in item["flags"]

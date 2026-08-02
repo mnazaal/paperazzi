@@ -86,9 +86,31 @@ def test_check_strict_exits_nonzero_on_problematic(tmp_path: Path) -> None:
     assert code == 1
 
 
-def test_check_non_strict_problematic_still_exit_zero(tmp_path: Path) -> None:
+def test_check_reports_a_problematic_entry_without_strict(tmp_path: Path) -> None:
+    """`1` is the documented answer for "ran fine and has something to report".
+
+    It fired only under `--strict`, so `pzi check || alert` — written straight
+    from the README's exit-code table — stayed silent on a library of fabricated
+    references. `--strict` selects *harder checks*; it is not the switch that
+    decides whether a finding is reported.
+    """
     code, _out, _err = _run(
         _args(strict=False), lambda **_k: _result(problematic=1, verified=0), tmp_path
+    )
+    assert code == 1
+
+
+def test_check_reports_an_entry_it_could_not_verify(tmp_path: Path) -> None:
+    """The README names this case explicitly; it never fired in either mode."""
+    code, _out, _err = _run(
+        _args(strict=False), lambda **_k: _result(cnv=1, verified=0), tmp_path
+    )
+    assert code == 1
+
+
+def test_check_exits_zero_when_every_entry_verified(tmp_path: Path) -> None:
+    code, _out, _err = _run(
+        _args(strict=False), lambda **_k: _result(verified=2), tmp_path
     )
     assert code == 0
 
@@ -154,11 +176,16 @@ def test_check_reports_unreachable_sources_on_stderr(tmp_path):
     assert code == exit_codes.ENVIRONMENT
 
 
-def test_check_still_exits_ok_when_some_source_answered(tmp_path):
+def test_check_reports_findings_not_failure_when_some_source_answered(tmp_path):
+    """A partly-unreachable run still audited something, so it is not ENVIRONMENT.
+
+    The entry it could not verify is a finding, which is `1`.
+    """
     result = _offline_result()
     result["items"][0]["sources_checked"] = ["openalex"]
 
     code, _stdout, stderr = _run(_args(), lambda **_kw: result, tmp_path)
 
     assert "metadata sources unavailable" in stderr
-    assert code == exit_codes.OK
+    assert code == exit_codes.FINDINGS
+

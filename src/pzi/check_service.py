@@ -305,8 +305,26 @@ def _verdict_from_scores(
     }
 
 
+def _can_testify(match: MatchScore) -> bool:
+    """Whether a non-best source's match is about *this* work at all.
+
+    `_is_unrelated_hit` discards a by-title hit only below `_UNRELATED_TITLE`
+    (30), while a comparison is flagged `title_mismatch` below `_TITLE_OK` (60).
+    A search miss landing in that band survived as scored evidence, and the
+    union below then let it condemn an entry two other sources had confirmed
+    exactly — `--strict` reported `problematic` alongside
+    `confidence_score: 100`, which is self-contradictory on its face.
+
+    A source that did not identify the work cannot testify about it, so its
+    flags are dropped rather than unioned. The union itself stays: a source that
+    *did* find the paper and disagrees about the DOI is precisely what `pzi
+    check` exists to surface, even when a sparse title-only record outscores it.
+    """
+    return "title_mismatch" not in match["flags"]
+
+
 def _defect_flags_across_sources(scored: list[tuple[str, MatchScore]]) -> list[str]:
-    """Every defect flag any source raised, in first-seen order.
+    """Every defect flag a source that identified the work raised, first-seen order.
 
     Non-defect flags (`author_unknown`, `authors_swapped` from a sparse record)
     are taken from the best match only — they describe *that* comparison, not
@@ -315,7 +333,7 @@ def _defect_flags_across_sources(scored: list[tuple[str, MatchScore]]) -> list[s
     best_name, best = max(scored, key=lambda item: item[1]["score"])
     flags: list[str] = list(best["flags"])
     for name, match in scored:
-        if name == best_name:
+        if name == best_name or not _can_testify(match):
             continue
         for flag in match["flags"]:
             if flag in _PROBLEMATIC_FLAGS and flag not in flags:
@@ -327,7 +345,7 @@ def _mismatch_lines_across_sources(scored: list[tuple[str, MatchScore]]) -> list
     best_name, best = max(scored, key=lambda item: item[1]["score"])
     lines = list(_mismatch_lines(best))
     for name, match in scored:
-        if name == best_name:
+        if name == best_name or not _can_testify(match):
             continue
         if not any(flag in _PROBLEMATIC_FLAGS for flag in match["flags"]):
             continue

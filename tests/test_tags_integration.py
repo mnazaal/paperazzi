@@ -277,3 +277,97 @@ def test_remove_nonexistent_tags_noop(tmp_path: Path) -> None:
     assert result["status"] == "ok"
     assert result["changed"] is False
     assert "no changes" in result["message"]
+
+
+# --- Tags the user did not write as slugs ---
+
+
+NON_SLUG_BIB = """@article{smith2024graph,
+  title = {Graph Parsers},
+  author = {Smith, J},
+  year = {2024},
+  keywords = {Machine Learning, Graph Nets},
+}
+"""
+
+
+def test_remove_matches_a_stored_tag_written_in_any_spelling(tmp_path: Path) -> None:
+    """`--tags` is normalized on the way in and stored tags were not compared.
+
+    A library tag written `Machine Learning` could not be removed by any input:
+    the normalized `machine-learning` never equalled the stored string, so the
+    command reported "no changes" and exited 0 forever.
+    """
+    config_path = _write_config_and_bib(tmp_path, NON_SLUG_BIB)
+
+    result = remove_tags(
+        config_path=str(config_path), home_dir=str(tmp_path),
+        citekey="smith2024graph", tags=["Machine Learning"], bib_selector=None,
+    )
+
+    assert result["status"] == "ok"
+    assert result["changed"] is True
+    assert result["tags"] == ["Graph Nets"]
+
+
+def test_adding_a_tag_already_stored_in_another_spelling_is_a_noop(
+    tmp_path: Path,
+) -> None:
+    """Otherwise the entry ends up carrying both spellings of one tag."""
+    config_path = _write_config_and_bib(tmp_path, NON_SLUG_BIB)
+
+    result = add_tags(
+        config_path=str(config_path), home_dir=str(tmp_path),
+        citekey="smith2024graph", tags=["machine-learning"], bib_selector=None,
+    )
+
+    assert result["changed"] is False
+    assert result["tags"] == ["Graph Nets", "Machine Learning"]
+
+
+def test_adding_a_tag_keeps_the_stored_spelling_of_the_others(
+    tmp_path: Path,
+) -> None:
+    """Comparing normalized forms must not rewrite tags the user typed."""
+    config_path = _write_config_and_bib(tmp_path, NON_SLUG_BIB)
+
+    result = add_tags(
+        config_path=str(config_path), home_dir=str(tmp_path),
+        citekey="smith2024graph", tags=["to-read"], bib_selector=None,
+    )
+
+    assert result["tags"] == ["Graph Nets", "Machine Learning", "to-read"]
+    assert "Machine Learning" in (tmp_path / "test.bib").read_text()
+
+
+def test_a_tag_added_between_the_read_and_the_lock_is_not_lost(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The tag set was computed from the pre-lock snapshot and written verbatim.
+
+    Two `pzi tag add` runs racing on one entry therefore ended with only the
+    second one's tag: the loser's write went through, reported success, and
+    silently dropped what the winner had just added.
+    """
+    import pzi.tag_service as tag_service
+
+    config_path = _write_config_and_bib(tmp_path, NON_SLUG_BIB)
+    real_read = tag_service.read_bib_file
+
+    def _stale_read(path):
+        """What the entry looked like before the other writer's tag landed."""
+        result = real_read(path)
+        for record in result["records"]:
+            if record.get("citekey") == "smith2024graph":
+                record["tags"] = ["Graph Nets"]
+        return result
+
+    monkeypatch.setattr(tag_service, "read_bib_file", _stale_read)
+
+    add_tags(
+        config_path=str(config_path), home_dir=str(tmp_path),
+        citekey="smith2024graph", tags=["to-read"], bib_selector=None,
+    )
+
+    written = read_bib_file(str(tmp_path / "test.bib"))
+    assert written["records"][0]["tags"] == ["Graph Nets", "Machine Learning", "to-read"]

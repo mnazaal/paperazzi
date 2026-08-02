@@ -298,12 +298,16 @@ pzi check --report audit.json          # full JSON report
 pzi check --strict --jsonl audit.jsonl # one JSON object per entry; CI-friendly
 ```
 
-`--strict` raises the confidence bar, queries every source (no early exit), adds
-two high-stakes checks — single-edit **title typos** (a title within one
-character of the matched record, which whole-word matching misses) and silently
-**truncated author lists** (fewer authors than the record with no `and others`
-sentinel) — and **exits non-zero when any entry is problematic** so CI can gate on
-it. `--json` prints the full result to stdout.
+`pzi check` **exits 1 whenever any entry is problematic or could not be
+verified**, in either mode, so `pzi check || alert` gates on the result without
+extra flags (exit `5` still means the audit could not run — see the exit-code
+table above).
+
+`--strict` selects *harder checks*: it raises the confidence bar, queries every
+source (no early exit), and adds two high-stakes tests — single-edit **title
+typos** (a title within one character of the matched record, which whole-word
+matching misses) and silently **truncated author lists** (fewer authors than the
+record with no `and others` sentinel). `--json` prints the full result to stdout.
 
 ### HTTP API
 
