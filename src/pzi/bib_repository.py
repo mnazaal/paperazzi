@@ -1164,6 +1164,17 @@ def resolve_entry_type(record: NormalizedRecord) -> str:
     return "article"
 
 
+
+def _reported_changed_fields(record: NormalizedRecord) -> list[str]:
+    """The record keys worth showing a user as "what this write sets".
+
+    ``item_type`` is routing information — it picks the ``@type`` — not a field
+    that lands in the entry, so listing it among an insert's changed fields is
+    noise that varies with which provider answered.
+    """
+    return sorted(key for key in record if key != "item_type")
+
+
 def plan_bib_write(
     incoming_record: NormalizedRecord,
     existing_records: list[NormalizedRecord],
@@ -1210,7 +1221,7 @@ def plan_bib_write(
             "index": None,
             "record": incoming_record,
             "entry": _insert_entry(),
-            "changed_fields": sorted(incoming_record.keys()),
+            "changed_fields": _reported_changed_fields(incoming_record),
             "force_new": True,
         }
 
@@ -1221,7 +1232,7 @@ def plan_bib_write(
             "index": None,
             "record": incoming_record,
             "entry": _insert_entry(),
-            "changed_fields": sorted(incoming_record.keys()),
+            "changed_fields": _reported_changed_fields(incoming_record),
         }
 
     existing_record = existing_records[match_index]

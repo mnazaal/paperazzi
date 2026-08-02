@@ -252,8 +252,16 @@ def _mutate_entry_tags(
     if not dry_run:
         file_path_style = config.get("pdf_file_path_style", "absolute")
 
-        def _updater(entry, _record):
-            return apply_record_to_entry(entry, updated_record)
+        def _updater(entry, record):
+            # Re-derive from the record the repository hands back *under the
+            # lock*, not from the snapshot this run opened with. Writing the
+            # pre-lock snapshot back silently reverted any edit another process
+            # made in between — a different title and abstract were restored
+            # while the command reported `status: ok`. `update_service`
+            # already does it this way and says why.
+            locked_record = cast(NormalizedRecord, dict(record))
+            locked_record["tags"] = merged_sorted
+            return apply_record_to_entry(entry, locked_record)
 
         update_result = update_bib_entry(
             bib["path"], citekey, _updater, file_path_style=file_path_style

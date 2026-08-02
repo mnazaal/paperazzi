@@ -211,7 +211,15 @@ def merge_projected_entry(entry: BibtexEntry, projected_entry: BibtexEntry) -> B
     # One record key (`venue`), two possible homes. Write back to whichever the
     # entry already used: rewriting a proceedings entry's `booktitle` as
     # `journal` is bibliographically wrong and breaks styles that require it.
-    venue_key = "booktitle" if "booktitle" in existing and "journal" not in existing else "journal"
+    # When the entry uses *neither* — the venue is a gap being filled — the entry
+    # type decides, as it does for a fresh entry. Defaulting to `journal` there
+    # put `journal = {NeurIPS}` on an @inproceedings.
+    if "booktitle" in existing and "journal" not in existing:
+        venue_key = "booktitle"
+    elif "journal" in existing:
+        venue_key = "journal"
+    else:
+        venue_key = venue_field_for_entry_type(entry["entry_type"])
     # The projection puts the venue under whichever key *its* entry type calls
     # for, so read both homes: looking only at `journal` would drop the venue of
     # every proceedings entry merged here.

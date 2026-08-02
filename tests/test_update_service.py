@@ -756,9 +756,12 @@ def test_update_bib_reports_low_confidence_metadata_warning(tmp_path: Path) -> N
         fetch_search=_search,
     )
 
-    assert result["items"][0]["metadata_warnings"] == [
-        "metadata confidence low: selected result score=-41 below 0; verify captured metadata"
-    ]
+    # The candidate's DOI contradicts the entry's, so it is refused outright.
+    # This used to be a warning attached to a write that went ahead regardless.
+    item = result["items"][0]
+    assert item["applied"] is False
+    assert item["changed_fields"] == []
+    assert "contradicts" in item["note"]
 
 
 def test_update_bib_uses_configured_metadata_confidence_threshold(tmp_path: Path) -> None:
@@ -803,9 +806,12 @@ default = true
         fetch_search=_search,
     )
 
-    assert result["items"][0]["metadata_warnings"] == [
-        "metadata confidence low: selected result score=59 below 60; verify captured metadata"
-    ]
+    # `metadata_confidence_min_score` is a write gate now, not a warning: a
+    # candidate below it leaves the entry untouched and says why.
+    item = result["items"][0]
+    assert item["applied"] is False
+    assert item["changed_fields"] == []
+    assert "below metadata_confidence_min_score=60" in item["note"]
 
 def test_update_bib_unexpected_error_isolated_per_record(tmp_path: Path) -> None:
     """A non-OSError/ValueError failure on one record must not abort the pass.

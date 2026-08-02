@@ -8,6 +8,7 @@ from typing import Any, NotRequired, TypedDict, cast
 from pzi.add_planning import (
     metadata_result_confidence_warnings,
     metadata_result_diagnostics,
+    score_metadata_candidate,
     select_best_metadata_result,
 )
 from pzi.bib_repository import (
@@ -24,7 +25,9 @@ from pzi.bibtex import (
     bibtex_entry_to_record,
 )
 from pzi.config import BibResolutionFailure, load_bib_target
+from pzi.identifiers import is_preprint_url
 from pzi.protocols import SearchTranslationFetcher
+from pzi.similarity import _canonical_doi
 from pzi.translation_server import fetch_search_translations
 
 
@@ -38,6 +41,10 @@ class UpdatePlanItem(TypedDict):
     # item of a healthy `--dry-run`, so neither can serve as a failure
     # predicate. The runner needs one to report PARTIAL.
     failed: NotRequired[bool]
+    #: Set when a candidate was found but refused (a contradicting DOI, or a
+    #: score below `metadata_confidence_min_score`). Distinct from `failed`:
+    #: nothing went wrong, the metadata was simply not good enough to write.
+    skipped: NotRequired[bool]
     diff: NotRequired[str]
     metadata_diagnostics: NotRequired[list[str]]
     metadata_warnings: NotRequired[list[str]]
@@ -189,6 +196,17 @@ def _plan_update_for_record(
         min_score=metadata_confidence_min_score,
     )
     candidate = selected["record"]
+    rejection = _candidate_rejection(
+        record, selected, min_score=metadata_confidence_min_score
+    )
+    if rejection is not None:
+        return {
+            "citekey": citekey,
+            "changed_fields": [],
+            "applied": False,
+            "note": rejection,
+            "skipped": True,
+        }
     changed_fields = _changed_fields_for_candidate(record, candidate)
     if not changed_fields:
         return None  # pragma: no cover — covered by integration/browser tests
@@ -298,6 +316,71 @@ def _conservative_enrich(
         if current in (None, "", [], {}):
             merged[key] = value
     return cast(NormalizedRecord, merged)
+
+
+
+
+def _has_preprint_identity(record: Mapping[str, Any]) -> bool:
+    """True when the record itself says it is a preprint."""
+    if record.get("arxiv_id"):
+        return True
+    doi = _canonical_doi(record.get("doi"))
+    if doi and doi.startswith("10.48550/"):
+        return True
+    return is_preprint_url(record.get("source_url")) or is_preprint_url(
+        record.get("canonical_url")
+    )
+
+
+def _candidate_rejection(
+    record: Mapping[str, Any],
+    selected: Mapping[str, Any],
+    *,
+    min_score: int,
+) -> str | None:
+    """Why this candidate must not be written into the entry, or None.
+
+    `update` had no acceptance gate at all: `select_best_metadata_result`
+    returns the best of whatever came back, and a candidate scoring **−33** —
+    a different title, one author of three, a different DOI — had its `venue`,
+    `year` and `pdf_url` written in. `promote` has a hard threshold; this is the
+    same idea, using the key the config already documents.
+
+    Two rules, in order of certainty:
+
+    - **Contradicting DOIs.** Both sides carry a DOI and they differ: these are
+      not the same work, whatever the text similarity says. Preprint pairs are
+      the deliberate exception (an arXiv DOI legitimately differs from the
+      published one), and `pzi update --promote` is the command for those.
+    - **Score below `metadata_confidence_min_score`.** Previously warn-only.
+    """
+    candidate = selected.get("record") if isinstance(selected, Mapping) else None
+    if isinstance(candidate, Mapping):
+        record_doi = _canonical_doi(record.get("doi"))
+        candidate_doi = _canonical_doi(candidate.get("doi"))
+        # The preprint exemption is deliberately narrow. `is_preprint` treats a
+        # venue-less record as a preprint, which is most of what `update` runs
+        # on — using it here would exempt nearly everything. Only a record with
+        # an actual preprint identity is exempt, because that is the pairing
+        # (arXiv DOI vs published DOI) that legitimately disagrees, and
+        # `update --promote` is the command for it.
+        if (
+            record_doi
+            and candidate_doi
+            and record_doi != candidate_doi
+            and not _has_preprint_identity(record)
+        ):
+            return (
+                f"skipped: candidate DOI {candidate_doi} contradicts the entry's "
+                f"{record_doi}"
+            )
+    score = score_metadata_candidate(selected, cast(Mapping[str, object], record))
+    if score < min_score:
+        return (
+            f"skipped: best candidate scored {score}, below "
+            f"metadata_confidence_min_score={min_score}"
+        )
+    return None
 
 
 def _changed_fields_for_candidate(

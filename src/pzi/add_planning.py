@@ -332,6 +332,30 @@ def build_discovery_context(
     }
 
 
+def _carry_item_type(record: dict[str, Any], selected: Mapping[str, Any]) -> None:
+    """Copy a translation result's ``item_type`` into the record it wraps.
+
+    ``normalize_translation_item`` returns ``item_type`` as a *sibling* of
+    ``record``, and the add path took only the record — so ``resolve_entry_type``
+    saw no item type and fell through to its ``"article"`` default. Every
+    conference paper captured through the translation-server became
+    ``@article`` with ``journal = {proceedings title}``, and since Crossref,
+    OpenAlex and DBLP *do* put ``item_type`` inside their records, the entry type
+    silently depended on which provider answered. ``promote_service`` has always
+    carried it correctly; this is the same move.
+    """
+    item_type = selected.get("item_type")
+    if not isinstance(item_type, str) or not item_type.strip():
+        return
+    if item_type.strip() == "webpage":
+        # Zotero's "I could not tell" answer, not a claim about the work. Taking
+        # it literally would retype every unrecognized publisher page as
+        # `@unpublished`; the existing heuristics (preprint source, declared
+        # type, else article) make a better guess from the metadata itself.
+        return
+    record.setdefault("item_type", item_type.strip())
+
+
 def fetch_record_for_input(
     *,
     raw_value: str,
@@ -429,6 +453,7 @@ def fetch_record_for_input(
         if results:
             selected = select_best_metadata_result(results, fallback)
             best = dict(merge_record_sources(fallback, selected["record"]))
+            _carry_item_type(best, selected)
             return (
                 _with_pdf_discovery(
                     cast(NormalizedRecord, best),
@@ -528,6 +553,7 @@ def fetch_record_for_input(
         if results:
             selected = select_best_metadata_result(results, fallback)
             best = dict(selected["record"])
+            _carry_item_type(best, selected)
             best = _with_pdf_discovery(
                 cast(NormalizedRecord, best), translation_attachments=selected.get("attachments")
             )
@@ -559,13 +585,31 @@ def fetch_record_for_input(
 
 
 def safe_api_call(fn, *, errors: list[str] | None = None):
-    """Run callable, returning [] on HTTPError (and recording it when errors is given)."""
+    """Run callable, returning [] on an expected provider failure.
+
+    Two expected failure modes are absorbed so the cascade can fall through to
+    the next provider: an HTTP status, and a transport error — the
+    translation-server being down is the common one, and catching only
+    ``HTTPError`` meant it aborted DOI resolution entirely while Crossref and
+    OpenAlex sat right behind it. The reason is recorded either way, so
+    ``--strict-metadata`` and the result's warnings still see it.
+
+    A ``ValueError``/``KeyError``/``TypeError`` deliberately propagates: that is
+    a bug in pzi or a provider contract change, and turning it into "no results"
+    is how a broken provider comes to look like an unindexed paper. See
+    ``test_add_input_to_bib_does_not_swallow_non_network_bugs``.
+    """
     try:
         return fn()
     except urllib.error.HTTPError as exc:
         if errors is not None:
             errors.append(f"HTTP {exc.code}")
         return []
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        if errors is not None:
+            errors.append(f"provider unreachable: {exc}")
+        return []
+
 
 
 def select_best_metadata_result(

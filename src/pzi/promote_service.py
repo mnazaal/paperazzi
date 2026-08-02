@@ -50,6 +50,7 @@ from pzi.protocols import (
     accepts_keyword,
 )
 from pzi.resolution_match import score_match
+from pzi.similarity import _canonical_doi, normalize_title
 from pzi.tag_service import add_tags
 from pzi.translation_server import fetch_search_translations
 
@@ -687,15 +688,19 @@ def _find_duplicate_citekey(
     records: list[NormalizedRecord],
     exclude_citekey: str,
 ) -> str | None:
-    c_doi = candidate.get("doi")
-    c_title = str(candidate.get("title") or "").lower().strip()
+    # Canonical comparison on both sides. Raw equality missed `10.1145/ABC` vs
+    # `10.1145/abc` and `"Deep  Residual Learning"` (double space) vs
+    # `"Deep Residual Learning"` — and the write that follows uses
+    # `force_new=True`, so nothing downstream catches the duplicate it creates.
+    c_doi = _canonical_doi(candidate.get("doi"))
+    c_title = normalize_title(candidate.get("title"))
     for rec in records:
         ck = rec.get("citekey")
         if not isinstance(ck, str) or ck == exclude_citekey:
             continue
-        if c_doi and rec.get("doi") == c_doi:
+        if c_doi and _canonical_doi(rec.get("doi")) == c_doi:
             return ck
-        if c_title and str(rec.get("title") or "").lower().strip() == c_title:
+        if c_title and normalize_title(rec.get("title")) == c_title:
             return ck
     return None
 
@@ -960,12 +965,25 @@ def _handle_update_in_place(
             browser_hook=browser_hook,
         )
 
-        def _updater(entry, _current):
+        def _updater(entry, current):
+            # Merge the published metadata onto the record as it is on disk
+            # *now*, not onto the pre-lock snapshot: `update_bib_entry` re-reads
+            # under the exclusive lock precisely so a concurrent edit is not
+            # thrown away, and discarding its `record` argument reverted one.
+            locked = _merge_published_metadata(
+                cast(NormalizedRecord, dict(current)), candidate
+            )
+            # The PDF was acquired before the lock was taken, so its path lives
+            # on `updated` and has to be carried over onto the fresh merge.
+            for pdf_field in ("local_pdf_path", "pdf_url"):
+                value = updated.get(pdf_field)
+                if value:
+                    locked[pdf_field] = value  # type: ignore[literal-required]
             # Project onto the entry rather than replacing it: a rebuild from
             # the record drops every field `NormalizedRecord` does not model
             # (`volume`, `pages`, `publisher`, ...).
             projected = record_to_bibtex_entry(
-                updated, entry_type=resolve_entry_type(updated)
+                locked, entry_type=resolve_entry_type(locked)
             )
             merged = merge_projected_entry(entry, projected)
             # `merge_projected_entry` keeps the on-disk entry type, because an

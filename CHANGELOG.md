@@ -180,6 +180,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   injected Playwright doubles; the real-browser suite needs Playwright binaries,
   which are not installed here.)*
 
+- **A conference paper captured through the translation-server is now
+  `@inproceedings` with a `booktitle`.** The translator reports `item_type` as a
+  sibling of the record and the add path took only the record, so every such
+  capture became `@article` with `journal = {proceedings title}` — and because
+  Crossref, OpenAlex and DBLP *do* put the item type inside their records, the
+  entry type silently depended on which provider answered. (Zotero's `webpage`
+  item type is still treated as "unknown" rather than `@unpublished`: it is the
+  translator's fallback, not a claim about the work.)
+- **Filling a venue on an entry with neither `journal` nor `booktitle` now uses
+  the entry type to choose.** `pzi update` on an `@inproceedings` wrote
+  `journal = {NeurIPS}`.
+- **`pzi update` has an acceptance gate.** It wrote metadata from the best
+  candidate regardless of score — a candidate scoring −33 had its `venue`,
+  `year` and `pdf_url` written in. `metadata_confidence_min_score` is now a
+  write gate rather than a warning (default 0, so only negative-scoring
+  candidates are refused), and a candidate whose DOI contradicts the entry's is
+  refused outright unless the entry is a preprint.
+- **`pzi update --promote` no longer creates duplicate published entries** for
+  DOIs and titles differing only in case or whitespace (`10.1145/ABC` vs
+  `10.1145/abc`). The write uses `force_new=True`, so nothing downstream caught
+  it.
+- **A percent-encoded `doi.org` URL is recognized as a DOI.** It was classified
+  as a plain URL, so the entry was written with no identifier and never deduped.
+- **A provider being unreachable no longer aborts the whole cascade.** Only
+  `HTTPError` was absorbed, so a connection-refused translation-server ended DOI
+  resolution with Crossref and OpenAlex sitting right behind it. A
+  `ValueError`/`KeyError`/`TypeError` still propagates — that is a bug, not a
+  provider outage.
+- **`tag add/remove` and `promote --replace` no longer revert a concurrent
+  edit.** Both computed the new entry before taking the lock and discarded the
+  record the repository handed them under it, so another writer's corrections
+  were silently written back to their old values at `status: ok`.
+
 ### Known limitations
 
 - A bibliography with more than one hard link keeps only the written name

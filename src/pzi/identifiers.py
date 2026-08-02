@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from typing import Literal
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
 from pzi.bibtex import ClassifiedInput
 
@@ -54,6 +54,14 @@ def normalize_doi(value: str) -> str | None:
     """
     candidate = value.strip()
     match = DOI_PATTERN.match(candidate)
+    if match is None and _is_doi_org_url(candidate):
+        # A percent-encoded doi.org link — `https://doi.org/10.1145%2F1327452…`
+        # — is what a browser address bar hands over for some publishers. It
+        # failed the pattern (the `/` is escaped), was classified as a plain
+        # URL, and the entry was then written with no identifier at all and
+        # never deduped. Decode once and re-test rather than loosening the
+        # pattern, which would also start accepting encoded junk.
+        match = DOI_PATTERN.match(unquote(candidate))
     if match is None:
         return None
 
@@ -65,6 +73,13 @@ def normalize_doi(value: str) -> str | None:
     # re-capture create a duplicate entry.
     doi = doi.rstrip("/")
     return doi.lower()
+
+
+def _is_doi_org_url(value: str) -> bool:
+    try:
+        return (urlsplit(value).hostname or "").lower() in {"doi.org", "dx.doi.org"}
+    except ValueError:  # pragma: no cover — urlsplit rejects very odd input
+        return False
 
 
 def normalize_url(value: str) -> str | None:
@@ -202,7 +217,11 @@ def _extract_zenodo_id(path: str) -> str | None:
 
 def _normalize_special_path(*, hostname: str, path: str) -> str:
     if hostname == "doi.org":
-        stripped = path.lstrip("/")
+        # Percent-decode first: `https://doi.org/10.1145%2F1327452.1327492` is a
+        # DOI URL, but `normalize_doi` saw `10.1145%2F...`, rejected it, and the
+        # input was classified as a plain URL — so the entry was written with no
+        # identifier at all and never deduped.
+        stripped = unquote(path.lstrip("/"))
         normalized_doi = normalize_doi(stripped)
         return f"/{normalized_doi}" if normalized_doi is not None else path
 
