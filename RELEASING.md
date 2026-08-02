@@ -35,15 +35,18 @@ While in `0.x`, bump the minor for new features and the patch for fixes.
 
 ### 1. Update CHANGELOG.md
 
-Move the `[Unreleased]` section's contents into a new versioned section:
+Move the `[Unreleased]` section's contents into a new versioned section. Newest
+first, so `[Unreleased]` stays at the top ready for the next change — the
+example here used to show it *below* the new version, which is the order the
+file must not be in:
 
 ```markdown
+## [Unreleased]
+
 ## [0.2.0] - 2025-07-15
 
 ### Added
 - ...
-
-## [Unreleased]
 ```
 
 Update the comparison links at the bottom of the file.
@@ -63,18 +66,24 @@ sed -i '' 's/^version = "0.1.0"/version = "0.2.0"/' pyproject.toml
 ### 3. Verify locally
 
 ```sh
+# Refresh the lock after the version bump, or the release job's
+# `uv sync --locked` fails: it verifies uv.lock against pyproject.toml.
+uv lock
 uv pip install -e ".[dev]"
 ruff check src tools tests
 pyright
 pytest -m "not browser" -q
+pytest -m browser -q          # needs: playwright install chromium firefox
 python -m build
 twine check dist/*.tar.gz dist/*.whl
 ```
 
+Commit the refreshed `uv.lock` alongside `pyproject.toml` and `CHANGELOG.md`.
+
 ### 4. Commit and tag
 
 ```sh
-git add pyproject.toml CHANGELOG.md
+git add pyproject.toml uv.lock CHANGELOG.md
 git commit -m "release: v0.2.0"
 git tag v0.2.0
 git push origin main
@@ -85,14 +94,22 @@ git push origin v0.2.0
 
 Pushing the tag triggers `.github/workflows/release.yml`:
 
-1. **build** — builds sdist + wheel, runs twine check, builds the Firefox +
+1. **verify** — the gate, and the job that was missing from this list. Checks
+   the tag against `pyproject.toml`'s version and against a matching
+   `CHANGELOG.md` section, installs with `uv sync --locked` (which fails on a
+   lockfile out of step with the manifest), then runs the test suite, the
+   browser suite, and `ruff`. Everything below only runs if this passes.
+2. **build** — builds sdist + wheel, runs twine check, builds the Firefox +
    Chrome extension zips (`tools/build_extension.py`), uploads all of it as a
    workflow artifact.
-2. **github-release** — creates a GitHub Release with the changelog section as
+3. **github-release** — creates a GitHub Release with the changelog section as
    the release notes, attaches the sdist, wheel, and both extension zips
    (`paperazzi-capture-firefox.zip`, `paperazzi-capture-chrome.zip`) — so
-   installing the extension no longer requires a repo checkout.
-3. **pypi** — dormant. Only runs when the repo variable `PYPI_ENABLED` is set
+   installing the extension no longer requires a repo checkout. A version with a
+   PEP 440 pre-release segment (`0.1.0b5`) is published with `--prerelease`, so
+   it is not presented as "Latest"; the README therefore links to the releases
+   *list*, since `/releases/latest` skips pre-releases.
+4. **pypi** — dormant. Only runs when the repo variable `PYPI_ENABLED` is set
    to `true` (see below).
 
 ### 6. Verify the release

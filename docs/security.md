@@ -83,14 +83,20 @@ completes. Only the cross-origin PDF fetch is skipped.
 |---|---|---|---|
 | Page URL | local pzi server | Metadata lookup | Loopback (no network) |
 | Page HTML `<head>` | local pzi server | Fallback metadata extraction | Loopback |
-| Page cookies (active domain) | local pzi server, then translation-server (local) | Authenticated metadata resolution | Loopback |
+| Page cookies (active domain) | local pzi server, then translation-server (local), **then the publisher that set them** | Authenticated metadata resolution | Loopback, then that publisher |
 | PDF candidates (URL list) | local pzi server | PDF discovery | Loopback |
 | PDF bytes (captured) | local pzi server | Save to `papers/` directory | Loopback |
 
-**Nothing leaves the local machine.** paperazzi never sends PDFs, HTML, or cookies
-to external services. External metadata APIs (Crossref, OpenAlex, Semantic
-Scholar, Unpaywall, DOAJ, Europe PMC) receive only DOIs, titles, or author
-names — never PDFs, cookies, or HTML.
+**PDFs and page HTML never leave the local machine**, and the external
+metadata APIs (Crossref, OpenAlex, Semantic Scholar, Unpaywall, DOAJ, Europe
+PMC) receive only DOIs, titles, or author names — never PDFs, cookies, or HTML.
+
+**Cookies are the exception, and they are the point.** The cookie header for the
+active tab's domain is forwarded to the local translation-server, which
+**replays it to that same publisher** when it fetches the page for metadata.
+That is what the cookie bridge is for: without it an authenticated or paywalled
+page resolves as a login wall. The cookies go to the site that issued them and
+to nowhere else — not to any other publisher, and not to any metadata API.
 
 ## API security (pzi server)
 
@@ -170,10 +176,17 @@ Treat the API token as the boundary for it.
 
 - Cookies are read **only** for the active tab's domain.
 - The cookie header is sent in the `/capture` JSON body to the local pzi
-  server over loopback. pzi forwards it only to the local translation-server
-  for metadata resolution.
+  server over loopback. pzi forwards it to the local translation-server, which
+  **sends it onward to the publisher whose domain it came from** — that outbound
+  replay is what lets an authenticated page resolve at all. pzi installs this
+  bridge itself, by patching translation-server's `webSession.js` /
+  `webEndpoint.js` on install (`ts_backend._apply_cookie_patch`).
+- Cookies go only to the domain that issued them. They are **never** sent to
+  another publisher, and **never** to a metadata API (Crossref, OpenAlex,
+  Semantic Scholar, Unpaywall, DOAJ, Europe PMC).
 - Debug/status payloads redact cookie values before display or logging.
-- Cookies are **never** sent to external metadata APIs.
+- Bulk capture from a search-results page sends **no** cookies: those results are
+  other people's domains, and the user is not on them.
 
 ### Content security
 
@@ -209,9 +222,13 @@ Treat the API token as the boundary for it.
   Crossref, OpenAlex, DBLP and OpenReview also received it.)
 - FlareSolverr (optional, opt-in) routes publisher page requests through a
   third-party service. paperazzi warns when it is configured.
-- Translation-server (Zotero) may make outbound HTTP requests to publisher
-  sites for metadata resolution. These requests carry your machine's IP
-  address, not your browser cookies.
+- Translation-server (Zotero) makes outbound HTTP requests to publisher sites
+  for metadata resolution. These carry your machine's IP address **and, for the
+  domain you captured from, the cookies your browser holds for it** — pzi
+  patches translation-server on install to forward them, so an authenticated
+  page resolves as your session sees it rather than as a login wall. A
+  publisher therefore sees a request attributable to your account. No other
+  domain receives them.
 - The `browser_pdf_cmd` (Playwright headless hook) opens a headless browser
   that carries your browser profile. It is a local process but may make
   outbound requests to publisher sites. Your institutional access applies if

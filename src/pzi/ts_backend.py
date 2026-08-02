@@ -266,7 +266,7 @@ def _clone_repo(
     specific hash (``--branch`` does not accept commit hashes).
     """
     if dest.exists() and (dest / ".git").exists():
-        return  # already cloned — user must ``pzi services update`` to refresh
+        return  # already cloned — user must run ``pzi doctor --reinstall-server`` to refresh
     dest.parent.mkdir(parents=True, exist_ok=True)
 
     _ref_is_hash = bool(re.fullmatch(r"[0-9a-f]{40}", ref))
@@ -324,7 +324,7 @@ def ensure_translation_server(
 
     if not shutil.which("git"):
         print(
-            "git is not installed.  Install git and retry `pzi services up`.",
+            "git is not installed.  Install git and retry `pzi server`.",
             file=stderr,
         )
         return None
@@ -665,7 +665,7 @@ def wait_for_ts(
         time.sleep(2)
     print(
         f"translation-server did not become ready within {timeout:.0f}s — "
-        "check `pzi services status`, or run `pzi server` to start it",
+        "check `pzi doctor`, or run `pzi server` to start it",
         file=stderr,
     )
     return False

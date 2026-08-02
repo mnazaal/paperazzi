@@ -55,20 +55,39 @@ Quick summary:
 
 - **`activeTab`, `scripting`** — extract page metadata and fetch PDFs with your
   browser session. Only for the tab you click the extension on.
-- **`cookies`** — forward the active tab's cookies to the local
-  translation-server for authenticated metadata resolution. Cookies never leave
-  your machine.
+- **`cookies`** — forward the active tab's cookies to the local pzi server,
+  which passes them to the local translation-server. That server **replays them
+  to the publisher whose domain issued them** when it fetches the page: without
+  that, an authenticated or paywalled page resolves as a login wall. They go to
+  that domain and nowhere else — never to another site, never to a metadata API.
+  Capturing a whole page of search results sends no cookies at all, since those
+  results are other people's domains.
 - **`webRequest`** — observe PDF responses from publisher sites so the extension
   can discover PDF URLs that appear via JavaScript redirects.
 - **`contextMenus`** — add "Save to paperazzi" to the right-click menu on links.
 - **`storage`** — save your API token, bib preference, and recent captures.
-- **Publisher host permissions** — needed so the extension can inject content
-  scripts on major publisher sites for authenticated PDF fetch.
-- **Optional `https://*/*`** — requested only when a cross-origin PDF candidate
-  is found. Used for that one fetch, then removed. Denying it still captures
+- **Publisher host permissions** — granted at *install* time, not on demand, so
+  the browser lists them up front. Eleven publisher origins (IEEE Xplore, ACM
+  DL, ScienceDirect and its CDN, Wiley, Taylor & Francis, SAGE, Oxford
+  Academic, Nature, NCBI and PMC), plus `http://127.0.0.1/*` and
+  `http://localhost/*` for the local pzi server. They let the extension inject
+  its content script and fetch PDFs with your session on those sites.
+- **Optional host permission** — requested at capture time when a PDF candidate
+  lives on an origin not in that list. Used for that one fetch and released
+  afterwards, on every path including failure. Denying it still captures the
   metadata.
 
-No PDF data, HTML, or cookies ever leave your machine through paperazzi.
+**What leaves your machine.** PDF bytes and page HTML do not: they go to the
+local pzi server over loopback and stop there. Two things do leave, both to the
+site you are capturing from and to nowhere else:
+
+- the **cookies** for that domain, replayed by the local translation-server as
+  described above;
+- the page's **`<head>` HTML**, uploaded to the local server as `head_html` for
+  fallback metadata extraction — local only, but worth knowing it is collected.
+
+External metadata APIs (Crossref, OpenAlex, Semantic Scholar, Unpaywall, DOAJ,
+Europe PMC) receive only DOIs, titles and author names.
 
 ## Configuration
 

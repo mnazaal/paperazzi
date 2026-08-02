@@ -23,3 +23,6 @@ dist/
 PLAN.md
 LOG.md
 notes/
+
+# Agent shell history/state (kept out of the repo; also in the global ignore).
+.agent-shell/

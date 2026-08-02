@@ -100,9 +100,12 @@ Use this for authenticated publisher pages, browser-only PDF links, or one-click
 
 Get the unpacked extension one of two ways:
 
-- **From a release** (no repo checkout needed): download `paperazzi-capture-firefox.zip`
-  or `paperazzi-capture-chrome.zip` from the [latest
-  release](https://github.com/mnazaal/paperazzi/releases/latest) and unzip it.
+- **From a release** (no repo checkout needed): download
+  `paperazzi-capture-firefox.zip` or `paperazzi-capture-chrome.zip` from the
+  newest entry on the [releases
+  page](https://github.com/mnazaal/paperazzi/releases) and unzip it. (Not
+  `/releases/latest`: every `0.1.0bN` is published as a pre-release, which that
+  URL deliberately skips.)
 - **From a repo checkout** (tracks `main`): `python tools/build_extension.py`,
   which writes `dist/firefox/` and `dist/chrome/`.
 
@@ -139,6 +142,9 @@ Use `pzi server` for the browser extension and `pzi add` for CLI capture; both s
 
 To keep the browser-capture server running without a dedicated terminal, run it as a **user** service. A ready-made unit ships in [`packaging/systemd/pzi.service`](packaging/systemd/pzi.service):
 
+The server refuses to start without an API token, so run `pzi init` first
+(or add `--no-auth` to `ExecStart` to serve unauthenticated deliberately).
+
 ```sh
 mkdir -p ~/.config/systemd/user
 cp packaging/systemd/pzi.service ~/.config/systemd/user/
@@ -155,7 +161,7 @@ The translation-server runs as a child of `pzi server`, so this one unit covers 
 
 ### Config
 
-`pzi init --setup --bib ~/bibs/main.bib` writes `~/.config/pzi/config.toml`. Common options: `contact_email`, `unpaywall_email`, `browser_pdf_cmd`, `citekey_format`, `pdf_filename_format`, `papers_dir`, `browser_engine` (headless Playwright browser for automated capture, set via `pzi init --browser`; not the same setting as `PZI_BROWSER` below), and multiple `[[bibs]]`. See `src/pzi/config.template.toml` for all options and comments. `papers_dir` defaults to `<bib-dir>/papers/`; use `_cmd` variants for secrets.
+`pzi init --setup --bib ~/bibs/main.bib` writes `~/.config/pzi/config.toml` and an API token to `<data-home>/api_token` (mode 0600). Re-running `init` reuses the existing token so a paired browser extension keeps working; `--rotate-token` replaces it, which un-pairs the extension until you paste the new one in. `pzi add --force-new` inserts a second entry for a paper pzi considers a duplicate. Common options: `contact_email`, `unpaywall_email`, `browser_pdf_cmd`, `citekey_format`, `pdf_filename_format`, `papers_dir`, `browser_engine` (headless Playwright browser for automated capture, set via `pzi init --browser`; not the same setting as `PZI_BROWSER` below), and multiple `[[bibs]]`. See `src/pzi/config.template.toml` for all options and comments. `papers_dir` defaults to `<bib-dir>/papers/`; use `_cmd` variants for secrets.
 
 ### CLI reference
 
@@ -203,8 +209,8 @@ is safe. `pzi entries` writes five tab-separated columns
 moves entries between libraries.
 
 ```sh
-pzi init [--force] [--setup --bib PATH] [--papers-dir PATH] [--name NAME] [--browser chromium|firefox]
-pzi add <doi|url|pdf> [--tags t1,t2] [--dry-run] [--citekey KEY] [--verbose] [--strict-metadata]
+pzi init [--force] [--rotate-token] [--setup --bib PATH] [--papers-dir PATH] [--name NAME] [--browser chromium|firefox]
+pzi add <doi|url|pdf> [--tags t1,t2] [--dry-run] [--citekey KEY] [--force-new] [--verbose] [--strict-metadata]
 pzi add --from-file <file|-> [--tags t1,t2] [--delay S] [--failures-out PATH]  # bulk
 pzi inbox <file> [--dry-run] [--tags t1,t2] [--delay S]   # drain a file of DOIs/URLs
 pzi pdf retry [<citekey>] [--failed-only]     # --failed-only retries every PDF-less entry; not combinable with a citekey
@@ -226,7 +232,7 @@ pzi fix reindex [--rename-citekeys [--dry-run] [--force]]  # audit citekeys; ren
 pzi export [--format bibtex|csv|json|ris] [-o <output>] [--force]
 pzi import <source.bib> [--dry-run] [--force-new]
 pzi doctor [--config-only] [--reinstall-server]  # health check; --reinstall-server reinstalls the translation-server
-pzi server [--host H --port P] [--stop-after N]
+pzi server [--host H --port P] [--stop-after N] [--no-auth]
 ```
 
 `pzi add` also accepts `--metadata-json PATH|-`, `--cookie-file PATH|-`, `--pdf-candidate URL` (repeatable), and `--page-html PATH|-` — these exist mainly for the browser extension's own capture flow, not typical CLI use. See `pzi add --help` for the full set.

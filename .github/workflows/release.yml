@@ -8,6 +8,13 @@ on:
 permissions:
   contents: write
 
+# One release run per tag. A re-pushed tag or a manual re-run would otherwise
+# race the previous run through `gh release create`, and both would try to
+# upload the same asset names.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   verify:
     # A `v*` tag used to publish whatever it pointed at: no tests, and no check
@@ -134,10 +141,29 @@ jobs:
           m = re.search(pattern, text, re.DOTALL)
           print(m.group(0) if m else 'See CHANGELOG.md')
           " "$version")
-          gh release create "$tag" \
-            --title "$tag" \
-            --notes "$body" \
-            dist/*.tar.gz dist/*.whl dist/*.zip
+          # A version carrying a PEP 440 pre-release segment is not "Latest".
+          # Marking a beta as the latest release tells every visitor — and any
+          # tool reading /releases/latest — that it is the recommended one.
+          # Paired with the README pointing at the releases *list* rather than
+          # /releases/latest, which returns nothing once every release is a
+          # pre-release.
+          prerelease=""
+          if printf '%s' "$version" | grep -Eq '(a|b|rc)[0-9]+$'; then
+            prerelease="--prerelease"
+          fi
+          # Idempotent: a re-run must not fail because the release exists, and
+          # must not silently skip the assets either.
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release edit "$tag" --title "$tag" --notes "$body" $prerelease
+            gh release upload "$tag" \
+              dist/*.tar.gz dist/*.whl dist/*.zip --clobber
+          else
+            gh release create "$tag" \
+              --title "$tag" \
+              --notes "$body" \
+              $prerelease \
+              dist/*.tar.gz dist/*.whl dist/*.zip
+          fi
     permissions:
       contents: write
 
@@ -165,5 +191,14 @@ jobs:
           name: dist
           path: dist/
 
+      - name: Collect distributions
+        # `dist/` also holds the extension zips, which PyPI must never see —
+        # the default `packages-dir` would hand it every file in the directory.
+        run: |
+          mkdir -p dist-pypi
+          cp dist/*.tar.gz dist/*.whl dist-pypi/
+
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist-pypi
