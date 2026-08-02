@@ -290,3 +290,96 @@ def test_embedded_pdf_url_is_validated_like_every_other_url() -> None:
     )
 
     assert error == "embedded_pdf_url must be a public http(s) URL"
+
+
+# ---------------------------------------------------------------------------
+# Request framing
+# ---------------------------------------------------------------------------
+
+
+def test_a_chunked_body_is_refused_rather_than_read_as_empty() -> None:
+    """No Content-Length meant zero bytes read, so a real body was processed as
+    `{}` and answered 200."""
+    from pzi.http_security import validated_content_length
+
+    result = validated_content_length(
+        None, max_body_bytes=1024, transfer_encoding="chunked"
+    )
+
+    assert result == (411, "chunked request bodies are not supported; send Content-Length")
+
+
+def test_a_normal_content_length_still_works() -> None:
+    from pzi.http_security import validated_content_length
+
+    assert validated_content_length("12", max_body_bytes=1024) == 12
+
+
+# ---------------------------------------------------------------------------
+# Browser requests are held to the same URL policy as everything else
+# ---------------------------------------------------------------------------
+
+
+def test_the_browser_request_guard_aborts_a_private_destination(monkeypatch) -> None:
+    """`safe_http` protects what pzi fetches itself; a Playwright page fetches
+    through the browser's own stack, following redirects and resolving DNS."""
+    from pzi import browser_session
+
+    routes: dict[str, object] = {}
+
+    class _Page:
+        def route(self, pattern, handler):
+            routes["handler"] = handler
+
+    class _Route:
+        def __init__(self):
+            self.action = None
+
+        def continue_(self):
+            self.action = "continue"
+
+        def abort(self):
+            self.action = "abort"
+
+    browser_session.install_request_guard(_Page())
+    handler = routes["handler"]
+
+    public, private = _Route(), _Route()
+    handler(public, type("R", (), {"url": "https://example.com/paper.pdf"})())
+    handler(private, type("R", (), {"url": "http://127.0.0.1:8765/capture"})())
+
+    assert public.action == "continue"
+    assert private.action == "abort"
+
+
+def test_fetch_direct_refuses_a_redirect_to_a_private_address() -> None:
+    from pzi.browser_session import BrowserSession
+
+    read_attempts: list[str] = []
+
+    class _Response:
+        status = 200
+        url = "http://127.0.0.1:8765/secret"
+        headers = {"content-type": "application/pdf"}
+
+        def body(self):
+            # Recorded rather than raised: `fetch_direct` swallows exceptions
+            # into a status -1 result, so raising here would look like the fix
+            # working when it is not.
+            read_attempts.append(self.url)
+            return b"%PDF-1.4 private"
+
+    class _Request:
+        def get(self, _url):
+            return _Response()
+
+    class _Page:
+        request = _Request()
+        url = "https://example.com/"
+
+    session = BrowserSession(playwright=None, browser_ref=None, page=_Page())
+    result = session.fetch_direct("https://example.com/paper.pdf")
+
+    assert result.status == -1
+    assert result.body == b""
+    assert read_attempts == []

@@ -164,6 +164,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   were stored in `chrome.storage.session`, which is cleared when the browser
   closes.
 
+- **Malformed request framing is answered, not crashed through.** A chunked
+  body was silently read as empty and processed as `{}` with a 200; an oversize
+  body got a 413 while the client was still writing (surfacing as a broken pipe
+  rather than the status just sent); and a deeply nested JSON body became a 500
+  instead of a 400.
+- **Playwright-backed routes are now held to the same URL policy as everything
+  else.** `safe_http` protects what pzi fetches itself, but a browser page
+  follows redirects and resolves DNS through the browser's own stack, so
+  validating only the URL handed in left `/browser/discover` and
+  `/browser/download` able to reach private and loopback addresses. Every
+  browser request is now routed through the public-URL predicate, the landing
+  URL is re-checked after navigation, and a direct fetch that redirects
+  somewhere non-public returns nothing. *(Verified by unit tests against
+  injected Playwright doubles; the real-browser suite needs Playwright binaries,
+  which are not installed here.)*
+
 ### Known limitations
 
 - A bibliography with more than one hard link keeps only the written name

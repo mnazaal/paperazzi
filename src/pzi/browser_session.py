@@ -13,6 +13,7 @@ Usage:
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import tempfile
@@ -93,9 +94,27 @@ class BrowserSession:
         wait_until: str = "domcontentloaded",
         timeout: int = 30000,
     ) -> Any:
-        """Navigate to URL, returning the Playwright response object."""
+        """Navigate to URL, returning the Playwright response object.
+
+        The *landing* URL is checked as well as the one asked for: the guard
+        installed by :func:`install_request_guard` refuses each hop, and this
+        catches anything that still arrives somewhere non-public (a
+        ``file:``/``about:`` redirect, or a guard that failed to install).
+        """
         self._check_open()
-        return self.page.goto(url, wait_until=wait_until, timeout=timeout)
+        response = self.page.goto(url, wait_until=wait_until, timeout=timeout)
+        self._reject_non_public_landing()
+        return response
+
+    def _reject_non_public_landing(self) -> None:
+        from pzi.safe_http import SsrfBlocked
+        from pzi.url_safety import safe_public_http_url
+
+        landed = ""
+        with contextlib.suppress(Exception):
+            landed = self.page.url or ""
+        if landed and not safe_public_http_url(landed):
+            raise SsrfBlocked(f"browser landed on a non-public URL: {landed}")
 
     def current_url(self) -> str:
         """Return the current page URL."""
@@ -122,8 +141,17 @@ class BrowserSession:
         Does NOT navigate the page — uses the browser's HTTP stack directly.
         """
         self._check_open()
+        from pzi.url_safety import safe_public_http_url
+
+        if not safe_public_http_url(url):
+            return FetchResult(status=-1, content_type=None, body=b"")
         try:
             response = self.page.request.get(url)
+            final_url = getattr(response, "url", url) or url
+            if not safe_public_http_url(final_url):
+                # Redirected somewhere private. `page.request` does not go
+                # through the page's route handler, so this is its guard.
+                return FetchResult(status=-1, content_type=None, body=b"")
             ct = response.headers.get("content-type", "")
             body = response.body() if response.status == 200 else b""
             return FetchResult(
@@ -200,6 +228,36 @@ class FetchResult:
 # ------------------------------------------------------------------
 
 
+def install_request_guard(page: Any) -> None:
+    """Refuse browser requests to non-public destinations.
+
+    ``safe_http`` protects everything pzi fetches itself, but a Playwright page
+    fetches through the *browser's* stack: it follows redirects and resolves DNS
+    on its own, so validating only the URL handed in leaves
+    ``https://public.example/x`` → ``http://127.0.0.1:8765/`` (or a DNS name
+    that resolves to a private address) entirely unguarded. Routing every
+    request through the same public-URL predicate closes redirect and
+    rebinding, because each hop is a request of its own.
+
+    Best effort by construction: if Playwright cannot install the route (an
+    older build, a closed page) the caller still has the entry-point check.
+    """
+    from pzi.url_safety import safe_public_http_url
+
+    def _guard(route: Any, request: Any) -> None:
+        url = getattr(request, "url", "") or ""
+        try:
+            if safe_public_http_url(url):
+                route.continue_()
+                return
+            route.abort()
+        except Exception:  # pragma: no cover — Playwright teardown races
+            with contextlib.suppress(Exception):
+                route.abort()
+
+    with contextlib.suppress(Exception):
+        page.route("**/*", _guard)
+
 def _launch_browser(
     browser: str,
     profile_path: str | None,
@@ -240,6 +298,7 @@ def _launch_browser(
                 user_data_dir=str(profile), **options
             )
         page = ctx.new_page()
+        install_request_guard(page)
         session = BrowserSession(
             playwright=playwright, browser_ref=ctx, page=page
         )
@@ -257,6 +316,7 @@ def _launch_browser(
         browser_instance = playwright.chromium.launch(**options)
         context = browser_instance.new_context()
     page = context.new_page()
+    install_request_guard(page)
     return BrowserSession(
         playwright=playwright,
         browser_ref=(browser_instance, context),

@@ -209,7 +209,21 @@ def request_security_error(
     return None
 
 
-def validated_content_length(value: str | None, *, max_body_bytes: int) -> int | tuple[int, str]:
+def validated_content_length(
+    value: str | None,
+    *,
+    max_body_bytes: int,
+    transfer_encoding: str | None = None,
+) -> int | tuple[int, str]:
+    """Decide how many body bytes to read, or the error to answer with.
+
+    A chunked request carries no ``Content-Length``, and reading zero bytes for
+    one silently turned a real body into an empty one: the request was then
+    processed as ``{}`` and answered 200. pzi's clients always send a length, so
+    the honest answer is 411 rather than a wrong success.
+    """
+    if transfer_encoding and "chunked" in transfer_encoding.lower():
+        return 411, "chunked request bodies are not supported; send Content-Length"
     if value is None or not value.strip():
         return 0
     try:

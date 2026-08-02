@@ -330,10 +330,17 @@ def _handle_post(
     if idle_state is not None:
         idle_state["_last_request"] = time.monotonic()
     length_result = validated_content_length(
-        request.headers.get("Content-Length"), max_body_bytes=security["max_body_bytes"]
+        request.headers.get("Content-Length"),
+        max_body_bytes=security["max_body_bytes"],
+        transfer_encoding=request.headers.get("Transfer-Encoding"),
     )
     if isinstance(length_result, tuple):
-        _respond(request, length_result[0], {"error": length_result[1]}, security)
+        # Close the connection with the rejection. Answering 413 while the
+        # client is still writing a large body left it writing into a socket
+        # nobody would read, which surfaces as a broken pipe rather than as the
+        # status just sent.
+        _respond(request, length_result[0], {"error": length_result[1]}, security,
+                 close_connection=True)
         return
     length = length_result
     raw = request.rfile.read(length) if length > 0 else b""
@@ -364,6 +371,12 @@ def _handle_post(
     except (json.JSONDecodeError, UnicodeDecodeError):
         _respond(request, 400, {"error": "invalid JSON body"}, security)
         return
+    except RecursionError:
+        # A deeply nested body exhausts the parser's stack. That is the client's
+        # input being unacceptable, not the server failing — it used to reach
+        # the catch-all and answer 500.
+        _respond(request, 400, {"error": "JSON body is nested too deeply"}, security)
+        return
 
     status, response_body = process_post_request(
         request.path, body, config_path, home_dir,
@@ -389,12 +402,16 @@ def _send_cors_headers(request: BaseHTTPRequestHandler, security: HttpSecurityCo
 def _respond(
     request: BaseHTTPRequestHandler, status: int, data: Any, security: HttpSecurityConfig,
     rate_remaining: int | None = None, rate_reset: int | None = None,
+    close_connection: bool = False,
 ) -> None:
     body = json.dumps(data, sort_keys=True, default=str).encode("utf-8")
     request._response_started = True  # type: ignore[attr-defined]
     request.send_response(status)
     request.send_header("Content-Type", "application/json")
     request.send_header("Content-Length", str(len(body)))
+    if close_connection:
+        request.send_header("Connection", "close")
+        request.close_connection = True
     request.send_header("X-Content-Type-Options", "nosniff")
     if rate_remaining is not None:
         request.send_header("X-RateLimit-Remaining", str(rate_remaining))
