@@ -8,6 +8,7 @@ token tests set it explicitly.
 
 from __future__ import annotations
 
+import socket
 from pathlib import Path
 from unittest.mock import patch
 
@@ -579,3 +580,54 @@ def test_a_metacharacter_rejection_names_the_key_not_the_command() -> None:
     assert "vault" not in message
     # It still says what is wrong.
     assert "&&" in message
+
+
+# ---------------------------------------------------------------------------
+# DNS rebinding: a public *name* that resolves somewhere private
+# ---------------------------------------------------------------------------
+
+
+def test_a_public_hostname_resolving_to_a_private_address_is_refused() -> None:
+    """The literal-address tests cannot cover this: `evil.example.com` looks
+    entirely public until it is resolved, which is the whole point of a
+    rebinding attack. Every other test in the suite runs against the hermetic
+    resolver, which answers with a *public* IP — so the branch that rejects a
+    private answer had no test standing on it.
+    """
+    from pzi import url_safety
+
+    for private_ip in ("127.0.0.1", "10.0.0.5", "192.168.1.1", "169.254.169.254", "::1"):
+        family = socket.AF_INET6 if ":" in private_ip else socket.AF_INET
+
+        def _resolves_private(host, port, *, timeout, _ip=private_ip, _family=family):
+            return [(_family, socket.SOCK_STREAM, 6, "", (_ip, port))]
+
+        assert not url_safety.safe_public_http_url(
+            "https://evil.example.com/paper.pdf", resolve_host=_resolves_private
+        ), private_ip
+
+
+def test_a_public_hostname_resolving_to_a_public_address_is_allowed() -> None:
+    from pzi import url_safety
+
+    def _resolves_public(host, port, *, timeout):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
+
+    assert url_safety.safe_public_http_url(
+        "https://example.com/paper.pdf", resolve_host=_resolves_public
+    )
+
+
+def test_a_name_resolving_to_both_is_refused() -> None:
+    """One private answer is enough: the browser or the HTTP stack may pick it."""
+    from pzi import url_safety
+
+    def _resolves_both(host, port, *, timeout):
+        return [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port)),
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", port)),
+        ]
+
+    assert not url_safety.safe_public_http_url(
+        "https://evil.example.com/x", resolve_host=_resolves_both
+    )

@@ -78,7 +78,10 @@ def test_add_from_file_exits_partial_on_a_mixed_batch(tmp_path: Path) -> None:
     An all-failed batch also exits 4, which is why it is not sufficient
     evidence: the stub resolves one identifier and refuses the other.
     """
-    items = {_GOOD_DOI: translation_item(title="A Stub Paper", doi=_GOOD_DOI)}
+    # No DOI on the stub record: `doi_pdf_step` would otherwise resolve it
+    # against Crossref, Europe PMC and DOAJ, so this test — whose subject is the
+    # PARTIAL exit code — contacted three public hosts on every run.
+    items = {_GOOD_DOI: translation_item(title="A Stub Paper")}
     with stub_translation_server(items) as server_url:
         config_path = _write_config(
             tmp_path, extra=f'translation_server_url = "{server_url}"\n'

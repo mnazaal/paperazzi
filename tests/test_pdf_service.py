@@ -6,8 +6,6 @@ _attach_pdf_data, _store_pdf_source, and _entry_with_pdf_fields.
 
 from pathlib import Path
 
-import pytest
-
 from pzi import pdf_service
 from pzi.config import BibResolutionFailure
 
@@ -930,11 +928,12 @@ def test_extract_title_from_text_none() -> None:
 
 
 def test_extract_pdf_metadata_real_pdf(tmp_path: Path) -> None:
-    """Test with a real PDF created via pypdf if available."""
-    try:
-        from pypdf import PdfWriter
-    except ImportError:
-        pytest.skip("pypdf not installed")
+    """Test with a real PDF created via pypdf.
+
+    `pypdf` is a hard dependency, so the `try: import / except: skip` this used
+    to carry could only ever hide a broken install.
+    """
+    from pypdf import PdfWriter
 
     writer = PdfWriter()
     writer.add_blank_page(width=612, height=792)

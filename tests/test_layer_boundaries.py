@@ -174,6 +174,11 @@ BROWSER: frozenset[str] = frozenset(
 # ---------------------------------------------------------------------------
 
 
+def _package_of(path: Path) -> tuple[str, ...]:
+    """The dotted package parts containing *path*, relative to the pzi package."""
+    return path.relative_to(_SRC).parent.parts
+
+
 def _imported_pzi_modules(path: Path) -> set[str]:
     """Return candidate pzi-internal module stems imported directly by *path*.
 
@@ -202,14 +207,25 @@ def _imported_pzi_modules(path: Path) -> set[str]:
                     for alias in node.names:
                         names.add(alias.name)
             elif node.level > 0:
-                # Relative import inside the pzi package.
+                # A relative import inside the pzi package. Resolved against the
+                # *importing module's* package, which is what makes it comparable
+                # with the dotted names the rest of the graph uses: from
+                # `pzi/commands/add.py`, `from .common import x` is
+                # `commands.common`, not `common`. Taking the bare stem produced a
+                # name matching no module, so `_build_import_graph` dropped the edge
+                # and a back-edge written this way was invisible to this guard.
+                package = list(_package_of(path))
+                # `level` 1 means "this package", 2 the parent, and so on.
+                for _ in range(node.level - 1):
+                    if package:
+                        package.pop()
+                prefix = ".".join(package)
                 if node.module:
-                    # ``from .foo import bar`` — the module stem is foo.
-                    names.add(node.module)
+                    names.add(f"{prefix}.{node.module}" if prefix else node.module)
                 else:
-                    # ``from . import bar, baz`` — the names *are* the stems.
                     for alias in node.names:
-                        names.add(alias.name)
+                        names.add(f"{prefix}.{alias.name}" if prefix else alias.name)
+
     return names
 
 
@@ -409,3 +425,25 @@ def test_graph_drops_reexported_non_modules() -> None:
     graph = _build_import_graph()
     assert "cli_version_text" not in graph["ts_backend"]
     assert "cli_version_text" not in graph
+
+
+def test_a_relative_import_resolves_to_the_module_it_names(tmp_path: Path) -> None:
+    """`from .common import x` inside `pzi/commands/` means `commands.common`.
+
+    It resolved to the bare stem `common`, which matches no module, so
+    `_build_import_graph` dropped the edge — a back-edge written with a relative
+    import was invisible to every check in this file.
+    """
+    module = _SRC / "commands" / "_probe_relative.py"
+    module.write_text(
+        "from .common import resolve_target\n"
+        "from . import add\n"
+        "from ..cli_render import render_cell\n",
+        encoding="utf-8",
+    )
+    try:
+        assert _imported_pzi_modules(module) == {
+            "commands.common", "commands.add", "cli_render",
+        }
+    finally:
+        module.unlink()

@@ -70,7 +70,7 @@ def _handler_class(resolvable: Mapping[str, dict]) -> type[BaseHTTPRequestHandle
 def translation_item(
     *,
     title: str,
-    doi: str,
+    doi: str | None = None,
     first_name: str = "Jane",
     last_name: str = "Smith",
     year: str = "2024",
@@ -84,7 +84,10 @@ def translation_item(
             {"creatorType": "author", "firstName": first_name, "lastName": last_name}
         ],
         "date": year,
-        "DOI": doi,
+        # Omitted when None. A DOI sends `doi_pdf_step` to Crossref, Europe PMC
+        # and DOAJ — three real hosts — from a test whose subject is the exit
+        # code, so the tests that do not need one pass None and stay offline.
+        **({"DOI": doi} if doi else {}),
         "publicationTitle": venue,
     }
 

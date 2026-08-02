@@ -293,10 +293,11 @@ console.log(JSON.stringify([fromError, fromErrors, fallback]));
         text=True,
         cwd=str(Path(__file__).resolve().parent.parent),
     )
-    if node.returncode != 0:
-        import pytest
-
-        pytest.skip(f"node unavailable or failed: {node.stderr.strip()[:200]}")
+    # Asserted, not skipped. Node is required to run the extension tests at all
+    # (`test_browser_extension_js` skips only when it is absent from PATH), so a
+    # *failing* node here means the module under test is broken — and reporting
+    # that as a skip is how it would stay broken.
+    assert node.returncode == 0, f"node failed: {node.stderr.strip()[:500]}"
 
     import json
 

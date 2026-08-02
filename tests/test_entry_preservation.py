@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from pzi.dedupe_service import merge_duplicates
 from pzi.export_service import export_bibtex
 from pzi.import_service import import_from_bibtex
@@ -279,10 +281,11 @@ def test_export_to_an_existing_file_is_all_or_nothing(
         raise OSError(28, "No space left on device")
 
     monkeypatch.setattr(export_command.os, "replace", _boom)
-    try:
+    # `try/except OSError: pass` also passes when the call raises nothing at
+    # all, or raises a *different* OSError than the one injected.
+    with pytest.raises(OSError) as excinfo:
         export_command._write_atomic(destination, "new content")
-    except OSError:
-        pass
+    assert excinfo.value.errno == 28
 
     assert destination.read_text(encoding="utf-8") == "PREVIOUS GOOD BACKUP\n"
     assert list(tmp_path.glob(".out.bib-*.tmp")) == []

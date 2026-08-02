@@ -504,3 +504,111 @@ def test_add_from_file_verbose_prints_the_diagnostics_it_promises(tmp_path: Path
 
     assert code == exit_codes.OK
     assert "selected result 1/2" in stdout
+
+
+# ---------------------------------------------------------------------------
+# The two commands that destroy a block, driven through their runners
+# ---------------------------------------------------------------------------
+
+_TWO_ENTRIES = (
+    "@article{keep2019,\n  title = {Kept},\n  year = {2019},\n}\n\n"
+    "@article{drop2020,\n  title = {Dropped},\n  year = {2020},\n}\n"
+)
+
+
+def test_delete_removes_the_entry_and_leaves_a_backup(tmp_path: Path) -> None:
+    """`pzi delete` had no command-level test at all — the most destructive
+    command in the CLI was covered only at the service layer, so the runner's
+    own confirmation, backup reporting and exit code were unpinned."""
+    config_path, bib = _library(tmp_path, _TWO_ENTRIES)
+
+    code, stdout, stderr = _run(
+        ["delete", "drop2020", "--force", "--config", str(config_path)], tmp_path
+    )
+
+    assert code == exit_codes.OK
+    written = bib.read_text(encoding="utf-8")
+    assert "drop2020" not in written
+    assert "keep2019" in written
+    assert "backup saved to" in stderr
+    assert "Dropped" in stdout or "deleted" in stdout
+    backups = list(tmp_path.glob("*.bak"))
+    assert len(backups) == 1
+    assert backups[0].read_text(encoding="utf-8") == _TWO_ENTRIES
+
+
+def test_delete_without_force_refuses_when_stdin_is_not_a_terminal(tmp_path: Path) -> None:
+    config_path, bib = _library(tmp_path, _TWO_ENTRIES)
+
+    code, _stdout, stderr = _run(
+        ["delete", "drop2020", "--config", str(config_path)], tmp_path
+    )
+
+    assert code == exit_codes.USAGE
+    assert "--force" in stderr
+    assert bib.read_text(encoding="utf-8") == _TWO_ENTRIES
+
+
+def test_delete_of_a_missing_citekey_is_not_found(tmp_path: Path) -> None:
+    config_path, bib = _library(tmp_path, _TWO_ENTRIES)
+
+    code, _stdout, _stderr = _run(
+        ["delete", "nosuch2024", "--force", "--config", str(config_path)], tmp_path
+    )
+
+    assert code == exit_codes.NOT_FOUND
+    assert bib.read_text(encoding="utf-8") == _TWO_ENTRIES
+
+
+def test_fix_merge_folds_one_entry_into_the_other(tmp_path: Path) -> None:
+    """`pzi fix merge` had no command-level test either, and it destroys a block."""
+    config_path, bib = _library(
+        tmp_path,
+        "@article{a2020,\n  title = {Same Paper},\n  year = {2020},\n"
+        "  doi = {10.1000/same},\n  pages = {1--10},\n}\n\n"
+        "@article{b2020,\n  title = {Same Paper},\n  year = {2020},\n"
+        "  doi = {10.1000/same},\n}\n",
+    )
+
+    code, stdout, _stderr = _run(
+        ["fix", "merge", "a2020", "b2020", "--config", str(config_path)], tmp_path
+    )
+
+    assert code == exit_codes.OK
+    written = bib.read_text(encoding="utf-8")
+    assert "@article{a2020" not in written
+    assert "@article{b2020" in written
+    # The survivor takes over what only the dropped entry carried.
+    assert "pages = {1--10}" in written
+    assert "merged" in stdout
+    assert list(tmp_path.glob("*.bak"))
+
+
+def test_fix_merge_dry_run_writes_nothing(tmp_path: Path) -> None:
+    before = (
+        "@article{a2020,\n  title = {Same},\n  doi = {10.1000/same},\n}\n\n"
+        "@article{b2020,\n  title = {Same},\n  doi = {10.1000/same},\n}\n"
+    )
+    config_path, bib = _library(tmp_path, before)
+
+    code, stdout, _stderr = _run(
+        ["fix", "merge", "a2020", "b2020", "--dry-run", "--config", str(config_path)],
+        tmp_path,
+    )
+
+    assert code == exit_codes.OK
+    assert bib.read_text(encoding="utf-8") == before
+    assert list(tmp_path.glob("*.bak")) == []
+    assert "would merge" in stdout
+
+
+def test_fix_merge_of_a_missing_citekey_is_not_found(tmp_path: Path) -> None:
+    config_path, bib = _library(tmp_path, _TWO_ENTRIES)
+
+    code, _stdout, _stderr = _run(
+        ["fix", "merge", "nosuch2024", "keep2019", "--config", str(config_path)],
+        tmp_path,
+    )
+
+    assert code == exit_codes.NOT_FOUND
+    assert bib.read_text(encoding="utf-8") == _TWO_ENTRIES

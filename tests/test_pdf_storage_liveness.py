@@ -98,7 +98,9 @@ def test_an_unreadable_pdf_yields_no_metadata_rather_than_a_traceback(
 
 
 def test_an_encrypted_pdf_yields_no_metadata(tmp_path: Path) -> None:
-    pypdf = pytest.importorskip("pypdf")
+    # `pypdf` is a hard dependency (see `pyproject.toml`), so an
+    # `importorskip` here would hide a broken install as a skip.
+    import pypdf
 
     writer = pypdf.PdfWriter()
     writer.add_blank_page(width=200, height=200)
@@ -111,3 +113,59 @@ def test_an_encrypted_pdf_yields_no_metadata(tmp_path: Path) -> None:
 
     assert result["doi"] is None
     assert result["title"] is None
+
+
+def _pdf_with_text(lines: list[str]) -> bytes:
+    """A minimal but real PDF whose pages carry extractable text.
+
+    Built by hand because `pypdf`'s writer cannot lay out text, and the point of
+    the test below is the *extraction* path — a PDF with no text exercises none
+    of it.
+    """
+    content = b"BT /F1 12 Tf 72 720 Td 14 TL\n"
+    for line in lines:
+        escaped = line.replace("\\", r"\\").replace("(", r"\(").replace(")", r"\)")
+        content += f"({escaped}) Tj T*\n".encode()
+    content += b"ET\n"
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+        b"/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+        b"<< /Length " + str(len(content)).encode() + b" >>\nstream\n" + content + b"endstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for index, body in enumerate(objects, 1):
+        offsets.append(len(out))
+        out += f"{index} 0 obj\n".encode() + body + b"\nendobj\n"
+    xref = len(out)
+    out += f"xref\n0 {len(objects) + 1}\n".encode() + b"0000000000 65535 f \n"
+    for offset in offsets:
+        out += f"{offset:010d} 00000 n \n".encode()
+    out += (
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
+        f"startxref\n{xref}\n%%EOF"
+    ).encode()
+    return bytes(out)
+
+
+def test_a_pdf_with_a_doi_and_title_actually_yields_them(tmp_path: Path) -> None:
+    """Every other test of this function asserts `doi is None and title is None`.
+
+    That is satisfied by a constant stub, so the whole extraction path — read
+    the pages, pull the text, find the DOI, pick the title line — was pinned by
+    nothing at all.
+    """
+    path = tmp_path / "paper.pdf"
+    path.write_bytes(_pdf_with_text([
+        "Deep Residual Learning for Image Recognition",
+        "Kaiming He, Xiangyu Zhang",
+        "doi:10.1109/CVPR.2016.90",
+    ]))
+
+    result = extract_pdf_metadata(str(path))
+
+    assert result["doi"] == "10.1109/cvpr.2016.90"
+    assert result["title"] == "Deep Residual Learning for Image Recognition"

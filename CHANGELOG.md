@@ -50,6 +50,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Two browser tests could not fail.** `assert url is None or url.endswith(...)`
   and `if body is not None: assert ...` are both satisfied by the feature not
   working at all, and duly passed throughout.
+- **Gaps closed in the test suite itself.** `extract_pdf_metadata` had no
+  positive test — every case asserted `doi is None and title is None`, which a
+  constant stub satisfies. `pzi delete` and `pzi fix merge`, the two commands
+  that destroy a block, had no command-level test at all. The layer-boundary
+  guard resolved a relative import to a bare stem matching no module, so a
+  back-edge written `from .common import x` was invisible to it. `$HOME` is
+  pinned per test, so a test that forgets `home_dir` can no longer write into the
+  developer's real config and data directories. A node failure in the extension
+  bridge test is asserted rather than skipped, `pypdf`'s `importorskip` guards
+  are gone (it is a hard dependency, so they could only mask a broken install),
+  a swallowed `except OSError: pass` became `pytest.raises`, DNS rebinding got
+  the test it never had, and the `add --from-file` tests no longer contact
+  Crossref, Europe PMC and DOAJ on every run.
 - **CI and the release use `uv sync --locked`, not `--frozen`.** Only `--locked`
   verifies the lockfile is up to date with `pyproject.toml`; `--frozen` skips
   resolution and installs the lock as-is, so a lockfile out of step with the

@@ -146,6 +146,21 @@ def _clear_xdg_env(request, monkeypatch):
     monkeypatch.delenv("XDG_DATA_HOME", raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _pin_home(request, tmp_path_factory, monkeypatch):
+    """Point ``$HOME`` at a throwaway directory for the unit suite.
+
+    Clearing the XDG vars above sends default path resolution to ``$HOME``, so
+    a test that forgets to pass ``home_dir`` writes into the developer's *real*
+    home — `~/.config/pzi/config.toml`, `~/.local/share/pzi/api_token`. That is
+    the same class of leak the XDG fixture exists to stop, one variable over,
+    and nothing was catching it.
+    """
+    if _is_live_test(request):
+        return
+    monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home")))
+
+
 def _free_port() -> int:
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
