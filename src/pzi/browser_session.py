@@ -280,24 +280,35 @@ def _launch_browser(
     temp_profile: Path | None = None
     if profile_path:
         profile = Path(profile_path).expanduser()
-        if browser in ("chrome", "chromium"):
-            # Chrome refuses remote debugging on its default user-data dir.
-            # Clone to a temp location to satisfy the "non-default" requirement.
-            temp_profile = _clone_chrome_profile(profile)
-            profile = temp_profile
-        if browser == "firefox":
-            ctx = playwright.firefox.launch_persistent_context(
-                user_data_dir=str(profile), **options
-            )
-        elif browser == "chrome":
-            ctx = playwright.chromium.launch_persistent_context(
-                user_data_dir=str(profile), channel="chrome", **options
-            )
-        else:
-            ctx = playwright.chromium.launch_persistent_context(
-                user_data_dir=str(profile), **options
-            )
-        page = ctx.new_page()
+        # Everything past the clone is wrapped: the clone is a full copy of the
+        # user's Chrome profile, cookie database included, and a failed launch
+        # used to abandon it in $TMPDIR where nothing ever removed it — along
+        # with the Playwright driver process it had already started.
+        try:
+            if browser in ("chrome", "chromium"):
+                # Chrome refuses remote debugging on its default user-data dir.
+                # Clone to a temp location to satisfy the "non-default" requirement.
+                temp_profile = _clone_chrome_profile(profile)
+                profile = temp_profile
+            if browser == "firefox":
+                ctx = playwright.firefox.launch_persistent_context(
+                    user_data_dir=str(profile), **options
+                )
+            elif browser == "chrome":
+                ctx = playwright.chromium.launch_persistent_context(
+                    user_data_dir=str(profile), channel="chrome", **options
+                )
+            else:
+                ctx = playwright.chromium.launch_persistent_context(
+                    user_data_dir=str(profile), **options
+                )
+            page = ctx.new_page()
+        except BaseException:
+            if temp_profile is not None:
+                shutil.rmtree(temp_profile, ignore_errors=True)
+            with contextlib.suppress(Exception):
+                playwright.stop()
+            raise
         install_request_guard(page)
         session = BrowserSession(
             playwright=playwright, browser_ref=ctx, page=page

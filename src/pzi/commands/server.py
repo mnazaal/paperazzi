@@ -28,7 +28,13 @@ def run_server_command(args, *, home_dir, config_path, stdout, stderr) -> int:
         except (RuntimeError, ValueError) as exc:
             print(f"failed to resolve api_auth_token_cmd: {exc}", file=stderr)
             return exit_codes.ENVIRONMENT
-    plan = build_server_plan(host=host, port=port, config=config, auth_token=auth_token)
+    plan = build_server_plan(
+        host=host,
+        port=port,
+        config=config,
+        auth_token=auth_token,
+        allow_no_auth=getattr(args, "no_auth", False),
+    )
     if plan["status"] == "error":
         print(plan["message"], file=stderr)
         for error in cfg["errors"]:

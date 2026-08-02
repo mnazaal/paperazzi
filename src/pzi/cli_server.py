@@ -43,6 +43,7 @@ def build_server_plan(
     port: int | None,
     config: dict[str, Any] | None,
     auth_token: str | None = None,
+    allow_no_auth: bool = False,
 ) -> ServerPlan:
     """Resolve server host/port/security without I/O.
 
@@ -90,6 +91,26 @@ def build_server_plan(
             "message": (
                 "refusing to serve unauthenticated API on a non-loopback host; "
                 "set api_auth_token or bind to 127.0.0.1/localhost"
+            ),
+        }
+    if not auth_token and not allow_no_auth:
+        # Even on loopback: without a token every route — search, export, the
+        # PDFs, `capture`, `update` and `delete` — is available to any process
+        # on the machine. This used to start anyway behind a printed warning,
+        # and a warning the server then ignores is not a guard.
+        #
+        # The opt-out is a CLI flag rather than a config key on purpose: nothing
+        # reachable from `config.toml` or from the HTTP API itself can turn
+        # authentication off. Minting a token here instead was the alternative,
+        # and was rejected because a silently rotated token gives an already
+        # paired extension nothing but 401s and no explanation.
+        return {
+            "status": "error",
+            "message": (
+                "refusing to serve an unauthenticated API: any process on this "
+                "machine could read, capture and delete entries. Run `pzi init` "
+                "to write a token (your extension reads the same one), or pass "
+                "--no-auth to serve without authentication deliberately."
             ),
         }
 

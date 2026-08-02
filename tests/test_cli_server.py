@@ -10,8 +10,10 @@ _CONFIG = {
 }
 
 
-def test_loopback_bind_without_a_token_is_allowed_but_reports_auth_off() -> None:
-    plan = build_server_plan(host=None, port=None, config=dict(_CONFIG), auth_token=None)
+def test_loopback_bind_without_a_token_reports_auth_off_once_opted_in() -> None:
+    plan = build_server_plan(
+        host=None, port=None, config=dict(_CONFIG), auth_token=None, allow_no_auth=True
+    )
 
     assert plan["status"] == "ok"
     # The operator must be able to see that the API is unauthenticated. A token
@@ -61,3 +63,53 @@ def test_wildcard_ipv6_bind_is_refused_too() -> None:
     )
 
     assert plan["status"] == "error"
+
+
+
+# ---------------------------------------------------------------------------
+# Starting unauthenticated has to be asked for
+# ---------------------------------------------------------------------------
+
+
+def test_a_loopback_bind_without_a_token_is_refused_by_default() -> None:
+    """Every route was open to any local process, behind a warning.
+
+    A warning the server then ignores is not a guard: on a shared machine the
+    whole library — read, capture, update *and* delete — was reachable by
+    anything that could open the port. Settles the plan's open decision 5.
+    """
+    plan = build_server_plan(
+        host=None, port=None, config=dict(_CONFIG), auth_token=None
+    )
+
+    assert plan["status"] == "error"
+    assert "pzi init" in plan["message"]
+    assert "--no-auth" in plan["message"]
+
+
+def test_the_opt_out_starts_the_server_and_still_reports_auth_off() -> None:
+    plan = build_server_plan(
+        host=None, port=None, config=dict(_CONFIG), auth_token=None, allow_no_auth=True
+    )
+
+    assert plan["status"] == "ok"
+    assert plan["auth_enabled"] is False
+
+
+def test_a_token_needs_no_opt_out() -> None:
+    plan = build_server_plan(
+        host=None, port=None, config=dict(_CONFIG), auth_token="s3cret"
+    )
+
+    assert plan["status"] == "ok"
+    assert plan["auth_enabled"] is True
+
+
+def test_the_opt_out_is_a_cli_flag_not_a_config_key() -> None:
+    """Nothing reachable from `config.toml` or the HTTP API may disable auth —
+    the same reasoning that kept the browser-test URL seam out of config."""
+    from pzi.cli_parser import build_parser
+    from pzi.config import AppConfig
+
+    assert build_parser().parse_args(["server", "--no-auth"]).no_auth is True
+    assert not any("no_auth" in key for key in AppConfig.__annotations__)

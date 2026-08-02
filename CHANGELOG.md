@@ -32,6 +32,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for `problematic` and only under `--strict`, so a CI gate written from that
   table passed a library of fabricated references. `--strict` keeps its real
   meaning: harder checks, not whether findings are reported.
+- **`pzi server` refuses to start without an API token.** Without one every
+  route — search, export, the stored PDFs, `capture`, `update` and `delete` —
+  was reachable by any process on the machine, behind a printed warning the
+  server then ignored. Run `pzi init` to write a token (the extension reads the
+  same one), or pass the new `--no-auth` to serve unauthenticated deliberately.
+  The opt-out is a CLI flag rather than a config key on purpose: nothing
+  reachable from `config.toml` or from the HTTP API itself can disable
+  authentication.
+- **A PDF URL from any discovery step is validated before it is used.** Only the
+  browser step checked what it had found; a URL supplied by a Crossref,
+  Unpaywall, EuropePMC or DOAJ response, or built from a captured page, went
+  straight into the record — and the server then fetched it, or handed it to the
+  extension to fetch with the user's cookies. `http://169.254.169.254/…` and
+  `file:///…` are now dropped at the one place a step's result is accepted.
+- **A hostile page can no longer hold the browser lock indefinitely.** The list
+  of PDF candidate links comes from JavaScript running in the fetched page, and
+  every entry cost a navigation with a 30-second timeout while the server's
+  single browser lock was held. Capped at 10 candidates and a 60-second sweep.
+- **A failed browser launch no longer leaves a copy of your Chrome profile in
+  `$TMPDIR`.** The clone — cookie database included — was abandoned there, along
+  with the Playwright driver process, whenever the launch after it raised.
+- **The desktop-browser PDF fallback refuses a non-http(s) URL.**
+  `webbrowser.open` hands the string to the OS scheme handler, and the URL comes
+  from a provider or a captured page, so `file:`, `javascript:` and `data:` URLs
+  were opened by whatever the desktop runs for them.
+- **The sessionless `/attach-pdf-bytes` upload enforces the PDF size cap.** The
+  session path checked `max_bytes`; the sessionless one — which is deliberate
+  and documented — checked nothing.
+- **A NUL byte in a request path is refused, not a 500.** `Path.resolve` raises
+  `ValueError`, and the confinement helper caught only `OSError`.
+- **401, 403 and 429 close the connection**, as the 413 path already did, rather
+  than leaving a keep-alive socket open for a caller the server has just refused.
 - **A malformed `Host` or `Origin` header is a 403, not an unauthenticated 500.**
   `urlsplit` raises `Invalid IPv6 URL` on an unbalanced bracket, and that ran
   inside the request gate — before the token is checked — so any caller could

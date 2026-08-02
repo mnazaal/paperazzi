@@ -413,3 +413,68 @@ def test_download_pdf_follows_candidate_links_after_html_page() -> None:
     )
     result = hook.download_pdf("https://journal.test/article", _session=s)
     assert result == b"%PDF-linked"
+
+
+# ---------------------------------------------------------------------------
+# The candidate loop is bounded
+# ---------------------------------------------------------------------------
+
+
+class _CandidateSession:
+    """A session whose page returns as many PDF candidates as it likes."""
+
+    def __init__(self, candidates: list[str], *, navigate_seconds: float = 0.0) -> None:
+        self._candidates = candidates
+        self._navigate_seconds = navigate_seconds
+        self.navigations: list[str] = []
+        self.page = object()
+
+    def fetch_direct(self, _url):
+        from pzi.browser_session import FetchResult
+
+        return FetchResult(status=200, content_type="text/html", body=b"<html>")
+
+    def navigate(self, url, **_kwargs):
+        import time as _time
+
+        self.navigations.append(url)
+        if self._navigate_seconds:
+            _time.sleep(self._navigate_seconds)
+        return None
+
+    def wait_network_idle(self):
+        return None
+
+    def evaluate(self, _script):
+        return self._candidates
+
+
+def test_a_hostile_page_cannot_drive_an_unbounded_candidate_loop() -> None:
+    """Every candidate costs a navigation with a 30s timeout, and the whole
+    loop runs while the server's single browser lock is held — so the page
+    being fetched decided how long every other capture waited."""
+    from pzi.browser_pdf_hook import MAX_PDF_CANDIDATES, download_pdf
+
+    session = _CandidateSession([f"https://evil.test/{i}.pdf" for i in range(500)])
+
+    download_pdf("https://evil.test/paper", _session=session, _dismiss=lambda _p: None)
+
+    assert len(session.navigations) <= MAX_PDF_CANDIDATES + 1  # +1 for the page itself
+
+
+def test_the_candidate_loop_stops_at_its_deadline() -> None:
+    from pzi.browser_pdf_hook import download_pdf
+
+    session = _CandidateSession(
+        [f"https://slow.test/{i}.pdf" for i in range(50)], navigate_seconds=0.05
+    )
+
+    download_pdf(
+        "https://slow.test/paper",
+        _session=session,
+        _dismiss=lambda _p: None,
+        candidate_deadline_seconds=0.2,
+    )
+
+    # Far fewer than the 50 offered: the deadline stopped it.
+    assert len(session.navigations) < 20

@@ -567,6 +567,12 @@ def build_parser() -> argparse.ArgumentParser:
     # 30s tick regardless of traffic".
     server_parser.add_argument("--stop-after", type=_positive_int, metavar="MINUTES",
                                help="auto-stop the whole server after N idle minutes")
+    # A flag, deliberately not a config key: nothing reachable from config.toml
+    # or from the HTTP API itself may switch authentication off.
+    server_parser.add_argument(
+        "--no-auth", action="store_true",
+        help="serve without an API token (any local process can use the API)",
+    )
 
     # ── init ─────────────────────────────────────────────────────────────
     init_parser = subparsers.add_parser("init", help="Create or overwrite pzi configuration")

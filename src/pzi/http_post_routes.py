@@ -764,6 +764,20 @@ def _handle_attach_pdf_post(
         if validation_error is not None:
             attach_session_store.restore(session)
             return 403, {"error": validation_error}
+    else:
+        # The sessionless upload is deliberate and documented — a capture that
+        # never opened a session still has to be able to attach — but arriving
+        # without a session is not a reason to accept an unbounded PDF. The
+        # session path checks exactly this via `session.max_bytes`; the same
+        # cap applies here.
+        try:
+            decoded_size = len(base64.b64decode(pdf_base64, validate=True))
+        except (ValueError, binascii.Error):
+            return 400, {"error": "pdf_base64 invalid"}
+        if decoded_size > MAX_BROWSER_PDF_BYTES:
+            return 413, {
+                "error": f"pdf too large: {decoded_size} > {MAX_BROWSER_PDF_BYTES} bytes"
+            }
     result = attach_pdf_bytes(
         config_path=config_path,
         home_dir=home_dir,

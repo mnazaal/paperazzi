@@ -108,10 +108,31 @@ def apply_pdf_discovery(
         if record.get("pdf_url"):
             break
         try:
-            record = step(record, context)
+            record = _validated_discovery(step(record, context))
         except Exception:
             continue
     return record
+
+
+def _validated_discovery(record: NormalizedRecord) -> NormalizedRecord:
+    """Drop a ``pdf_url`` that is not a public http(s) URL.
+
+    Only the browser step checked what it had found. Every other step takes its
+    URL from a provider response or from the captured page, and the server then
+    *fetches* it — or puts it in the plan the extension executes with the user's
+    cookies. Either way an attacker-supplied `http://169.254.169.254/…` or
+    `file:///…` was followed.
+
+    Enforced here, at the one place a step's result is accepted, so a step added
+    later is covered without having to remember.
+    """
+    pdf_url = record.get("pdf_url")
+    if not pdf_url or _safe_public_http_url(str(pdf_url)):
+        return record
+    cleaned = dict(record)
+    cleaned.pop("pdf_url", None)
+    cleaned.pop("pdf_source", None)
+    return cast(NormalizedRecord, cleaned)
 
 
 def apply_pdf_discovery_parallel(
@@ -132,7 +153,7 @@ def apply_pdf_discovery_parallel(
         if record.get("pdf_url"):
             return record
         if phase_of(step) == "pure":
-            record = step(record, context)
+            record = _validated_discovery(step(record, context))
 
     if record.get("pdf_url"):
         return record
@@ -151,7 +172,7 @@ def apply_pdf_discovery_parallel(
             results: dict[PdfDiscoveryStep, NormalizedRecord | None] = {}
             for step, future in futures.items():
                 try:
-                    results[step] = future.result()
+                    results[step] = _validated_discovery(future.result())
                 except Exception:
                     # A single discovery source failing (network, parse, provider
                     # error) must not abort the whole fan-out: treat it as "no
@@ -167,7 +188,7 @@ def apply_pdf_discovery_parallel(
         if record.get("pdf_url"):
             return record
         if phase_of(step) == "browser":
-            record = step(record, context)
+            record = _validated_discovery(step(record, context))
 
     return record
 

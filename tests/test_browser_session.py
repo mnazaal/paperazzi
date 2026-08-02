@@ -196,3 +196,37 @@ def test_open_browser_session_closes_on_exception(monkeypatch) -> None:
         pass
 
     assert closed == [True]
+
+
+# === A failed launch must not leave a copy of the user's profile behind ===
+
+
+def test_a_failed_launch_removes_the_cloned_chrome_profile(tmp_path, monkeypatch) -> None:
+    """The clone is a full copy of the user's Chrome profile — cookie DB included.
+
+    `launch_persistent_context` failing after the copy left it in `$TMPDIR`,
+    where nothing ever removed it, and abandoned the Playwright driver process
+    with it.
+    """
+    from unittest.mock import MagicMock
+
+    from pzi import browser_session as module
+
+    clone = tmp_path / "clone"
+    clone.mkdir()
+    (clone / "Cookies").write_bytes(b"secrets")
+    monkeypatch.setattr(module, "_clone_chrome_profile", lambda _p: clone)
+
+    playwright = MagicMock()
+    playwright.chromium.launch_persistent_context.side_effect = RuntimeError("no browser")
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "playwright.sync_api",
+        MagicMock(sync_playwright=MagicMock(return_value=MagicMock(start=lambda: playwright))),
+    )
+
+    with pytest.raises(RuntimeError):
+        module._launch_browser("chromium", str(tmp_path / "profile"))
+
+    assert not clone.exists()
+    playwright.stop.assert_called_once()

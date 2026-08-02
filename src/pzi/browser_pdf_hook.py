@@ -82,6 +82,15 @@ POST_CLICK_JS = r"""
   .filter(Boolean)
 """
 
+#: How many PDF candidate links to follow from one page. The list is produced
+#: by JavaScript running in the fetched page, so the page chooses its length;
+#: each entry costs a navigation with a 30s timeout, taken while the server's
+#: single browser lock is held.
+MAX_PDF_CANDIDATES = 10
+#: Wall-clock bound on the whole candidate sweep, so ten slow navigations
+#: cannot add up to five minutes of held lock either.
+CANDIDATE_DEADLINE_SECONDS = 60.0
+
 DOWNLOAD_CANDIDATES_JS = r"""
 () => {
   const out = [];
@@ -347,10 +356,17 @@ def download_pdf(
     _session: BrowserSession | None = None,
     headless: bool = True,
     challenge_timeout: int = 0,
+    candidate_deadline_seconds: float = CANDIDATE_DEADLINE_SECONDS,
 ) -> bytes | None:
     """Download PDF bytes using browser, with optional profile reuse.
 
     All browser I/O edges are injectable via _session for testing.
+
+    The candidate sweep is bounded by ``MAX_PDF_CANDIDATES`` and
+    *candidate_deadline_seconds*: the list comes from the page being fetched, so
+    without a bound the page decides how long the server's single browser lock
+    is held — one hostile document could stall every other capture indefinitely,
+    30 seconds at a time.
     """
     close_on_exit = _session is None  # pragma: no branch
     if _session is not None:  # pragma: no branch
@@ -391,11 +407,16 @@ def download_pdf(
 
         candidates = session.evaluate(DOWNLOAD_CANDIDATES_JS)
         if isinstance(candidates, list):  # pragma: no branch — covered by integration/browser tests
+            deadline = time.monotonic() + max(0.0, candidate_deadline_seconds)
+            tried = 0
             for candidate in candidates:
+                if tried >= MAX_PDF_CANDIDATES or time.monotonic() >= deadline:
+                    break
                 if not isinstance(candidate, str):
                     continue
                 if not candidate.startswith(("http://", "https://")):
                     continue  # pragma: no cover — covered by integration/browser tests
+                tried += 1
                 try:
                     resp = session.navigate(candidate, wait_until="domcontentloaded", timeout=30000)
                     if resp is not None:  # pragma: no branch — covered by integration/browser tests

@@ -483,3 +483,59 @@ def test_web_attachment_step_no_attachments2() -> None:
     }
     result = web_attachment_step(record, context)
     assert result.get("pdf_url") is None
+
+
+# ---------------------------------------------------------------------------
+# A discovered PDF URL is validated wherever it came from
+# ---------------------------------------------------------------------------
+
+_PRIVATE_URLS = [
+    "http://127.0.0.1:8080/x.pdf",
+    "http://169.254.169.254/latest/meta-data/",
+    "http://[::1]/x.pdf",
+    "file:///etc/passwd",
+    "http://10.0.0.5/internal.pdf",
+]
+
+
+@pytest.mark.parametrize("bad_url", _PRIVATE_URLS)
+def test_a_step_cannot_hand_back_a_private_pdf_url(bad_url: str) -> None:
+    """Only the browser step validated what it found.
+
+    The URL a DOI, Unpaywall or preprint step returns is supplied by a provider
+    response or by the captured page, and the server then fetches it — or hands
+    it to the extension to fetch with the user's cookies. One chokepoint covers
+    every step, including any added later.
+    """
+    from pzi.pdf_discovery import apply_pdf_discovery
+
+    def _rogue_step(record, _context):
+        return {**record, "pdf_url": bad_url, "pdf_source": "doi"}
+
+    result = apply_pdf_discovery({"citekey": "k1"}, [_rogue_step], {})
+
+    assert result.get("pdf_url") is None
+
+
+@pytest.mark.parametrize("bad_url", _PRIVATE_URLS)
+def test_the_parallel_path_validates_the_same_way(bad_url: str) -> None:
+    from pzi.pdf_discovery import apply_pdf_discovery_parallel, discovery_phase
+
+    @discovery_phase("http")
+    def _rogue_step(record, _context):
+        return {**record, "pdf_url": bad_url, "pdf_source": "doi"}
+
+    result = apply_pdf_discovery_parallel({"citekey": "k1"}, [_rogue_step], {})
+
+    assert result.get("pdf_url") is None
+
+
+def test_a_public_pdf_url_still_gets_through() -> None:
+    from pzi.pdf_discovery import apply_pdf_discovery
+
+    def _good_step(record, _context):
+        return {**record, "pdf_url": "https://arxiv.org/pdf/2301.12345", "pdf_source": "arxiv"}
+
+    result = apply_pdf_discovery({"citekey": "k1"}, [_good_step], {})
+
+    assert result["pdf_url"] == "https://arxiv.org/pdf/2301.12345"

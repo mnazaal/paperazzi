@@ -10,7 +10,7 @@ import urllib.error
 import webbrowser
 from collections.abc import Callable
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from pzi.fetch_helpers import fetch_text as _fetch_text
 from pzi.pdf_download import fetch_and_store_pdf, write_pdf_bytes
@@ -62,6 +62,14 @@ def fetch_pdf_via_desktop_browser_download(
     settings = settings or PdfFallbackSettings.from_environment()
     if settings.disable_desktop_browser:
         return None, None
+
+    # `webbrowser.open` hands the string straight to the OS scheme handler, and
+    # this URL came from a metadata provider or a captured page — so a `file:`,
+    # `javascript:` or `data:` URL would be run by whatever the desktop is
+    # configured to open it with. Everything downstream expects an http(s)
+    # download; nothing else has a reason to reach here.
+    if urlsplit(url).scheme not in {"http", "https"}:
+        return None, f"refusing to open a non-http(s) URL in the browser: {url!r}"
 
     download_dir = settings.download_dir
     download_dir.mkdir(parents=True, exist_ok=True)

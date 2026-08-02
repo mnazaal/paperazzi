@@ -257,13 +257,18 @@ def _handle_get(
         method="GET", headers=dict(request.headers.items()), security=security
     )
     if error is not None:
-        _respond(request, error[0], {"error": error[1]}, security)
+        # Close on rejection, as the 413 path already does. A keep-alive
+        # connection left open after 401/403/429 lets a caller keep retrying
+        # down the same socket, and hands a rejected client a connection the
+        # server has no intention of serving.
+        _respond(request, error[0], {"error": error[1]}, security,
+                 close_connection=True)
         return
     client_id = request.client_address[0] if request.client_address else "unknown"
     allowed, remaining, reset = request._rate_limiter.check(client_id)  # type: ignore[attr-defined]
     if not allowed:
         _respond(request, 429, {"error": "rate limit exceeded"}, security,
-                 rate_remaining=0, rate_reset=reset)
+                 rate_remaining=0, rate_reset=reset, close_connection=True)
         return
     idle_state = getattr(request, "_idle_state", None)
     if idle_state is not None:
@@ -316,13 +321,14 @@ def _handle_post(
         method="POST", headers=dict(request.headers.items()), security=security
     )
     if error is not None:  # pragma: no cover — covered by integration
-        _respond(request, error[0], {"error": error[1]}, security)
+        _respond(request, error[0], {"error": error[1]}, security,
+                 close_connection=True)
         return
     client_id = request.client_address[0] if request.client_address else "unknown"
     allowed, post_remaining, post_reset = request._rate_limiter.check(client_id)  # type: ignore[attr-defined]
     if not allowed:
         _respond(request, 429, {"error": "rate limit exceeded"}, security,
-                 rate_remaining=0, rate_reset=post_reset)
+                 rate_remaining=0, rate_reset=post_reset, close_connection=True)
         return
     # Only count an accepted request against the idle-stop timer (mirrors GET),
     # so a rejected POST can't keep the auto-stop server alive.

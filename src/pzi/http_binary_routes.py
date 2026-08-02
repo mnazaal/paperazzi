@@ -161,14 +161,17 @@ def path_confined_to(candidate_path: object, roots: object) -> Path | None:
         return None
     try:
         candidate = Path(candidate_path).expanduser().resolve(strict=True)
-    except OSError:
+    except (OSError, ValueError):
+        # `ValueError`, not `OSError`, is what an embedded NUL raises — and the
+        # path can come straight out of a request, so letting it escape turned a
+        # malformed input into a 500 rather than a refusal.
         return None
     for raw_root in root_paths:
         if not isinstance(raw_root, (str, Path)):
             continue
         try:
             root = Path(raw_root).expanduser().resolve(strict=True)
-        except OSError:
+        except (OSError, ValueError):
             continue
         if candidate == root or root in candidate.parents:
             return candidate

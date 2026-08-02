@@ -9,6 +9,7 @@ token tests set it explicitly.
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -483,3 +484,75 @@ def test_building_cors_headers_cannot_fault_on_a_malformed_origin() -> None:
 
     for origin in ("[[[", "http://[", "//["):
         assert origin_allowed(origin, ("http://localhost",)) is False
+
+
+def test_a_nul_byte_in_a_path_is_refused_not_a_500() -> None:
+    """`Path.resolve` raises `ValueError`, not `OSError`, on an embedded NUL.
+
+    The confinement helper caught only `OSError`, so a request naming such a
+    path crashed instead of being refused — and it is reached from routes that
+    take a path out of the request.
+    """
+    from pzi.http_binary_routes import path_confined_to
+
+    assert path_confined_to("a\x00b", "/tmp") is None
+    assert path_confined_to("/tmp", "a\x00b") is None
+
+
+def test_the_sessionless_attach_path_enforces_the_pdf_byte_cap(tmp_path) -> None:
+    """The session path checks `max_bytes`; the sessionless one checked nothing.
+
+    The sessionless upload is deliberate and documented — a capture that never
+    opened a session still has to be able to attach — but arriving without a
+    session is not a reason to accept an unbounded PDF.
+    """
+    import base64
+
+    from pzi.http_post_routes import MAX_BROWSER_PDF_BYTES, _handle_attach_pdf_post
+
+    oversized = b"%PDF-1.4\n" + b"A" * (MAX_BROWSER_PDF_BYTES + 1)
+    status, response = _handle_attach_pdf_post(
+        {
+            "citekey": "smith2024",
+            "pdf_base64": base64.b64encode(oversized).decode(),
+        },
+        config_path=str(tmp_path / "config.toml"),
+        home_dir=str(tmp_path),
+        attach_session_store=None,
+        now=lambda: 0.0,
+    )
+
+    assert status == 413
+    assert "too large" in response["error"]
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["file:///etc/passwd", "javascript:alert(1)", "data:text/html,<script>x</script>",
+     "vbscript:x", "smb://host/share"],
+)
+def test_the_desktop_browser_fallback_refuses_a_non_http_url(url: str, tmp_path) -> None:
+    """`webbrowser.open` hands the string to the OS handler.
+
+    The URL reaching this is one a *provider* supplied, so a `file:` or
+    `javascript:` URL would have been opened as-is by whatever the desktop is
+    configured to run for that scheme.
+    """
+    from pzi.pdf import fetch_pdf_via_desktop_browser_download
+    from pzi.pdf_planning import PdfFallbackSettings
+
+    opened: list[str] = []
+    settings = PdfFallbackSettings(
+        disable_desktop_browser=False,
+        download_dir=tmp_path / "downloads",
+        desktop_timeout=1,
+    )
+
+    with patch("webbrowser.open", side_effect=lambda u: opened.append(u) or True):
+        path, error = fetch_pdf_via_desktop_browser_download(
+            url=url, papers_dir=str(tmp_path), citekey="k1", settings=settings,
+        )
+
+    assert opened == []
+    assert path is None
+    assert error is not None and "http" in error
