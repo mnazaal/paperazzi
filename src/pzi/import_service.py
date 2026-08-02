@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, NotRequired, TypedDict
 
 from pzi.add_service import add_records_to_bib_batch
-from pzi.bib_repository import parse_bibtex_with_failures
+from pzi.bib_serialize import parse_bibtex_for_import
 from pzi.bibtex import bibtex_entry_to_record
 from pzi.config import BibResolutionFailure, load_bib_target
 from pzi.fileio import read_text_utf8
@@ -68,7 +68,7 @@ def import_from_bibtex(
     # returns the rest, so the old `try/except` here could never fire and every
     # unreadable entry vanished from an import that reported success. Import the
     # blocks that parsed and account for the ones that did not.
-    source_entries, dropped_blocks = parse_bibtex_with_failures(text)
+    source_entries, dropped_blocks = parse_bibtex_for_import(text)
 
     if not source_entries and dropped_blocks:
         return {

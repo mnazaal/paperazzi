@@ -6,6 +6,7 @@ import os
 import tempfile
 from pathlib import Path
 
+from pzi.bib_repository import update_bib_entry
 from pzi.import_service import import_from_bibtex
 
 # We need a minimal valid config.toml for add_record_to_bib to resolve bibs.
@@ -270,6 +271,63 @@ def test_import_reports_source_blocks_the_parser_dropped(tmp_path) -> None:
     assert result["total_source"] == 2
     assert result["skipped_errors"] == 1
     assert any("unparseable" in err.lower() for err in result["errors"])
+
+
+def test_import_skips_a_source_entry_whose_field_name_swallowed_a_comment(
+    tmp_path,
+) -> None:
+    """Importing it wrote the mangled key into the library and bricked it.
+
+    The block parses, so the round-trip gate sees nothing wrong; the hidden
+    field's value ends up under a name no reader matches, and every subsequent
+    write to the library is refused. It is reported once, skipped, and the good
+    entry beside it still imports.
+    """
+    d = tmp_path / "lib"
+    (d / "papers").mkdir(parents=True)
+    bib_path = d / "library.bib"
+    bib_path.write_text("")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'[[bibs]]\nname = "main"\npath = "{bib_path}"\n'
+        f'papers_dir = "{d / "papers"}"\ndefault = true\n'
+    )
+    source = tmp_path / "source.bib"
+    source.write_text(
+        "@article{good2024, title = {Good}, author = {A}, year = {2024}}\n\n"
+        "@article{foreign2020a,\n"
+        "  title = {Some title},\n"
+        "  % private note\n"
+        "  doi = {10.1/xyz},\n"
+        "  year = {2020},\n"
+        "}\n"
+    )
+
+    result = import_from_bibtex(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        source_path=str(source),
+        bib_selector=None,
+        dry_run=False,
+    )
+
+    assert result["imported"] == 1
+    assert result["total_source"] == 2
+    assert result["skipped_errors"] == 1
+    # Reported once, naming the entry and the field it hides.
+    matching = [err for err in result["errors"] if "foreign2020a" in err]
+    assert len(matching) == 1
+    assert "doi" in matching[0]
+
+    written = bib_path.read_text(encoding="utf-8")
+    assert "foreign2020a" not in written
+    assert "% private note" not in written
+    # The library still accepts writes.
+    update_bib_entry(
+        str(bib_path),
+        "good2024",
+        lambda entry, _record: {**entry, "fields": {**entry["fields"], "keywords": "x"}},
+    )
 
 
 def test_import_of_a_wholly_unparseable_source_is_an_error(tmp_path) -> None:

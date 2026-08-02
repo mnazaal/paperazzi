@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A field value ending in a backslash no longer destroys its entry.**
+  `title = {Graph Networks\ }` — a legal LaTeX forced inter-word space — was read
+  as `Graph Networks\` and written back as `{Graph Networks\}`, where the
+  backslash escaped the writer's own closing brace. `pzi tag add` reported
+  success and exited 0; the entry then vanished from every read and *every*
+  later write to that library was refused. A trailing backslash run is now
+  removed before the value is enclosed, however long the run is: bibtexparser's
+  splitter looks only at the character before a `}`, so an even run broke the
+  block exactly as an odd one did.
+- **A field name that swallowed a `%` comment is refused instead of imported.**
+  bibtexparser folds a comment inside an entry into the following field's key
+  (`'% private note\n  doi'`), and `pzi import` carried it verbatim into the
+  user's library: the `doi` was attached to a name no reader matches, and the
+  library accepted no further writes. Field names are now checked where the
+  citekey already was, and `pzi import` skips and reports such an entry — once,
+  naming the entry and the field it hides, rather than counting it twice and
+  reporting `imported 0/2` for a one-entry file.
 - **The write gate now checks the parse *result*, not just that parsing did not
   raise.** bibtexparser v2 collects a block it cannot read in `failed_blocks`
   instead of raising, so serialized text that parsed back to zero entries and one

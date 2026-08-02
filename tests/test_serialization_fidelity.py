@@ -182,6 +182,139 @@ def test_unmatched_braces_are_still_dropped() -> None:
 
 
 # ---------------------------------------------------------------------------
+# A trailing backslash
+# ---------------------------------------------------------------------------
+
+
+def test_a_trailing_backslash_run_is_dropped_however_long_it_is() -> None:
+    """It would escape the writer's own closing brace and lose the entry.
+
+    bibtexparser's splitter looks only at the single character before a `}`, so
+    an *even* run breaks the block just as an odd one does.
+    """
+    from pzi.bib_serialize import _safe_field_value
+
+    assert _safe_field_value("Graph Networks\\") == "Graph Networks"
+    assert _safe_field_value("Graph Networks\\\\") == "Graph Networks"
+    assert _safe_field_value("Graph Networks\\\\\\") == "Graph Networks"
+    # Only at the very end: a backslash with something to escape is left alone.
+    assert _safe_field_value("a \\} b") == "a \\} b"
+    assert _safe_field_value("a \\ b") == "a \\ b"
+
+
+def test_balancing_braces_cannot_expose_a_new_trailing_backslash() -> None:
+    """Dropping an unmatched `}` can move a backslash run to the end of the value.
+
+    `\\\\}` is an escaped backslash followed by a real (here unmatched) closing
+    brace, so brace balancing removes the brace — which is why the backslash
+    strip has to run afterwards.
+    """
+    from pzi.bib_serialize import _safe_field_value
+
+    assert _safe_field_value("Networks\\\\}") == "Networks"
+    # An *escaped* brace is still kept: it is not a delimiter and parses back.
+    assert _safe_field_value("Networks\\}") == "Networks\\}"
+
+
+def test_a_title_ending_in_a_backslash_survives_a_write(tmp_path: Path) -> None:
+    """`title = {Graph Networks\\ }` is legal LaTeX — a forced inter-word space.
+
+    The read side strips the space, leaving a trailing backslash; writing that
+    back reported success, made the entry unparseable, and then refused every
+    later write to the library.
+    """
+    bib = tmp_path / "main.bib"
+    path = _write(
+        bib,
+        "@article{a1,\n"
+        "  title = {Graph Networks\\ },\n"
+        "  year = {2019},\n"
+        "}\n\n"
+        "@article{a2,\n"
+        "  title = {Deep},\n"
+        "  year = {2020},\n"
+        "}\n",
+    )
+
+    update_bib_entry(path, "a1", _add_keyword)  # type: ignore[arg-type]
+
+    result = read_bib_file(path)
+    assert [record["citekey"] for record in result["records"]] == ["a1", "a2"]
+    # The title was not the field being written, so its source text is kept
+    # verbatim — including the `\ ` that made it legal in the first place.
+    assert "title = {Graph Networks\\ }" in bib.read_text(encoding="utf-8")
+    # And the library still accepts writes.
+    update_bib_entry(path, "a2", _add_keyword)  # type: ignore[arg-type]
+
+
+def test_a_title_written_from_the_record_loses_its_trailing_backslash(
+    tmp_path: Path,
+) -> None:
+    """When the write *does* own the field, the exposed backslash has to go."""
+    bib = tmp_path / "main.bib"
+    path = _write(bib, "@article{a1,\n  title = {Old},\n  year = {2019},\n}\n")
+
+    def _retitle(entry: BibtexEntry, _record) -> BibtexEntry:
+        touched = dict(entry)
+        touched["fields"] = {**entry["fields"], "title": "Graph Networks\\"}
+        return touched  # type: ignore[return-value]
+
+    update_bib_entry(path, "a1", _retitle)  # type: ignore[arg-type]
+
+    assert "title = {Graph Networks}" in bib.read_text(encoding="utf-8")
+    assert read_bib_file(path)["records"][0]["title"] == "Graph Networks"
+
+
+# ---------------------------------------------------------------------------
+# Field keys
+# ---------------------------------------------------------------------------
+
+
+def test_a_field_key_that_swallowed_a_comment_is_refused_on_write() -> None:
+    """The mangled key round-trips perfectly, so the gate cannot catch it.
+
+    `pzi import` carried a foreign entry's fields verbatim, so a `%` comment
+    folded into the following field key landed in the user's library — hiding
+    that field's value from every reader and refusing every later write.
+    """
+    from pzi.bib_serialize import serialize_bibtex
+
+    entry: BibtexEntry = {  # type: ignore[assignment]
+        "entry_type": "article",
+        "citekey": "foreign2020a",
+        "fields": {"title": "Some title", "% private note\n  doi": "10.1/xyz"},
+    }
+
+    with pytest.raises(PziError, match="doi"):
+        serialize_bibtex([entry])
+
+
+def test_a_structurally_broken_field_key_is_refused_on_write() -> None:
+    from pzi.bib_serialize import serialize_bibtex
+
+    for key in ("ti,tle", "ti{tle", "ti}tle", "ti=tle", "ti tle", ""):
+        entry: BibtexEntry = {  # type: ignore[assignment]
+            "entry_type": "article",
+            "citekey": "a1",
+            "fields": {key: "value"},
+        }
+        with pytest.raises(PziError, match="field name"):
+            serialize_bibtex([entry])
+
+
+def test_ordinary_field_keys_are_still_accepted() -> None:
+    from pzi.bib_serialize import serialize_bibtex
+
+    entry: BibtexEntry = {  # type: ignore[assignment]
+        "entry_type": "article",
+        "citekey": "a1",
+        "fields": {"pzi-pdf-url": "https://x/y.pdf", "date_added": "2020", "ids": "b1"},
+    }
+
+    assert "pzi-pdf-url" in serialize_bibtex([entry])
+
+
+# ---------------------------------------------------------------------------
 # A `%` comment inside an entry
 # ---------------------------------------------------------------------------
 

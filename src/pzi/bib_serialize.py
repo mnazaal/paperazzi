@@ -210,6 +210,45 @@ def parse_bibtex_with_failures(text: str) -> tuple[list[BibtexEntry], list[str]]
     return entries, describe_failed_blocks(library)
 
 
+def parse_bibtex_for_import(text: str) -> tuple[list[BibtexEntry], list[str]]:
+    """Parse *foreign* BibTeX: only entries that can be written back, and why not.
+
+    :func:`parse_bibtex_with_failures` is deliberately lenient — an export billed
+    as a backup should carry an entry whose field name the parser mangled, and
+    merely warn. An *import* writes those entries into the user's library, where
+    the same mangled name hides a field from every reader and refuses every later
+    write, so here they are dropped rather than warned about.
+
+    Each unusable entry produces exactly one message. Reporting it as both a
+    dropped block and a failed record made a two-entry file import as "0/3".
+    """
+    library = parse_string(text)
+    problems = [message for _key, message in failed_block_details(library)]
+    entries: list[BibtexEntry] = []
+    for block in library.entries:
+        entry = _library_entry_to_bibtex_entry(block)
+        refusal = unwritable_field_key(entry)
+        if refusal is None:
+            entries.append(entry)
+        else:
+            problems.append(refusal)
+    return entries, problems
+
+
+def unwritable_field_key(entry: BibtexEntry) -> str | None:
+    """Why :func:`serialize_bibtex` would refuse *entry*'s field names, or ``None``.
+
+    Lets a caller holding entries read from a foreign file skip and report them
+    one at a time, instead of losing a whole batch write to the first bad name.
+    """
+    for key in entry["fields"]:
+        try:
+            _checked_field_key(key, entry["citekey"])
+        except PziError as exc:
+            return exc.message
+    return None
+
+
 def _validate_library_parseable(library: Library) -> None:
     """Raise :exc:`PziError` if the library has unparseable blocks.
 
@@ -549,7 +588,75 @@ def _checked_citekey(citekey: str) -> str:
 
 def _safe_field_value(value: str) -> str:
     """Make an untrusted field value safe to serialize inside ``{...}``."""
-    return _balance_braces(_CONTROL_CHARS.sub("", value))
+    return _strip_trailing_backslashes(_balance_braces(_CONTROL_CHARS.sub("", value)))
+
+
+#: A backslash run at the very end of a value, which would escape the closing
+#: brace this code is about to write.
+_TRAILING_BACKSLASHES = re.compile(r"\\+\Z")
+
+
+def _strip_trailing_backslashes(value: str) -> str:
+    """Drop a backslash run at the end of a value.
+
+    Written as ``{<value>}`` the run swallows the writer's own closing brace.
+    bibtexparser's splitter looks only at the single character preceding a
+    ``}``, so an *even* run (a legitimately escaped backslash) breaks the block
+    exactly as an odd one does — the entry then vanishes from every read and
+    every later write to that library is refused.
+
+    A backslash at the very end has nothing to escape, so removing it loses no
+    meaning. The usual source is not a hostile value at all: ``\\ `` is LaTeX's
+    forced inter-word space, and the read side strips the space off the end,
+    leaving the backslash exposed.
+
+    Runs before an *internal* ``}`` are untouched — :func:`_balance_braces`
+    keeps those, and this runs after it so a brace it dropped cannot leave a
+    fresh backslash at the end.
+    """
+    return _TRAILING_BACKSLASHES.sub("", value)
+
+
+#: What a BibTeX field name may contain. Deliberately narrow: measured against a
+#: 22k-entry library (282k fields, including JabRef/BibDesk keys like
+#: ``bdsk-url-1``, ``date-added`` and ``__markedentry``), not one key falls
+#: outside it, so refusing the rest costs a real library nothing.
+_SAFE_FIELD_KEY = re.compile(r"\A[A-Za-z0-9_:.+-]+\Z")
+
+
+def _checked_field_key(key: str, citekey: str) -> str:
+    """Refuse a field name that would be written as something other than a name.
+
+    A citekey has been checked at this chokepoint for a while; a *field* key was
+    written verbatim, so `pzi import` could carry a foreign entry's mangled key
+    into the user's library. Two ways that goes wrong, both silent:
+
+    * ``ti,tle`` / ``ti{tle`` make the block unparseable and ``ti}tle`` parses to
+      an entry with **zero** fields — total field loss on the next read;
+    * a ``%`` comment inside an entry is folded by the parser into the following
+      field's key (``'% private note\\n  doi'``). That round-trips perfectly, so
+      the write gate sees nothing wrong, while the hidden field's value is
+      attached to a key no reader will ever match and every subsequent write to
+      the library is refused.
+
+    Refusing is right rather than sanitizing: silently renaming the key would
+    move the user's data somewhere they did not put it.
+    """
+    if _SAFE_FIELD_KEY.match(key):
+        return key
+    if _MANGLED_FIELD_KEY.search(key):
+        hidden = key.rsplit("\n", 1)[-1].strip()
+        raise PziError(
+            f"refusing to write entry {citekey!r}: a '%' comment inside the entry "
+            f"was folded into the field name {hidden!r}, which would hide it from "
+            "every reader — move the comment outside the entry",
+            code=exit_codes.ENVIRONMENT,
+        )
+    raise PziError(
+        f"refusing to write entry {citekey!r}: {key!r} is not a usable BibTeX "
+        "field name",
+        code=exit_codes.ENVIRONMENT,
+    )
 
 
 def _escaped_positions(value: str) -> list[bool]:
@@ -624,7 +731,7 @@ def _bibtex_entry_to_library_entry(
         entry_type=entry_type,
         key=_checked_citekey(entry["citekey"]),
         fields=[
-            Field(key=k, value=_safe_field_value(v))
+            Field(key=_checked_field_key(k, entry["citekey"]), value=_safe_field_value(v))
             for k, v in sorted(entry["fields"].items())
         ],
     )
