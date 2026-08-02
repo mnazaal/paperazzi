@@ -5,6 +5,7 @@ from __future__ import annotations
 import functools
 import time
 import urllib.error
+import urllib.parse
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, TypeVar
@@ -152,6 +153,17 @@ def _fetch_with_retries(
     raise last_error  # type: ignore[misc]
 
 
+#: The only host `api_key` belongs to. It is the Semantic Scholar key, and one
+#: shared fetcher is handed to every provider — so without this gate the same
+#: `x-api-key` header went to Crossref, OpenAlex, DBLP and OpenReview, handing
+#: a credential to four services that never asked for one and cannot use it.
+_API_KEY_HOSTS = frozenset({"api.semanticscholar.org"})
+
+
+def _is_api_key_host(url: str) -> bool:
+    return (urllib.parse.urlsplit(url).hostname or "").lower() in _API_KEY_HOSTS
+
+
 def fetch_text(
     url: str,
     *,
@@ -169,7 +181,7 @@ def fetch_text(
     HTTPError (4xx/5xx status).
     """
     headers: dict[str, str] = {"User-Agent": user_agent}
-    if api_key:
+    if api_key and _is_api_key_host(url):
         headers["x-api-key"] = api_key
 
     return _fetch_with_retries(

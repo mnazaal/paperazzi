@@ -554,15 +554,25 @@ def build_parser() -> argparse.ArgumentParser:
         "--setup", action="store_true",
         help="write config, configure translation-server, and configure browser fallback",
     )
+    # These four default to None, not to their effective values, so the runner
+    # can tell "user asked for this" from "nobody said" and refuse them without
+    # --setup instead of accepting and dropping them. Their defaults are applied
+    # in the runner's --setup branch.
     init_parser.add_argument(
-        "--bib", default="~/bibs/main.bib", help="default BibTeX file path for --setup"
+        "--bib", help="default BibTeX file path for --setup (default: ~/bibs/main.bib)"
     )
     init_parser.add_argument(
         "--papers-dir", help="PDF storage directory for --setup; defaults to <bib-dir>/papers"
     )
-    init_parser.add_argument("--name", default="main", help="default bib name for --setup")
-    init_parser.add_argument("--browser", default="chromium", choices=["chromium", "firefox"],
+    init_parser.add_argument(
+        "--name", help="default bib name for --setup (default: main)"
+    )
+    init_parser.add_argument("--browser", choices=["chromium", "firefox"],
                              help="browser for PDF fallback (default: chromium)")
+    init_parser.add_argument(
+        "--rotate-token", action="store_true",
+        help="replace the existing API auth token (this un-pairs the browser extension)",
+    )
 
     # ── delete / entries ─────────────────────────────────────────────────
     delete_parser = subparsers.add_parser("delete", help="Delete a BibTeX entry by citekey")

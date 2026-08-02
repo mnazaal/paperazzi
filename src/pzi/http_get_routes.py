@@ -15,7 +15,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from pzi.bib_repository import read_bib_file
 from pzi.bib_service import list_bibs, list_entries
-from pzi.config import BibResolutionFailure, load_bib_target
+from pzi.config import BibResolutionFailure, load_bib_target, load_config_file
 from pzi.doctor_service import doctor_check
 from pzi.http_payloads import (
     detail_payload,
@@ -23,7 +23,10 @@ from pzi.http_payloads import (
     search_payload,
     tag_list_payload,
 )
-from pzi.http_status import status_for_service_result
+from pzi.http_status import (
+    reject_unconfigured_bib_selector,
+    status_for_service_result,
+)
 from pzi.search_service import search_bib
 from pzi.tag_service import list_tags
 
@@ -53,6 +56,14 @@ def process_get_request(
     parsed = urlsplit(path)
     p = parsed.path
     qs = _parse_query(parsed.query)
+
+    rejection = reject_unconfigured_bib_selector(
+        qs.get("bib"),
+        config=load_config_file(config_path, home_dir=home_dir)["config"],
+        home_dir=home_dir,
+    )
+    if rejection is not None:
+        return rejection
 
     for route in GET_ROUTES:
         if p == route.path:

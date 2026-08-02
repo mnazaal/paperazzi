@@ -4,7 +4,10 @@ import os
 import stat
 from unittest.mock import patch
 
+import pytest
+
 from pzi.config import escape_toml_string as _escape_toml_string
+from pzi.errors import PziError
 from pzi.setup_service import (
     _find_firefox_profile,
     provision_api_token,
@@ -15,8 +18,9 @@ from pzi.setup_service import (
 
 def test_provision_api_token_writes_0600_file(tmp_path) -> None:
     data_home = tmp_path / "data"
-    token_file = provision_api_token(data_home)
+    token_file, created = provision_api_token(data_home)
 
+    assert created is True
     assert token_file == data_home / "api_token"
     assert token_file.exists()
     # Secret is a non-empty token.
@@ -25,17 +29,47 @@ def test_provision_api_token_writes_0600_file(tmp_path) -> None:
     assert stat.S_IMODE(token_file.stat().st_mode) == 0o600
 
 
-def test_provision_api_token_tightens_preexisting_loose_file(tmp_path) -> None:
+def test_provision_api_token_reuses_an_existing_token(tmp_path) -> None:
+    """Minting a fresh token on every call de-paired the browser extension from
+    the server whenever `pzi init` was run for any other reason."""
+    data_home = tmp_path / "data"
+    data_home.mkdir()
+    existing = data_home / "api_token"
+    existing.write_text("keep-me\n")
+
+    token_file, created = provision_api_token(data_home)
+
+    assert created is False
+    assert token_file.read_text().strip() == "keep-me"
+
+
+def test_provision_api_token_rotates_when_asked(tmp_path) -> None:
     data_home = tmp_path / "data"
     data_home.mkdir()
     stale = data_home / "api_token"
     stale.write_text("old")
     stale.chmod(0o644)
 
-    provision_api_token(data_home)
+    _token_file, created = provision_api_token(data_home, rotate=True)
 
+    assert created is True
     assert stat.S_IMODE(stale.stat().st_mode) == 0o600
     assert stale.read_text().strip() != "old"
+
+
+def test_provision_api_token_refuses_to_replace_an_unreadable_token(tmp_path) -> None:
+    """An unreadable token file is not "no token" — replacing it would rotate a
+    secret this process cannot even see."""
+    data_home = tmp_path / "data"
+    data_home.mkdir()
+    token = data_home / "api_token"
+    token.write_text("secret")
+    token.chmod(0o000)
+    try:
+        with pytest.raises(PziError, match="cannot read the existing API token"):
+            provision_api_token(data_home)
+    finally:
+        token.chmod(0o600)
 
 # ── render_config ───────────────────────────────────────────────────────────
 

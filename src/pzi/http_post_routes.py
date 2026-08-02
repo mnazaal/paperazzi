@@ -25,7 +25,6 @@ from pzi.capture_core import capture_to_bib
 from pzi.capture_models import AuthHints, CaptureInput, CaptureOptions, PageArtifact, PdfCandidate
 from pzi.config import (
     BibResolutionFailure,
-    is_configured_selector,
     load_bib_target,
     load_config_file,
 )
@@ -38,7 +37,10 @@ from pzi.http_payloads import (
     update_payload,
 )
 from pzi.http_security import DEFAULT_MAX_BODY_BYTES, safe_public_http_url
-from pzi.http_status import status_for_service_result
+from pzi.http_status import (
+    reject_unconfigured_bib_selector,
+    status_for_service_result,
+)
 from pzi.pdf_acquisition_plan import build_pdf_acquisition_plan
 from pzi.pdf_attach_session import build_attach_session, validate_attach_request
 from pzi.pdf_attach_session_store import AttachSessionStore
@@ -70,6 +72,21 @@ CONCURRENT_EDIT_MESSAGE = (
 # ---------------------------------------------------------------------------
 # Capture body helpers
 # ---------------------------------------------------------------------------
+
+
+def body_flag(body: Mapping[str, Any], key: str, *, default: bool) -> bool:
+    """Read a JSON boolean from a request body — strictly.
+
+    ``bool(body.get(key, default))`` decides on Python truthiness, which is not
+    what a JSON API means. Two consequences were live: ``{"dry_run": null}``
+    authorized a *real* update (``bool(None)`` is False, and False means "not a
+    preview"), and ``{"replace": "false"}`` selected replace mode, because a
+    non-empty string is truthy. JSON has real booleans; anything else is a
+    caller mistake, and for a flag that gates a write the safe reading of a
+    mistake is the default, not the destructive branch.
+    """
+    value = body.get(key, default)
+    return value if isinstance(value, bool) else default
 
 
 def record_overrides_from_capture_body(body: dict[str, Any]) -> dict[str, object]:
@@ -137,8 +154,14 @@ def capture_input_from_http_body(
     body: dict[str, Any],
     *,
     pdf_candidates: list[str] | None,
+    value_override: str | None = None,
 ) -> CaptureInput:
-    """Build pure capture input from validated HTTP capture body."""
+    """Build pure capture input from validated HTTP capture body.
+
+    *value_override* replaces the body's ``url``. The local-file branch uses it
+    to capture the *resolved* path its confinement check was made about, rather
+    than the caller's spelling of it.
+    """
     raw_cookies = body.get("cookies")
     cookies = raw_cookies.strip() if isinstance(raw_cookies, str) and raw_cookies.strip() else None
     raw_page_html = body.get("page_html")
@@ -154,7 +177,7 @@ def capture_input_from_http_body(
         else None
     )
     return CaptureInput(
-        value=str(body["url"]).strip(),
+        value=value_override if value_override is not None else str(body["url"]).strip(),
         record_overrides=record_overrides_from_capture_body(body),
         bib_selector=body.get("bib") if isinstance(body.get("bib"), str) else None,
         pdf_candidates=tuple(
@@ -176,8 +199,8 @@ def capture_options_from_http_body(
     page_metadata_cmd = cfg.get("page_metadata_cmd")
     timeout = cfg.get("page_metadata_timeout_seconds", 5)
     return CaptureOptions(
-        dry_run=bool(body.get("dry_run", False)),
-        force_new=bool(body.get("force_new", False)),
+        dry_run=body_flag(body, "dry_run", default=False),
+        force_new=body_flag(body, "force_new", default=False),
         page_metadata_cmd=(
             page_metadata_cmd
             if isinstance(page_metadata_cmd, str) and page_metadata_cmd.strip()
@@ -237,7 +260,10 @@ def metadata_url_override_error(
     *,
     safe_url: Callable[[str], bool],
 ) -> str | None:
-    for key in ("canonical_url", "source_url", "abstract_url"):
+    # Every URL-bearing field the body can set, not a subset. `embedded_pdf_url`
+    # was omitted, and it becomes `fallback_pdf_url` on the record — i.e. a
+    # private or loopback URL the acquisition planner would then go and fetch.
+    for key in ("canonical_url", "source_url", "abstract_url", "embedded_pdf_url"):
         value = body.get(key)
         if isinstance(value, str) and value.strip() and not safe_url(value):
             return f"{key} must be a public http(s) URL"
@@ -298,21 +324,10 @@ def _reject_unconfigured_bib(
     """Reject a request naming a library the config does not declare."""
     if not isinstance(body, dict):
         return None
-    selector = body.get("bib")
-    if not isinstance(selector, str) or not selector.strip():
-        return None
     config_result = load_config_file(config_path, home_dir=home_dir)
-    config = config_result["config"]
-    if config is None:
-        return None  # the handler will report the config failure itself
-    if is_configured_selector(config.get("bibs") or [], selector, home_dir=home_dir):
-        return None
-    return 400, {
-        "error": (
-            "bib must name a library configured in config.toml "
-            "(a direct .bib path is CLI-only)"
-        )
-    }
+    return reject_unconfigured_bib_selector(
+        body.get("bib"), config=config_result["config"], home_dir=home_dir
+    )
 
 
 def process_post_request(
@@ -507,7 +522,7 @@ def _handle_delete_post(
     # for `dry_run: true` and getting a real delete is the one outcome this
     # endpoint must never produce. Without force the default stays a preview;
     # with it, the default is the delete the caller came for.
-    dry_run = bool(body.get("dry_run", not force))
+    dry_run = body_flag(body, "dry_run", default=not force)
 
     resolved = load_bib_target(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector,
@@ -525,26 +540,29 @@ def _handle_delete_post(
     return status, dict(result)
 
 
-def _local_capture_path_error(
+def _confined_local_capture_path(
     value: str, *, config_path: str, home_dir: str
-) -> str | None:
-    """Reject a local capture path unless it is inside `capture_source_dirs`.
+) -> tuple[str | None, str | None]:
+    """Confine a local capture path to `capture_source_dirs`.
 
-    Returns an error message, or None when the path is allowed. Uses the same
-    confinement primitive as the PDF read route, so ``..`` and symlinks are
-    resolved before the containment test rather than after.
+    Returns ``(resolved_path, error)`` — exactly one of which is set. The
+    *resolved* path is handed back because that is the one the check was made
+    about: passing the caller's original string on meant the containment
+    decision and the file actually opened were two different paths, and the
+    difference between them is precisely what symlinks and ``..`` control.
     """
     cfg = load_config_file(config_path, home_dir=home_dir)
     config = cfg.get("config")
     roots = tuple(config.get("capture_source_dirs") or ()) if config else ()
     if not roots:
-        return (
+        return None, (
             "local file capture is not enabled over HTTP; "
             "set capture_source_dirs in config to allow it"
         )
-    if path_confined_to(value, roots) is None:
-        return "path is outside the configured capture_source_dirs"
-    return None
+    confined = path_confined_to(value, roots)
+    if confined is None:
+        return None, "path is outside the configured capture_source_dirs"
+    return str(confined), None
 
 
 def _handle_capture_post(
@@ -575,11 +593,12 @@ def _handle_capture_post(
         # around the read-side confinement. The extension only ever sends
         # http(s) URLs, so this path is opt-in: with no `capture_source_dirs`
         # configured the allowlist is empty and every local path is refused.
-        capture_error = _local_capture_path_error(
+        confined_path, capture_error = _confined_local_capture_path(
             stripped_url, config_path=config_path, home_dir=home_dir,
         )
-        if capture_error is not None:
-            return 400, {"error": capture_error}
+        if capture_error is not None or confined_path is None:
+            return 400, {"error": capture_error or "path is not allowed"}
+        stripped_url = confined_path
     override_error = metadata_url_override_error(body, safe_url=safe_public_http_url)
     if override_error is not None:
         return 400, {"error": override_error}
@@ -603,7 +622,11 @@ def _handle_capture_post(
     config = config_result["config"] if config_result["config"] is not None else None
     try:
         result = capture_to_bib(
-            capture_input_from_http_body(body, pdf_candidates=safe_pdf_candidates),
+            capture_input_from_http_body(
+                body,
+                pdf_candidates=safe_pdf_candidates,
+                value_override=stripped_url,
+            ),
             capture_options_from_http_body(body, config=config),
             config_path=config_path,
             home_dir=home_dir,
@@ -614,7 +637,7 @@ def _handle_capture_post(
             error_result(
                 message=CONCURRENT_EDIT_MESSAGE,
                 errors=[CONCURRENT_EDIT_MESSAGE],
-                dry_run=bool(body.get("dry_run", False)),
+                dry_run=body_flag(body, "dry_run", default=False),
                 warnings=[],
             )
         )
@@ -631,7 +654,7 @@ def _handle_capture_post(
         )
     status = status_for_service_result(cast(dict[str, Any], result))
     return status, capture_payload(
-        cast(dict[str, Any], result), include_diagnostics=bool(body.get("verbose", False))
+        cast(dict[str, Any], result), include_diagnostics=body_flag(body, "verbose", default=False)
     )
 
 
@@ -773,28 +796,33 @@ def _handle_attach_pdf_raw_post(
     if source_url is not None and not safe_public_http_url(source_url):
         return 400, {"error": "source_url must be a public http(s) URL"}
     request_id = body.get("request_id") if isinstance(body.get("request_id"), str) else None
-    session = None
-    if request_id is not None:
-        if attach_session_store is None:
-            return 403, {"error": "attach session store unavailable"}
-        session = attach_session_store.claim(request_id)
-        if session is None:
-            return 403, {"error": "attach session not found"}
-        attach_token_value = body.get("attach_token")
-        token: str = attach_token_value if isinstance(attach_token_value, str) else ""
-        validation_error = validate_attach_request(
-            session,
-            request_id=request_id,
-            token=token,
-            citekey=citekey,
-            bib=body.get("bib") if isinstance(body.get("bib"), str) else None,
-            pdf_bytes=pdf_bytes,
-            source_url=source_url,
-            now=now(),
-        )
-        if validation_error is not None:
-            attach_session_store.restore(session)
-            return 403, {"error": validation_error}
+    if request_id is None:
+        # `docs/security.md` presents the attach-session checks — TTL, byte
+        # limit, allowlisted source URL, citekey and bib — as *the* control on
+        # this route. They only ran when the caller volunteered a `request_id`,
+        # so omitting it skipped every one of them and wrote bytes under any
+        # citekey. A control the caller can decline is not a control.
+        return 403, {"error": "request_id required: attach must reference a capture"}
+    if attach_session_store is None:
+        return 403, {"error": "attach session store unavailable"}
+    session = attach_session_store.claim(request_id)
+    if session is None:
+        return 403, {"error": "attach session not found"}
+    attach_token_value = body.get("attach_token")
+    token: str = attach_token_value if isinstance(attach_token_value, str) else ""
+    validation_error = validate_attach_request(
+        session,
+        request_id=request_id,
+        token=token,
+        citekey=citekey,
+        bib=body.get("bib") if isinstance(body.get("bib"), str) else None,
+        pdf_bytes=pdf_bytes,
+        source_url=source_url,
+        now=now(),
+    )
+    if validation_error is not None:
+        attach_session_store.restore(session)
+        return 403, {"error": validation_error}
     result = attach_pdf_raw_bytes(
         config_path=config_path,
         home_dir=home_dir,
@@ -826,7 +854,7 @@ def _handle_tags_add_post(
         bib_selector=body.get("bib") if isinstance(body.get("bib"), str) else None,
         citekey=citekey,
         tags=tags,
-        dry_run=bool(body.get("dry_run", False)),
+        dry_run=body_flag(body, "dry_run", default=False),
     )
     status = status_for_service_result(result)
     return status, tag_change_payload(result)
@@ -849,7 +877,7 @@ def _handle_tags_remove_post(
         bib_selector=body.get("bib") if isinstance(body.get("bib"), str) else None,
         citekey=citekey,
         tags=tags,
-        dry_run=bool(body.get("dry_run", False)),
+        dry_run=body_flag(body, "dry_run", default=False),
     )
     status = status_for_service_result(result)
     return status, tag_change_payload(result)
@@ -865,13 +893,13 @@ def _handle_update_post(
             config_path=config_path,
             home_dir=home_dir,
             bib_selector=body.get("bib") if isinstance(body.get("bib"), str) else None,
-            dry_run=bool(body.get("dry_run", True)),
+            dry_run=body_flag(body, "dry_run", default=True),
         )
     except ConcurrentEditError:
         return 409, {"error": CONCURRENT_EDIT_MESSAGE}
     status = status_for_service_result(result)
     return status, update_payload(
-        result, include_diagnostics=bool(body.get("verbose", False))
+        result, include_diagnostics=body_flag(body, "verbose", default=False)
     )
 
 
@@ -885,14 +913,14 @@ def _handle_promote_post(
             config_path=config_path,
             home_dir=home_dir,
             bib_selector=body.get("bib") if isinstance(body.get("bib"), str) else None,
-            keep_preprint=not bool(body.get("replace", False)),
-            dry_run=bool(body.get("dry_run", True)),
+            keep_preprint=not body_flag(body, "replace", default=False),
+            dry_run=body_flag(body, "dry_run", default=True),
         )
     except ConcurrentEditError:
         return 409, {"error": CONCURRENT_EDIT_MESSAGE}
     status = status_for_service_result(result)
     return status, promote_payload(
-        result, include_diagnostics=bool(body.get("verbose", False))
+        result, include_diagnostics=body_flag(body, "verbose", default=False)
     )
 
 
@@ -916,7 +944,8 @@ def _handle_inbox_drain_post(
         return 400, {
             "error": "inbox draining is not enabled over HTTP; set inbox_path in config"
         }
-    if path_confined_to(inbox_path.strip(), [configured_inbox]) is None:
+    confined_inbox = path_confined_to(inbox_path.strip(), [configured_inbox])
+    if confined_inbox is None:
         return 400, {"error": "file must be the configured inbox_path"}
 
     raw_delay = body.get("delay")
@@ -940,8 +969,10 @@ def _handle_inbox_drain_post(
     result = drain_inbox(
         config_path=config_path,
         home_dir=home_dir,
-        inbox_path=inbox_path.strip(),
-        dry_run=bool(body.get("dry_run", False)),
+        # The resolved path, not the caller's spelling of it — see
+        # `_confined_local_capture_path`.
+        inbox_path=str(confined_inbox),
+        dry_run=body_flag(body, "dry_run", default=False),
         extra_tags=extra_tags,
         delay=delay,
     )

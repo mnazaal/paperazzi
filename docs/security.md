@@ -155,6 +155,15 @@ directories and are closed by default.
 9. Pzi server validates token, citekey, size, source URL, then saves PDF.
 10. Extension removes temporary host permission.
 
+`/attach-pdf-raw` **requires** a `request_id` naming a live attach session, so
+the checks in step 9 cannot be skipped by omitting it.
+
+`/attach-pdf-bytes` (the JSON fallback, used when the capture produced no attach
+plan) accepts an attach session and enforces the same checks when one is given,
+but also accepts a sessionless upload. That upload is governed by the API-token
+auth gate alone — it is not covered by the TTL, size or source-URL checks above.
+Treat the API token as the boundary for it.
+
 ### Cookie handling
 
 - Cookies are read **only** for the active tab's domain.

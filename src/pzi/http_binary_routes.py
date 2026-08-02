@@ -12,8 +12,9 @@ from pathlib import Path
 from typing import Any
 
 from pzi.bib_repository import read_bib_file
-from pzi.config import BibResolutionFailure, load_bib_target
+from pzi.config import BibResolutionFailure, load_bib_target, load_config_file
 from pzi.export_service import export_bibtex, export_csv, export_json, export_ris
+from pzi.http_status import reject_unconfigured_bib_selector
 
 # Characters unsafe inside a quoted ``Content-Disposition`` filename: control
 # bytes (incl. CR/LF, which could split the header) plus the quote/backslash
@@ -62,6 +63,14 @@ def build_pdf_file_response(
     if not citekey:
         return 400, {"error": "citekey required"}
 
+    rejection = reject_unconfigured_bib_selector(
+        bib_selector,
+        config=load_config_file(config_path, home_dir=home_dir)["config"],
+        home_dir=home_dir,
+    )
+    if rejection is not None:
+        return rejection
+
     resolved = load_bib_target(
         config_path=config_path,
         home_dir=home_dir,
@@ -99,6 +108,14 @@ def build_export_bytes_response(
     """Build raw export response bytes for download/inline serving."""
     if fmt not in EXPORT_FORMATS:
         return 400, {"error": f"unsupported format: {fmt}"}
+
+    rejection = reject_unconfigured_bib_selector(
+        bib_selector,
+        config=load_config_file(config_path, home_dir=home_dir)["config"],
+        home_dir=home_dir,
+    )
+    if rejection is not None:
+        return rejection
 
     resolved = load_bib_target(
         config_path=config_path,

@@ -217,8 +217,6 @@ async function doMultiCapture(all) {
   searchProgressText.textContent = "Capturing 0/" + total + "…";
 
   // Per-item capture with progress updates.
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const cookies = tab && tab.url ? await cookieHeaderForUrl(tab.url) : "";
   const endpoint = await getEndpoint();
   const authHeaders = await getAuthHeaders();
   const results = [];
@@ -241,7 +239,11 @@ async function doMultiCapture(all) {
           bib,
           dry_run: dryRun,
           verbose: true,
-          cookies,
+          // Deliberately no `cookies`: each result is a *different* domain, and
+          // this used to forward the search page's cookie header to every one
+          // of them. Cookies are read for the active tab's domain and belong
+          // only to a capture of that tab.
+          cookies: await cookieHeaderForUrl(item.url),
         }),
       });
       const data = await response.json().catch(() => null);

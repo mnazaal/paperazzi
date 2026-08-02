@@ -302,15 +302,20 @@ def ensure_translation_server(
     *,
     stdout: TextIO,
     stderr: TextIO,
+    force: bool = False,
 ) -> Path | None:
     """Clone/install translation-server into ``data_home/ts/``.
 
     Returns the path to the translation-server directory, or ``None`` on
-    failure.
+    failure. The install is staged in ``ts.new`` and swapped in only once every
+    step has succeeded, so a failure leaves any existing install untouched.
+
+    *force* reinstalls even when the sentinel says the current install is
+    current — what ``pzi doctor --reinstall-server`` asks for.
     """
     ts_dir = data_home / "ts"
 
-    if not _needs_reinstall(ts_dir):
+    if not force and not _needs_reinstall(ts_dir):
         return ts_dir
 
     if not shutil.which("git"):
@@ -320,15 +325,51 @@ def ensure_translation_server(
         )
         return None
 
-    # Remove stale directory if sentinel mismatch
-    if ts_dir.exists():
-        print("removing outdated translation-server installation …", file=stdout)
-        shutil.rmtree(ts_dir, ignore_errors=True)
+    # An existing directory is only ours to replace if a previous pzi install
+    # left its sentinel there. Anything else is the user's, and deleting it —
+    # which this used to do unconditionally — destroys work pzi never created.
+    if (
+        not force
+        and ts_dir.exists()
+        and _read_sentinel(ts_dir) is None
+        and any(ts_dir.iterdir())
+    ):
+        print(
+            f"refusing to replace {ts_dir}: it was not installed by pzi "
+            "(no .pzi-installed marker). Move it aside and retry.",
+            file=stderr,
+        )
+        return None
 
-    ts_dir.mkdir(parents=True, exist_ok=True)
+    # Build into a staging directory and swap it in only once every step has
+    # succeeded. The old install stays usable until then: deleting it up front
+    # meant a failed clone left the user with nothing, on the very command they
+    # ran *because* something was already broken.
+    ts_dir.parent.mkdir(parents=True, exist_ok=True)
+    build_dir = data_home / "ts.new"
+    shutil.rmtree(build_dir, ignore_errors=True)
+    build_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        return _build_translation_server(
+            ts_dir, build_dir, node_bin, stdout=stdout, stderr=stderr
+        )
+    except BaseException:
+        shutil.rmtree(build_dir, ignore_errors=True)
+        raise
+
+
+def _build_translation_server(
+    ts_dir: Path,
+    build_dir: Path,
+    node_bin: str,
+    *,
+    stdout: TextIO,
+    stderr: TextIO,
+) -> Path | None:
+    """Populate *build_dir*, then move it over *ts_dir*. See the caller."""
 
     for repo in _TS_REPOS:
-        dest = ts_dir / repo["dest"]
+        dest = build_dir / repo["dest"]
         print(f"cloning {repo['name']} …", file=stdout)
         stdout.flush()
         try:
@@ -341,8 +382,8 @@ def ensure_translation_server(
             return None
 
     # Apply cookie-bridge patches
-    web_session = ts_dir / "src" / "webSession.js"
-    web_endpoint = ts_dir / "src" / "webEndpoint.js"
+    web_session = build_dir / "src" / "webSession.js"
+    web_endpoint = build_dir / "src" / "webEndpoint.js"
     patch_warnings: list[str] = []
     if web_session.exists():
         warning = _apply_cookie_patch(web_session, "session")
@@ -383,7 +424,7 @@ def ensure_translation_server(
     try:
         subprocess.run(
             [node_bin, str(_npm_cli_path(node_bin)), "install", "--production"],
-            cwd=str(ts_dir),
+            cwd=str(build_dir),
             env=npm_env,
             check=True,
             capture_output=True,
@@ -393,7 +434,22 @@ def ensure_translation_server(
         print(f"npm install failed: {exc.stderr.strip()}", file=stderr)
         return None
 
-    _write_sentinel(ts_dir)
+    _write_sentinel(build_dir)
+
+    # Swap: keep the previous install until the replacement is in place, so a
+    # failure here still leaves a working translation-server behind.
+    previous = ts_dir.with_name(ts_dir.name + ".old")
+    shutil.rmtree(previous, ignore_errors=True)
+    if ts_dir.exists():
+        ts_dir.rename(previous)
+    try:
+        build_dir.rename(ts_dir)
+    except OSError as exc:
+        if previous.exists():
+            previous.rename(ts_dir)
+        print(f"failed to install translation-server: {exc}", file=stderr)
+        return None
+    shutil.rmtree(previous, ignore_errors=True)
     print(f"translation-server installed to {ts_dir}", file=stdout)
     return ts_dir
 

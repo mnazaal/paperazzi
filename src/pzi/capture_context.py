@@ -47,7 +47,8 @@ def resolve_api_auth_token(
     """
     resolver = resolve_secret or (
         lambda command, fallback: resolve_optional_value(
-            command=command, fallback=fallback, run_command=run_command
+            command=command, fallback=fallback, run_command=run_command,
+            config_key="api_auth_token_cmd",
         )
     )
     explicit = resolver(config.get("api_auth_token_cmd"), config.get("api_auth_token"))
@@ -82,15 +83,21 @@ def resolve_optional_value(
     command: str | None,
     fallback: str | None,
     run_command: Callable[[str], str] | None = None,
+    config_key: str | None = None,
 ) -> str | None:
-    """Resolve optional secret/config value, with command output taking priority."""
+    """Resolve optional secret/config value, with command output taking priority.
+
+    *config_key* names the ``*_cmd`` key being resolved, so a failure can say
+    which config line to fix without quoting the command or its stderr.
+    """
     if not command:
         return fallback
-    runner = run_command or run_shell_command
-    return runner(command).strip() or None
+    if run_command is not None:
+        return run_command(command).strip() or None
+    return run_shell_command(command, config_key=config_key).strip() or None
 
 
-def run_shell_command(command: str) -> str:
+def run_shell_command(command: str, *, config_key: str | None = None) -> str:
     """Run a configured shell-style command and return stdout.
 
     Only simple commands (no shell operators like &&, |, ;, $(), ``) are
@@ -115,21 +122,35 @@ def run_shell_command(command: str) -> str:
         result = subprocess.run(tokens, capture_output=True, text=True, timeout=10)
     except subprocess.TimeoutExpired as exc:
         raise PziError(
-            f"secret command timed out after 10s (did it prompt for input?): {command!r}",
+            f"{_secret_command_label(config_key)} timed out after 10s "
+            "(did it prompt for input?)",
             code=exit_codes.ENVIRONMENT,
         ) from exc
     except OSError as exc:
         raise PziError(
-            f"secret command could not run: {exc.strerror or exc}: {command!r}",
+            f"{_secret_command_label(config_key)} could not run: "
+            f"{exc.strerror or type(exc).__name__}",
             code=exit_codes.ENVIRONMENT,
         ) from exc
     if result.returncode != 0:
         raise PziError(
-            f"secret command exited with code {result.returncode}: "
-            f"{result.stderr.strip() or '(no stderr)'}",
+            f"{_secret_command_label(config_key)} exited with code "
+            f"{result.returncode}",
             code=exit_codes.ENVIRONMENT,
         )
     return result.stdout
+
+
+def _secret_command_label(config_key: str | None) -> str:
+    """Name the *config key* whose command failed — never the command itself.
+
+    These messages reach the CLI, `--json` output and HTTP error bodies. The
+    command string is user-authored config that routinely names a password
+    store, an account or a key id, and its stderr can carry the secret it was
+    asked to print; neither belongs in a message the user may paste into an
+    issue. The key is enough to find the line to fix.
+    """
+    return f"the {config_key} command" if config_key else "a configured secret command"
 
 
 def _reject_shell_metacharacters(command: str) -> None:
@@ -203,6 +224,7 @@ def resolve_contact_email(
         command=config.get("contact_email_cmd"),
         fallback=config.get("contact_email"),
         run_command=run_command,
+        config_key="contact_email_cmd",
     )
 
 

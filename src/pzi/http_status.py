@@ -41,3 +41,34 @@ def _result_text(result: Mapping[str, Any]) -> str:
     if isinstance(errors, Sequence) and not isinstance(errors, (str, bytes)):
         parts.extend(str(item) for item in errors)
     return "\n".join(parts)
+
+
+def reject_unconfigured_bib_selector(
+    selector: object, *, config: Mapping[str, Any] | None, home_dir: str
+) -> tuple[int, dict[str, Any]] | None:
+    """Reject a request naming a library *config* does not declare.
+
+    The HTTP API is confined to configured libraries; a direct ``.bib`` path is
+    CLI-only. Applied by both dispatchers rather than per route: the POST side
+    had this check while every GET and binary route accepted any existing
+    ``.bib`` path, so an isolated ``/export/raw?bib=/elsewhere/private.bib``
+    returned the contents of a bibliography the config had never heard of.
+
+    Takes an already-loaded *config* so each dispatcher keeps loading it the way
+    it already does (and stays independently testable); ``None`` means the
+    config could not be loaded, which the handler reports itself.
+    """
+    from pzi.config import is_configured_selector
+
+    if not isinstance(selector, str) or not selector.strip():
+        return None
+    if config is None:
+        return None
+    if is_configured_selector(config.get("bibs") or [], selector, home_dir=home_dir):
+        return None
+    return 400, {
+        "error": (
+            "bib must name a library configured in config.toml "
+            "(a direct .bib path is CLI-only)"
+        )
+    }

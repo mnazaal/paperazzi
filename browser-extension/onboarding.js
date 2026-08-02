@@ -10,7 +10,11 @@ const statusEl = document.getElementById("status");
 const DEFAULT_ENDPOINT = "http://127.0.0.1:8765/capture";
 
 function getStorage() {
-  return chrome.storage.session || chrome.storage.local;
+  // `chrome.storage.session` is cleared when the browser closes, so first-run
+  // setup — the endpoint and the API token the user just pasted — evaporated at
+  // the next restart and the extension came back unpaired. Onboarding settings
+  // are configuration, not session state.
+  return chrome.storage.local;
 }
 
 async function loadSettings() {

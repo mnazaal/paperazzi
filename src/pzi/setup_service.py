@@ -8,7 +8,9 @@ import shlex
 import sys
 from pathlib import Path
 
+from pzi import exit_codes
 from pzi.config import escape_toml_string, tildify_path
+from pzi.errors import PziError
 
 
 def _quote_token(token: str) -> str:
@@ -23,17 +25,25 @@ def _quote_token(token: str) -> str:
     return token if shlex.split(token) == [token] else shlex.quote(token)
 
 
-def provision_api_token(data_home: Path) -> Path:
-    """Generate an API auth token, write it to a ``0600`` file under
-    *data_home*, and return that file's path.
+def provision_api_token(data_home: Path, *, rotate: bool = False) -> tuple[Path, bool]:
+    """Ensure an API auth token exists under *data_home*; return ``(path, created)``.
 
     Keeping the token in its own file (not ``config.toml``) is what lets the
     config be committed to dotfiles safely: pzi auto-reads this file at runtime
     from the resolved data home, so the config references neither the secret nor
     a path. Users who prefer a manager can set ``api_auth_token_cmd`` instead.
+
+    **An existing token is reused unless *rotate* is set.** This function used
+    to mint a fresh token on every call, and ``pzi init`` calls it
+    unconditionally — so running ``pzi init`` for any reason (including against
+    a throwaway ``--config``, which the browser-extension README prescribes as a
+    smoke test) silently de-paired the user's browser extension from their
+    server.
     """
     data_home.mkdir(parents=True, exist_ok=True)
     token_path = data_home / "api_token"
+    if not rotate and _existing_token(token_path) is not None:
+        return token_path, False
     token = secrets.token_urlsafe(32)
     # Create owner-only from the start so the token is never briefly
     # world-readable; O_CREAT's mode only applies on creation, so chmod after
@@ -44,7 +54,27 @@ def provision_api_token(data_home: Path) -> Path:
     finally:
         os.close(fd)
     os.chmod(token_path, 0o600)
-    return token_path
+    return token_path, True
+
+
+def _existing_token(token_path: Path) -> str | None:
+    """The token already on disk, or None if there is none to reuse.
+
+    An *unreadable* file is not "no token": overwriting it would rotate a secret
+    this process cannot even see. That case raises rather than silently minting
+    a replacement.
+    """
+    if not token_path.exists():
+        return None
+    try:
+        existing = token_path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise PziError(
+            f"cannot read the existing API token at {token_path}: {exc.strerror}"
+            " — fix its permissions, or pass --rotate-token to replace it",
+            code=exit_codes.ENVIRONMENT,
+        ) from exc
+    return existing or None
 
 
 def render_config(

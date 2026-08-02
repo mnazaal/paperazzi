@@ -8,7 +8,24 @@ from pathlib import Path
 from typing import TextIO
 
 from pzi import exit_codes, setup_service
-from pzi.config import default_data_home
+from pzi.config import default_data_home, load_config_file
+
+
+def _configured_data_home(config_path: Path, home_dir: str) -> str:
+    """The data home the config being (over)written points at.
+
+    On a fresh `init` there is no config yet and the XDG default is right. With
+    `--force` over a config that sets `pzi_data_home`, that key is where the
+    runtime will look for the token, so that is where it has to go.
+    """
+    if config_path.exists():
+        loaded = load_config_file(str(config_path), home_dir=home_dir)
+        config = loaded.get("config")
+        if config is not None:
+            configured = config.get("pzi_data_home")
+            if isinstance(configured, str) and configured.strip():
+                return configured
+    return default_data_home(home_dir)
 
 
 def run_init_command(
@@ -20,6 +37,28 @@ def run_init_command(
         # USAGE: refused before doing anything, not a finding.
         return exit_codes.USAGE
 
+    setup_only_flags = [
+        name
+        for name, value in (
+            ("--bib", args.bib),
+            ("--name", args.name),
+            ("--papers-dir", args.papers_dir),
+            ("--browser", args.browser),
+        )
+        if value is not None
+    ]
+    if setup_only_flags and not args.setup:
+        # These describe a library, and only the `--setup` template has anywhere
+        # to put one — the plain path copies the shipped template verbatim. They
+        # used to be accepted and dropped, and `pzi init --bib ...` is exactly
+        # what the docs recommend.
+        print(
+            f"error: {', '.join(setup_only_flags)} require --setup "
+            "(plain `pzi init` writes the commented template unchanged)",
+            file=stderr,
+        )
+        return exit_codes.USAGE
+
     dest.parent.mkdir(parents=True, exist_ok=True)
 
     # Provisioned on both paths: the template `init` copies states outright that
@@ -27,15 +66,22 @@ def run_init_command(
     # path used to ship a config asserting a file it had not created. The read
     # side already auto-discovers it (`capture_context`), so writing it here is
     # all that was missing.
-    data_home = Path(default_data_home(home_dir))
-    token_path: Path = setup_service.provision_api_token(data_home)
+    #
+    # Written where the *reader* will look. `resolve_api_auth_token` reads
+    # `<pzi_data_home>/api_token`, so writing to the XDG default regardless left
+    # the token orphaned for anyone who sets that key — the server then fell
+    # back to `auth: DISABLED` while `init` reported a token had been written.
+    data_home = Path(_configured_data_home(dest, home_dir))
+    token_path, token_created = setup_service.provision_api_token(
+        data_home, rotate=getattr(args, "rotate_token", False)
+    )
     if args.setup:
         content = setup_service.render_config(
-            bib_name=args.name,
-            bib_path=args.bib,
+            bib_name=args.name or "main",
+            bib_path=args.bib or "~/bibs/main.bib",
             papers_dir=args.papers_dir,
             with_browser=True,
-            browser=args.browser,
+            browser=args.browser or "chromium",
             home_dir=home_dir,
         )
     else:
@@ -54,12 +100,19 @@ def run_init_command(
     os.chmod(dest, 0o600)
     print(f"created {dest} (mode 0600)", file=stdout)
 
-    print(
-        f"API auth token written to {token_path} (mode 0600). pzi auto-reads "
-        "it at runtime, so config.toml holds no secret or path and is safe to "
-        "commit. To use a manager instead, set `api_auth_token_cmd`.",
-        file=stdout,
-    )
+    if token_created:
+        print(
+            f"API auth token written to {token_path} (mode 0600). pzi auto-reads "
+            "it at runtime, so config.toml holds no secret or path and is safe to "
+            "commit. To use a manager instead, set `api_auth_token_cmd`.",
+            file=stdout,
+        )
+    else:
+        print(
+            f"reusing the existing API auth token at {token_path} — your browser "
+            "extension stays paired. Pass --rotate-token to replace it.",
+            file=stdout,
+        )
 
     if args.setup:
         print(

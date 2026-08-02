@@ -13,6 +13,17 @@ from pzi.doctor_service import doctor_check
 
 def run_doctor_command(args, *, home_dir, config_path, stdout, stderr) -> int:
     if getattr(args, "reinstall_server", False):
+        if getattr(args, "config_only", False):
+            # `--config-only` is documented as the offline check. Running a
+            # network reinstall under it — which is what used to happen, since
+            # this branch was tested first — is the opposite of what was asked.
+            print(
+                "error: --config-only and --reinstall-server are mutually "
+                "exclusive (--config-only is offline; --reinstall-server "
+                "clones and installs over the network)",
+                file=stderr,
+            )
+            return exit_codes.USAGE
         return _reinstall_server(config_path=config_path, home_dir=home_dir,
                                  stdout=stdout, stderr=stderr)
 
@@ -56,8 +67,6 @@ def run_doctor_command(args, *, home_dir, config_path, stdout, stderr) -> int:
 
 def _reinstall_server(*, config_path, home_dir, stdout, stderr) -> int:
     """Reinstall the translation-server with the latest pinned versions."""
-    import shutil
-
     from pzi.node_runtime import ensure_node
     from pzi.ts_backend import ensure_translation_server, is_ts_reachable
 
@@ -85,15 +94,20 @@ def _reinstall_server(*, config_path, home_dir, stdout, stderr) -> int:
     if node is None:
         return exit_codes.ENVIRONMENT
     ts_dir = data_home / "ts"
-    if ts_dir.exists():
-        if is_ts_reachable(ts_url):
-            print(
-                "warning: a translation-server is running; restart `pzi server` "
-                "after the update to use the new version.",
-                file=stderr,
-            )
-        shutil.rmtree(ts_dir, ignore_errors=True)
-    if ensure_translation_server(data_home, node, stdout=stdout, stderr=stderr) is None:
+    if ts_dir.exists() and is_ts_reachable(ts_url):
+        print(
+            "warning: a translation-server is running; restart `pzi server` "
+            "after the update to use the new version.",
+            file=stderr,
+        )
+    # The old install is left in place: `ensure_translation_server` stages the
+    # replacement and swaps it in only on success. Deleting it here first meant
+    # a failed clone left the user with no translation-server at all — strictly
+    # worse than before, on the command they ran to repair something.
+    installed = ensure_translation_server(
+        data_home, node, stdout=stdout, stderr=stderr, force=True
+    )
+    if installed is None:
         return exit_codes.ENVIRONMENT
     print("translation-server reinstalled. Run `pzi server` to start.", file=stdout)
     return exit_codes.OK

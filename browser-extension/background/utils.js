@@ -87,7 +87,14 @@ export function jsonOrNull(response) {
 export function responseErrors(data, defaultMessage) {
   if (!data) return [defaultMessage];
   const errors = Array.isArray(data.errors) ? data.errors : [];
-  return errors.length > 0 ? errors : [data.message || defaultMessage];
+  if (errors.length > 0) return errors;
+  // The server has two error channels. Service results carry `errors[]`, but
+  // every pre-service rejection — invalid API token, origin not allowed, rate
+  // limit exceeded, "bib must name a library configured in config.toml" —
+  // answers with the singular `error`. Reading only `errors` and `message`
+  // turned all of those into a bare "HTTP 401" or "failed" in the popup.
+  if (typeof data.error === "string" && data.error) return [data.error];
+  return [data.message || defaultMessage];
 }
 
 export function arrayBufferToBase64(buffer) {

@@ -108,6 +108,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no longer promises a rename the real run refuses because the destination is
   occupied.
 
+- **`pzi init` no longer rotates the API auth token.** It minted a fresh token
+  on every run, so running `init` for any reason — including against a throwaway
+  `--config`, which `browser-extension/README.md` prescribes as a smoke test —
+  silently un-paired the browser extension from the server. An existing token is
+  reused and reported as reused; `pzi init --rotate-token` replaces it
+  deliberately. An *unreadable* token file is an error, not a reason to mint a
+  new one.
+- **`pzi init` writes the token where the runtime reads it.** It always wrote to
+  the XDG default while `resolve_api_auth_token` reads
+  `<pzi_data_home>/api_token`, so setting that key left the token orphaned and
+  the server fell back to `auth: DISABLED` while `init` reported success.
+- **The Semantic Scholar API key is no longer sent to Crossref, OpenAlex, DBLP
+  and OpenReview.** One shared metadata fetcher is handed to every provider, and
+  it attached the `x-api-key` header to all of them.
+- **A failing `*_cmd` secret command no longer echoes the command or its
+  stderr** into CLI, `--json` or HTTP errors — those routinely name a password
+  store or account, and the stderr can carry the secret itself. The message
+  names the config key and the exit code.
+- **`pzi doctor --reinstall-server` no longer destroys a working
+  translation-server before the replacement exists.** The install is staged in
+  `ts.new` and swapped in only after every step succeeds; a failed clone now
+  leaves the existing install untouched. Automatic setup additionally refuses to
+  delete a `ts/` directory pzi did not create.
+- **`pzi doctor --config-only --reinstall-server` is a usage error** instead of
+  silently running the network reinstall that `--config-only` excludes.
+- **`pzi init --bib/--name/--papers-dir/--browser` without `--setup` is a usage
+  error** instead of being accepted and dropped.
+- **HTTP GET and binary routes now honour the configured-library gate.** Only
+  the POST side checked it, so `GET /export?bib=/elsewhere/private.bib` and
+  `/export/raw` returned the contents of a bibliography the config never
+  declared.
+- **HTTP booleans must be JSON booleans.** Flags were read with Python
+  truthiness, so `{"dry_run": null}` authorized a real write and
+  `{"replace": "false"}` selected replace mode. Anything that is not a boolean
+  now falls back to the route's default, which for destructive routes is the
+  preview.
+- **`POST /attach-pdf-raw` requires a `request_id`**, so the TTL, size,
+  source-URL and citekey checks `docs/security.md` presents as this route's
+  control can no longer be skipped by omitting it. The JSON `/attach-pdf-bytes`
+  fallback still accepts a sessionless upload — that is now documented rather
+  than implied otherwise.
+- **Path confinement now operates on the path it checked.** Both the local
+  capture path and the inbox drain resolved the path, tested containment, then
+  passed the caller's *unresolved* string to the service.
+- **`embedded_pdf_url` is validated like every other URL field**, instead of
+  reaching acquisition planning unchecked.
+- **The browser extension shows the server's actual error.** Every pre-service
+  rejection (invalid API token, origin not allowed, rate limit, unconfigured
+  bib) answers with the singular `error` key, which the extension never read —
+  the popup showed a bare `HTTP 401`.
+- **Bulk capture no longer forwards the search page's cookies to every captured
+  domain**; each capture sends cookies for its own URL.
+- **Extension onboarding survives a browser restart** — the endpoint and token
+  were stored in `chrome.storage.session`, which is cleared when the browser
+  closes.
+
 ### Known limitations
 
 - A bibliography with more than one hard link keeps only the written name
