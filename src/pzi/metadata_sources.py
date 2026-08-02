@@ -85,6 +85,31 @@ def fetch_crossref_pdf_url(
     return _crossref_extract_pdf_url(work)
 
 
+def _crossref_author_name(author: dict[str, object]) -> str:
+    """One author as ``Family, Given``, covering the shapes Crossref also emits.
+
+    Only ``given`` + ``family`` used to be read, so three kinds of contributor
+    were dropped entirely — the entry was captured with no author at all, and
+    ``pzi check`` then flagged it ``author_unknown``:
+
+    * an **organizational** author (a consortium, standards body or working
+      group) is given as ``name`` with no personal-name parts;
+    * a **mononym** appears as ``given`` alone as often as ``family`` alone;
+    * a **suffix** (``Jr.``, ``III``) is a separate key, and dropping it merges
+      two different people.
+    """
+    given = str(author.get("given") or "").strip()
+    family = str(author.get("family") or "").strip()
+    suffix = str(author.get("suffix") or "").strip()
+    if suffix and family:
+        family = f"{family} {suffix}"
+    if family and given:
+        return f"{family}, {given}"
+    if family or given:
+        return family or given
+    return str(author.get("name") or "").strip()
+
+
 def _crossref_normalize_work(work: dict[str, object]) -> NormalizedRecord:
     title_list = work.get("title")
     title = title_list[0] if isinstance(title_list, list) and title_list else None
@@ -94,15 +119,17 @@ def _crossref_normalize_work(work: dict[str, object]) -> NormalizedRecord:
     for author in raw_authors if isinstance(raw_authors, list) else []:
         if not isinstance(author, dict):
             continue
-        given = author.get("given") or ""
-        family = author.get("family") or ""
-        if family and given:
-            authors.append(f"{family}, {given}")
-        elif family:
-            authors.append(str(family))
+        name = _crossref_author_name(author)
+        if name:
+            authors.append(name)
 
     year: int | None = None
-    for date_field in ("published-print", "published-online", "created"):
+    # `created` is the *deposit* date — when the DOI record was made — so a 1998
+    # paper back-deposited in 2015 was captured as `year = {2015}` and then
+    # failed `pzi check` against every other source. `issued` is Crossref's
+    # publication date and `posted` is its equivalent for posted content; both
+    # belong ahead of the deposit date, which stays only as a last resort.
+    for date_field in ("published-print", "published-online", "issued", "posted", "created"):
         raw_date = work.get(date_field)
         date_parts = raw_date.get("date-parts") if isinstance(raw_date, dict) else None
         if (

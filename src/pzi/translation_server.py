@@ -11,7 +11,12 @@ from urllib.request import Request, urlopen
 
 from pzi.bibtex import NormalizedRecord, repair_split_initials
 from pzi.fetch_helpers import DEFAULT_MAX_RESPONSE_BYTES, _read_limited
-from pzi.identifiers import _extract_year_from_str, normalize_doi, normalize_url
+from pzi.identifiers import (
+    _extract_year_from_str,
+    normalize_arxiv_id,
+    normalize_doi,
+    normalize_url,
+)
 
 TranslationAttachment: TypeAlias = dict[str, Any]
 
@@ -201,9 +206,16 @@ def _extract_year(item: Mapping[str, object]) -> int | None:
 
 
 def _extract_arxiv_id(item: Mapping[str, object]) -> str | None:
+    """The bare arXiv ID a translator reported, or ``None``.
+
+    Zotero emits ``archiveID: "arXiv:2301.12345"``. Kept verbatim, the prefix
+    reached both the entry — where ``archiveprefix`` supplies it again, so the
+    rendered citation read "arXiv:arXiv:2301.12345" — and the dedup identity,
+    where it split one paper into two depending on the capture route.
+    """
     archive_id = _mapping_string(item, "archiveID")
     if archive_id is not None:
-        return archive_id.strip() or None
+        return normalize_arxiv_id(archive_id)
 
     extra = _mapping_string(item, "extra")
     if extra is None:
@@ -214,8 +226,7 @@ def _extract_arxiv_id(item: Mapping[str, object]) -> str | None:
             continue
         key, value = line.split(":", 1)  # pragma: no branch — covered by integration/browser tests
         if key.strip().lower() == "arxiv":  # pragma: no branch
-            candidate = value.strip()
-            return candidate or None
+            return normalize_arxiv_id(value)
     return None
 
 

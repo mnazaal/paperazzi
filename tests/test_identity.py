@@ -110,3 +110,27 @@ def test_a_value_that_is_not_a_doi_yields_no_doi_identity() -> None:
 
     for value in ("  Not-A-Doi  ", "n/a", "N/A", "-", "TBD", "in press", "10.xxxx/xxxxx"):
         assert extract_identities({"doi": value}) == [], value
+
+
+def test_arxiv_ids_are_normalized_so_variants_are_one_paper() -> None:
+    """Zotero emits `archiveID: "arXiv:2301.12345"`; arXiv itself serves `v2`.
+
+    Compared verbatim, the same paper carried a different identity depending on
+    which route captured it: dedupe missed it, and the entry rendered as
+    `eprint = {arXiv:2301.12345}` — a citation reading "arXiv:arXiv:2301.12345",
+    since `archiveprefix` supplies the prefix.
+    """
+    from pzi.similarity import find_exact_match
+
+    existing = [{"citekey": "a2023", "arxiv_id": "2301.12345"}]
+    for spelling in ("arXiv:2301.12345", "arxiv:2301.12345", "2301.12345v2", "  2301.12345  "):
+        assert find_exact_match({"arxiv_id": spelling}, existing) == 0, spelling
+    assert find_exact_match({"arxiv_id": "2301.99999"}, existing) is None
+
+
+def test_an_old_style_arxiv_id_keeps_its_subject_class() -> None:
+    from pzi.similarity import extract_identities
+
+    assert extract_identities({"arxiv_id": "arXiv:math.GT/0309136v1"}) == [
+        {"kind": "arxiv", "value": "math.GT/0309136"}
+    ]

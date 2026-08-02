@@ -146,3 +146,99 @@ def test_fetch_crossref_record_by_title_no_items() -> None:
         fetch_text=lambda url: json.dumps({"message": {"items": []}}),
     )
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Authors Crossref does not describe as `given` + `family`
+# ---------------------------------------------------------------------------
+
+
+def _record_from(message: dict) -> dict:
+    result = fetch_crossref_record("10.1000/x", fetch_text=lambda _: json.dumps({"message": message}))
+    assert result is not None
+    return result
+
+
+def test_an_organizational_author_is_not_dropped() -> None:
+    """Crossref gives a corporate author a `name`, not `family`/`given`.
+
+    Standards bodies, consortia and working groups were silently dropped, so a
+    W3C or IETF reference captured with *no author at all* — and `pzi check`
+    then flagged it `author_unknown`.
+    """
+    result = _record_from({
+        "title": ["HTML Standard"],
+        "author": [{"name": "World Wide Web Consortium"}],
+    })
+
+    assert result["authors"] == ["World Wide Web Consortium"]
+
+
+def test_a_mononym_author_is_kept() -> None:
+    result = _record_from({
+        "title": ["A Paper"],
+        "author": [{"family": "Plato"}, {"given": "Prince"}],
+    })
+
+    assert result["authors"] == ["Plato", "Prince"]
+
+
+def test_an_author_suffix_is_kept() -> None:
+    """`King, Jr., Martin Luther` is a different person from `King, Martin Luther`."""
+    result = _record_from({
+        "title": ["A Paper"],
+        "author": [{"given": "Martin Luther", "family": "King", "suffix": "Jr."}],
+    })
+
+    assert result["authors"] == ["King Jr., Martin Luther"]
+
+
+# ---------------------------------------------------------------------------
+# Which Crossref date is the publication year
+# ---------------------------------------------------------------------------
+
+
+def test_issued_wins_over_the_deposit_date() -> None:
+    """`created` is when the DOI record was deposited, not when the work appeared.
+
+    A 1998 paper back-deposited in 2015 was captured as `year = {2015}`, which
+    then failed `pzi check` against every other source.
+    """
+    result = _record_from({
+        "title": ["An Old Paper"],
+        "issued": {"date-parts": [[1998]]},
+        "created": {"date-parts": [[2015, 6, 1]]},
+    })
+
+    assert result["year"] == 1998
+
+
+def test_posted_is_used_for_posted_content() -> None:
+    result = _record_from({
+        "title": ["A Preprint"],
+        "posted": {"date-parts": [[2024, 3, 2]]},
+        "created": {"date-parts": [[2024, 3, 5]]},
+    })
+
+    assert result["year"] == 2024
+
+
+def test_a_printed_date_still_wins_over_issued() -> None:
+    """`issued` is the earliest of the known dates, print included; when the
+    print date is stated it is the one a citation uses."""
+    result = _record_from({
+        "title": ["A Paper"],
+        "published-print": {"date-parts": [[2009]]},
+        "issued": {"date-parts": [[2008]]},
+    })
+
+    assert result["year"] == 2009
+
+
+def test_the_deposit_date_is_still_the_last_resort() -> None:
+    result = _record_from({
+        "title": ["A Paper"],
+        "created": {"date-parts": [[2015, 6, 1]]},
+    })
+
+    assert result["year"] == 2015

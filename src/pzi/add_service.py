@@ -224,6 +224,12 @@ def add_input_to_bib(
             fetch_openalex=fetch_openalex,
             fetch_s2=fetch_s2,
             s2_api_key=s2_api_key,
+            # Threaded through like every other input kind: without them the
+            # local-PDF path called Crossref and OpenAlex anonymously, off the
+            # polite pool and outside the injected HTTP seam, so its provider
+            # requests were neither rate-limit-friendly nor test-isolated.
+            contact_email=contact_email,
+            metadata_fetch_text=metadata_fetch_text,
             fetch_web=fetch_web,
             flaresolverr_url=config.get("flaresolverr_url"),
             browser_pdf_cmd=effective_browser_pdf_cmd,

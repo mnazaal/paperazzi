@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, TypeAlias, cast
 
 from pzi import add_planning as _add_planning
-from pzi.add_planning import fetch_record_for_input, merge_record_sources
+from pzi.add_planning import (
+    _carry_item_type,
+    fetch_record_for_input,
+    merge_record_sources,
+    select_best_metadata_result,
+)
 from pzi.bib_repository import WritePlan, read_bib_file
 from pzi.bibtex import BibtexEntry, NormalizedRecord, bibtex_entry_to_record
 from pzi.config import BibConfig
+from pzi.identifiers import normalize_doi
 from pzi.pdf import fetch_and_store_pdf_with_fallbacks, remove_new_pdf, snapshot_pdf_paths
 from pzi.pdf_download import copy_pdf_to_papers_dir
 from pzi.pdf_service import extract_pdf_metadata
@@ -21,6 +27,7 @@ from pzi.protocols import (
     SearchTranslationFetcher,
     WebTranslationFetcher,
 )
+from pzi.resolution_match import score_match
 from pzi.similarity import find_exact_match
 from pzi.translation_server import fetch_web_translations
 
@@ -45,6 +52,8 @@ def local_pdf_base_record(
     fetch_openalex=None,
     fetch_s2=None,
     s2_api_key: str | None = None,
+    contact_email: str | None = None,
+    metadata_fetch_text: Callable[..., str] | None = None,
     flaresolverr_url: str | None = None,
     browser_pdf_cmd: str | None = None,
     errors: list[str] | None = None,
@@ -55,12 +64,18 @@ def local_pdf_base_record(
     "best effort" and reported nothing, so ``--strict-metadata`` had nothing to
     act on and silently did not apply to local-PDF input.
     """
-    doi = extracted.get("doi")
-    if isinstance(doi, str) and doi.strip():
+    raw_doi = extracted.get("doi")
+    # Scraped out of the PDF's text, so it arrives with whatever surrounded it —
+    # a `https://doi.org/` prefix, a trailing period from the sentence it ended.
+    # Passing that through as already-`normalized` resolved it verbatim and
+    # stored it that way; a value that is not a DOI at all (`see front matter`)
+    # was resolved as one, wasting the request and risking a wrong adoption.
+    doi = normalize_doi(raw_doi) if isinstance(raw_doi, str) else None
+    if doi is not None:
         try:
             record, provider_errors, _results = fetch_record(
                 raw_value=doi,
-                classified={"kind": "doi", "raw": doi, "normalized": doi},
+                classified={"kind": "doi", "raw": raw_doi, "normalized": doi},
                 server_url=server_url,
                 fetch_web=fetch_web,
                 fetch_search=fetch_search,
@@ -68,6 +83,8 @@ def local_pdf_base_record(
                 fetch_openalex=fetch_openalex,
                 fetch_s2=fetch_s2,
                 s2_api_key=s2_api_key,
+                contact_email=contact_email,
+                metadata_fetch_text=metadata_fetch_text,
                 flaresolverr_url=flaresolverr_url,
                 browser_pdf_cmd=browser_pdf_cmd,
             )
@@ -87,13 +104,49 @@ def local_pdf_base_record(
             if errors is not None:
                 errors.append(str(exc))
             results = []
+        fallback: NormalizedRecord = {"title": title.strip(), "source_url": raw_value}
         if results:
-            found_record = results[0].get("record")
-            if isinstance(found_record, Mapping):
-                return cast(NormalizedRecord, dict(found_record))
-        return {"title": title.strip(), "source_url": raw_value}
+            return _adopt_title_search_hit(results, fallback, errors=errors)
+        return fallback
 
     return {"source_url": raw_value}
+
+
+def _adopt_title_search_hit(
+    results: Sequence[Mapping[str, object]],
+    fallback: NormalizedRecord,
+    *,
+    errors: list[str] | None,
+) -> NormalizedRecord:
+    """Take the best search hit, but only if it is plausibly the same paper.
+
+    The first result was taken whatever it was. A title-only match is the
+    weakest evidence available — there is no DOI, and no author list from the
+    PDF to corroborate with — so adopting the hit's DOI attaches a *different
+    paper's* identifier to the user's file, which then dedupes against that
+    paper and resolves to it on every later `update` and `check`.
+
+    Judged by the same comparison `pzi check` uses to decide whether a source
+    identified the work at all: a `title_mismatch` flag means it did not.
+    """
+    selected = select_best_metadata_result(results, fallback)
+    found = selected.get("record")
+    if not isinstance(found, Mapping):
+        return fallback
+    match = score_match(cast(Mapping[str, object], fallback), found)
+    if "title_mismatch" in match["flags"]:
+        if errors is not None:
+            errors.append(
+                "title search returned a different paper "
+                f"({found.get('title')!r}, match {match['score']}/100); "
+                "kept the title from the PDF and adopted no identifiers"
+            )
+        return fallback
+    record = dict(found)
+    # As the DOI and URL paths already do: without it every conference paper
+    # captured from a local PDF became `@article` with `journal = {proceedings}`.
+    _carry_item_type(record, selected)
+    return cast(NormalizedRecord, record)
 
 
 def copy_local_pdf_after_citekey(
@@ -142,6 +195,8 @@ def add_local_pdf(
     fetch_openalex: MetadataRecordFetcher | None = None,
     fetch_s2: S2RecordFetcher | None = None,
     s2_api_key: str | None = None,
+    contact_email: str | None = None,
+    metadata_fetch_text: Callable[..., str] | None = None,
     flaresolverr_url: str | None = None,
     browser_pdf_cmd: str | None = None,
     browser: str | None = None,
@@ -165,6 +220,8 @@ def add_local_pdf(
         fetch_openalex=fetch_openalex,
         fetch_s2=fetch_s2,
         s2_api_key=s2_api_key,
+        contact_email=contact_email,
+        metadata_fetch_text=metadata_fetch_text,
         flaresolverr_url=flaresolverr_url,
         browser_pdf_cmd=browser_pdf_cmd,
         errors=metadata_errors,

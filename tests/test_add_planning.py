@@ -544,3 +544,74 @@ def test_fetch_record_for_input_routes_providers_through_the_shared_fetcher() ->
     assert any("crossref.org" in url for url in seen_urls), seen_urls
     assert any("openalex.org" in url for url in seen_urls), seen_urls
     assert any("semanticscholar.org" in url for url in seen_urls), seen_urls
+
+
+# ---------------------------------------------------------------------------
+# A candidate that is a different paper than the one asked for
+# ---------------------------------------------------------------------------
+
+
+def test_a_candidate_whose_doi_contradicts_the_request_is_refused() -> None:
+    """A contradicting DOI only cost 50 points, which a rich record outweighs.
+
+    When it is the *only* candidate it wins outright, so `pzi add 10.1145/A`
+    stored the record for `10.9999/B` — a different paper, under the citekey and
+    DOI the user asked for.
+    """
+    from pzi.add_planning import fetch_record_for_input
+
+    def _search(_query, *, server_url):
+        return [
+            {
+                "item_type": "journalArticle",
+                "record": {
+                    "title": "A Completely Different Paper",
+                    "doi": "10.9999/b",
+                    "authors": ["Other, A", "Other, B", "Other, C"],
+                    "year": 2020,
+                    "venue": "Elsewhere",
+                    "abstract_url": "https://example.com/abs",
+                    "canonical_url": "https://example.com/paper",
+                },
+                "attachments": [{"url": "https://example.com/p.pdf"}],
+            }
+        ]
+
+    record, _errors, _results = fetch_record_for_input(
+        raw_value="10.1145/3372297",
+        classified={"kind": "doi", "raw": "10.1145/3372297",
+                    "normalized": "10.1145/3372297"},
+        server_url="http://127.0.0.1:1969",
+        fetch_web=lambda *_a, **_k: [],
+        fetch_search=_search,
+        fetch_crossref=lambda *_a, **_k: {
+            "title": "The Paper That Was Asked For", "doi": "10.1145/3372297",
+        },
+    )
+
+    assert record["doi"] == "10.1145/3372297"
+    assert record["title"] == "The Paper That Was Asked For"
+
+
+def test_a_candidate_that_agrees_or_is_silent_about_the_doi_is_still_taken() -> None:
+    """Most translators return no DOI at all; refusing those would break capture."""
+    from pzi.add_planning import fetch_record_for_input
+
+    def _search(_query, *, server_url):
+        return [
+            {"item_type": "journalArticle",
+             "record": {"title": "The Paper", "authors": ["A, B"], "year": 2020},
+             "attachments": []},
+        ]
+
+    record, _errors, _results = fetch_record_for_input(
+        raw_value="10.1145/3372297",
+        classified={"kind": "doi", "raw": "10.1145/3372297",
+                    "normalized": "10.1145/3372297"},
+        server_url="http://127.0.0.1:1969",
+        fetch_web=lambda *_a, **_k: [],
+        fetch_search=_search,
+    )
+
+    assert record["title"] == "The Paper"
+    assert record["doi"] == "10.1145/3372297"

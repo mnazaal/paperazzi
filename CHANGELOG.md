@@ -32,6 +32,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for `problematic` and only under `--strict`, so a CI gate written from that
   table passed a library of fabricated references. `--strict` keeps its real
   meaning: harder checks, not whether findings are reported.
+- **A metadata candidate claiming a different DOI than the one asked for is
+  refused.** It cost 50 points, which a rich record outweighs — and when it was
+  the only candidate it won outright however low it scored, so `pzi add
+  10.1145/A` could store the record for `10.9999/B` under the DOI and citekey
+  the user asked for. The cascade now falls through to Crossref/OpenAlex
+  instead. A candidate that agrees, or says nothing about the DOI, is unaffected.
+- **A local PDF no longer adopts a different paper's identifiers.** The first
+  title-search hit was taken whatever it was, so a near-miss handed its DOI to
+  the user's file — which then deduped against that paper and resolved to it on
+  every later `update` and `check`. The hit is now scored with the same
+  comparison `pzi check` uses, the *best* hit is taken rather than the first, and
+  its `item_type` is carried across so a conference paper stops becoming
+  `@article` with `journal = {proceedings}`.
+- **A DOI scraped out of a PDF is normalized before it is resolved.** It arrives
+  with whatever surrounded it in the text — a `https://doi.org/` prefix, a
+  trailing sentence period — and was resolved and stored verbatim; a value that
+  is not a DOI at all (`see front matter`) was resolved as one instead of
+  falling through to the title search.
+- **The local-PDF path uses the configured contact email and HTTP seam.** It
+  called Crossref and OpenAlex anonymously, off the polite pool and outside the
+  injected fetcher, unlike every other input kind.
+- **arXiv IDs are normalized, so one paper is one identity.** Zotero reports
+  `archiveID: "arXiv:2301.12345"` and arXiv itself serves `v2` suffixes; stored
+  verbatim, the same paper had a different identity per capture route, dedupe
+  missed it, and `eprint = {arXiv:2301.12345}` rendered a citation reading
+  "arXiv:arXiv:2301.12345" because `archiveprefix` supplies the prefix again.
+- **Crossref organizational, mononym and suffixed authors are no longer
+  dropped.** Only `given` + `family` was read, so a consortium or standards-body
+  author (which Crossref reports as `name`) produced an entry with *no* author at
+  all — which `pzi check` then flagged `author_unknown` — and `King, Jr.` was
+  silently merged with `King`.
+- **Crossref's deposit date is no longer mistaken for the publication year.**
+  `created` — when the DOI record was deposited — was consulted before `issued`
+  and `posted`, so a 1998 paper back-deposited in 2015 was captured as
+  `year = {2015}` and then disagreed with every other source.
+- **The DOI→`/web` fallback scores its results like its two siblings.** It took
+  the translator's first result unscored and carried no `item_type`.
 - **A placeholder DOI is no longer an identity two papers can share.** A `doi`
   field the DOI parser rejects — `n/a`, `-`, `TBD`, `10.xxxx/xxxxx` — fell back
   to its own lowercased text as an exact-match key, so every entry carrying the

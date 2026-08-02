@@ -39,6 +39,30 @@ DOI_IN_PATH_PATTERN = re.compile(r"(?i)/doi/(?:[a-z]+/)?(10\.\d{4,9}/[^\s?#]+)")
 _ARXIV_ID = r"[a-z\-]+(?:\.[a-z]{2})?/\d{7}|\d{4}\.\d{4,5}"
 ARXIV_ABS_PATTERN = re.compile(rf"(?i)^/abs/({_ARXIV_ID})(v\d+)?/?$")
 ARXIV_PDF_PATTERN = re.compile(rf"(?i)^/pdf/({_ARXIV_ID})(v\d+)?(?:\.pdf)?/?$")
+# A bare arXiv ID, however it was handed to us: Zotero's `archiveID` carries an
+# `arXiv:` prefix, arXiv's own pages carry a version suffix, and a pasted
+# abs/pdf URL carries both plus a host.
+_ARXIV_BARE = re.compile(
+    rf"(?i)^(?:arxiv:\s*)?(?:https?://arxiv\.org/(?:abs|pdf)/)?({_ARXIV_ID})(?:v\d+)?(?:\.pdf)?/?$"
+)
+
+
+def normalize_arxiv_id(value: str) -> str | None:
+    """Return a bare, comparable arXiv ID, or ``None`` when *value* is not one.
+
+    Stored verbatim, the same paper carried a different identity depending on
+    which route captured it — `2301.12345` from a pasted URL, `arXiv:2301.12345`
+    from the translation server, `2301.12345v2` from arXiv itself — so dedupe
+    missed it. The prefix is also wrong to keep in the entry: `archiveprefix`
+    already supplies it, so `eprint = {arXiv:2301.12345}` renders a citation
+    reading "arXiv:arXiv:2301.12345".
+
+    The subject class of an old-style ID (`math.GT/0309136`) is part of the ID
+    and is preserved; only the case of the `arXiv:` prefix is normalized, since
+    the ID's own case is significant.
+    """
+    match = _ARXIV_BARE.match(value.strip())
+    return match.group(1) if match else None
 
 
 

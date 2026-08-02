@@ -9,7 +9,7 @@ from collections.abc import Iterable, Sequence
 from typing import Any, Literal, NamedTuple, TypeAlias
 
 from pzi.bibtex import NormalizedRecord, normalize_authors
-from pzi.identifiers import normalize_doi
+from pzi.identifiers import normalize_arxiv_id, normalize_doi
 
 # ---------------------------------------------------------------------------
 # Type aliases
@@ -37,7 +37,7 @@ def extract_identities(record: MatchableRecord) -> list[Identity]:
     """
     candidates: list[tuple[IdentityKind, str | None]] = [
         ("doi", _canonical_doi(record.get("doi"))),
-        ("arxiv", record.get("arxiv_id")),
+        ("arxiv", _canonical_arxiv_id(record.get("arxiv_id"))),
         ("url", record.get("canonical_url")),
     ]
 
@@ -67,6 +67,19 @@ def _canonical_doi(value: object) -> str | None:
     if not isinstance(value, str) or not value.strip():
         return None
     return normalize_doi(value)
+
+
+def _canonical_arxiv_id(value: object) -> str | None:
+    """Canonical form of a stored arXiv ID, for identity comparison.
+
+    An unrecognized value keeps its stripped self rather than dropping out: a
+    hand-written ID this parser does not know is still the user's identifier for
+    that paper, and unlike a DOI field there is no established placeholder
+    convention here for it to collide with.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return normalize_arxiv_id(value) or value.strip()
 
 
 def build_identity_index(

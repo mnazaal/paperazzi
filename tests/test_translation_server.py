@@ -150,3 +150,14 @@ def test_fetch_translation_rejects_non_list_response() -> None:
         assert str(exc) == "translation-server response must be a list"
     else:
         raise AssertionError("expected ValueError")
+
+
+def test_an_arxiv_id_from_the_translator_is_stored_without_its_prefix() -> None:
+    """Zotero's `archiveID` carries the `arXiv:` prefix, which `archiveprefix`
+    already supplies — stored raw, the citation reads "arXiv:arXiv:2301.12345"."""
+    from pzi.translation_server import _extract_arxiv_id
+
+    assert _extract_arxiv_id({"archiveID": "arXiv:2301.12345"}) == "2301.12345"
+    assert _extract_arxiv_id({"archiveID": "2301.12345v3"}) == "2301.12345"
+    assert _extract_arxiv_id({"extra": "arXiv: arXiv:2301.12345"}) == "2301.12345"
+    assert _extract_arxiv_id({"archiveID": "not-an-arxiv-id"}) is None

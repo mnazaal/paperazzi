@@ -450,8 +450,13 @@ def fetch_record_for_input(
             errors=provider_errors,
         )
         translation_results.extend(results or [])
-        if results:
-            selected = select_best_metadata_result(results, fallback)
+        # A candidate claiming a different DOI is a different paper, whatever it
+        # scores. Dropping it here rather than at selection lets the cascade fall
+        # through to Crossref/OpenAlex, which is what a caller asking for a
+        # specific DOI wants next.
+        usable = drop_contradicting_candidates(results or [], fallback)
+        if usable:
+            selected = select_best_metadata_result(usable, fallback)
             best = dict(merge_record_sources(fallback, selected["record"]))
             _carry_item_type(best, selected)
             return (
@@ -507,14 +512,19 @@ def fetch_record_for_input(
                 errors=provider_errors,
             )
             translation_results.extend(web_results or [])
-            if web_results:
-                best = dict(
-                    merge_record_sources(fallback, web_results[0]["record"])
-                )
+            usable_web = drop_contradicting_candidates(web_results or [], fallback)
+            if usable_web:
+                # Scored and item-type-carrying, like the DOI-search branch above
+                # and the URL branch below. Taking `[0]` meant this one fallback
+                # path picked whichever result the translator happened to emit
+                # first and typed every conference paper it found as `@article`.
+                selected = select_best_metadata_result(usable_web, fallback)
+                best = dict(merge_record_sources(fallback, selected["record"]))
+                _carry_item_type(best, selected)
                 return (
                     _with_pdf_discovery(
                         cast(NormalizedRecord, best),
-                        translation_attachments=web_results[0].get("attachments"),
+                        translation_attachments=selected.get("attachments"),
                     ),
                     provider_errors,
                     translation_results,
@@ -610,6 +620,33 @@ def safe_api_call(fn, *, errors: list[str] | None = None):
             errors.append(f"provider unreachable: {exc}")
         return []
 
+
+
+def drop_contradicting_candidates(
+    results: Sequence[Mapping[str, Any]], fallback: Mapping[str, object]
+) -> list[Mapping[str, Any]]:
+    """Results that do not claim a *different* DOI than the one asked for.
+
+    Scoring only penalized this, by 50 points, which a rich record outweighs —
+    and when the contradicting candidate is the only one it wins outright
+    however low it scores. `pzi add 10.1145/A` then stored the record for
+    `10.9999/B`: a different paper, under the citekey and DOI the user asked
+    for, indistinguishable afterwards from a correct capture.
+
+    A candidate that agrees, or says nothing about the DOI, is kept: most
+    translators return no DOI at all, so refusing those would refuse most
+    captures.
+    """
+    wanted = _norm_text(fallback.get("doi"))
+    if not wanted:
+        return list(results)
+    kept: list[Mapping[str, Any]] = []
+    for result in results:
+        record = result.get("record")
+        found = _norm_text(record.get("doi")) if isinstance(record, Mapping) else None
+        if found is None or found == wanted:
+            kept.append(result)
+    return kept
 
 
 def select_best_metadata_result(
