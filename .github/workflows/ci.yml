@@ -35,8 +35,10 @@ jobs:
         # From `uv.lock`, which is committed and was consumed by nothing: CI
         # resolved fresh on every run, so a dependency change nobody made could
         # turn the suite red — or, worse, keep it green against a set the
-        # release will not use. `--frozen` fails if the lock is stale.
-        run: uv sync --frozen --extra dev
+        # release will not use. `--locked` fails if the lock is stale —
+        # `--frozen` does not: it skips resolution and installs the lock as-is,
+        # so a lockfile out of step with `pyproject.toml` passes silently.
+        run: uv sync --locked --extra dev
 
       - name: Ruff
         run: .venv/bin/ruff check src tools tests
@@ -129,8 +131,10 @@ jobs:
         # From `uv.lock`, which is committed and was consumed by nothing: CI
         # resolved fresh on every run, so a dependency change nobody made could
         # turn the suite red — or, worse, keep it green against a set the
-        # release will not use. `--frozen` fails if the lock is stale.
-        run: uv sync --frozen --extra dev
+        # release will not use. `--locked` fails if the lock is stale —
+        # `--frozen` does not: it skips resolution and installs the lock as-is,
+        # so a lockfile out of step with `pyproject.toml` passes silently.
+        run: uv sync --locked --extra dev
 
       - name: Live smoke tests
         env:

@@ -46,15 +46,28 @@ jobs:
           fi
 
       - name: Install locked dependencies
-        # `--frozen`: release from the dependency set the lockfile pins, not
-        # from whatever resolves on the day.
-        run: uv sync --frozen --all-extras
+        # `--locked`, not `--frozen`. Both install exactly what `uv.lock` pins,
+        # but only `--locked` *verifies* the lock is up to date with
+        # `pyproject.toml` — `--frozen` skips resolution entirely and would
+        # happily release from a lockfile that no longer matches the manifest,
+        # which is the one thing this step exists to rule out.
+        run: uv sync --locked --all-extras
+
+      - name: Install Playwright browsers
+        run: uv run --locked playwright install chromium firefox
 
       - name: Run tests
-        run: uv run --frozen pytest -m 'not browser' -q
+        run: uv run --locked pytest -m 'not browser' -q
+
+      - name: Browser tests
+        # The browser suite gates the release too. It ran only in CI, so a red
+        # browser suite on the release branch could not stop a tag.
+        env:
+          PZI_SKIP_AUTO_START: "1"
+        run: uv run --locked pytest -m browser -q
 
       - name: Lint
-        run: uv run --frozen ruff check src tools tests
+        run: uv run --locked ruff check src tools tests
 
   build:
     name: Build sdist + wheel

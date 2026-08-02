@@ -28,6 +28,7 @@ import re
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import urljoin
 
@@ -284,10 +285,16 @@ def _launch_browser(
     profile_path: str | None = None,
     *,
     headless: bool = True,
+    url_allowed: Callable[[str], bool] | None = None,
 ) -> BrowserSession:
     """Launch a browser and return a BrowserSession (delegates to browser_session module)."""
+    from pzi.browser_session import _default_url_allowed
     from pzi.browser_session import _launch_browser as _impl
-    return _impl(browser, profile_path, headless=headless)
+
+    return _impl(
+        browser, profile_path, headless=headless,
+        url_allowed=url_allowed or _default_url_allowed,
+    )
 
 
 def _close_browser(session: BrowserSession) -> None:
@@ -305,16 +312,21 @@ def discover_pdf_url(
     _resolve=None,
     _session: BrowserSession | None = None,
     headless: bool = True,
+    url_allowed: Callable[[str], bool] | None = None,
 ) -> str | None:
     """Discover PDF URL from a page using browser.
 
-    All I/O edges are injectable via _session for testing.
+    All I/O edges are injectable via _session for testing, including the
+    URL predicate — see :class:`BrowserSession.url_allowed` for why that is a
+    parameter and not a config key.
     """
     close_on_exit = _session is None  # pragma: no branch
     if _session is not None:  # pragma: no branch
         session = _session
     else:  # pragma: no cover
-        session = _launch_browser(browser, profile_path, headless=headless)
+        session = _launch_browser(
+            browser, profile_path, headless=headless, url_allowed=url_allowed
+        )
 
     dismiss_fn = _dismiss or _dismiss_cookie_banners
     click_fn = _click or _click_downloadish_links
@@ -357,6 +369,7 @@ def download_pdf(
     headless: bool = True,
     challenge_timeout: int = 0,
     candidate_deadline_seconds: float = CANDIDATE_DEADLINE_SECONDS,
+    url_allowed: Callable[[str], bool] | None = None,
 ) -> bytes | None:
     """Download PDF bytes using browser, with optional profile reuse.
 
@@ -372,7 +385,9 @@ def download_pdf(
     if _session is not None:  # pragma: no branch
         session = _session
     else:  # pragma: no cover
-        session = _launch_browser(browser, profile_path, headless=headless)
+        session = _launch_browser(
+            browser, profile_path, headless=headless, url_allowed=url_allowed
+        )
 
     dismiss_fn = _dismiss or _dismiss_cookie_banners
 

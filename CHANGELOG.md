@@ -32,6 +32,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for `problematic` and only under `--strict`, so a CI gate written from that
   table passed a library of fabricated references. `--strict` keeps its real
   meaning: harder checks, not whether findings are reported.
+### Changed
+
+- **The browser test suite runs green, and now gates the release.** Every
+  browser test that expected a result was failing in CI: the page request guard
+  and the landing check both apply the public-URL predicate, and the fixture
+  servers are necessarily on loopback. Both now take that predicate as an
+  injected parameter — a dependency-injection seam, deliberately not a config key
+  or environment variable, since a user- or HTTP-reachable switch that disables
+  SSRF protection is the exact thing the guard exists to prevent. `release.yml`
+  installs browsers and runs `pytest -m browser`, so a red browser suite can no
+  longer be tagged.
+- **A browser that is installed but will not launch is a failure, not a skip.**
+  The probe returned a bare `False` for any exception, so a machine where
+  Firefox times out reported "20 skipped" while CI reported "10 failed" — and the
+  skip was indistinguishable from the honest "no browsers installed" case.
+- **Two browser tests could not fail.** `assert url is None or url.endswith(...)`
+  and `if body is not None: assert ...` are both satisfied by the feature not
+  working at all, and duly passed throughout.
+- **CI and the release use `uv sync --locked`, not `--frozen`.** Only `--locked`
+  verifies the lockfile is up to date with `pyproject.toml`; `--frozen` skips
+  resolution and installs the lock as-is, so a lockfile out of step with the
+  manifest passed silently. Three comments claiming `--frozen` validates the
+  lock were wrong and are corrected.
+
+### Fixed
+
 - **`pzi add --json` answers with an envelope when the backend is not ready.**
   The commonest failure of all printed prose to stderr and nothing to stdout, so
   a script driving `--json` got an empty document. Translation-server bootstrap

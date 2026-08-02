@@ -9,20 +9,33 @@ from pzi.browser_pdf_hook import discover_pdf_url, download_pdf
 from pzi.browser_session import (
     open_browser_session,
 )
-from tests.browser_probe import BROWSER_UNAVAILABLE_REASON, browser_available
+from tests.browser_probe import require_browser
 
 pytestmark = pytest.mark.browser
 
 
 @pytest.fixture(autouse=True)
 def _require_browser() -> None:
-    if not browser_available():
-        pytest.skip(reason=BROWSER_UNAVAILABLE_REASON)
+    require_browser()
 
 
 # ----------------------------------------------------------------
 # helpers
 # ----------------------------------------------------------------
+
+
+def _allow_loopback(url: str) -> bool:
+    """Predicate for the fixture server, which is on 127.0.0.1 by necessity.
+
+    Injected per session rather than configured: a switch that turns the SSRF
+    guard off would be reachable from `config.toml` and from the HTTP API, which
+    is the attack the guard exists to stop. Reaching into the call site is
+    something only a test can do.
+    """
+    from pzi.url_safety import safe_public_http_url
+
+    return url.startswith(("http://127.0.0.1:", "http://localhost:")) or safe_public_http_url(url)
+
 
 
 def _serve_pdf(http_server):
@@ -54,13 +67,13 @@ def _ensure_pdf(http_server):
 
 
 def test_open_session_navigate(http_server):
-    with open_browser_session(browser="chromium") as s:
+    with open_browser_session(browser="chromium", url_allowed=_allow_loopback) as s:
         s.navigate(f"{http_server}/article_with_pdf_link.html")
         assert "Article" in s.evaluate("document.title")
 
 
 def test_open_session_close_is_clean(http_server):
-    with open_browser_session(browser="chromium") as s:
+    with open_browser_session(browser="chromium", url_allowed=_allow_loopback) as s:
         s.navigate(f"{http_server}/article_no_pdf.html")
     # After closing, operations should raise
     with pytest.raises(RuntimeError, match="closed"):
@@ -73,7 +86,7 @@ def test_open_session_close_is_clean(http_server):
 
 
 def test_discover_pdf_direct_link(http_server):
-    with open_browser_session(browser="chromium") as s:
+    with open_browser_session(browser="chromium", url_allowed=_allow_loopback) as s:
         url = discover_pdf_url(
             f"{http_server}/article_with_pdf_link.html",
             _session=s,
@@ -83,7 +96,7 @@ def test_discover_pdf_direct_link(http_server):
 
 
 def test_discover_pdf_after_click(http_server):
-    with open_browser_session(browser="chromium") as s:
+    with open_browser_session(browser="chromium", url_allowed=_allow_loopback) as s:
         # The button text "Download PDF" should be found by DOWNLOADISH_SELECTORS
         url = discover_pdf_url(
             f"{http_server}/article_with_download_button.html",
@@ -94,7 +107,7 @@ def test_discover_pdf_after_click(http_server):
 
 
 def test_discover_no_pdf_links(http_server):
-    with open_browser_session(browser="chromium") as s:
+    with open_browser_session(browser="chromium", url_allowed=_allow_loopback) as s:
         url = discover_pdf_url(
             f"{http_server}/article_no_pdf.html",
             _session=s,
@@ -108,7 +121,7 @@ def test_discover_no_pdf_links(http_server):
 
 
 def test_download_pdf_direct(http_server):
-    with open_browser_session(browser="chromium") as s:
+    with open_browser_session(browser="chromium", url_allowed=_allow_loopback) as s:
         body = download_pdf(
             f"{http_server}/paper.pdf",
             _session=s,
@@ -119,7 +132,7 @@ def test_download_pdf_direct(http_server):
 
 def test_download_pdf_via_candidate(http_server):
     """download_pdf follows a PDF candidate link on an HTML page."""
-    with open_browser_session(browser="chromium") as s:
+    with open_browser_session(browser="chromium", url_allowed=_allow_loopback) as s:
         body = download_pdf(
             f"{http_server}/article_with_candidate_link.html",
             _session=s,
@@ -131,7 +144,7 @@ def test_download_pdf_via_candidate(http_server):
 
 
 def test_download_non_pdf_page(http_server):
-    with open_browser_session(browser="chromium") as s:
+    with open_browser_session(browser="chromium", url_allowed=_allow_loopback) as s:
         body = download_pdf(
             f"{http_server}/article_no_pdf.html",
             _session=s,
@@ -145,7 +158,7 @@ def test_download_non_pdf_page(http_server):
 
 
 def test_discover_invalid_url(http_server):
-    with open_browser_session(browser="chromium") as s:
+    with open_browser_session(browser="chromium", url_allowed=_allow_loopback) as s:
         url = discover_pdf_url(
             "http://127.0.0.1:19999/nonexistent",
             _session=s,
@@ -154,7 +167,7 @@ def test_discover_invalid_url(http_server):
 
 
 def test_download_invalid_url(http_server):
-    with open_browser_session(browser="chromium") as s:
+    with open_browser_session(browser="chromium", url_allowed=_allow_loopback) as s:
         body = download_pdf(
             "http://127.0.0.1:19999/nonexistent.pdf",
             _session=s,

@@ -17,7 +17,7 @@ import contextlib
 import os
 import shutil
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -69,6 +69,13 @@ def browser_launch_options(browser: str, *, headless: bool = True) -> dict[str, 
     return options
 
 
+def _default_url_allowed(url: str) -> bool:
+    """The production predicate: a public http(s) destination and nothing else."""
+    from pzi.url_safety import safe_public_http_url
+
+    return safe_public_http_url(url)
+
+
 @dataclass
 class BrowserSession:
     """Unified browser session wrapping Playwright lifecycle.
@@ -80,6 +87,14 @@ class BrowserSession:
     playwright: Any = field(repr=False)
     browser_ref: Any = field(repr=False)
     page: Any = field(repr=False)
+    #: What counts as a destination this session may reach. Injected rather
+    #: than read from config or the environment: a switch that turns SSRF
+    #: protection off would be reachable from `config.toml` and from the HTTP
+    #: API, which is precisely what the guard exists to prevent. The only
+    #: caller that overrides it is the test suite, whose fixture servers are on
+    #: loopback — and a test that has to reach into the process to change it
+    #: cannot be triggered from outside.
+    url_allowed: Callable[[str], bool] = field(default=_default_url_allowed, repr=False)
     _closed: bool = field(default=False, init=False)
     _temp_profile: Path | None = field(default=None, init=False, repr=False)
 
@@ -108,12 +123,11 @@ class BrowserSession:
 
     def _reject_non_public_landing(self) -> None:
         from pzi.safe_http import SsrfBlocked
-        from pzi.url_safety import safe_public_http_url
 
         landed = ""
         with contextlib.suppress(Exception):
             landed = self.page.url or ""
-        if landed and not safe_public_http_url(landed):
+        if landed and not self.url_allowed(landed):
             raise SsrfBlocked(f"browser landed on a non-public URL: {landed}")
 
     def current_url(self) -> str:
@@ -141,14 +155,12 @@ class BrowserSession:
         Does NOT navigate the page — uses the browser's HTTP stack directly.
         """
         self._check_open()
-        from pzi.url_safety import safe_public_http_url
-
-        if not safe_public_http_url(url):
+        if not self.url_allowed(url):
             return FetchResult(status=-1, content_type=None, body=b"")
         try:
             response = self.page.request.get(url)
             final_url = getattr(response, "url", url) or url
-            if not safe_public_http_url(final_url):
+            if not self.url_allowed(final_url):
                 # Redirected somewhere private. `page.request` does not go
                 # through the page's route handler, so this is its guard.
                 return FetchResult(status=-1, content_type=None, body=b"")
@@ -228,7 +240,9 @@ class FetchResult:
 # ------------------------------------------------------------------
 
 
-def install_request_guard(page: Any) -> None:
+def install_request_guard(
+    page: Any, url_allowed: Callable[[str], bool] = _default_url_allowed
+) -> None:
     """Refuse browser requests to non-public destinations.
 
     ``safe_http`` protects everything pzi fetches itself, but a Playwright page
@@ -242,12 +256,10 @@ def install_request_guard(page: Any) -> None:
     Best effort by construction: if Playwright cannot install the route (an
     older build, a closed page) the caller still has the entry-point check.
     """
-    from pzi.url_safety import safe_public_http_url
-
     def _guard(route: Any, request: Any) -> None:
         url = getattr(request, "url", "") or ""
         try:
-            if safe_public_http_url(url):
+            if url_allowed(url):
                 route.continue_()
                 return
             route.abort()
@@ -263,6 +275,7 @@ def _launch_browser(
     profile_path: str | None,
     *,
     headless: bool = True,
+    url_allowed: Callable[[str], bool] = _default_url_allowed,
 ) -> BrowserSession:
     """Launch a browser and return a BrowserSession."""
     try:
@@ -309,9 +322,9 @@ def _launch_browser(
             with contextlib.suppress(Exception):
                 playwright.stop()
             raise
-        install_request_guard(page)
+        install_request_guard(page, url_allowed)
         session = BrowserSession(
-            playwright=playwright, browser_ref=ctx, page=page
+            playwright=playwright, browser_ref=ctx, page=page, url_allowed=url_allowed,
         )
         session._temp_profile = temp_profile
         return session
@@ -327,11 +340,12 @@ def _launch_browser(
         browser_instance = playwright.chromium.launch(**options)
         context = browser_instance.new_context()
     page = context.new_page()
-    install_request_guard(page)
+    install_request_guard(page, url_allowed)
     return BrowserSession(
         playwright=playwright,
         browser_ref=(browser_instance, context),
         page=page,
+        url_allowed=url_allowed,
     )
 
 
@@ -341,6 +355,7 @@ def open_browser_session(
     profile_path: str | None = None,
     *,
     headless: bool = True,
+    url_allowed: Callable[[str], bool] = _default_url_allowed,
 ) -> Iterator[BrowserSession]:
     """Context manager: guaranteed cleanup even on exception.
 
@@ -349,7 +364,9 @@ def open_browser_session(
             session.navigate("https://example.com")
             ...
     """
-    session = _launch_browser(browser, profile_path, headless=headless)
+    session = _launch_browser(
+        browser, profile_path, headless=headless, url_allowed=url_allowed
+    )
     try:
         yield session
     finally:

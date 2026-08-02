@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.browser_probe import BROWSER_UNAVAILABLE_REASON, browser_available
+from tests.browser_probe import require_browser
 
 pytestmark = pytest.mark.browser
 
@@ -22,8 +22,14 @@ pytestmark = pytest.mark.browser
 def _require_browser() -> None:
     """Skip lazily on first use instead of probing (and launching a real
     browser) at module-import/collection time."""
-    if not browser_available():
-        pytest.skip(reason=BROWSER_UNAVAILABLE_REASON)
+    require_browser()
+
+
+def _allow_loopback(url: str) -> bool:
+    """See `tests/test_browser_integration.py` — the fixture server is loopback."""
+    from pzi.url_safety import safe_public_http_url
+
+    return url.startswith(("http://127.0.0.1:", "http://localhost:")) or safe_public_http_url(url)
 
 
 @pytest.fixture
@@ -59,7 +65,9 @@ def test_discover_pdf_url_from_meta_tag(
     (tmp_path / "article.html").write_text(html)
     (tmp_path / "paper.pdf").write_bytes(b"%PDF-1.4\ntest")
 
-    result = discover_pdf_url(f"{test_server}/article.html", browser=browser)
+    result = discover_pdf_url(
+        f"{test_server}/article.html", browser=browser, url_allowed=_allow_loopback
+    )
     assert result == pdf_url
 
 
@@ -77,7 +85,9 @@ def test_discover_pdf_url_from_link(
     (tmp_path / "page.html").write_text(html)
     (tmp_path / "paper.pdf").write_bytes(b"%PDF-1.4\ntest")
 
-    result = discover_pdf_url(f"{test_server}/page.html", browser=browser)
+    result = discover_pdf_url(
+        f"{test_server}/page.html", browser=browser, url_allowed=_allow_loopback
+    )
     assert result == f"{test_server}/paper.pdf"
 
 
@@ -91,7 +101,9 @@ def test_discover_pdf_url_returns_none_when_no_pdf(
     html = "<!DOCTYPE html><html><body>No PDF here</body></html>"
     (tmp_path / "nopdf.html").write_text(html)
 
-    result = discover_pdf_url(f"{test_server}/nopdf.html", browser=browser)
+    result = discover_pdf_url(
+        f"{test_server}/nopdf.html", browser=browser, url_allowed=_allow_loopback
+    )
     assert result is None
 
 
@@ -102,7 +114,9 @@ def test_download_pdf_bytes(browser: str, test_server: str, tmp_path: Path) -> N
 
     (tmp_path / "document.pdf").write_bytes(b"%PDF-1.4\ndownloaded content")
 
-    result = download_pdf(f"{test_server}/document.pdf", browser=browser)
+    result = download_pdf(
+        f"{test_server}/document.pdf", browser=browser, url_allowed=_allow_loopback
+    )
     assert result is not None
     assert result == b"%PDF-1.4\ndownloaded content"
 
@@ -117,5 +131,7 @@ def test_download_pdf_returns_none_for_non_pdf(
     html = "<!DOCTYPE html><html><body>Not a PDF</body></html>"
     (tmp_path / "notpdf.html").write_text(html)
 
-    result = download_pdf(f"{test_server}/notpdf.html", browser=browser)
+    result = download_pdf(
+        f"{test_server}/notpdf.html", browser=browser, url_allowed=_allow_loopback
+    )
     assert result is None
