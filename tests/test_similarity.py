@@ -293,3 +293,33 @@ def test_best_fuzzy_matches_ignores_a_record_with_no_usable_title() -> None:
     ]
 
     assert best_fuzzy_matches(records, positions=range(2)) == {}
+
+
+def test_a_placeholder_doi_is_not_an_identity() -> None:
+    """`doi = {n/a}` is the absence of a DOI, not a shared one.
+
+    The canonical form fell back to a case-folded strip whenever the value was
+    not DOI-shaped, so every entry carrying the same placeholder shared one
+    identity — and `fix dedupe` reported them as exact duplicates of each other.
+    """
+    from pzi.similarity import build_identity_index, find_exact_match
+
+    records = [
+        {"citekey": "a", "title": "Alpha", "doi": "n/a"},
+        {"citekey": "b", "title": "Beta", "doi": "N/A"},
+        {"citekey": "c", "title": "Gamma", "doi": "-"},
+        {"citekey": "d", "title": "Delta", "doi": "TODO"},
+    ]
+
+    index = build_identity_index(records)  # type: ignore[arg-type]
+    assert index == {}
+    assert find_exact_match(records[0], records[1:]) is None  # type: ignore[arg-type]
+
+
+def test_a_real_doi_is_still_an_identity_however_it_was_written() -> None:
+    from pzi.similarity import find_exact_match
+
+    stored = [{"citekey": "a", "title": "Alpha", "doi": "10.1145/abc"}]
+    for spelling in ("10.1145/ABC", "10.1145/abc/", "https://doi.org/10.1145/abc"):
+        incoming = {"citekey": "b", "title": "Alpha", "doi": spelling}
+        assert find_exact_match(incoming, stored) == 0, spelling  # type: ignore[arg-type]

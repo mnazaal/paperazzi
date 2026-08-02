@@ -445,7 +445,7 @@ def test_a_defect_from_a_source_that_did_identify_the_work_still_counts(tmp_path
         title="Attention Is All You Need",
         authors=["Vaswani, Ashish", "Shazeer, Noam"],
         year=2017,
-        doi="10.1/wrong",
+        doi="10.1000/wrong",
     )
 
     def _title_only(_title, **_kw):

@@ -32,6 +32,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for `problematic` and only under `--strict`, so a CI gate written from that
   table passed a library of fabricated references. `--strict` keeps its real
   meaning: harder checks, not whether findings are reported.
+- **A placeholder DOI is no longer an identity two papers can share.** A `doi`
+  field the DOI parser rejects — `n/a`, `-`, `TBD`, `10.xxxx/xxxxx` — fell back
+  to its own lowercased text as an exact-match key, so every entry carrying the
+  same filler matched every other: `pzi import` folded two unrelated papers into
+  one entry and reported a duplicate skipped, and `fix dedupe` offered the same
+  merge. Measured against a 22k-entry library, exactly one of 14,510 DOIs stops
+  being an identity, and it is a stray file path.
 - **`pzi fix dedupe` is roughly 38× faster on a large library.** The fuzzy pass
   rebuilt an N-element candidate list per record and re-tokenized every title N
   times, so a 22k-entry library spent about 33 minutes on pure recomputation

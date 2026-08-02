@@ -87,31 +87,31 @@ def test_apply_plan_keeps_entries_and_records_parallel() -> None:
     session = _session([], [])
 
     session.apply_plan(
-        cast(Any, _insert_plan(_record("a", "10.1/a", "A"), _entry("a", "10.1/a", "A")))
+        cast(Any, _insert_plan(_record("a", "10.1000/a", "A"), _entry("a", "10.1000/a", "A")))
     )
     session.apply_plan(
-        cast(Any, _update_plan(0, _record("a", "10.1/a", "A2"), _entry("a", "10.1/a", "A2")))
+        cast(Any, _update_plan(0, _record("a", "10.1000/a", "A2"), _entry("a", "10.1000/a", "A2")))
     )
 
     assert len(session.entries) == len(session.records) == 1
-    assert session.index[("doi", "10.1/a")] == [0]
+    assert session.index[("doi", "10.1000/a")] == [0]
     session.check_consistency()
 
 
 def test_update_changing_identity_drops_stale_index_key() -> None:
     # Seed one record, then update it to a different DOI. The old DOI key must
     # be removed so a later record carrying that old DOI is not falsely matched.
-    session = _session([_record("a", "10.1/old", "A")], [_entry("a", "10.1/old", "A")])
+    session = _session([_record("a", "10.1000/old", "A")], [_entry("a", "10.1000/old", "A")])
 
     session.apply_plan(
-        cast(Any, _update_plan(0, _record("a", "10.1/new", "A"), _entry("a", "10.1/new", "A")))
+        cast(Any, _update_plan(0, _record("a", "10.1000/new", "A"), _entry("a", "10.1000/new", "A")))
     )
 
-    assert ("doi", "10.1/old") not in session.index
-    assert session.index[("doi", "10.1/new")] == [0]
+    assert ("doi", "10.1000/old") not in session.index
+    assert session.index[("doi", "10.1000/new")] == [0]
 
     # A new record carrying the *old* DOI must not dedup against the updated one.
-    incoming = _record("c", "10.1/old", "C")
+    incoming = _record("c", "10.1000/old", "C")
     assert find_exact_match(incoming, session.records, index=session.index) is None
     session.check_consistency()
 
@@ -175,7 +175,7 @@ def test_batch_update_keeps_fields_the_record_model_does_not_carry(
     bib_path.write_text(
         "@inproceedings{smith2024graph,\n"
         "  title = {Graph Parsers},\n"
-        "  doi = {10.1/graph},\n"
+        "  doi = {10.1000/graph},\n"
         "  booktitle = {GraphConf},\n"
         "  pages = {1--12},\n"
         "  publisher = {ACM}\n"
@@ -185,7 +185,7 @@ def test_batch_update_keeps_fields_the_record_model_does_not_carry(
     with batch_write_session(str(bib_path)) as session:
         incoming = cast(
             NormalizedRecord,
-            {"citekey": "smith2024graph", "doi": "10.1/graph", "title": "Graph Parsers"},
+            {"citekey": "smith2024graph", "doi": "10.1000/graph", "title": "Graph Parsers"},
         )
         plan = plan_bib_write(
             incoming,
@@ -219,9 +219,9 @@ def test_batch_commit_failure_removes_downloaded_pdfs(tmp_path: Path) -> None:
     papers_dir = Path(bib["papers_dir"])
 
     records = [
-        {"citekey": "a2024", "title": "Paper A", "doi": "10.1/a",
+        {"citekey": "a2024", "title": "Paper A", "doi": "10.1000/a",
          "pdf_url": "http://example.com/a.pdf"},
-        {"citekey": "b2023", "title": "Paper B", "doi": "10.1/b",
+        {"citekey": "b2023", "title": "Paper B", "doi": "10.1000/b",
          "pdf_url": "http://example.com/b.pdf"},
     ]
 
@@ -252,9 +252,9 @@ def test_batch_per_record_failure_cleans_only_that_records_pdf(tmp_path: Path) -
     papers_dir = Path(bib["papers_dir"])
 
     records = [
-        {"citekey": "good2024", "title": "Good Paper", "doi": "10.1/good",
+        {"citekey": "good2024", "title": "Good Paper", "doi": "10.1000/good",
          "pdf_url": "http://example.com/good.pdf"},
-        {"citekey": "bad2023", "title": "Bad Paper", "doi": "10.1/bad",
+        {"citekey": "bad2023", "title": "Bad Paper", "doi": "10.1000/bad",
          "pdf_url": "http://example.com/bad.pdf"},
     ]
 

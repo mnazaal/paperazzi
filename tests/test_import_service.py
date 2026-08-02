@@ -192,20 +192,20 @@ def test_batch_import_equivalent_to_repeated_single_writes(tmp_path) -> None:
     seed = (
         "@article{seed2020,\n"
         "  author = {Anderson, A},\n"
-        "  doi = {10.1/seed},\n"
+        "  doi = {10.1000/seed},\n"
         "  title = {Seed Paper},\n"
         "  year = {2020},\n"
         "}\n"
     )
     records: list[dict[str, object]] = [
         {"citekey": "alpha", "title": "Alpha Paper",
-         "authors": ["Brown, B"], "year": 2021, "doi": "10.1/alpha"},
+         "authors": ["Brown, B"], "year": 2021, "doi": "10.1000/alpha"},
         {"citekey": "seeddup", "title": "Seed Paper Revised",
-         "authors": ["Anderson, A"], "year": 2020, "doi": "10.1/seed"},  # dedup vs library
+         "authors": ["Anderson, A"], "year": 2020, "doi": "10.1000/seed"},  # dedup vs library
         {"citekey": "beta", "title": "Beta Paper",
-         "authors": ["Clark, C"], "year": 2022, "doi": "10.1/beta"},
+         "authors": ["Clark, C"], "year": 2022, "doi": "10.1000/beta"},
         {"citekey": "alphadup", "title": "Alpha Paper",
-         "authors": ["Brown, B"], "year": 2021, "doi": "10.1/alpha"},  # dedup vs record 0
+         "authors": ["Brown, B"], "year": 2021, "doi": "10.1000/alpha"},  # dedup vs record 0
     ]
 
     def _make_bib(name: str):
@@ -298,7 +298,7 @@ def test_import_skips_a_source_entry_whose_field_name_swallowed_a_comment(
         "@article{foreign2020a,\n"
         "  title = {Some title},\n"
         "  % private note\n"
-        "  doi = {10.1/xyz},\n"
+        "  doi = {10.1000/xyz},\n"
         "  year = {2020},\n"
         "}\n"
     )
@@ -374,11 +374,11 @@ def test_batch_import_dry_run_predicts_the_actions_the_real_run_takes(tmp_path) 
 
     records: list[dict[str, object]] = [
         {"citekey": "alpha", "title": "Alpha Paper",
-         "authors": ["Brown, B"], "year": 2021, "doi": "10.1/alpha"},
+         "authors": ["Brown, B"], "year": 2021, "doi": "10.1000/alpha"},
         {"citekey": "alphadup", "title": "Alpha Paper Revised",
-         "authors": ["Brown, B"], "year": 2021, "doi": "10.1/alpha"},
+         "authors": ["Brown, B"], "year": 2021, "doi": "10.1000/alpha"},
         {"citekey": "beta", "title": "Beta Paper",
-         "authors": ["Clark, C"], "year": 2022, "doi": "10.1/beta"},
+         "authors": ["Clark, C"], "year": 2022, "doi": "10.1000/beta"},
     ]
 
     predicted = [
@@ -418,11 +418,11 @@ def test_batch_import_parity_for_citekey_collision_and_pdf_reuse(tmp_path) -> No
 
     records: list[dict[str, object]] = [
         {"citekey": "dup", "title": "First Paper", "authors": ["Brown, B"],
-         "year": 2021, "doi": "10.1/a", "pdf_url": "https://example.com/a.pdf"},
+         "year": 2021, "doi": "10.1000/a", "pdf_url": "https://example.com/a.pdf"},
         {"citekey": "dup", "title": "Second Paper", "authors": ["Clark, C"],
-         "year": 2022, "doi": "10.1/b"},  # same citekey, different paper -> suffix
+         "year": 2022, "doi": "10.1000/b"},  # same citekey, different paper -> suffix
         {"citekey": "ignored", "title": "First Paper", "authors": ["Brown, B"],
-         "year": 2021, "doi": "10.1/a"},  # exact dupe of record 0 -> reuse key + PDF
+         "year": 2021, "doi": "10.1000/a"},  # exact dupe of record 0 -> reuse key + PDF
     ]
 
     def _make_bib(name: str):

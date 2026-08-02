@@ -50,15 +50,23 @@ def extract_identities(record: MatchableRecord) -> list[Identity]:
 
 
 def _canonical_doi(value: object) -> str | None:
-    """Canonical form of a stored DOI, for identity comparison.
+    """Canonical form of a stored DOI, or ``None`` when the value is not one.
 
-    Falls back to a case-folded strip when the value is not DOI-shaped, so a
-    hand-edited or malformed field still matches itself rather than dropping out
-    of the index entirely.
+    A value the DOI parser rejects used to fall back to a case-folded strip, so
+    that a malformed field would at least match itself. But the values that
+    reach this are overwhelmingly *placeholders* — `n/a`, `-`, `TODO` — and a
+    placeholder is the absence of a DOI, not a shared one: every entry carrying
+    the same filler collapsed into a single identity and `fix dedupe` offered to
+    merge unrelated papers.
+
+    Dropping the fallback costs a malformed-but-unique DOI its identity, so
+    re-capturing that one paper can insert a second entry. Matching by title and
+    URL still applies, and a spurious duplicate is recoverable in a way a
+    wrongly merged pair is not.
     """
     if not isinstance(value, str) or not value.strip():
         return None
-    return normalize_doi(value) or value.strip().lower()
+    return normalize_doi(value)
 
 
 def build_identity_index(

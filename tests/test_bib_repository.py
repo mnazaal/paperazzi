@@ -28,7 +28,7 @@ def test_parse_bibtex_reads_entries_and_fields() -> None:
         """
 @article{smith2024graph,
   title = {Graph Parsers},
-  doi = {10.1/foo},
+  doi = {10.1000/foo},
 }
 """.strip()
     )
@@ -39,7 +39,7 @@ def test_parse_bibtex_reads_entries_and_fields() -> None:
             "citekey": "smith2024graph",
             "fields": {
                 "title": "Graph Parsers",
-                "doi": "10.1/foo",
+                "doi": "10.1000/foo",
             },
         }
     ]
@@ -53,7 +53,7 @@ def test_serialize_bibtex_writes_deterministic_output() -> None:
                 "citekey": "smith2024graph",
                 "fields": {
                     "title": "Graph Parsers",
-                    "doi": "10.1/foo",
+                    "doi": "10.1000/foo",
                 },
             }
         ]
@@ -61,7 +61,7 @@ def test_serialize_bibtex_writes_deterministic_output() -> None:
 
     assert (
         text
-        == "@article{smith2024graph,\n  doi = {10.1/foo},\n  title = {Graph Parsers}\n}\n"
+        == "@article{smith2024graph,\n  doi = {10.1000/foo},\n  title = {Graph Parsers}\n}\n"
     )
 
 
@@ -127,7 +127,7 @@ def test_read_bib_file_returns_entries_and_records(tmp_path: Path) -> None:
         """
 @article{smith2024graph,
   author = {Smith, Jane and Doe, John},
-  doi = {10.1/foo},
+  doi = {10.1000/foo},
   title = {Graph Parsers},
   year = {2024},
 }
@@ -144,7 +144,7 @@ def test_read_bib_file_returns_entries_and_records(tmp_path: Path) -> None:
             "authors": ["Smith, Jane", "Doe, John"],
             "year": 2024,
             "venue": None,
-            "doi": "10.1/foo",
+            "doi": "10.1000/foo",
             "arxiv_id": None,
             "canonical_url": None,
             "source_url": None,
@@ -591,7 +591,7 @@ def test_execute_write_plan_rebase_keeps_on_disk_entry_type_and_fields(
   volume = {12},
   pages = {1--10},
   publisher = {ACM},
-  doi = {10.1/foo},
+  doi = {10.1000/foo},
 }
 """.strip()
     )
@@ -604,7 +604,7 @@ def test_execute_write_plan_rebase_keeps_on_disk_entry_type_and_fields(
             "authors": ["Smith, Ada"],
             "year": 2024,
             "venue": "Proceedings of Things",
-            "doi": "10.1/foo",
+            "doi": "10.1000/foo",
         },
         [],
     )

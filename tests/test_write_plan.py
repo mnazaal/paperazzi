@@ -21,7 +21,7 @@ def test_plan_bib_write_returns_insert_for_new_record() -> None:
         {
             "citekey": "smith2024graph",
             "title": "Graph Parsers",
-            "doi": "10.1/foo",
+            "doi": "10.1000/foo",
         },
         [],
     )
@@ -32,14 +32,14 @@ def test_plan_bib_write_returns_insert_for_new_record() -> None:
         "record": {
             "citekey": "smith2024graph",
             "title": "Graph Parsers",
-            "doi": "10.1/foo",
+            "doi": "10.1000/foo",
         },
         "entry": {
             "entry_type": "article",
             "citekey": "smith2024graph",
             "fields": {
                 "title": "Graph Parsers",
-                "doi": "10.1/foo",
+                "doi": "10.1000/foo",
             },
         },
         "changed_fields": ["citekey", "doi", "title"],
@@ -51,14 +51,14 @@ def test_plan_bib_write_returns_update_for_exact_match() -> None:
         {
             "citekey": "smith2024graph",
             "title": "Graph Parsers for Structured Search",
-            "doi": "10.1/foo",
+            "doi": "10.1000/foo",
             "tags": ["graphs"],
         },
         [
             {
                 "citekey": "smith2024graph",
                 "title": "Graph Parsers",
-                "doi": "10.1/foo",
+                "doi": "10.1000/foo",
                 "local_pdf_path": "papers/smith2024graph.pdf",
             }
         ],
@@ -70,7 +70,7 @@ def test_plan_bib_write_returns_update_for_exact_match() -> None:
         "record": {
             "citekey": "smith2024graph",
             "title": "Graph Parsers for Structured Search",
-            "doi": "10.1/foo",
+            "doi": "10.1000/foo",
             "local_pdf_path": "papers/smith2024graph.pdf",
             "tags": ["graphs"],
         },
@@ -79,7 +79,7 @@ def test_plan_bib_write_returns_update_for_exact_match() -> None:
             "citekey": "smith2024graph",
             "fields": {
                 "title": "Graph Parsers for Structured Search",
-                "doi": "10.1/foo",
+                "doi": "10.1000/foo",
                 "file": "papers/smith2024graph.pdf",
                 "keywords": "graphs",
             },
@@ -92,13 +92,13 @@ def test_plan_bib_write_preserves_existing_user_owned_fields_on_update() -> None
     plan = plan_bib_write(
         {
             "citekey": "ignored-new-key",
-            "doi": "10.1/foo",
+            "doi": "10.1000/foo",
             "canonical_url": "https://example.com/paper",
         },
         [
             {
                 "citekey": "smith2024graph",
-                "doi": "10.1/foo",
+                "doi": "10.1000/foo",
                 "local_pdf_path": "papers/smith2024graph.pdf",
             }
         ],
@@ -114,13 +114,13 @@ def test_plan_bib_write_adopts_incoming_local_pdf_path_when_missing() -> None:
     plan = plan_bib_write(
         {
             "citekey": "ignored-new-key",
-            "doi": "10.1/foo",
+            "doi": "10.1000/foo",
             "local_pdf_path": "papers/smith2024graph.pdf",
         },
         [
             {
                 "citekey": "smith2024graph",
-                "doi": "10.1/foo",
+                "doi": "10.1000/foo",
             }
         ],
     )
@@ -136,7 +136,7 @@ def test_plan_bib_write_uses_requested_entry_type() -> None:
         {
             "citekey": "smith2024graph",
             "title": "Graph Parsers",
-            "doi": "10.1/foo",
+            "doi": "10.1000/foo",
             "venue": "GraphConf",
         },
         [],

@@ -137,7 +137,7 @@ def test_update_preview_and_write_both_honor_relative_file_path_style() -> None:
                 "item_type": "journalArticle",
                 "record": {
                     "title": "Graph Parsers", "venue": "CVPR",
-                    "doi": "10.1/foo", "year": 2024, "authors": ["Smith, J"],
+                    "doi": "10.1000/foo", "year": 2024, "authors": ["Smith, J"],
                 },
                 "attachments": [],
             }]
@@ -211,7 +211,7 @@ def test_insert_new_entry_preserves_comments_macros_and_preamble() -> None:
         result = add_record_with_bib(
             bib=bib,  # type: ignore[arg-type]
             record={"citekey": "new2025", "title": "Fresh Work",
-                    "authors": ["New, N"], "year": 2025, "doi": "10.1/new"},
+                    "authors": ["New, N"], "year": 2025, "doi": "10.1000/new"},
             dry_run=False,
         )
 
@@ -237,7 +237,7 @@ def test_update_existing_entry_preserves_comments_macros_and_preamble() -> None:
             '@preamble{ "\\newcommand{\\noop}[1]{}" }\n'
             "\n"
             "@article{smith2024, title = {Deep Learning}, author = {Smith, John}, "
-            "year = {2024}, doi = {10.1/smith}}\n"
+            "year = {2024}, doi = {10.1000/smith}}\n"
             "@article{jones2023, title = {Vision}, author = {Jones, K}, year = {2023}}\n"
         )
         bib_cfg = {"name": "main", "path": bib, "papers_dir": papers, "default": True}
@@ -245,7 +245,7 @@ def test_update_existing_entry_preserves_comments_macros_and_preamble() -> None:
         result = add_record_with_bib(
             bib=bib_cfg,  # type: ignore[arg-type]
             record={"title": "Deep Learning", "authors": ["Smith, John"],
-                    "year": 2024, "doi": "10.1/smith", "pdf_url": "https://x.test/p.pdf"},
+                    "year": 2024, "doi": "10.1000/smith", "pdf_url": "https://x.test/p.pdf"},
             dry_run=False,
         )
 

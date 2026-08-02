@@ -15,8 +15,8 @@ from pzi.bibtex import (
 def test_ensure_citekey_force_new_suffixes_instead_of_reusing() -> None:
     # An exact match would normally reuse the existing key; force_new must
     # instead mint a distinct suffixed key so the duplicate is a new entry.
-    record = {"doi": "10.1/a", "title": "Paper"}
-    existing = [{"doi": "10.1/a", "citekey": "smith2024paper"}]
+    record = {"doi": "10.1000/a", "title": "Paper"}
+    existing = [{"doi": "10.1000/a", "citekey": "smith2024paper"}]
 
     result = ensure_citekey_for_write(record, existing, force_new=True)  # type: ignore[arg-type]
 
@@ -33,7 +33,7 @@ def test_ensure_citekey_generates_base_when_missing_and_no_match() -> None:
 
 
 def test_ensure_citekey_keeps_unique_explicit_key() -> None:
-    record = {"citekey": "mykey2024", "doi": "10.1/x"}
+    record = {"citekey": "mykey2024", "doi": "10.1000/x"}
 
     result = ensure_citekey_for_write(record, [])  # type: ignore[arg-type]
 

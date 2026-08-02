@@ -36,7 +36,7 @@ default = true
         record={
             "citekey": "smith2024graph",
             "title": "Graph Parsers",
-            "doi": "10.1/foo",
+            "doi": "10.1000/foo",
         },
         bib_selector=None,
         dry_run=False,
@@ -59,7 +59,7 @@ default = true
     }
     assert (
         bib_path.read_text()
-        == "@article{smith2024graph,\n  doi = {10.1/foo},\n  title = {Graph Parsers}\n}\n"
+        == "@article{smith2024graph,\n  doi = {10.1000/foo},\n  title = {Graph Parsers}\n}\n"
     )
 
 
@@ -81,7 +81,7 @@ default = true
         record={
             "citekey": "smith2024graph",
             "title": "Graph Parsers",
-            "doi": "10.1/foo",
+            "doi": "10.1000/foo",
         },
         bib_selector=None,
         dry_run=True,
@@ -119,7 +119,7 @@ default = true
     bib_path.write_text(
         """
 @article{smith2024graph,
-  doi = {10.1/foo},
+  doi = {10.1000/foo},
   title = {Graph Parsers},
 }
 """.strip()
@@ -131,7 +131,7 @@ default = true
         record={
             "citekey": "smith2024graph",
             "title": "Graph Parsers for Structured Search",
-            "doi": "10.1/foo",
+            "doi": "10.1000/foo",
             "tags": ["graphs"],
         },
         bib_selector=None,
@@ -171,7 +171,7 @@ default = true
     bib_path.write_text(
         """
 @article{smith2024graph,
-  doi = {10.1/foo},
+  doi = {10.1000/foo},
   title = {Graph Parsers},
 }
 """.strip()
@@ -182,7 +182,7 @@ default = true
         home_dir=str(tmp_path),
         record={
             "citekey": "ignored-new-key",
-            "doi": "10.1/foo",
+            "doi": "10.1000/foo",
             "local_pdf_path": "papers/smith2024graph.pdf",
         },
         bib_selector=None,
@@ -753,7 +753,7 @@ def test_add_record_with_bib_retries_once_on_concurrent_edit_without_redownload(
         record={
             "citekey": "smith2024graph",
             "title": "Graph Parsers",
-            "doi": "10.1/foo",
+            "doi": "10.1000/foo",
             "pdf_url": "https://example.com/paper.pdf",
         },
         dry_run=False,
@@ -797,7 +797,7 @@ def test_add_record_with_bib_reraises_when_concurrent_edit_persists(
         add_service.add_record_with_bib(
             bib=bib,  # type: ignore[arg-type]
             record={"citekey": "smith2024graph", "title": "Graph Parsers",
-                    "doi": "10.1/foo"},
+                    "doi": "10.1000/foo"},
             dry_run=False,
         )
 
@@ -837,7 +837,7 @@ def test_add_record_with_bib_cleans_up_pdf_when_concurrent_edit_persists(
             record={
                 "citekey": "smith2024graph",
                 "title": "Graph Parsers",
-                "doi": "10.1/foo",
+                "doi": "10.1000/foo",
                 "pdf_url": "https://example.com/paper.pdf",
             },
             dry_run=False,
@@ -1582,7 +1582,7 @@ def test_single_path_retry_then_fail_removes_new_pdf(tmp_path: Path) -> None:
                 record={
                     "citekey": "smith2024",
                     "title": "New Paper",
-                    "doi": "10.1/new",
+                    "doi": "10.1000/new",
                     "pdf_url": "http://example.com/new.pdf",
                 },
                 dry_run=False,
