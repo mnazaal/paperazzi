@@ -231,3 +231,65 @@ def test_compute_similarity_hint_none_when_no_title() -> None:
         }
     ]
     assert compute_similarity_hint({"title": None}, existing) is None
+
+
+def test_best_fuzzy_matches_agrees_with_scanning_one_record_at_a_time() -> None:
+    """The fast path must be a pure speed-up, not a different answer.
+
+    Randomized because the interesting cases are the ones nobody writes by
+    hand: near-threshold Jaccard, ties broken by corpus order, titles of very
+    different lengths, and records whose only shared token is a common word.
+    """
+    import random
+
+    from pzi.similarity import best_fuzzy_matches, compute_similarity_hint
+
+    words = (
+        "graph neural network learning deep transformer attention model data "
+        "efficient scalable robust sparse bayesian causal representation"
+    ).split()
+
+    for seed in range(25):
+        rng = random.Random(seed)
+        records = [
+            {
+                "citekey": f"k{i}",
+                "title": " ".join(rng.sample(words, rng.randint(2, 8))),
+                "authors": [f"Author{rng.randint(0, 6)}, A" for _ in range(rng.randint(0, 3))],
+                "year": rng.choice([None, 2018 + rng.randint(0, 8)]),
+            }
+            for i in range(60)
+        ]
+
+        expected = {}
+        for i, record in enumerate(records):
+            others = [other for j, other in enumerate(records) if j != i]
+            hint = compute_similarity_hint(record, others)
+            if hint is not None:
+                expected[i] = hint
+
+        assert best_fuzzy_matches(records, positions=range(len(records))) == expected, seed
+
+
+def test_best_fuzzy_matches_only_scores_the_positions_it_was_given() -> None:
+    from pzi.similarity import best_fuzzy_matches
+
+    records = [
+        {"citekey": "a", "title": "Deep Residual Learning", "authors": ["He, K"], "year": 2016},
+        {"citekey": "b", "title": "Deep Residual Learning", "authors": ["He, K"], "year": 2016},
+        {"citekey": "c", "title": "Attention Is All You Need", "authors": ["V, A"], "year": 2017},
+    ]
+
+    # `b` is still available as a *candidate* for `a`, it is just not scored.
+    assert best_fuzzy_matches(records, positions=[0]) == {0: "b"}
+
+
+def test_best_fuzzy_matches_ignores_a_record_with_no_usable_title() -> None:
+    from pzi.similarity import best_fuzzy_matches
+
+    records = [
+        {"citekey": "a", "title": "", "authors": ["He, K"], "year": 2016},
+        {"citekey": "b", "title": "Deep Residual Learning", "authors": ["He, K"], "year": 2016},
+    ]
+
+    assert best_fuzzy_matches(records, positions=range(2)) == {}

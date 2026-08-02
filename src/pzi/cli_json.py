@@ -49,12 +49,24 @@ def build_envelope(
                 consumed.add(key)
                 break
 
+    status = result.get("status", "ok")
+    errors = list(result.get("errors", []) or [])
+    if status == "error" and not errors:
+        # `errors[]` is the documented failure channel, so a failure has to say
+        # something in it. `fix merge` reported every one of its refusals as
+        # `status: error` with a `message` and no errors at all, leaving a
+        # consumer that branches on the channel looking at a failed command with
+        # nothing wrong. Doing it here rather than per command means the next
+        # service to forget is covered too.
+        message = result.get("message")
+        errors = [str(message)] if message else ["command failed"]
+
     envelope: dict[str, Any] = {
         "command": command,
-        "status": result.get("status", "ok"),
+        "status": status,
         "bib_name": result.get("bib_name"),
         "items": list(found_items) if found_items is not None else [],
-        "errors": list(result.get("errors", []) or []),
+        "errors": errors,
     }
     # Everything the service reported that the envelope does not already carry.
     for key, value in result.items():

@@ -106,18 +106,27 @@ def with_inbox_lock(inbox_path: Path) -> Iterator[None]:
             portalocker.unlock(lock_fh)
 
 
-def _reread_appended_lines(inbox_path: Path, known_line_count: int) -> list[str]:
-    """Return lines appended to the inbox file after the initial drain snapshot.
+def _appended_since(inbox_path: Path, snapshot_text: str) -> list[str] | None:
+    """Lines appended after *snapshot_text*, or ``None`` if it was not an append.
 
-    The inbox is append-only in practice, so anything beyond the line count
-    the drain started with is a line written concurrently and must survive
-    the rewrite rather than being silently dropped.
+    The inbox is append-only in practice, so a line written while the drain's
+    network calls were in flight must survive the rewrite rather than being
+    dropped. What identifies such a line is that the snapshot is still a *prefix*
+    of the file — not that the file has more lines than before.
+
+    Counting lines was wrong in both directions: an external edit that shortened
+    the file handed back lines that were never new, and one that lengthened an
+    existing line handed back the edited line while dropping the genuinely new
+    one. ``None`` says the file was rewritten rather than appended to, which is
+    not something this function can reconcile — see the caller.
     """
     try:
         current_text = inbox_path.read_text(encoding="utf-8")
     except OSError:
         return []
-    return current_text.splitlines()[known_line_count:]
+    if not current_text.startswith(snapshot_text):
+        return None
+    return current_text[len(snapshot_text):].splitlines()
 
 
 def _write_inbox_atomically(inbox_path: Path, lines: list[str]) -> None:
@@ -251,6 +260,7 @@ def drain_inbox(
             item["warnings"] = warnings
         items.append(item)
 
+    errors: list[str] = []
     if not dry_run:
         remaining = [
             raw_lines[i]
@@ -258,8 +268,20 @@ def drain_inbox(
             if parsed[i] is None or i in failed_indices
         ]
         with with_inbox_lock(path):
-            appended = _reread_appended_lines(path, len(raw_lines))
-            _write_inbox_atomically(path, remaining + appended)
+            appended = _appended_since(path, raw_text)
+            if appended is None:
+                # Someone rewrote the file rather than appending to it, so
+                # `remaining` no longer describes it and writing that back would
+                # destroy their edit. Leaving the drained lines in place costs a
+                # re-drain, which `add` answers with `exists`; clobbering an edit
+                # costs the edit.
+                errors.append(
+                    f"{inbox_file} was modified while draining, so the entries "
+                    "just added were left in it — remove them by hand or re-run "
+                    "the drain"
+                )
+            else:
+                _write_inbox_atomically(path, remaining + appended)
 
     return {
         "status": "ok",
@@ -268,5 +290,5 @@ def drain_inbox(
         "total": total,
         "counts": counts,
         "items": items,
-        "errors": [],
+        "errors": errors,
     }

@@ -14,8 +14,8 @@ from pzi.bib_repository import (
 )
 from pzi.bibtex import NormalizedRecord
 from pzi.similarity import (
+    best_fuzzy_matches,
     build_identity_index,
-    compute_similarity_hint,
 )
 
 
@@ -39,6 +39,10 @@ class MergeResult(TypedDict):
     citekey_b: str
     dry_run: bool
     message: str
+    #: The documented `--json` failure channel. Every refusal here reported
+    #: `status: error` with a `message` and nothing in `errors`, so a consumer
+    #: branching on the channel saw a failed command with nothing wrong.
+    errors: list[str]
     merged_title: NotRequired[str]
     dropped_citekey: NotRequired[str]
     changed_fields: NotRequired[list[str]]
@@ -110,25 +114,27 @@ def find_duplicates(
         seen_positions.update(component)
 
     # --- Fuzzy near-duplicates ---
+    # Every record must be kept out of its own candidate corpus: only the single
+    # *best* match is returned, and a record always scores highest against
+    # itself (identical title tokens, full author overlap), so including it left
+    # the fuzzy pass permanently silent.
+    #
+    # Scored in one pass rather than one scan per record. Rebuilding an
+    # N-element candidate list and re-tokenizing every title N times cost about
+    # half an hour on a 22k-entry library, printing nothing while it ran; the
+    # answers are unchanged (see `best_fuzzy_matches`).
     fuzzy_candidates: list[dict[str, Any]] = []
     seen_pairs: set[frozenset[str]] = set()
-    for i, record in enumerate(records):
-        if i in seen_positions:
-            continue
-        citekey = record.get("citekey", "")
-        # The record must be kept out of its own candidate corpus:
-        # `compute_similarity_hint` returns only the single *best* match, and a
-        # record always scores highest against itself (identical title tokens,
-        # full author overlap).  Passing the whole list therefore made the
-        # self-match win every time, and discarding it afterwards left the
-        # fuzzy pass permanently silent.
-        others = [other for j, other in enumerate(records) if j != i]
-        hint = compute_similarity_hint(
-            record, others,  # type: ignore[arg-type]
-            title_threshold=title_threshold,
-            year_window=year_window,
-        )
-        if not hint or hint == citekey:
+    hints = best_fuzzy_matches(
+        records,  # type: ignore[arg-type]
+        positions=(i for i in range(len(records)) if i not in seen_positions),
+        title_threshold=title_threshold,
+        year_window=year_window,
+    )
+    for i in sorted(hints):
+        citekey = records[i].get("citekey", "")
+        hint = hints[i]
+        if hint == citekey:
             continue
         # Both members of a pair point at each other; report the pair once.
         pair = frozenset({citekey, hint})
@@ -214,6 +220,7 @@ def merge_duplicates(
             "citekey_b": citekey_b,
             "message": "cannot merge an entry with itself",
             "dry_run": dry_run,
+            "errors": ["cannot merge an entry with itself"],
         }
 
     raw = read_bib_file(bib_path)
@@ -233,12 +240,14 @@ def merge_duplicates(
             "status": "error", "citekey_a": citekey_a, "citekey_b": citekey_b,
             "message": f"entry not found: {citekey_a}", "dry_run": dry_run,
             "reason": "not_found",
+            "errors": [f"entry not found: {citekey_a}"],
         }
     if idx_b is None:
         return {
             "status": "error", "citekey_a": citekey_a, "citekey_b": citekey_b,
             "message": f"entry not found: {citekey_b}", "dry_run": dry_run,
             "reason": "not_found",
+            "errors": [f"entry not found: {citekey_b}"],
         }
 
     record_a = records[idx_a]
@@ -270,6 +279,7 @@ def merge_duplicates(
             "dropped_citekey": citekey_a,
             "dry_run": True,
             "message": f"would merge {citekey_a} into {citekey_b}",
+            "errors": [],
             "changed_fields": changed_fields,
             "carried_fields": carried_fields,
             "dropped_fields": conflicting_fields,
@@ -295,6 +305,7 @@ def merge_duplicates(
             "status": "error", "citekey_a": citekey_a, "citekey_b": citekey_b,
             "message": "entry disappeared between reads", "dry_run": dry_run,
             "reason": "not_found",
+            "errors": ["entry disappeared between reads"],
         }
 
     return {
@@ -304,6 +315,7 @@ def merge_duplicates(
         "dropped_citekey": citekey_a,
         "dry_run": False,
         "message": f"merged {citekey_a} into {citekey_b}",
+        "errors": [],
         "changed_fields": changed_fields,
         "carried_fields": carried_fields,
         "dropped_fields": merge_result.get("dropped_fields", conflicting_fields),

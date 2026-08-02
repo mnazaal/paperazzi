@@ -5,8 +5,8 @@ from __future__ import annotations
 import html
 import re
 import unicodedata
-from collections.abc import Sequence
-from typing import Any, Literal, TypeAlias
+from collections.abc import Iterable, Sequence
+from typing import Any, Literal, NamedTuple, TypeAlias
 
 from pzi.bibtex import NormalizedRecord, normalize_authors
 from pzi.identifiers import normalize_doi
@@ -359,3 +359,105 @@ def compute_similarity_hint(
             best_key = citekey
 
     return best_key
+
+
+class _Prepared(NamedTuple):
+    """One record's comparison inputs, derived once instead of once per pair."""
+
+    citekey: str | None
+    tokens: frozenset[str]
+    authors: list[str]
+    year: int | None
+
+
+def _prepare(records: Sequence[SimilarityCandidate]) -> list[_Prepared]:
+    return [
+        _Prepared(
+            citekey=(
+                record.get("citekey")
+                if isinstance(record.get("citekey"), str) and str(record.get("citekey")).strip()
+                else None
+            ),
+            tokens=frozenset(title_tokens(record.get("title"))),
+            authors=normalize_authors(record.get("authors")),
+            year=_as_int_year(record.get("year")),
+        )
+        for record in records
+    ]
+
+
+def best_fuzzy_matches(
+    records: Sequence[SimilarityCandidate],
+    *,
+    positions: Iterable[int],
+    title_threshold: float = 0.6,
+    year_window: int = 2,
+) -> dict[int, str]:
+    """The best fuzzy match for each position in *positions*, over every other record.
+
+    Same answers as calling :func:`compute_similarity_hint` once per position
+    against the rest of the corpus — same filters, same score, same
+    first-highest-wins tie-break in corpus order — but without paying for that
+    shape. The naive loop rebuilt an N-element candidate list per record and
+    re-tokenized every title N times, so a 22k-entry library took roughly half an
+    hour of pure recomputation before printing anything.
+
+    Three exact changes, none of which can drop a pair:
+
+    * tokens, authors and year are derived once per record;
+    * an inverted index over title tokens supplies ``|A ∩ B|`` by counting
+      shared tokens, so a candidate sharing none is never visited — and Jaccard
+      at or above any positive threshold *requires* a shared token;
+    * a candidate whose title length cannot reach the threshold is skipped:
+      ``|A ∩ B| ≤ min(|A|,|B|)`` and ``|A ∪ B| ≥ max(|A|,|B|)``, so
+      ``min(|A|,|B|) ≥ threshold · max(|A|,|B|)`` is necessary.
+    """
+    prepared = _prepare(records)
+    by_token: dict[str, list[int]] = {}
+    for position, item in enumerate(prepared):
+        if item.citekey is None:
+            continue
+        for token in item.tokens:
+            by_token.setdefault(token, []).append(position)
+
+    matches: dict[int, str] = {}
+    for position in positions:
+        query = prepared[position]
+        if not query.tokens:
+            continue
+        shared: dict[int, int] = {}
+        for token in query.tokens:
+            for candidate in by_token.get(token, ()):
+                if candidate != position:
+                    shared[candidate] = shared.get(candidate, 0) + 1
+
+        best_key: str | None = None
+        best_score = 0.0
+        query_size = len(query.tokens)
+        # Ascending, so "first to reach the highest score" means the same record
+        # the sequential scan would have picked.
+        for candidate in sorted(shared):
+            other = prepared[candidate]
+            overlap_tokens = shared[candidate]
+            other_size = len(other.tokens)
+            if min(query_size, other_size) < title_threshold * max(query_size, other_size):
+                continue
+            similarity = overlap_tokens / (query_size + other_size - overlap_tokens)
+            if similarity < title_threshold:
+                continue
+            if (
+                query.year is not None
+                and other.year is not None
+                and abs(query.year - other.year) > year_window
+            ):
+                continue
+            overlap = author_overlap(query.authors, other.authors)
+            if overlap == 0 and similarity < 0.85:
+                continue
+            score = similarity + 0.1 * overlap
+            if score > best_score:
+                best_score = score
+                best_key = other.citekey
+        if best_key is not None:
+            matches[position] = best_key
+    return matches

@@ -32,6 +32,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for `problematic` and only under `--strict`, so a CI gate written from that
   table passed a library of fabricated references. `--strict` keeps its real
   meaning: harder checks, not whether findings are reported.
+- **`pzi fix dedupe` is roughly 38× faster on a large library.** The fuzzy pass
+  rebuilt an N-element candidate list per record and re-tokenized every title N
+  times, so a 22k-entry library spent about 33 minutes on pure recomputation
+  before printing anything; the same run now takes under a minute. The answers
+  are unchanged — an inverted index over title tokens supplies the intersection
+  size directly, and Jaccard at any positive threshold requires a shared token.
+- **A drain no longer mistakes an edited inbox for an appended one.** Lines
+  written during the drain were detected by *line count*, so a concurrent writer
+  that edited an existing line handed back the edited line as "new" and dropped
+  the genuinely new one. The snapshot is now matched as a prefix; a file that was
+  rewritten rather than appended to is reported and left alone instead of being
+  overwritten with the drain's stale view.
+- **A failed command always says why in `--json`.** `fix merge` reported each of
+  its refusals as `status: error` with a `message` and an empty `errors[]` — the
+  documented failure channel — so a consumer branching on it saw a failed command
+  with nothing wrong. `fix merge` now populates it, and the shared envelope falls
+  back to the message for any service that forgets.
 - **`pzi doctor --reinstall-server` no longer deletes a translation-server
   directory pzi did not install.** The ownership sentinel was skipped whenever
   `force` was set, and `doctor` is the sole caller that sets it — so the one

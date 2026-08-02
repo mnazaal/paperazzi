@@ -366,3 +366,63 @@ def test_drain_inbox_lock_file_cleaned_up_alongside_inbox(tmp_path: Path) -> Non
     # The lock file is a persistent sidecar (like bib_repository's .lock),
     # not a leftover temp file — assert it exists rather than that it's absent.
     assert (tmp_path / "inbox.txt.lock").exists()
+
+
+def test_drain_inbox_keeps_an_appended_line_when_an_earlier_one_was_edited(
+    tmp_path: Path,
+) -> None:
+    """Appended lines were detected by *line count*, so any concurrent rewrite
+    that changed a line's length or position handed back the wrong slice.
+
+    Here the external writer edits line 1 and appends a line. Counting produced
+    the *edited* line as "appended" and dropped the genuinely new one.
+    """
+    inbox = tmp_path / "inbox.txt"
+    inbox.write_text(
+        "https://arxiv.org/abs/first\nhttps://arxiv.org/abs/second\n", encoding="utf-8"
+    )
+    seen: list[str] = []
+
+    def _add_then_rewrite(**kwargs: Any) -> dict[str, Any]:
+        seen.append(kwargs.get("user_input", ""))
+        if len(seen) == 1:
+            inbox.write_text(
+                "https://arxiv.org/abs/first #edited\n"
+                "https://arxiv.org/abs/second\n"
+                "https://arxiv.org/abs/appended-mid-drain\n",
+                encoding="utf-8",
+            )
+        return {"status": "ok", "action": "insert", "citekey": "ck",
+                "bib_name": "main", "warnings": [], "errors": []}
+
+    result = drain_inbox(config_path=_CFG, home_dir=_HOME, inbox_path=str(inbox),
+                         delay=0, add_fn=_add_then_rewrite)
+
+    # The file was not merely appended to, so the drain refuses to rewrite it
+    # rather than clobbering the other writer's edit — and says so.
+    assert result["errors"]
+    text = inbox.read_text(encoding="utf-8")
+    assert "appended-mid-drain" in text
+    assert "#edited" in text
+
+
+def test_drain_inbox_reports_nothing_when_the_file_was_only_appended_to(
+    tmp_path: Path,
+) -> None:
+    """The ordinary case stays quiet: append detected, drained lines removed."""
+    inbox = tmp_path / "inbox.txt"
+    inbox.write_text("https://arxiv.org/abs/first\n", encoding="utf-8")
+
+    def _add_then_append(**kwargs: Any) -> dict[str, Any]:
+        with inbox.open("a", encoding="utf-8") as f:
+            f.write("https://arxiv.org/abs/appended-mid-drain\n")
+        return {"status": "ok", "action": "insert", "citekey": "ck",
+                "bib_name": "main", "warnings": [], "errors": []}
+
+    result = drain_inbox(config_path=_CFG, home_dir=_HOME, inbox_path=str(inbox),
+                         delay=0, add_fn=_add_then_append)
+
+    assert result["errors"] == []
+    text = inbox.read_text(encoding="utf-8")
+    assert "appended-mid-drain" in text
+    assert "first" not in text
