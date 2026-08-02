@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
+from pzi.add_service import ensure_citekey_for_write
 from pzi.bib_repository import (
     ConcurrentEditError,
     _write_bib_text_atomic,
@@ -19,6 +20,7 @@ from pzi.bib_repository import (
 )
 from pzi.bib_serialize import _balance_braces, _safe_citekey, _safe_field_value, serialize_bibtex
 from pzi.bibtex import record_to_bibtex_entry
+from pzi.errors import PziError
 
 
 def test_parse_bibtex_reads_entries_and_fields() -> None:
@@ -358,8 +360,20 @@ def test_execute_write_plan_skips_check_for_new_file(tmp_path: Path) -> None:
 
 
 def test_serialize_neutralizes_bibtex_injection() -> None:
+    """Hostile *field values* are neutralized at the serialization chokepoint.
+
+    The citekey half of this is now enforced in two places instead of one: a
+    composed key is sanitized where it enters (see
+    `ensure_citekey_for_write`), and serialization *refuses* a key that could
+    still break out — see `test_serialize_refuses_a_breakout_citekey`. Silently
+    rewriting the key here was the mechanism that renamed hand-written
+    citekeys off the user's disk.
+    """
     malicious = {
-        "citekey": "evil2024} @article{injected, title={pwned}, x={",
+        "citekey": ensure_citekey_for_write(
+            {"citekey": "evil2024} @article{injected, title={pwned}, x={"},  # type: ignore[arg-type]
+            [],
+        )["citekey"],
         "title": "T} @string{m=1} @article{evil2, author={y",
         "authors": ["Bar} @article{z, t={"],
         "year": 2024,
@@ -374,6 +388,16 @@ def test_serialize_neutralizes_bibtex_injection() -> None:
     assert library.failed_blocks == []
     assert "@article{injected" not in text  # the breakout `{` was neutralized
     assert "@article{fromabstract" not in text
+
+
+def test_serialize_refuses_a_breakout_citekey() -> None:
+    malicious = {
+        "citekey": "evil2024} @article{injected, title={pwned}, x={",
+        "title": "T",
+        "year": 2024,
+    }
+    with pytest.raises(PziError, match="cannot appear in a BibTeX entry key"):
+        serialize_bibtex([record_to_bibtex_entry(malicious)])
 
 
 def test_safe_citekey_strips_unsafe_characters() -> None:

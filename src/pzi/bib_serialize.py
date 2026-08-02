@@ -141,8 +141,37 @@ def describe_failed_blocks(library: Library) -> list[str]:
     ``library.entries`` loses them without a signal. Duplicate citekeys land
     here too: the parser keeps the first block and files every later one as a
     failure, so it is equally an entry the caller never sees.
+
+    Entries the parser accepted but *mangled* are reported alongside them (see
+    :func:`describe_mangled_field_keys`): the block is not "failed" by
+    bibtexparser's reckoning, but a field of it is just as invisible.
     """
-    return [message for _key, message in failed_block_details(library)]
+    return [
+        message for _key, message in failed_block_details(library)
+    ] + describe_mangled_field_keys(library)
+
+
+#: A field key can only pick these up by absorbing text that was meant to be
+#: something else — a ``%`` comment line inside the entry, which bibtexparser
+#: folds into the *following* field's key (``'% private note\n  doi'``), taking
+#: that field's value out of the record model with it.
+_MANGLED_FIELD_KEY = re.compile(r"[%\r\n]")
+
+
+def describe_mangled_field_keys(library: Library) -> list[str]:
+    """One message per field key that swallowed neighbouring text."""
+    messages: list[str] = []
+    for entry in library.entries:
+        for field in entry.fields:
+            if not _MANGLED_FIELD_KEY.search(field.key):
+                continue
+            real_key = field.key.rsplit("\n", 1)[-1].strip()
+            messages.append(
+                f"entry {entry.key!r}: a '%' comment inside the entry was folded "
+                f"into the following field key, hiding {real_key!r} — "
+                "move the comment outside the entry"
+            )
+    return messages
 
 
 def failed_block_details(library: Library) -> list[tuple[str | None, str]]:
@@ -184,6 +213,13 @@ def _validate_library_parseable(library: Library) -> None:
     saw would drop them. Read paths should report the same blocks via
     :func:`describe_failed_blocks` and carry on.
     """
+    # A mangled field key is not a *failed* block — bibtexparser accepted it —
+    # but rewriting the file would commit the mangling: the hidden field's value
+    # is attached to a key no reader will ever match, and the whole thing
+    # round-trips, so the write gate downstream sees nothing wrong.
+    mangled = describe_mangled_field_keys(library)
+    if mangled:
+        raise ValueError(f"malformed BibTeX: refusing to rewrite the file — {mangled[0]}")
     if not library.failed_blocks:
         return
     # `describe_failed_blocks` names the citekey for a duplicate and adds the
@@ -282,28 +318,44 @@ def merge_preserving_unchanged_source(
     account of what it changed would turn an under-reported field into silent
     data loss, where a wrong comparison here can only cost fidelity.
 
-    Fields are emitted in *rebuilt*'s order, and *rebuilt* owns which fields
-    exist at all, so a plan can still add and remove them.
+    *rebuilt* owns which fields exist at all, so a plan can still add and remove
+    them. Everything else about how they were written is *original*'s: fields it
+    already had keep their position, their key's capitalization and their source
+    text, and fields the plan added are appended after them. A rebuilt block is
+    alphabetized and lowercased, so emitting it as-is reordered and re-cased
+    every field of every touched entry — a library edited by pzi slowly drifted
+    into a second convention, one entry at a time.
     """
-    original_fields = {field.key: field for field in original.fields}
+    original_fields = {field.key.lower(): field for field in original.fields}
+    original_order = {
+        field.key.lower(): position for position, field in enumerate(original.fields)
+    }
     original_enclosing = original.parser_metadata.get("removed_enclosing", {})
     if not isinstance(original_enclosing, dict):  # pragma: no cover — defensive
         original_enclosing = {}
 
-    fields: list[Field] = []
+    known: list[tuple[int, Field]] = []
+    added: list[Field] = []
     preserved_enclosing: dict[str, str] = {}
     for field in rebuilt.fields:
-        source_field = original_fields.get(field.key)
+        source_field = original_fields.get(field.key.lower())
         if source_field is None:
-            fields.append(field)
+            added.append(field)
             continue
-        enclosing = original_enclosing.get(field.key)
+        position = original_order[field.key.lower()]
+        # `removed_enclosing` is keyed by the field key as it was written, so
+        # every lookup and every key emitted below uses the source spelling.
+        enclosing = original_enclosing.get(source_field.key)
         if field.value not in _unchanged_forms(source_field.value, enclosing, strings):
-            fields.append(field)
+            known.append((position, Field(key=source_field.key, value=field.value)))
             continue
-        fields.append(source_field)
+        known.append((position, source_field))
         if isinstance(enclosing, str):
-            preserved_enclosing[field.key] = enclosing
+            preserved_enclosing[source_field.key] = enclosing
+
+    fields: list[Field] = [
+        field for _position, field in sorted(known, key=lambda item: item[0])
+    ] + added
 
     merged = BibtexEntryV2(
         entry_type=rebuilt.entry_type, key=rebuilt.key, fields=fields,
@@ -345,11 +397,24 @@ def _unchanged_forms(
 
 
 def _library_entry_to_bibtex_entry(entry: BibtexEntryV2) -> BibtexEntry:
-    """Convert a bibtexparser v2 Entry to the internal BibtexEntry dict."""
+    """Convert a bibtexparser v2 Entry to the internal BibtexEntry dict.
+
+    Field keys are case-folded here, at the single parse boundary. BibTeX field
+    names are case-insensitive and bibtexparser lowercases the entry *type* but
+    not the keys, so a JabRef/IEEE-style ``Author =`` / ``Title =`` / ``Doi =``
+    / ``File =`` was invisible to the whole record model: dedup missed the DOI
+    and added a second copy, an update wrote lowercase twins *alongside* the
+    capitalized originals, ``fix clean`` quarantined a referenced PDF, and
+    ``pzi entries`` rendered the entry blank.
+
+    The user's own spelling is not lost — it is restored on write by
+    :func:`merge_preserving_unchanged_source` for every entry that already
+    existed on disk.
+    """
     return {
         "entry_type": entry.entry_type,
         "citekey": entry.key,
-        "fields": {f.key: f.value for f in entry.fields},
+        "fields": {f.key.lower(): f.value for f in entry.fields},
     }
 
 
@@ -357,13 +422,22 @@ def _library_entry_to_bibtex_entry(entry: BibtexEntryV2) -> BibtexEntry:
 # ``{<value>}``.  Untrusted metadata (a hostile capture page, a crafted
 # ``--citekey``/``--title``, a malicious ``--metadata-json``) could otherwise
 # break out of those delimiters and inject or corrupt entries, so both are
-# neutralized at this single serialization chokepoint.
+# neutralized where a citekey is *composed* (:func:`_safe_citekey`, used by
+# citekey generation and by the add path's explicit-citekey branch) and checked
+# again where any entry is serialized (:func:`_checked_citekey`).
 #
-# ``/`` is intentionally excluded: a citekey doubles as the PDF filename stem,
-# so a path separator there has no legitimate use and would be one more way to
-# smuggle path components toward the filesystem (paths are also basename-guarded
-# downstream — this removes it at the source).
+# ``/`` is intentionally excluded from a composed key: a citekey doubles as the
+# PDF filename stem, so a path separator there has no legitimate use and would
+# be one more way to smuggle path components toward the filesystem (paths are
+# also basename-guarded downstream — this removes it at the source).
 _UNSAFE_CITEKEY = re.compile(r"[^A-Za-z0-9_:.+\-]")
+# What actually breaks out of ``@type{<key>,``. Verified against the parser:
+# ``{``, ``,``, ``=`` and ``"`` make the block unparseable, and ``}`` silently
+# truncates the key — so a citekey read off disk can never contain them, and
+# refusing them costs a real library nothing. Everything the parser does accept
+# (``ü``, ``&``, ``'``, ``(``, ``%``, ``#``, ``\``, even a space) is written
+# back exactly as the user typed it.
+_STRUCTURAL_CITEKEY = re.compile(r"[{},=\"\r\n\x00-\x1f\x7f]")
 _UNSAFE_ENTRY_TYPE = re.compile(r"[^A-Za-z]")
 # Control characters (keep \t and \n) — NUL and friends have no place in a
 # BibTeX field value and can corrupt the file or downstream tools.
@@ -371,9 +445,44 @@ _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 
 def _safe_citekey(citekey: str) -> str:
-    """Strip characters that could escape the ``@type{<key>,`` context."""
+    """Strip characters that could escape the ``@type{<key>,`` context.
+
+    For citekeys the *code* composes — generated from metadata, or supplied as
+    ``--citekey`` / ``citekey`` in a capture payload. Never apply this to a key
+    read off disk: rewriting ``@article{Müller2020}`` to ``@article{Mller2020}``
+    silently breaks every ``\\cite{Müller2020}`` in the user's LaTeX.
+    """
     cleaned = _UNSAFE_CITEKEY.sub("", citekey).strip(".")
     return cleaned or "untitled"
+
+
+#: Public name for the composed-citekey sanitizer — callers outside this module
+#: (the add path's explicit-citekey branch) should not reach for the private one.
+safe_composed_citekey = _safe_citekey
+
+
+def _checked_citekey(citekey: str) -> str:
+    """Pass a citekey through, refusing one that would corrupt the file.
+
+    The serialization backstop for keys this code did not compose. An on-disk
+    key is returned verbatim; a key carrying a delimiter (which can only have
+    come from code or from untrusted input that skipped
+    :func:`_safe_citekey`) is a loud refusal, never a silent rewrite.
+    """
+    key = citekey.strip()
+    if not key:
+        raise PziError(
+            "refusing to write an entry with an empty citekey",
+            code=exit_codes.ENVIRONMENT,
+        )
+    match = _STRUCTURAL_CITEKEY.search(key)
+    if match:
+        raise PziError(
+            f"refusing to write citekey {citekey!r}: "
+            f"{match.group()!r} cannot appear in a BibTeX entry key",
+            code=exit_codes.ENVIRONMENT,
+        )
+    return key
 
 
 def _safe_field_value(value: str) -> str:
@@ -381,33 +490,55 @@ def _safe_field_value(value: str) -> str:
     return _balance_braces(_CONTROL_CHARS.sub("", value))
 
 
+def _escaped_positions(value: str) -> list[bool]:
+    """Per-character flag: is this character escaped by a preceding backslash?
+
+    A brace preceded by an *odd* run of backslashes is literal text (``\\}``),
+    not a delimiter. Counting the run rather than looking at the single previous
+    character keeps ``\\\\}`` — an escaped backslash followed by a real closing
+    brace — reading as a delimiter.
+    """
+    flags: list[bool] = []
+    run = 0
+    for ch in value:
+        flags.append(run % 2 == 1)
+        run = run + 1 if ch == "\\" else 0
+    return flags
+
+
 def _balance_braces(value: str) -> str:
     """Drop unmatched braces so a field value cannot terminate its ``{...}``.
 
     Balanced groups (e.g. case protection like ``{DNA}``) are preserved; only
     stray ``}`` (which would end the field early) and stray ``{`` are removed.
+    LaTeX-escaped braces are left alone: an escape-blind counter read ``\\}`` as
+    an unmatched closer and deleted it, mangling ``note = {a \\} b}`` on any
+    write that touched a neighbouring field.
     """
     if "{" not in value and "}" not in value:
         return value
-    kept: list[str] = []
+    escaped = _escaped_positions(value)
+    kept: list[tuple[str, bool]] = []
     depth = 0
-    for ch in value:  # left-to-right: drop unmatched closing braces
-        if ch == "}":
-            if depth == 0:
-                continue
-            depth -= 1
-        elif ch == "{":
-            depth += 1
-        kept.append(ch)
+    for ch, is_escaped in zip(value, escaped):  # left-to-right: drop unmatched `}`
+        if not is_escaped:
+            if ch == "}":
+                if depth == 0:
+                    continue
+                depth -= 1
+            elif ch == "{":
+                depth += 1
+        kept.append((ch, is_escaped))
     out: list[str] = []
     depth = 0
-    for ch in reversed(kept):  # right-to-left: drop unmatched opening braces
-        if ch == "{":
-            if depth == 0:
-                continue
-            depth -= 1
-        elif ch == "}":
-            depth += 1
+    for ch, is_escaped in reversed(kept):  # right-to-left: drop unmatched `{`
+        if not is_escaped:
+            if ch == "{":
+                if depth == 0:
+                    continue
+                depth -= 1
+            elif ch == "}":
+                depth += 1
         out.append(ch)
     return "".join(reversed(out))
 
@@ -429,7 +560,7 @@ def _bibtex_entry_to_library_entry(
     entry_type = _UNSAFE_ENTRY_TYPE.sub("", entry["entry_type"]) or "misc"
     return BibtexEntryV2(
         entry_type=entry_type,
-        key=_safe_citekey(entry["citekey"]),
+        key=_checked_citekey(entry["citekey"]),
         fields=[
             Field(key=k, value=_safe_field_value(v))
             for k, v in sorted(entry["fields"].items())

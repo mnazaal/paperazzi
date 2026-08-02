@@ -36,6 +36,7 @@ from pzi.bib_repository import (
     read_bib_file,
     validate_bibtex_roundtrip,
 )
+from pzi.bib_serialize import safe_composed_citekey
 from pzi.bibtex import (
     BibtexEntry,
     NormalizedRecord,
@@ -785,8 +786,13 @@ def ensure_citekey_for_write(
 
     ck = record.get("citekey")
     if isinstance(ck, str) and bool(ck.strip()):
+        # A citekey supplied from outside — `--citekey`, `--metadata-json`, a
+        # capture payload — is composed input, so it is sanitized here, at the
+        # boundary where it enters. Keys already in the library are never routed
+        # through this branch and keep whatever the user wrote.
+        requested = safe_composed_citekey(ck.strip())
         existing_keys = existing_citekeys(existing_records)
-        resolved = resolve_citekey_collision(ck.strip(), existing_keys)
+        resolved = resolve_citekey_collision(requested, existing_keys)
         if resolved == ck.strip():
             return record
         updated = dict(record)

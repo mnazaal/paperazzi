@@ -908,9 +908,12 @@ def test_update_dry_run_diff_does_not_claim_it_will_delete_unmodelled_fields(
 
     diff = result["items"][0].get("diff", "")
     added = [line for line in diff.splitlines() if line.startswith("+")]
-    # The post-write state keeps the fields the record model does not carry...
-    assert any("pages = {1--12}" in line for line in added)
-    assert any("publisher = {ACM}" in line for line in added)
+    # The fields the record model does not carry survive the write. They keep
+    # their original position now, so they appear as unchanged context (or, for
+    # the last one, re-emitted with a trailing comma) rather than as deletions.
+    surviving = [line for line in diff.splitlines() if not line.startswith("-")]
+    assert any("pages = {1--12}" in line for line in surviving)
+    assert any("publisher = {ACM}" in line for line in surviving)
     # ...and does not retype the entry: the bare projection used to resolve
     # @unpublished from the record's arxiv_id and show that as the outcome.
     assert not any(line.startswith("+@unpublished") for line in added)

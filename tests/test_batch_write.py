@@ -22,6 +22,7 @@ from unittest.mock import patch
 
 import pytest
 
+from pzi import add_service
 from pzi.add_service import add_records_to_bib_batch
 from pzi.bib_repository import BatchWriteSession, batch_write_session, plan_bib_write
 from pzi.bibtex import NormalizedRecord
@@ -253,18 +254,27 @@ def test_batch_per_record_failure_cleans_only_that_records_pdf(tmp_path: Path) -
     records = [
         {"citekey": "good2024", "title": "Good Paper", "doi": "10.1/good",
          "pdf_url": "http://example.com/good.pdf"},
-        # Invalid entry_type-less record that will fail validate_bibtex_roundtrip.
-        # We force the failure by passing a record whose citekey has illegal chars.
-        {"citekey": "bad\x00key", "title": "Bad Paper", "doi": "10.1/bad",
+        {"citekey": "bad2023", "title": "Bad Paper", "doi": "10.1/bad",
          "pdf_url": "http://example.com/bad.pdf"},
     ]
 
-    results = add_records_to_bib_batch(
-        bib=cast(Any, bib),
-        records=records,
-        dry_run=False,
-        fetch_binary=_fake_fetch_binary,
-    )
+    # The second record fails its round-trip validation. (It used to be given a
+    # citekey containing a NUL byte; composed citekeys are now sanitized before
+    # they reach the writer, so the failure is injected at the gate instead.)
+    real_validate = add_service.validate_bibtex_roundtrip
+
+    def _validate(entries):
+        if any(entry["citekey"] == "bad2023" for entry in entries):
+            raise ValueError("synthetic per-record validation failure")
+        return real_validate(entries)
+
+    with patch.object(add_service, "validate_bibtex_roundtrip", _validate):
+        results = add_records_to_bib_batch(
+            bib=cast(Any, bib),
+            records=records,
+            dry_run=False,
+            fetch_binary=_fake_fetch_binary,
+        )
 
     assert results[0]["status"] == "ok"
     assert results[1]["status"] == "error"

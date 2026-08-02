@@ -38,10 +38,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `flock` is released by the kernel on exit, so the file is never stale, and
   deleting it while a holder is live lets a second writer straight in.
 
+- **A hand-written citekey is no longer silently renamed.** Every write ran the
+  citekey sanitizer over *every* entry it rebuilt, including entries read
+  verbatim off disk — so `pzi tag add 'Müller2020' readme` reported success and
+  left the file holding `@article{Mller2020,`, breaking every
+  `\cite{Müller2020}` in the user's LaTeX. Keys are now written back exactly as
+  found; keys pzi *composes* are still sanitized where they enter, and
+  serialization refuses (rather than rewrites) a key carrying a BibTeX
+  delimiter.
+- **Capitalized field names are no longer invisible.** BibTeX field names are
+  case-insensitive, but pzi compared them case-sensitively, so a JabRef/IEEE
+  style `Author =` / `Title =` / `Doi =` / `File =` reached none of the record
+  model: `pzi add` inserted a second copy of a paper it should have deduped,
+  an update wrote lowercase twins *beside* the capitalized originals (producing
+  an entry bibtexparser then refuses), `fix clean --fix` quarantined a
+  referenced PDF, and `pzi entries` rendered the entry blank.
+- **A touched entry keeps its field order and its field-name capitalization.**
+  Both were rewritten on every write, so a library slowly drifted into a mix of
+  two conventions, one entry at a time.
+- **LaTeX-escaped braces survive a write.** The brace balancer was escape-blind,
+  so `note = {a \} b}` lost its `\}` whenever an unrelated field of the same
+  entry changed.
+- **A `%` comment inside an entry is reported instead of silently eating the
+  next field.** bibtexparser folds the comment into the following field's *key*,
+  which hides that field from the record model while still round-tripping
+  cleanly — so the write gate saw nothing wrong. pzi now refuses to rewrite such
+  a file and says which entry to fix.
+
 ### Known limitations
 
 - A bibliography with more than one hard link keeps only the written name
   pointing at the new content. This is inherent to replace-based atomic writes.
+- The first write to a `.bib` reformats the whole file (indentation, whitespace,
+  entry-type case). It is a one-time normalization and stable thereafter; the
+  README section on external `.bib` files documents exactly what is preserved.
 
 ## [0.1.0b4] - 2026-07-29
 
@@ -818,7 +848,7 @@ First public beta.
 
 - APIs can rate-limit; promotion is best-effort.
 - Browser extension install is manual.
-- Touched `.bib` entries may be re-serialized.
+- The first `.bib` write reformats the whole file (once; stable thereafter).
 - No native Windows support (WSL2 works).
 - No sync, group libraries, or desktop reader (by design).
 - Not yet on PyPI; install from GitHub for now.
