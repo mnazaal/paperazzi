@@ -17,9 +17,33 @@ export function setCaptureTabId(val) {
 
 // ── Endpoint & auth ────────────────────────────────────────────────────
 
+// pzi's API runs on this machine, by construction — `pzi server` refuses a
+// wildcard bind and the Host guard rejects anything else. So an endpoint that
+// is not loopback cannot be a pzi server, and everything a capture carries
+// goes to this URL: the page HTML, the user's cookies for that site, the
+// downloaded PDF bytes, and the API token. Taken from storage unchecked, one
+// mistyped character in the options box — or anything able to write extension
+// storage — redirected all of it to a remote host.
+export function isLoopbackEndpoint(rawEndpoint) {
+  try {
+    const { protocol, hostname } = new URL(rawEndpoint);
+    if (protocol !== "http:" && protocol !== "https:") return false;
+    const host = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+    return (
+      host === "localhost"
+      || host === "127.0.0.1"
+      || host === "::1"
+      || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)
+    );
+  } catch (_e) {
+    return false;
+  }
+}
+
 export async function getEndpoint() {
   const stored = await getStoredConfig("endpoint");
-  return stored.endpoint || DEFAULT_ENDPOINT;
+  if (stored.endpoint && isLoopbackEndpoint(stored.endpoint)) return stored.endpoint;
+  return DEFAULT_ENDPOINT;
 }
 
 export async function getAuthHeaders() {

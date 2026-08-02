@@ -47,9 +47,29 @@ import { isBotBypassWhitelisted } from "./pdf_discovery.js";
 const BOT_BYPASS_IFRAME_TIMEOUT_MS = 5000;
 const BOT_BYPASS_VISIBLE_TIMEOUT_MS = 15000;
 
+// How many bypass attempts one capture may spend. Each costs a hidden iframe
+// and can fall through to opening a *visible* tab, up to 20s apiece — so a page
+// offering many allowlisted candidates turned one capture into a minutes-long
+// sequence of tabs opening in the user's face. The attempts were already
+// serialized (each is awaited in turn); what was missing was a bound.
+const MAX_BOT_BYPASS_ATTEMPTS_PER_CAPTURE = 3;
+let _bypassBudgetTabId = null;
+let _bypassAttemptsUsed = 0;
+
+function takeBotBypassBudget(tabId) {
+  if (_bypassBudgetTabId !== tabId) {
+    _bypassBudgetTabId = tabId;
+    _bypassAttemptsUsed = 0;
+  }
+  if (_bypassAttemptsUsed >= MAX_BOT_BYPASS_ATTEMPTS_PER_CAPTURE) return false;
+  _bypassAttemptsUsed += 1;
+  return true;
+}
+
 export async function botBypassPdfUrl(tabId, candidateUrl, options = {}) {
   if (!tabId || !candidateUrl) return null;
   if (!isBotBypassWhitelisted(candidateUrl)) return null;
+  if (!takeBotBypassBudget(tabId)) return null;
   const visibleTimeoutMs = options.visibleTimeoutMs || BOT_BYPASS_VISIBLE_TIMEOUT_MS;
 
   startPdfObserver(tabId);
@@ -60,7 +80,12 @@ export async function botBypassPdfUrl(tabId, candidateUrl, options = {}) {
     // observer will catch.
     await chrome.scripting.executeScript({
       target: { tabId },
-      func: (url) => {
+      // Every value this function needs must arrive through `args`: it is
+      // serialized and evaluated in the *page*, where this module's scope does
+      // not exist. Reading BOT_BYPASS_IFRAME_TIMEOUT_MS from the closure threw
+      // a ReferenceError inside the injected promise, so the whole hidden-iframe
+      // bypass rejected and silently fell through to opening a visible tab.
+      func: (url, timeoutMs) => {
         return new Promise((resolve) => {
           const iframe = document.createElement("iframe");
           iframe.style.display = "none";
@@ -77,10 +102,10 @@ export async function botBypassPdfUrl(tabId, candidateUrl, options = {}) {
           setTimeout(() => {
             cleanup();
             resolve();
-          }, BOT_BYPASS_IFRAME_TIMEOUT_MS);
+          }, timeoutMs);
         });
       },
-      args: [candidateUrl],
+      args: [candidateUrl, BOT_BYPASS_IFRAME_TIMEOUT_MS],
     });
 
     // Give observer a chance to collect any PDF URLs that the iframe triggered.
@@ -169,17 +194,24 @@ export async function maybeStreamPdfBytes({ endpoint, citekey, bib, pdfUrlCandid
       // Fall through: tryPdfCandidates will skip navigate/discover methods
       // but still attempt generic fetch and page-context fetch.
     }
-    const attach = await tryPdfCandidates({
-      endpoint,
-      citekey,
-      bib,
-      candidates,
-      permission,
-      pageUrl,
-      attempts,
-      pdfRequest,
-    });
-    await removeTemporaryOriginPermission(candidates[0], permission);
+    // The release goes in a `finally`: it sat after the call, so a throw out of
+    // `tryPdfCandidates` left the user holding a host permission they had
+    // granted for one PDF fetch — silently, and until they revoked it by hand.
+    let attach = null;
+    try {
+      attach = await tryPdfCandidates({
+        endpoint,
+        citekey,
+        bib,
+        candidates,
+        permission,
+        pageUrl,
+        attempts,
+        pdfRequest,
+      });
+    } finally {
+      await removeTemporaryOriginPermission(candidates[0], permission);
+    }
     if (attach) {
       attach.pdf_attach_attempts = attempts;
       return attach;

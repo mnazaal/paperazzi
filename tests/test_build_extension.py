@@ -89,11 +89,18 @@ def test_copy_extension_files_excludes_readme(tmp_path: Path) -> None:
     assert "manifest.base.json" not in copied
 
 
-def test_firefox_manifest_has_webrequestfilterresponse() -> None:
+def test_neither_build_asks_for_response_body_access() -> None:
+    """`webRequestFilterResponse` gates `webRequest.filterResponseData` — the
+    ability to read and rewrite the *body* of every matching response. The
+    extension calls it nowhere; it reads response *headers* via
+    `onHeadersReceived`, which needs only `webRequest`. Asking for it bought
+    nothing and put the strongest permission in the API on the Firefox listing."""
     base = {"permissions": ["webRequest"], "version": "1.0"}
-    manifest = _build_firefox_manifest(base)
-    assert "webRequestFilterResponse" in manifest["permissions"]
-    assert "webRequest" in manifest["permissions"]
+
+    firefox = _build_firefox_manifest(base)
+
+    assert "webRequestFilterResponse" not in firefox["permissions"]
+    assert "webRequest" in firefox["permissions"]
 
 
 def test_chrome_manifest_does_not_have_webrequestfilterresponse() -> None:

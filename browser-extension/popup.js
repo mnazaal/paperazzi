@@ -3,7 +3,6 @@ import {
   getEndpoint,
   getAuthHeaders,
   detectAndExtractSearchResults,
-  cookieHeaderForUrl,
   captureCurrentTab,
   endpointFor,
 } from "./background.js";
@@ -32,13 +31,32 @@ const recentList = document.getElementById("recent-list");
 let _searchItems = [];
 
 // ── Init ─────────────────────────────────────────────────────────────────
+// Capture progress and the recent list are per-session state the *background*
+// writes to `storage.session`, so the popup has to read them from the same
+// place.
 function getStorage() {
   return (chrome.storage.session) ? chrome.storage.session : chrome.storage.local;
 }
 
-getStorage().get("authToken").then((stored) => {
+// The API token is not session state. It lived in `storage.session`, which the
+// browser clears on close *and* which shadows `storage.local` in the merge
+// `getStoredConfig` does — so the first capture of a new session wrote the
+// empty token box over the token onboarding had saved to local, and every
+// request 401'd until the user retyped it.
+function getTokenStorage() {
+  return chrome.storage.local;
+}
+
+getTokenStorage().get("authToken").then((stored) => {
   tokenInput.value = stored.authToken || "";
 });
+
+// An empty box means "I did not type one", never "clear the saved token".
+async function storeAuthToken() {
+  const token = tokenInput.value.trim();
+  if (!token) return;
+  await getTokenStorage().set({ authToken: token });
+}
 
 async function populateBibs() {
   const bibs = await fetchBibs();
@@ -197,7 +215,7 @@ async function doMultiCapture(all) {
   const tags = document.getElementById("tags").value.split(",").map((s) => s.trim()).filter(Boolean);
   const bib = bibSelect.value || null;
   const dryRun = document.getElementById("dry").checked;
-  await getStorage().set({ authToken: tokenInput.value.trim() });
+  await storeAuthToken();
 
   let selectedItems;
   if (all) {
@@ -239,11 +257,11 @@ async function doMultiCapture(all) {
           bib,
           dry_run: dryRun,
           verbose: true,
-          // Deliberately no `cookies`: each result is a *different* domain, and
-          // this used to forward the search page's cookie header to every one
-          // of them. Cookies are read for the active tab's domain and belong
-          // only to a capture of that tab.
-          cookies: await cookieHeaderForUrl(item.url),
+          // Deliberately no `cookies`: each result is a *different* domain the
+          // user is not on. Reading their cookies and forwarding them to the
+          // server — which forwards them to the publisher — is far beyond the
+          // active tab's session, which is the only thing a capture is entitled
+          // to reuse. The comment said so while the code did the opposite.
         }),
       });
       const data = await response.json().catch(() => null);
@@ -324,7 +342,7 @@ async function doSingleCapture() {
   const bib = bibSelect.value || null;
   const dryRun = document.getElementById("dry").checked;
   const forceNew = document.getElementById("force").checked;
-  await getStorage().set({ authToken: tokenInput.value.trim() });
+  await storeAuthToken();
 
   summary.textContent = "Capturing…";
   raw.textContent = "";

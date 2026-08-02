@@ -78,7 +78,7 @@ globalThis.calls = [];
 globalThis.chrome = {
   storage: {
     local: {
-      get: async (key) => ({ endpoint: "http://pzi.test/capture", authToken: "tok" })
+      get: async (key) => ({ endpoint: "http://127.0.0.1:8765/capture", authToken: "tok" })
     }
   },
   runtime: { onInstalled: { addListener: () => {} } },
@@ -97,7 +97,7 @@ console.log(JSON.stringify({ bibs, calls: globalThis.calls }));
     assert result["bibs"] == [{"name": "ml", "default": True}]
     assert result["calls"] == [
         {
-            "url": "http://pzi.test/bibs",
+            "url": "http://127.0.0.1:8765/bibs",
             "options": {"headers": {"X-Pzi-Token": "tok"}},
         }
     ]
@@ -108,7 +108,7 @@ def test_capture_generic_page_metadata_not_marked_ieee_trusted(tmp_path: Path) -
         r'''
 globalThis.chrome = {
   storage: {
-    local: { get: async () => ({ endpoint: "http://pzi.test/capture" }) },
+    local: { get: async () => ({ endpoint: "http://127.0.0.1:8765/capture" }) },
     session: { get: async () => ({}), set: () => {} },
   },
   runtime: { onInstalled: { addListener: () => {} } },
@@ -419,7 +419,7 @@ globalThis.fetchCalls = [];
 globalThis.chrome = {
   storage: {
     local: {
-      get: async () => ({ endpoint: "http://pzi.test/capture", authToken: "tok" })
+      get: async () => ({ endpoint: "http://127.0.0.1:8765/capture", authToken: "tok" })
     }
   },
   runtime: { onInstalled: { addListener: () => {} } },
@@ -473,7 +473,7 @@ console.log(JSON.stringify({ capture, calls: simplified }));
     assert result["capture"]["status"] == "ok"
     assert result["capture"]["citekey"] == "smith2024paper"
     assert result["capture"]["pdf_attach"]["status"] == "ok"
-    assert result["calls"][0]["url"] == "http://pzi.test/capture"
+    assert result["calls"][0]["url"] == "http://127.0.0.1:8765/capture"
     assert result["calls"][0]["method"] == "POST"
     assert result["calls"][0]["headers"] == {"Content-Type": "application/json", "X-Pzi-Token": "tok"}
     body = result["calls"][0]["body"]
@@ -511,7 +511,7 @@ def test_browser_extension_pdf_bytes_fallback_includes_attach_session(tmp_path: 
 const pdfBytes = new Uint8Array([37, 80, 68, 70, 45, 49]).buffer;
 globalThis.fetchCalls = [];
 globalThis.chrome = {
-  storage: { local: { get: async () => ({ endpoint: "http://pzi.test/capture" }) } },
+  storage: { local: { get: async () => ({ endpoint: "http://127.0.0.1:8765/capture" }) } },
   runtime: { onInstalled: { addListener: () => {} } },
   tabs: { query: async () => [{ id: 7, url: "https://paper.test/article" }] },
   scripting: {
@@ -531,7 +531,7 @@ globalThis.fetch = async (url, options = {}) => {
         request_id: "req-1",
         candidates: [{ url: "https://paper.test/paper.pdf" }],
         attach: {
-          url: "http://pzi.test/attach-pdf-raw?request_id=req-1&citekey=smith2024paper",
+          url: "http://127.0.0.1:8765/attach-pdf-raw?request_id=req-1&citekey=smith2024paper",
           token: "tok-1"
         }
       }
@@ -634,7 +634,7 @@ const fakeDocument = {
 };
 globalThis.chrome = {
   storage: {
-    local: { get: async () => ({ endpoint: "http://pzi.test/capture" }) },
+    local: { get: async () => ({ endpoint: "http://127.0.0.1:8765/capture" }) },
     session: { get: async () => ({}), set: async () => ({}) },
   },
   runtime: { onInstalled: { addListener: () => {} } },
@@ -708,7 +708,7 @@ const pdfBytes = new Uint8Array([37, 80, 68, 70, 45, 49]).buffer;
 globalThis.events = [];
 globalThis.chrome = {
   storage: {
-    local: { get: async () => ({ endpoint: "http://pzi.test/capture" }) },
+    local: { get: async () => ({ endpoint: "http://127.0.0.1:8765/capture" }) },
     session: { get: async () => ({}), set: async () => ({}) },
   },
   runtime: { onInstalled: { addListener: () => {} } },
@@ -1144,7 +1144,7 @@ globalThis.chrome = {
   },
   storage: {
     local: {
-      get: async () => ({ endpoint: "http://pzi.test/capture", authToken: "" }),
+      get: async () => ({ endpoint: "http://127.0.0.1:8765/capture", authToken: "" }),
     },
   },
   tabs: {
@@ -1194,7 +1194,7 @@ globalThis.chrome = {
   },
   storage: {
     local: {
-      get: async () => ({ endpoint: "http://pzi.test/capture", authToken: "" }),
+      get: async () => ({ endpoint: "http://127.0.0.1:8765/capture", authToken: "" }),
       set: async () => {},
     },
     session: { get: async () => ({}), set: async () => ({}) },
@@ -1368,3 +1368,278 @@ console.log(JSON.stringify({ count: candidates.length, cap: MAX_PDF_URL_CANDIDAT
     )
     assert result["cap"] == 20, "client cap must match the server's limit"
     assert result["count"] == 20
+
+
+# ---------------------------------------------------------------------------
+# The injected iframe function only sees what `args` hands it
+# ---------------------------------------------------------------------------
+
+
+def test_the_hidden_iframe_receives_its_timeout_as_an_argument(tmp_path: Path) -> None:
+    """`func` is serialized into the *page*, where a background-module const
+    does not exist — so `BOT_BYPASS_IFRAME_TIMEOUT_MS` was a ReferenceError,
+    the injected promise rejected, and the hidden-iframe bypass never ran at
+    all. It silently fell through to opening a visible tab every time."""
+    result = _run_background_module(
+        r'''
+let captured = null;
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} } },
+  webRequest: {
+    onHeadersReceived: { addListener: () => {}, removeListener: () => {} },
+  },
+  scripting: {
+    executeScript: async (options) => {
+      captured = options;
+      // Run the injected function exactly as the page would: with only the
+      // arguments it was given, and with no access to module scope.
+      const isolated = new Function("return " + options.func.toString())();
+      globalThis.document = {
+        createElement: () => ({ style: {} }),
+        body: { appendChild: () => {} },
+      };
+      await isolated(...options.args);
+      return [{ result: null }];
+    },
+  },
+  tabs: { create: async () => ({ id: 99 }), remove: async () => {} },
+};
+const mod = await import("./background.js");
+let error = null;
+try {
+  await mod.botBypassPdfUrl(7, "https://ieeexplore.ieee.org/stamp/stamp.jsp?a=1",
+                            { visibleTimeoutMs: 5 });
+} catch (e) {
+  error = String(e);
+}
+console.log(JSON.stringify({ argCount: captured?.args?.length ?? 0, error }));
+''',
+        tmp_path,
+    )
+
+    assert result["error"] is None
+    # The URL *and* the timeout, not just the URL.
+    assert result["argCount"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Failures in the extension's own helpers
+# ---------------------------------------------------------------------------
+
+
+def test_a_body_that_is_not_json_resolves_to_null_instead_of_rejecting(
+    tmp_path: Path,
+) -> None:
+    """`response.json()` returns a *promise* that rejects; the `try` around the
+    call never sees it. Every caller doing `await jsonOrNull(r)` therefore threw
+    on an empty or truncated body instead of getting the `null` it handles."""
+    result = _run_background_module(
+        r'''
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} } },
+  webRequest: { onHeadersReceived: { addListener: () => {}, removeListener: () => {} } },
+};
+const { jsonOrNull } = await import("./background/utils.mjs");
+const rejecting = { json: () => Promise.reject(new SyntaxError("Unexpected end of JSON input")) };
+const throwing = { json: () => { throw new TypeError("no body"); } };
+let fromRejecting = "threw";
+let fromThrowing = "threw";
+try { fromRejecting = await jsonOrNull(rejecting); } catch (_e) {}
+try { fromThrowing = await jsonOrNull(throwing); } catch (_e) {}
+console.log(JSON.stringify({ fromRejecting, fromThrowing }));
+''',
+        tmp_path,
+    )
+
+    assert result["fromRejecting"] is None
+    assert result["fromThrowing"] is None
+
+
+def test_a_cookie_backend_without_partition_support_still_returns_a_header(
+    tmp_path: Path,
+) -> None:
+    """The fallback `getAll` sat outside any `try`, so a backend that rejects
+    both shapes threw straight out of the capture path."""
+    result = _run_background_module(
+        r'''
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} } },
+  webRequest: { onHeadersReceived: { addListener: () => {}, removeListener: () => {} } },
+  cookies: {
+    getAll: async (query) => {
+      if ("partitionKey" in query) throw new TypeError("partitionKey unsupported");
+      throw new Error("cookies unavailable");
+    },
+  },
+};
+const { cookieHeaderForUrl } = await import("./background/permissions.mjs");
+let header = "threw";
+try { header = await cookieHeaderForUrl("https://example.com/a"); } catch (_e) {}
+console.log(JSON.stringify({ header }));
+''',
+        tmp_path,
+    )
+
+    assert result["header"] == ""
+
+
+def test_bulk_capture_shows_the_reason_the_server_gave(tmp_path: Path) -> None:
+    """The server reports a route failure under `error`, not `message`.
+
+    Every such failure rendered as the literal string "failed", which is exactly
+    the information the operator needed and did not get. `responseErrors` in the
+    background already reads both keys; this display did not.
+    """
+    module = tmp_path / "popup_format.mjs"
+    module.write_text(
+        _rewrite_local_imports(
+            (PROJECT_ROOT / "browser-extension" / "popup_format.js").read_text()
+        )
+    )
+    runner = tmp_path / "runner.mjs"
+    runner.write_text(
+        r'''
+import { formatMultiCaptureResult } from "./popup_format.mjs";
+const out = formatMultiCaptureResult({
+  status: "complete",
+  total: 3,
+  results: [
+    { status: "ok", citekey: "a2024" },
+    { status: "error", error: "invalid API token" },
+    { status: "error", errors: ["metadata provider unreachable"] },
+  ],
+});
+console.log(JSON.stringify({ out }));
+'''
+    )
+    result = subprocess.run(
+        ["node", str(runner)], text=True, capture_output=True, cwd=str(tmp_path)
+    )
+    assert result.returncode == 0, result.stderr
+    text = json.loads(result.stdout)["out"]
+
+    assert "invalid API token" in text
+    assert "metadata provider unreachable" in text
+    assert "❌ failed" not in text
+
+
+def test_bulk_capture_does_not_forward_cookies_for_other_domains() -> None:
+    """Each search result is a *different* site the user is not on.
+
+    Reading their cookies and forwarding them to the server — which forwards
+    them to the publisher — is far beyond "the active tab's session", which is
+    what the comment directly above the call already claimed was happening.
+    """
+    text = POPUP_JS.read_text()
+
+    assert "cookieHeaderForUrl(item.url)" not in text
+
+
+def test_the_popup_stores_the_api_token_where_it_survives_a_restart() -> None:
+    """`storage.session` is cleared when the browser closes, and it *shadows*
+    `storage.local` in the merge the background does — so the first capture of
+    a new session wrote an empty token over the one onboarding had saved, and
+    every request 401'd until it was retyped.
+
+    Only the token moves: capture progress and the recent list are per-session
+    state the background writes to `storage.session`, and the popup has to keep
+    reading them from there.
+    """
+    text = POPUP_JS.read_text()
+
+    assert "function getTokenStorage() {\n  return chrome.storage.local;\n}" in text
+    assert 'getTokenStorage().get("authToken")' in text
+    # An empty box never overwrites a stored token.
+    assert "if (!token) return;" in text
+    # And the session-scoped keys still come from session storage.
+    assert "chrome.storage.session" in text
+    assert 'getStorage().get(["pzi:lastCapture"' in text
+
+
+def test_a_non_loopback_endpoint_is_not_used(tmp_path: Path) -> None:
+    """Everything a capture holds goes to this URL: the page HTML, the user's
+    cookies for that site, the downloaded PDF, and the API token. It was taken
+    from storage unchecked, so anything that could write extension storage —
+    or one mistyped character in the options box — redirected the lot to a
+    remote host."""
+    result = _run_background_module(
+        r'''
+const store = { endpoint: "https://evil.example.com/capture" };
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} } },
+  webRequest: { onHeadersReceived: { addListener: () => {}, removeListener: () => {} } },
+  storage: { local: { get: async (k) => ({ [k]: store[k] }) } },
+};
+const { getEndpoint, DEFAULT_ENDPOINT } = await import("./background/config.mjs");
+const remote = await getEndpoint();
+store.endpoint = "http://127.0.0.1:9999/capture";
+const loopbackIp = await getEndpoint();
+store.endpoint = "http://localhost:8765/capture";
+const loopbackName = await getEndpoint();
+console.log(JSON.stringify({ remote, loopbackIp, loopbackName, DEFAULT_ENDPOINT }));
+''',
+        tmp_path,
+    )
+
+    assert result["remote"] == result["DEFAULT_ENDPOINT"]
+    # A loopback endpoint on any port is the normal case and stays honoured.
+    assert result["loopbackIp"] == "http://127.0.0.1:9999/capture"
+    assert result["loopbackName"] == "http://localhost:8765/capture"
+
+
+
+def test_a_temporary_origin_permission_is_released_on_every_path() -> None:
+    """The release sat after the call it protects, so a throw out of
+    `tryPdfCandidates` left the user holding a host permission they had granted
+    for one PDF fetch — silently, and indefinitely.
+
+    Asserted structurally: driving `tryPdfCandidates` to throw needs a real
+    network stack, and the property is "the release cannot be skipped", which is
+    exactly what `finally` states.
+    """
+    text = (PROJECT_ROOT / "browser-extension" / "background" / "pdf_fetch.js").read_text()
+    body = text[text.index("export async function maybeStreamPdfBytes"):]
+    body = body[: body.index("\n}\n")]
+
+    release = body.index("removeTemporaryOriginPermission(candidates[0], permission)")
+    finally_block = body.rindex("} finally {", 0, release)
+    try_block = body.rindex("try {", 0, finally_block)
+
+    assert "tryPdfCandidates({" in body[try_block:finally_block]
+
+
+def test_bot_bypass_is_capped_per_capture(tmp_path: Path) -> None:
+    """Each attempt opens a hidden iframe and can fall through to a *visible*
+    tab, up to 20s apiece. A page offering many allowlisted candidates turned
+    one capture into a minutes-long sequence of tabs opening in the user's face.
+    """
+    result = _run_background_module(
+        r'''
+let created = 0;
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} } },
+  webRequest: { onHeadersReceived: { addListener: () => {}, removeListener: () => {} } },
+  scripting: { executeScript: async () => [{ result: null }] },
+  tabs: {
+    create: async () => { created += 1; return { id: 90 + created }; },
+    update: async () => {},
+    remove: async () => {},
+    onUpdated: { addListener: () => {}, removeListener: () => {} },
+  },
+};
+const mod = await import("./background.js");
+const results = [];
+for (let i = 0; i < 8; i += 1) {
+  results.push(await mod.botBypassPdfUrl(
+    7, "https://ieeexplore.ieee.org/stamp/stamp.jsp?arnumber=" + i,
+    { visibleTimeoutMs: 5 },
+  ));
+}
+console.log(JSON.stringify({ created, attempts: results.length }));
+''',
+        tmp_path,
+    )
+
+    assert result["attempts"] == 8
+    # Far fewer helper tabs than candidates: the budget stopped it.
+    assert result["created"] <= 3, result

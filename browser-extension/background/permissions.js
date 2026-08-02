@@ -21,9 +21,17 @@ export async function cookieHeaderForUrl(url) {
   try {
     cookies = await chrome.cookies.getAll({ url, partitionKey: {} });
   } catch (_error) {
-    cookies = await chrome.cookies.getAll({ url });
+    // The fallback needs its own guard: it sat bare in the `catch`, so a
+    // backend that rejects both shapes — or has the permission revoked
+    // mid-capture — threw straight out of the capture path. No cookies is a
+    // degraded capture, not a failed one.
+    try {
+      cookies = await chrome.cookies.getAll({ url });
+    } catch (_fallbackError) {
+      return "";
+    }
   }
-  return cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join("; ");
+  return (cookies || []).map((cookie) => `${cookie.name}=${cookie.value}`).join("; ");
 }
 
 export function groupPdfCandidates(candidates, pageUrl) {

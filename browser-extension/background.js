@@ -353,51 +353,15 @@ function _clearBadge() {
   chrome.action.setBadgeText({ text: "" }).catch(() => {});
 }
 
-// ── Popup-to-background bridge ──────────────────────────────────────────
-// Popup sends a "pzi:capture" message with {tags,bib,dryRun,tabId,tabUrl}.
-// Background runs the full capture pipeline, stores result in session
-// storage, and manages the badge.  This keeps capture alive after popup
-// close (MV3 service-worker persistence).
-if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage) {
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message && message.type === "pzi:capture") {
-      _handlePziCapture(message, sendResponse);
-      return true; // async — keep channel open
-    }
-    return false;
-  });
-}
-
-async function _handlePziCapture(message, sendResponse) {
-  const { tags, bib, dryRun, tabId, tabUrl, forceNew } = message;
-
-  _setBadge("…", "#FFA500");
-
-  try {
-    await chrome.storage.session.set({ "pzi:captureInProgress": true });
-
-    const result = await captureCurrentTab({ tags, bib, dryRun, tabId, tabUrl, forceNew });
-
-    await chrome.storage.session.set({
-      "pzi:lastCapture": result,
-      "pzi:captureInProgress": false,
-      "pzi:captureStage": null,
-    });
-
-    if (result && result.status === "ok") {
-      _setBadge("✓", "#4CAF50");
-    } else {
-      _setBadge("✗", "#F44336");
-    }
-
-    sendResponse({ status: "received" });
-  } catch (err) {
-    await chrome.storage.session.set({
-      "pzi:lastCapture": { status: "error", message: err?.message || String(err) },
-      "pzi:captureInProgress": false,
-      "pzi:captureStage": null,
-    });
-    _setBadge("✗", "#F44336");
-    sendResponse({ status: "error", message: err?.message || String(err) });
-  }
-}
+// ── Why there is no popup-to-background capture bridge ──────────────────
+// There used to be a `chrome.runtime.onMessage` listener here that ran the
+// capture pipeline in the service worker, so a capture would survive the popup
+// closing. Nothing ever sent that message: `doSingleCapture` calls
+// `captureCurrentTab` directly, deliberately, because Firefox only grants an
+// optional host permission while a user gesture is in scope — moving the work
+// to the background loses the click and the permission request fails.
+//
+// The listener was therefore unreachable code asserting a property the
+// extension does not have. Removed rather than wired: the context-menu path
+// still runs in the background and reports through `pzi:lastCapture`, which is
+// what `_checkStoredCapture` in the popup displays.

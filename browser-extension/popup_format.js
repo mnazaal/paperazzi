@@ -184,6 +184,19 @@ function actionLabel(value) {
 
 // ── Multi-item capture result formatting (Tier 4) ───────────────────────
 
+export function captureFailureReason(result) {
+  // The server has two failure channels and this read neither of the ones a
+  // *route* uses. A service result carries `errors[]`; a route rejection (bad
+  // token, refused host, unparseable body) carries a singular `error`. Only
+  // `message` was consulted, so every route failure rendered as the literal
+  // "failed" — precisely the information the operator was missing.
+  if (!result) return "failed";
+  if (Array.isArray(result.errors) && result.errors.length > 0) {
+    return result.errors.join("; ");
+  }
+  return result.error || result.message || "failed";
+}
+
 export function formatMultiCaptureResult(outcome) {
   if (!outcome || !Array.isArray(outcome.results)) {
     return "❌ Capture failed: no results";
@@ -199,8 +212,7 @@ export function formatMultiCaptureResult(outcome) {
       lines.push("✅ " + (r.citekey || "entry"));
     } else {
       fail++;
-      const msg = (r && r.message) ? r.message : "failed";
-      lines.push("❌ " + msg);
+      lines.push("❌ " + captureFailureReason(r));
     }
   }
 

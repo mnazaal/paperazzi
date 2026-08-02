@@ -121,11 +121,13 @@ def _build_firefox_manifest(base: dict[str, Any]) -> dict[str, Any]:
             "strict_min_version": "109.0",
         }
     }
-    # Firefox-only: webRequestFilterResponse needed for responseHeaders access in MV3
-    permissions = list(manifest.get("permissions", []))
-    if "webRequestFilterResponse" not in permissions:
-        permissions.append("webRequestFilterResponse")
-    manifest["permissions"] = permissions
+    # No `webRequestFilterResponse`. It was added here on the belief that MV3
+    # needs it for `responseHeaders`, which is wrong: it gates
+    # `webRequest.filterResponseData` — reading and rewriting the *body* of
+    # every matching response — and the extension calls that nowhere. Reading
+    # headers via `onHeadersReceived` needs only `webRequest`. Asking for it
+    # bought nothing and put the strongest permission in the API on the listing
+    # a reviewer reads.
     return manifest
 
 

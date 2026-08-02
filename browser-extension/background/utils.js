@@ -77,8 +77,14 @@ export function normalizeDoi(raw) {
 // ── HTTP/fetch utilities ────────────────────────────────────────────────
 
 export function jsonOrNull(response) {
+  // `response.json()` returns a promise that *rejects* on a body that is not
+  // JSON — a truncated response, an empty 204, an HTML error page from
+  // something in front of the server. A `try` around the call cannot see that,
+  // so every `await jsonOrNull(r)` threw instead of receiving the `null` its
+  // callers are written to handle. The `try` still covers a response object
+  // with no `json` method at all.
   try {
-    return response.json();
+    return Promise.resolve(response.json()).catch(() => null);
   } catch (_error) {
     return Promise.resolve(null);
   }

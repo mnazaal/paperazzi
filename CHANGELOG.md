@@ -32,6 +32,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for `problematic` and only under `--strict`, so a CI gate written from that
   table passed a library of fabricated references. `--strict` keeps its real
   meaning: harder checks, not whether findings are reported.
+- **Bulk capture no longer reads and uploads cookies for every search result.**
+  Each result is a *different* site the user is not on; their cookies were read
+  and forwarded to the server, which forwards them to the publisher. The comment
+  directly above the call already said this did not happen.
+- **The extension only talks to a loopback endpoint.** The configured URL was
+  used unchecked, so one mistyped character in the options box — or anything
+  able to write extension storage — sent the page HTML, the site's cookies, the
+  downloaded PDF and the API token to a remote host. A pzi server is always
+  local, so a non-loopback endpoint falls back to the default.
+- **The API token survives a browser restart.** The popup stored it in
+  `storage.session`, which the browser clears on close *and* which shadows
+  `storage.local` in the background's merge — so the first capture of a new
+  session wrote the empty token box over the token onboarding had saved, and
+  every request 401'd until it was retyped. An empty box no longer overwrites a
+  stored token.
+- **The Firefox build no longer requests response-body access.**
+  `webRequestFilterResponse` gates `webRequest.filterResponseData`, which the
+  extension calls nowhere — reading response *headers* needs only `webRequest`.
+- **The hidden-iframe PDF bypass actually runs.** Its timeout was read from
+  module scope inside a function serialized into the *page*, so it threw a
+  `ReferenceError`, the injected promise rejected, and every bypass silently
+  fell through to opening a visible tab. The bypass is also now capped at three
+  attempts per capture, instead of one per candidate at up to 20 seconds each.
+- **A temporary host permission is released even when the fetch throws.** It was
+  released after the call it protects, so a failure left the user holding a
+  permission granted for one PDF fetch.
+- **A response that is not JSON no longer throws out of the capture path.**
+  `jsonOrNull` wrapped `response.json()` in a `try`, but the failure arrives as
+  a rejected promise the `try` cannot see. Same for the cookie-header fallback,
+  whose second `getAll` sat bare inside the `catch`.
+- **Bulk capture shows why an item failed.** It read only `message`, while a
+  route rejection reports under `error` and a service failure under `errors[]` —
+  so every one of them rendered as the literal word "failed".
+- **Removed the dead popup→background capture bridge.** Nothing sent the message
+  it listened for: capture runs in the popup deliberately, because Firefox only
+  grants an optional host permission while the user's click is in scope. The
+  listener was unreachable code asserting a property the extension lacks.
 - **A PDF failure no longer throws away the metadata that was just fetched.** An
   exception out of the PDF stage — a dead `browser_pdf_cmd`, a full disk, a
   provider hanging up mid-download — aborted the whole `pzi add`, so the record
