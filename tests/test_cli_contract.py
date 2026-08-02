@@ -346,3 +346,39 @@ def test_reindex_audit_needs_no_confirmation(tmp_path: Path) -> None:
     assert code == exit_codes.FINDINGS
     assert "--rename-citekeys" in stdout
     assert bib.read_text(encoding="utf-8") == _RENAMEABLE
+
+
+def test_fix_clean_does_not_quarantine_a_sibling_librarys_pdf(tmp_path: Path) -> None:
+    """The default layout points every configured bib at one `papers_dir`.
+
+    `pzi fix clean --fix` on one target moved the other library's PDFs into
+    `.orphans/`, leaving that library's `file =` fields dangling — for a user who
+    simply ran the command against the wrong `--target`.
+    """
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    theirs = papers / "theirs2024.pdf"
+    theirs.write_bytes(b"%PDF-1.4\nTHEIRS\n")
+
+    ml = tmp_path / "ml.bib"
+    cs = tmp_path / "cs.bib"
+    ml.write_text("@article{mine2024,\n  title = {Mine},\n}\n", encoding="utf-8")
+    cs.write_text(
+        f"@article{{theirs2024,\n  title = {{Theirs}},\n  file = {{{theirs}}},\n}}\n",
+        encoding="utf-8",
+    )
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'[[bibs]]\nname = "ml"\npath = "{ml}"\npapers_dir = "{papers}"\ndefault = true\n\n'
+        f'[[bibs]]\nname = "cs"\npath = "{cs}"\npapers_dir = "{papers}"\n',
+        encoding="utf-8",
+    )
+
+    code, _stdout, _stderr = _run(
+        ["fix", "clean", "--fix", "--target", "ml", "--config", str(config_path)],
+        tmp_path,
+    )
+
+    assert code == exit_codes.OK
+    assert theirs.exists()
+    assert not (papers / ".orphans").exists()

@@ -1203,3 +1203,116 @@ def test_promote_still_accepts_a_published_doi_that_differs_from_the_preprint(tm
     assert result["status"] == "ok"
     assert len(result["items"]) == 1
     assert result["items"][0]["action"] == "update", result["items"][0]
+
+
+def _fake_search_without_doi(query: str, *, server_url: str):
+    """A published version whose provider record carries no DOI of its own."""
+    return [
+        {
+            "item_type": "journalArticle",
+            "record": {
+                "title": "Graph Parsers",
+                "venue": "Journal of Parsing",
+                "year": 2024,
+                "authors": ["Smith, Jane"],
+            },
+            "attachments": [],
+        }
+    ]
+
+
+def test_promote_in_place_reports_the_fields_it_removed(tmp_path):
+    """`changed_fields` iterated the *updated* record only.
+
+    A field the promotion deleted — the `eprint`, the preprint URL — is
+    therefore absent from the record being iterated, so the one change the user
+    most needs to see was applied and never named.
+    """
+    bib_path = tmp_path / "ml.bib"
+    config_path = _write_config(tmp_path, bib_path)
+    _seed_bib_with_preprint(
+        tmp_path, bib_path, config_path,
+        canonical_url="https://arxiv.org/abs/2401.12345",
+    )
+
+    result = promote_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        keep_preprint=False,
+        dry_run=False,
+        fetch_search=_fake_search_with_venue,
+    )
+
+    changed = result["items"][0]["changed_fields"]
+    assert "arxiv_id" in changed
+    assert "canonical_url" in changed
+
+
+def test_promote_in_place_leaves_a_backup(tmp_path):
+    """It overwrites an entry with a different paper's metadata, with no undo."""
+    bib_path = tmp_path / "ml.bib"
+    config_path = _write_config(tmp_path, bib_path)
+    _seed_bib_with_preprint(tmp_path, bib_path, config_path)
+    before = bib_path.read_text()
+
+    promote_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        keep_preprint=False,
+        dry_run=False,
+        fetch_search=_fake_search_with_venue,
+    )
+
+    backups = list(tmp_path.glob("*.bak"))
+    assert len(backups) == 1
+    assert backups[0].read_text() == before
+    assert bib_path.read_text() != before
+
+
+def test_promote_drops_the_arxiv_doi_when_the_published_version_has_none(tmp_path):
+    """`10.48550/arXiv.…` identifies the preprint, not the published paper.
+
+    Inherited, it labels the promoted entry with the version it just stopped
+    being — and a later `pzi check` resolves it straight back to the preprint.
+    """
+    bib_path = tmp_path / "ml.bib"
+    config_path = _write_config(tmp_path, bib_path)
+    _seed_bib_with_preprint(
+        tmp_path, bib_path, config_path, doi="10.48550/arXiv.2401.12345",
+    )
+
+    promote_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        keep_preprint=False,
+        dry_run=False,
+        fetch_search=_fake_search_without_doi,
+    )
+
+    text = bib_path.read_text()
+    assert "10.48550" not in text
+    assert "journal = {Journal of Parsing}" in text
+
+
+def test_promote_keeps_a_real_doi_the_published_version_supplied(tmp_path):
+    bib_path = tmp_path / "ml.bib"
+    config_path = _write_config(tmp_path, bib_path)
+    _seed_bib_with_preprint(
+        tmp_path, bib_path, config_path, doi="10.48550/arXiv.2401.12345",
+    )
+
+    promote_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        keep_preprint=False,
+        dry_run=False,
+        fetch_search=_fake_search_with_venue,
+    )
+
+    text = bib_path.read_text()
+    assert "doi = {10.9/jop}" in text
+    assert "10.48550" not in text

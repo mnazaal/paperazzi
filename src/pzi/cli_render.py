@@ -101,6 +101,11 @@ def _render_bib_promote_items(result: Mapping[str, Any]) -> list[str]:
             )
         else:
             lines.append(f"{prefix}{preprint} -> {pub}: {changed}{pdf}{note}")
+        backup = item.get("backup_path")
+        if isinstance(backup, str):
+            # An undo the user cannot find is not an undo — `delete` says the
+            # same thing for the same reason.
+            lines.append(f"{prefix}  backup saved to {backup}")
     if not lines:
         lines = [f"{prefix}no preprints to promote"]
     summary = result.get("summary")

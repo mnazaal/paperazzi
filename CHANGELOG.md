@@ -21,6 +21,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   less, both prompt and write a `.bak`. It now prompts (or takes `--force`,
   refusing to prompt into a pipe) and copies the library under the lock
   immediately before the rewrite.
+- **`pzi fix clean --fix` no longer quarantines a sibling library's PDFs.** The
+  default layout points every configured bib at one `papers_dir`, so checking
+  one library saw the others' PDFs as unreferenced and moved them into
+  `.orphans/`, leaving `file =` fields dangling in a library the user never
+  named. Libraries sharing the target's `papers_dir` now contribute their
+  references, and one that cannot be read stops orphan detection rather than
+  being treated as referencing nothing.
+- **`pzi fix merge` keeps the survivor's `@string` references and field
+  spelling.** It was the one write path that did not route the rebuilt block
+  through `merge_preserving_unchanged_source`, so `journal = jmlr` was rewritten
+  as the literal token `{jmlr}` — severing the macro reference while leaving the
+  now-unreferenced `@string` behind — and `Title` was lowercased, on an entry the
+  command was not asked to touch.
+- **`pzi update --promote --replace` reports removals, backs up, and drops the
+  arXiv DOI.** `changed_fields` iterated only the updated record, so a field the
+  promotion *deleted* was applied and never named; the command overwrote an entry
+  with a different paper's metadata leaving no `.bak`; and a preprint's
+  `10.48550/arXiv.…` DOI was inherited by the published entry, labelling it as
+  the version it had just stopped being.
 - **A year the record model cannot represent is no longer deleted.**
   `NormalizedRecord.year` is an `int`, so `2020a` (the standard same-author
   disambiguator), `in press` and `{\noopsort{1997}}1997` parsed to `None`, were

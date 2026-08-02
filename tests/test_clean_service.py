@@ -352,3 +352,74 @@ def test_validate_library_reports_orphans_normally_when_fully_parsed() -> None:
 
         assert result["partial_parse"] is False
         assert [Path(p).name for p in result["orphan_pdfs"]] == ["loose.pdf"]
+
+
+def test_a_pdf_referenced_by_a_sibling_library_is_not_an_orphan() -> None:
+    """The default layout gives every configured bib the same `papers_dir`.
+
+    Checking one library therefore saw the *other* library's PDFs as unreferenced
+    and `--fix` quarantined them, silently breaking that library's `file =`
+    fields — for a user who ran `pzi fix clean` on the wrong target.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        papers = os.path.join(td, "papers")
+        os.makedirs(papers, exist_ok=True)
+        mine = os.path.join(papers, "mine2024.pdf")
+        theirs = os.path.join(papers, "theirs2024.pdf")
+        Path(mine).write_bytes(b"%PDF-1.4\nMINE\n")
+        Path(theirs).write_bytes(b"%PDF-1.4\nTHEIRS\n")
+
+        ml = os.path.join(td, "ml.bib")
+        cs = os.path.join(td, "cs.bib")
+        _write_bib(ml, f'@article{{mine2024, title = {{Mine}}, file = {{{mine}}}}}')
+        _write_bib(cs, f'@article{{theirs2024, title = {{Theirs}}, file = {{{theirs}}}}}')
+
+        result = validate_library(
+            bib_path=ml, papers_dir=papers, sibling_bib_paths=[cs]
+        )
+
+        assert result["orphan_pdfs"] == []
+
+
+def test_an_unreferenced_pdf_is_still_an_orphan_with_siblings_configured() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        papers = os.path.join(td, "papers")
+        os.makedirs(papers, exist_ok=True)
+        stray = os.path.join(papers, "stray.pdf")
+        Path(stray).write_bytes(b"%PDF-1.4\nSTRAY\n")
+
+        ml = os.path.join(td, "ml.bib")
+        cs = os.path.join(td, "cs.bib")
+        _write_bib(ml, '@article{mine2024, title = {Mine}}')
+        _write_bib(cs, '@article{theirs2024, title = {Theirs}}')
+
+        result = validate_library(
+            bib_path=ml, papers_dir=papers, sibling_bib_paths=[cs]
+        )
+
+        assert result["orphan_pdfs"] == [stray]
+
+
+def test_an_unreadable_sibling_stops_orphan_detection_rather_than_guessing() -> None:
+    """A sibling the parser could not read contributes no referenced paths.
+
+    Same reasoning as the partial-parse guard on the target library: acting on an
+    incomplete reference set is how a referenced PDF gets quarantined.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        papers = os.path.join(td, "papers")
+        os.makedirs(papers, exist_ok=True)
+        theirs = os.path.join(papers, "theirs2024.pdf")
+        Path(theirs).write_bytes(b"%PDF-1.4\nTHEIRS\n")
+
+        ml = os.path.join(td, "ml.bib")
+        cs = os.path.join(td, "cs.bib")
+        _write_bib(ml, '@article{mine2024, title = {Mine}}')
+        _write_bib(cs, "@article{broken2024,\n  title = {Unclosed\n")
+
+        result = validate_library(
+            bib_path=ml, papers_dir=papers, sibling_bib_paths=[cs]
+        )
+
+        assert result["orphan_pdfs"] == []
+        assert any("cs.bib" in message for message in result["errors"])

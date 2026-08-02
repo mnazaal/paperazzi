@@ -879,8 +879,16 @@ def update_bib_entry(
     updater: Callable[[BibtexEntry, NormalizedRecord], BibtexEntry],
     *,
     file_path_style: str = "absolute",
+    backup_path: Path | None = None,
 ) -> UpdateBibEntryResult:
-    """Update one BibTeX entry under lock using a citekey-scoped callback."""
+    """Update one BibTeX entry under lock using a citekey-scoped callback.
+
+    *backup_path*, when given, is written from the on-disk file **inside this
+    lock** and only when the write actually changes something, exactly as
+    :func:`delete_bib_entry` does. Most updates add or fill a field and need no
+    undo; `update --promote --replace` is the one that overwrites an entry's
+    identity with a different paper's, which is a loss of the same kind.
+    """
     with with_bib_lock(path):
         source = _read_bib_source(path)
         library = _parse_bib_library(source)
@@ -914,6 +922,9 @@ def update_bib_entry(
                 file_path_style=file_path_style,
             )
             if new_source != source:
+                if backup_path is not None:
+                    backup_path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+                    shutil.copy2(path, backup_path)
                 _write_bib_text_atomic(path, new_source)
         return {
             "found": True,
@@ -1037,8 +1048,20 @@ def merge_bib_entries(
             merged_entry, entries[idx_a]
         )
         _validate_bibtex_roundtrip([merged_entry])
-        merged_block = _bibtex_entry_to_library_entry(
-            merged_entry, path, file_path_style=file_path_style
+        # Through `merge_preserving_unchanged_source`, as `_update_library_blocks`
+        # does — a rebuilt block carries neither the parser's enclosing record nor
+        # the user's field spelling, so writing it straight back rewrote
+        # `journal = jmlr` as the literal token `{jmlr}` (severing the `@string`
+        # reference while leaving the now-unreferenced macro behind) and
+        # lowercased `Title`. The survivor is an entry this command was not asked
+        # to reformat.
+        strings = {definition.key: definition.value for definition in library.strings}
+        merged_block = merge_preserving_unchanged_source(
+            library.entries[idx_b],
+            _bibtex_entry_to_library_entry(
+                merged_entry, path, file_path_style=file_path_style
+            ),
+            strings,
         )
 
         new_blocks: list = []

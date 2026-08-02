@@ -11,6 +11,7 @@ from pzi.bib_repository import (
     BatchWriteSession,
     ConcurrentEditError,
     WritePlan,
+    backup_path_for,
     batch_write_session,
     plan_bib_write,
     preview_batch_write,
@@ -70,6 +71,9 @@ class PromoteItem(TypedDict):
     #: every promotion failed exited 0 with `errors: []`.
     failed: NotRequired[bool]
     diff: NotRequired[str]
+    #: Where the pre-promotion library was copied, on the `--replace` path. A
+    #: backup nobody can find is not an undo.
+    backup_path: NotRequired[str]
     metadata_diagnostics: NotRequired[list[str]]
     metadata_warnings: NotRequired[list[str]]
 
@@ -733,6 +737,7 @@ def _promote_item(
     pdf_attached: bool | None = False,
     note: str | None = None,
     diff: str | None = None,
+    backup_path: str | None = None,
 ) -> PromoteItem:
     """Build a PromoteItem dict with all standard fields."""
     item: PromoteItem = {
@@ -745,6 +750,8 @@ def _promote_item(
     }
     if diff is not None:
         item["diff"] = diff
+    if backup_path is not None:
+        item["backup_path"] = backup_path
     return item
 
 
@@ -1061,6 +1068,7 @@ def _handle_update_in_place(
 
     pdf_attached = False
     diff: str | None = None
+    backup: str | None = None
     if dry_run:
         # Target the preprint *by citekey*, exactly as the real write does with
         # `update_bib_entry`. Relying on identity matching produced an INSERT
@@ -1090,8 +1098,17 @@ def _handle_update_in_place(
         def _updater(entry, current):
             return _promoted_entry(entry, current, candidate, pdf_source=updated)
 
+        # `--replace` overwrites the preprint entry with a *different* paper's
+        # metadata and deliberately strips its identity (`eprint`, the arXiv
+        # DOI, the preprint URL). That is destruction of the same kind `delete`
+        # and `fix merge` back up, and it had no undo at all.
+        backup_target = backup_path_for(bib_path, preprint_ck)
         update_result = update_bib_entry(
-            bib_path, preprint_ck, _updater, file_path_style=file_path_style
+            bib_path,
+            preprint_ck,
+            _updater,
+            file_path_style=file_path_style,
+            backup_path=backup_target,
         )
         if update_result.get("found") is not True:
             _remove_new_pdf(_local_pdf_path(updated), existing_pdf_paths)
@@ -1099,9 +1116,17 @@ def _handle_update_in_place(
                 preprint_ck, preprint_ck, "error",
                 note="preprint entry disappeared before promotion update could be written",
             )
+        # Written only when the write actually changed something, so its
+        # existence is the honest test of whether there is anything to undo.
+        backup = str(backup_target) if backup_target.exists() else None
 
+    # Over the union of both key sets: iterating `updated` alone could only ever
+    # report fields that survived, so a field the promotion *removed* — the
+    # `eprint`, the preprint URL, the arXiv DOI — was applied but never named.
     changed_fields = sorted(
-        key for key in updated if updated.get(key) != preprint_record.get(key)
+        key
+        for key in set(updated) | set(preprint_record)
+        if updated.get(key) != preprint_record.get(key)
     )
 
     return _promote_item(
@@ -1109,6 +1134,7 @@ def _handle_update_in_place(
         changed_fields=changed_fields,
         pdf_attached=pdf_attached if not dry_run else None,
         diff=diff,
+        backup_path=backup,
     )
 
 
@@ -1179,12 +1205,29 @@ def _merge_published_metadata(
     # from, and `resolve_entry_type` keys on the preprint hosts, so it would
     # type the published entry `@unpublished`.
     merged.pop("arxiv_id", None)
+    # `10.48550/arXiv.…` is arXiv's own DataCite DOI: it identifies the
+    # *preprint*, so keeping it labels the published entry with the version it
+    # just stopped being — and a later `pzi check` resolves it straight back to
+    # the preprint. Only dropped when the candidate offered no DOI of its own;
+    # when it did, the loop above has already overwritten this.
+    if _is_preprint_doi(merged.get("doi")):
+        merged.pop("doi", None)
     for url_field in ("canonical_url", "source_url"):
         if candidate.get(url_field):
             continue
         if is_preprint_url(merged.get(url_field)):
             merged.pop(url_field, None)
     return cast(NormalizedRecord, merged)
+
+
+#: arXiv's DataCite prefix. Deliberately just this one: bioRxiv and medRxiv
+#: share `10.1101/` with Cold Spring Harbor Laboratory Press's journals, so the
+#: prefix alone cannot tell a preprint from a published paper there.
+_PREPRINT_DOI_PREFIX = "10.48550/"
+
+
+def _is_preprint_doi(doi: object) -> bool:
+    return isinstance(doi, str) and doi.strip().lower().startswith(_PREPRINT_DOI_PREFIX)
 
 
 def _append_note(existing: object, text: str) -> str | None:

@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import os
 import shutil
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict
 
 from pzi.bib_repository import (
     read_bib_file,
+    read_bib_file_with_failures,
 )
 from pzi.bib_serialize import failed_block_details
 from pzi.bibtex import BibtexEntry
@@ -39,8 +41,15 @@ def validate_library(
     *,
     bib_path: str,
     papers_dir: str,
+    sibling_bib_paths: Sequence[str] = (),
 ) -> CleanResult:
     """Check a BibTeX library for integrity issues.
+
+    *sibling_bib_paths* are the other configured libraries sharing *papers_dir*.
+    A PDF any of them references is not an orphan: the default layout points
+    every bib at one ``papers_dir``, so without this, checking one library saw
+    the others' PDFs as unreferenced and ``--fix`` quarantined them, breaking
+    those libraries' ``file =`` fields.
 
     Returns a dict with:
     - ``status``: ``"ok"`` or ``"error"`` (parse failure)
@@ -144,6 +153,22 @@ def validate_library(
         if pdf and pdf_file_present(pdf):
             referenced_paths.add(os.path.realpath(str(Path(str(pdf)).expanduser())))
 
+    # A sibling library pointed at the same `papers_dir` references PDFs too, and
+    # they are just as much not-orphans as this library's own.
+    sibling_paths, sibling_errors = _referenced_by_siblings(sibling_bib_paths)
+    referenced_paths |= sibling_paths
+    if sibling_errors:
+        # Same reasoning as `partial_parse` below: an incomplete reference set is
+        # how a referenced PDF gets quarantined, and a sibling we could not read
+        # contributes none of its own.
+        partial_parse = True
+        for message in sibling_errors:
+            issues.append({
+                "severity": "error",
+                "type": "sibling_parse_error",
+                "message": message,
+            })
+
     orphan_pdfs: list[str] = []
     papers = Path(papers_dir)
     # Skipped entirely under a partial parse. Orphan detection needs the
@@ -174,9 +199,34 @@ def validate_library(
         "missing_pdfs": missing_pdfs,
         "orphan_pdfs": orphan_pdfs,
         "partial_parse": partial_parse,
-        "errors": [],
+        "errors": sibling_errors,
         "issues": issues,
     }
+
+
+def _referenced_by_siblings(
+    sibling_bib_paths: Sequence[str],
+) -> tuple[set[str], list[str]]:
+    """Resolved PDF paths the other libraries reference, and any that would not read.
+
+    A sibling is read leniently, exactly as the target is; the difference is that
+    an unreadable one is reported rather than skipped, because "no references"
+    and "references we could not see" are indistinguishable from here and only
+    one of them is safe to quarantine against.
+    """
+    referenced: set[str] = set()
+    errors: list[str] = []
+    for sibling in sibling_bib_paths:
+        if not Path(sibling).exists():
+            continue
+        raw, failures = read_bib_file_with_failures(sibling)
+        for message in failures:
+            errors.append(f"{Path(sibling).name}: {message}")
+        for record in raw["records"]:
+            pdf = record.get("local_pdf_path")
+            if pdf:
+                referenced.add(os.path.realpath(str(Path(str(pdf)).expanduser())))
+    return referenced, errors
 
 
 def plan_orphan_quarantine(
@@ -225,10 +275,14 @@ def clean_library(
     papers_dir: str,
     dry_run: bool = True,
     move_orphans: bool = True,
+    sibling_bib_paths: Sequence[str] = (),
 ) -> CleanResult:
     """Fix integrity issues in a BibTeX library.
 
     - ``move_orphans``: move orphan PDFs to ``papers_dir/.orphans/``
+    - ``sibling_bib_paths``: other libraries sharing *papers_dir*, whose
+      referenced PDFs are not this library's orphans (see
+      :func:`validate_library`)
 
     Only the filesystem is touched (orphan PDFs are relocated); the ``.bib``
     file itself is never rewritten, so comments, ``@string``/``@preamble``
@@ -237,7 +291,9 @@ def clean_library(
     Returns the same shape as :func:`validate_library` with an added
     ``actions`` list describing what was (or would be) done.
     """
-    validation = validate_library(bib_path=bib_path, papers_dir=papers_dir)
+    validation = validate_library(
+        bib_path=bib_path, papers_dir=papers_dir, sibling_bib_paths=sibling_bib_paths
+    )
     actions: list[dict[str, Any]] = []
 
     # `partial_parse` as well as `status`, and this is load-bearing: duplicates

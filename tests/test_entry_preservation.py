@@ -130,6 +130,49 @@ def test_import_preserves_every_unmodelled_field(tmp_path: Path) -> None:
     assert "@proceedings{proc2019" in written
 
 
+def test_merge_keeps_the_survivors_macro_references_and_field_spelling(
+    tmp_path: Path,
+) -> None:
+    """Every other write path routes the rebuilt block through
+    `merge_preserving_unchanged_source`, which exists to stop exactly this:
+    a rebuilt block carries no `@string` references and no original casing, so
+    `journal = jmlr` became the literal token `{jmlr}` and `Title` became
+    `title` — on a command whose job was to merge a *different* entry away.
+    """
+    bib = tmp_path / "main.bib"
+    bib.write_text(
+        '@string{jmlr = {Journal of Machine Learning Research}}\n\n'
+        "@article{survivor,\n"
+        "  Title = {Beta},\n"
+        "  author = {Jones, Alice},\n"
+        "  year = {2019},\n"
+        "  journal = jmlr,\n"
+        "  doi = {10.1/beta},\n"
+        "}\n\n"
+        "@article{dropped,\n"
+        "  title = {Beta},\n"
+        "  author = {Jones, Alice},\n"
+        "  year = {2019},\n"
+        "  doi = {10.1/beta},\n"
+        "  pages = {10--20},\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    result = merge_duplicates(
+        bib_path=str(bib), citekey_a="dropped", citekey_b="survivor", dry_run=False
+    )
+
+    written = bib.read_text(encoding="utf-8")
+    assert result["status"] == "ok"
+    assert "journal = jmlr" in written
+    assert "journal = {jmlr}" not in written
+    assert "Title = {Beta}" in written
+    # The merge still did its job.
+    assert "pages = {10--20}" in written
+    assert "@article{dropped" not in written
+
+
 def test_merge_carries_the_dropped_entrys_unmodelled_fields(tmp_path: Path) -> None:
     bib = tmp_path / "main.bib"
     bib.write_text(
