@@ -137,7 +137,7 @@ def test_update_bib_entry_refuses_an_entry_that_cannot_round_trip(
     path = _write(bib, ONE_ENTRY)
 
     def _explode(_entries) -> None:
-        raise ValueError("write plan produces invalid BibTeX: synthetic")
+        raise PziError("write plan produces invalid BibTeX: synthetic")
 
     monkeypatch.setattr(bib_repository, "_validate_bibtex_roundtrip", _explode)
 
@@ -146,7 +146,7 @@ def test_update_bib_entry_refuses_an_entry_that_cannot_round_trip(
         touched["fields"] = {**entry["fields"], "keywords": "readme"}
         return touched  # type: ignore[return-value]
 
-    with pytest.raises(ValueError):
+    with pytest.raises(PziError):
         update_bib_entry(path, "smith2020", _touch)  # type: ignore[arg-type]
 
     assert bib.read_text(encoding="utf-8") == ONE_ENTRY
@@ -161,10 +161,10 @@ def test_delete_bib_entry_validates_what_remains(
     path = _write(bib, TWO_ENTRIES)
 
     def _explode(_entries) -> None:
-        raise ValueError("write plan produces invalid BibTeX: synthetic")
+        raise PziError("write plan produces invalid BibTeX: synthetic")
 
     monkeypatch.setattr(bib_repository, "_validate_bibtex_roundtrip", _explode)
-    with pytest.raises(ValueError):
+    with pytest.raises(PziError):
         delete_bib_entry(path, "smith2020")
 
     assert bib.read_text(encoding="utf-8") == TWO_ENTRIES
@@ -197,11 +197,95 @@ def test_insert_into_a_partly_unparseable_bib_refuses_instead_of_writing(
         {"citekey": "new1", "title": "New Paper", "year": 2022},  # type: ignore[arg-type]
         [],
     )
-    with pytest.raises(ValueError, match="malformed BibTeX"):
+    with pytest.raises(PziError, match="malformed BibTeX"):
         execute_write_plan(path, plan)
 
     assert bib.read_text(encoding="utf-8") == before
     assert "WARNING" not in bib.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# The gate checks the parse *result*, not merely that parsing did not raise
+# ---------------------------------------------------------------------------
+
+
+def _serialize_values_verbatim(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Neutralize the value sanitizer, standing in for a serializer regression.
+
+    The gate exists to catch output the serializer should never have produced,
+    so every input that reaches it through the real sanitizer is by definition
+    already safe. Removing the sanitizer is the only way to ask the gate the
+    question it is there to answer.
+    """
+    from pzi import bib_serialize
+
+    monkeypatch.setattr(bib_serialize, "_safe_field_value", lambda value: value)
+
+
+def _entry(**fields: str) -> BibtexEntry:
+    return {  # type: ignore[return-value]
+        "entry_type": "article",
+        "citekey": "smith2019graph",
+        "fields": fields,
+    }
+
+
+def test_the_gate_rejects_output_the_parser_drops(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A trailing backslash escapes the writer's own closing brace.
+
+    bibtexparser v2 files the result in ``failed_blocks`` instead of raising, so
+    a gate that only watches for an exception passes it straight to disk.
+    """
+    from pzi.bib_serialize import _validate_bibtex_roundtrip
+
+    _serialize_values_verbatim(monkeypatch)
+
+    with pytest.raises(PziError, match="invalid BibTeX"):
+        _validate_bibtex_roundtrip([_entry(title="Graph Networks\\", year="2019")])
+
+
+def test_the_gate_rejects_output_that_parses_back_as_different_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Round-tripping is not enough: the entry has to come back unchanged."""
+    from pzi.bib_serialize import _validate_bibtex_roundtrip
+
+    _serialize_values_verbatim(monkeypatch)
+
+    with pytest.raises(PziError, match="invalid BibTeX"):
+        _validate_bibtex_roundtrip([_entry(title="Fine}, evil = {injected", year="2019")])
+
+
+def test_the_gate_rejects_output_that_loses_an_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pzi.bib_serialize import _validate_bibtex_roundtrip
+
+    _serialize_values_verbatim(monkeypatch)
+    good = _entry(title="Fine", year="2019")
+    broken: BibtexEntry = {**good, "citekey": "jones2020deep"}  # type: ignore[misc]
+    broken["fields"] = {"title": "Trailing\\"}
+
+    with pytest.raises(PziError, match="invalid BibTeX"):
+        _validate_bibtex_roundtrip([good, broken])
+
+
+def test_the_gate_accepts_an_entry_that_survives_unchanged() -> None:
+    from pzi.bib_serialize import _validate_bibtex_roundtrip
+
+    _validate_bibtex_roundtrip([_entry(title="Graph Networks", year="2019")])
+
+
+def test_the_gate_keeps_the_duplicate_citekey_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`build_library`'s refusal is already phrased for the user; do not rewrap it."""
+    from pzi.bib_serialize import _validate_bibtex_roundtrip
+
+    with pytest.raises(PziError, match="duplicate citekey"):
+        _validate_bibtex_roundtrip([_entry(title="One"), _entry(title="Two")])
 
 
 # ---------------------------------------------------------------------------

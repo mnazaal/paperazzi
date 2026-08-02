@@ -16,7 +16,7 @@ those stay in :mod:`pzi.bib_repository`, which re-exports the names here.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from bibtexparser.entrypoint import parse_string, write_string
@@ -40,7 +40,7 @@ def parse_bibtex(text: str) -> list[BibtexEntry]:
     return [_library_entry_to_bibtex_entry(entry) for entry in library.entries]
 
 
-def build_library(blocks: list[Block]) -> Library:
+def build_library(blocks: Sequence[Block]) -> Library:
     """Build a ``Library`` from *blocks*, refusing duplicate entry keys.
 
     ``Library.add`` is "key-safe": a block whose key is already present is
@@ -50,7 +50,7 @@ def build_library(blocks: list[Block]) -> Library:
     refuses, and the next parse reports a failed block — so every site that
     constructs a library destined for disk goes through here instead.
     """
-    library = Library(blocks=blocks)
+    library = Library(blocks=list(blocks))
     duplicates = [
         block.key
         for block in library.failed_blocks
@@ -68,9 +68,13 @@ def build_library(blocks: list[Block]) -> Library:
 
 def serialize_bibtex(entries: list[BibtexEntry]) -> str:
     """Serialize entries in a deterministic formatting style."""
-    library = build_library(
-        [_bibtex_entry_to_library_entry(entry) for entry in entries]
+    return _write_library_text(
+        build_library([_bibtex_entry_to_library_entry(entry) for entry in entries])
     )
+
+
+def _write_library_text(library: Library) -> str:
+    """Write *library* in the deterministic style shared by every full rewrite."""
     fmt = BibtexFormat()
     fmt.indent = "  "
     return write_string(library, bibtex_format=fmt)
@@ -207,7 +211,7 @@ def parse_bibtex_with_failures(text: str) -> tuple[list[BibtexEntry], list[str]]
 
 
 def _validate_library_parseable(library: Library) -> None:
-    """Raise ValueError if the library has unparseable blocks.
+    """Raise :exc:`PziError` if the library has unparseable blocks.
 
     Guards the *write* paths: rewriting a file whose blocks the parser never
     saw would drop them. Read paths should report the same blocks via
@@ -219,7 +223,7 @@ def _validate_library_parseable(library: Library) -> None:
     # round-trips, so the write gate downstream sees nothing wrong.
     mangled = describe_mangled_field_keys(library)
     if mangled:
-        raise ValueError(f"malformed BibTeX: refusing to rewrite the file — {mangled[0]}")
+        raise _malformed_bib_refusal(mangled[0])
     if not library.failed_blocks:
         return
     # `describe_failed_blocks` names the citekey for a duplicate and adds the
@@ -227,7 +231,20 @@ def _validate_library_parseable(library: Library) -> None:
     # text interpolated the raw 0-based `start_line`, so a duplicate on line 4
     # was reported as "around line 3".
     detail = describe_failed_blocks(library)[0]
-    raise ValueError(f"malformed BibTeX: refusing to rewrite the file — {detail}")
+    raise _malformed_bib_refusal(detail)
+
+
+def _malformed_bib_refusal(detail: str) -> PziError:
+    """The user has to fix the file by hand, so say so — do not raise a traceback.
+
+    These messages were always written for a reader ("refusing to rewrite the
+    file"), but as a bare ``ValueError`` they reached that reader as a Python
+    stack trace with exit 1, and ``--json`` printed nothing at all.
+    """
+    return PziError(
+        f"malformed BibTeX: refusing to rewrite the file — {detail}",
+        code=exit_codes.ENVIRONMENT,
+    )
 
 
 def _library_to_entries_records(
@@ -284,16 +301,61 @@ def _validate_bibtex_roundtrip(entries: list[BibtexEntry]) -> None:
     A :exc:`PziError` from :func:`build_library` (a duplicate citekey) already
     says what is wrong in the user's own terms, so it passes through untouched;
     anything else is a library-internal failure and gets the generic wrapper.
+
+    Parsing without raising proves nothing: bibtexparser v2 *collects* a block it
+    cannot read in ``failed_blocks`` and drops it from ``entries``, so text that
+    reparses to zero entries and one failure returns normally. This is the sole
+    gate in front of every write sink, so it checks the parse *result* — no
+    failed blocks, the same number of entries, and the same
+    ``(entry_type, citekey, fields)`` — rather than the absence of an exception.
+    Values are compared *after* sanitizing, because sanitizing is a deliberate
+    rewrite; what must not change is anything the serializer itself did.
     """
     try:
-        text = serialize_bibtex(entries)
-        parse_bibtex(text)
+        blocks = [_bibtex_entry_to_library_entry(entry) for entry in entries]
+        text = _write_library_text(build_library(blocks))
+        reparsed = parse_string(text)
     except PziError:
         raise
     except Exception as exc:
-        raise ValueError(
-            f"write plan produces invalid BibTeX: {exc}"
+        raise PziError(
+            f"write plan produces invalid BibTeX: {exc}",
+            code=exit_codes.ENVIRONMENT,
         ) from exc
+    _assert_roundtrip_is_faithful(blocks, reparsed)
+
+
+def _roundtrip_refusal(detail: str) -> PziError:
+    return PziError(
+        f"write plan produces invalid BibTeX: {detail}", code=exit_codes.ENVIRONMENT
+    )
+
+
+def _comparable_entry(entry: BibtexEntryV2) -> tuple[str, str, dict[str, str]]:
+    """The part of an entry a round-trip must preserve exactly."""
+    return (
+        entry.entry_type,
+        entry.key,
+        {field.key.lower(): field.value for field in entry.fields},
+    )
+
+
+def _assert_roundtrip_is_faithful(
+    written: list[BibtexEntryV2], reparsed: Library
+) -> None:
+    failures = describe_failed_blocks(reparsed)
+    if failures:
+        raise _roundtrip_refusal(failures[0])
+    got = reparsed.entries
+    if len(got) != len(written):
+        raise _roundtrip_refusal(
+            f"{len(written)} entries were written but {len(got)} parsed back"
+        )
+    for expected, actual in zip(written, got):
+        if _comparable_entry(actual) != _comparable_entry(expected):
+            raise _roundtrip_refusal(
+                f"entry {expected.key!r} does not read back as it was written"
+            )
 
 
 def merge_preserving_unchanged_source(

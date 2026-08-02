@@ -248,6 +248,13 @@ def run_cli(
             # file that is not valid UTF-8, …) become a clean diagnostic
             # instead of a raw traceback.  Genuine bugs still propagate.
             return _fail(_friendly_error(exc), [], exit_codes.ENVIRONMENT)
+        except ValueError as exc:
+            # Defence in depth, not a design: a write refusal is supposed to
+            # arrive as a `PziError`. One that does not still has to leave
+            # `--json` a parseable document and the exit code readable, because
+            # a bare `ValueError` printed a traceback and *nothing at all* on
+            # stdout — the two things `--json` exists to rule out.
+            return _fail(str(exc), [], exit_codes.ENVIRONMENT)
 
     print(f"unknown command: {args.command}", file=err)
     return exit_codes.USAGE

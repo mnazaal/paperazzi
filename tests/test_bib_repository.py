@@ -767,7 +767,7 @@ def test_write_refusal_names_the_duplicate_and_its_real_line(tmp_path: Path) -> 
         "}\n"
     )
 
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(PziError) as excinfo:
         update_bib_entry(
             str(path),
             "smith2024",

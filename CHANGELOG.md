@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The write gate now checks the parse *result*, not just that parsing did not
+  raise.** bibtexparser v2 collects a block it cannot read in `failed_blocks`
+  instead of raising, so serialized text that parsed back to zero entries and one
+  failure passed the gate — the no-op that let every corrupting write through to
+  disk. The gate now refuses unless there are no failed blocks, the entry count
+  round-trips, and every entry reads back with the same type, citekey and fields.
+- **A refusal to write reaches the user as an error, not a stack trace.**
+  "malformed BibTeX: refusing to rewrite the file", the round-trip refusal, and a
+  write plan invalidated by a concurrent edit were all raised as bare
+  `ValueError`: exit 1, a Python traceback on stderr, and — under `--json` — zero
+  bytes on stdout. They are now `PziError`s carrying exit code 5, and the CLI
+  boundary catches `ValueError` as well so no future slip can empty the `--json`
+  channel again.
+
 - **A partial write can no longer install a truncated bibliography.** The atomic
   replace discarded `os.write`'s return value, so a short write committed
   whatever had made it to the temp file — verified by installing a library

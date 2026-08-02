@@ -202,7 +202,10 @@ def apply_write_plan(entries: list[BibtexEntry], plan: WritePlan) -> list[Bibtex
 
     index = plan["index"]
     if index is None:
-        raise ValueError("update plan must include an index")
+        raise PziError(
+            "cannot apply the update: the write plan names no entry to replace",
+            code=exit_codes.ENVIRONMENT,
+        )
         # pragma: no cover — covered by integration/browser tests
     updated_entries[index] = plan["entry"]
     return updated_entries
@@ -776,19 +779,32 @@ def _source_diff(old_source: str, new_source: str, path: str) -> str:
     )
 
 
+def _stale_plan(reason: str) -> PziError:
+    """The bib moved under a plan built before the lock — a retry usually wins.
+
+    Reachable whenever a second writer commits in that window, so it is an
+    ordinary runtime outcome and has to read like one rather than as a traceback.
+    """
+    return PziError(
+        f"the bib changed while this write was being prepared — {reason}; "
+        "retry the command",
+        code=exit_codes.ENVIRONMENT,
+    )
+
+
 def _validate_update_plan_against_current(
     current_records: list[NormalizedRecord], plan: WritePlan
 ) -> None:
     index = plan.get("index")
     if not isinstance(index, int) or index < 0 or index >= len(current_records):
-        raise ValueError("stale update plan: target index no longer exists")
+        raise _stale_plan("the entry it targets no longer exists")
     planned_record = plan.get("record")
     if not isinstance(planned_record, dict):
-        raise ValueError("stale update plan: missing planned record")
+        raise _stale_plan("it carries no record to write")
     planned_citekey = planned_record.get("citekey")
     current_citekey = current_records[index].get("citekey")
     if planned_citekey and current_citekey != planned_citekey:
-        raise ValueError("stale update plan: target citekey changed")
+        raise _stale_plan("the entry it targets now has a different citekey")
 
 
 def _rebase_insert_plan_against_current(
@@ -798,7 +814,7 @@ def _rebase_insert_plan_against_current(
 ) -> WritePlan:
     planned_record = plan.get("record")
     if not isinstance(planned_record, dict):
-        raise ValueError("stale insert plan: missing planned record")
+        raise _stale_plan("it carries no record to write")
     planned_citekey = planned_record.get("citekey")
     if not isinstance(planned_citekey, str) or not planned_citekey.strip():
         return plan

@@ -206,7 +206,7 @@ def test_an_inline_comment_is_reported_and_the_entry_is_not_rewritten(
     warnings = describe_failed_blocks(_parse_bib_library(bib.read_text(encoding="utf-8")))
     assert any("'%' comment inside the entry" in message for message in warnings)
 
-    with pytest.raises(ValueError, match="refusing to rewrite"):
+    with pytest.raises(PziError, match="refusing to rewrite"):
         update_bib_entry(path, "a1", _add_keyword)  # type: ignore[arg-type]
 
     assert bib.read_text(encoding="utf-8") == COMMENTED

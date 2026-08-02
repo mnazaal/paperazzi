@@ -204,6 +204,75 @@ def test_semantic_scholar_reports_a_rate_limit_instead_of_no_result() -> None:
 
 
 # ---------------------------------------------------------------------------
+# A refusal to write is an error message, not a stack trace
+# ---------------------------------------------------------------------------
+
+_MALFORMED_LIBRARY = """@article{smith2019graph,
+  title = {Graph Networks\\},
+  year = {2019},
+}
+
+@article{jones2020deep,
+  title = {Deep},
+  year = {2020},
+}
+"""
+
+
+def _library_that_refuses_writes(tmp_path: Path) -> Path:
+    """A bib with one unparseable block — every write to it must be refused."""
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text(_MALFORMED_LIBRARY, encoding="utf-8")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\ndefault = true\n', encoding="utf-8"
+    )
+    return config_path
+
+
+def _run(argv: list[str], tmp_path: Path) -> tuple[int, str, str]:
+    from pzi.cli import run_cli
+
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = run_cli(argv, home_dir=str(tmp_path), stdout=stdout, stderr=stderr)
+    return code, stdout.getvalue(), stderr.getvalue()
+
+
+def test_refusing_to_rewrite_a_malformed_bib_is_an_error_not_a_traceback(
+    tmp_path: Path,
+) -> None:
+    config_path = _library_that_refuses_writes(tmp_path)
+
+    code, stdout, stderr = _run(
+        ["tag", "add", "jones2020deep", "ok", "--config", str(config_path)], tmp_path
+    )
+
+    assert code == exit_codes.ENVIRONMENT
+    assert "malformed BibTeX" in stderr
+    assert "Traceback" not in stderr
+    assert stdout == ""
+
+
+def test_refusing_to_rewrite_a_malformed_bib_still_answers_in_json(
+    tmp_path: Path,
+) -> None:
+    """`--json` promises a parseable document on every outcome, failures included."""
+    import json
+
+    config_path = _library_that_refuses_writes(tmp_path)
+
+    code, stdout, _stderr = _run(
+        ["tag", "add", "jones2020deep", "ok", "--json", "--config", str(config_path)],
+        tmp_path,
+    )
+
+    assert code == exit_codes.ENVIRONMENT
+    envelope = json.loads(stdout)
+    assert envelope["status"] == "error"
+    assert any("malformed BibTeX" in message for message in envelope["errors"])
+
+
+# ---------------------------------------------------------------------------
 # The extension's error channel
 # ---------------------------------------------------------------------------
 
