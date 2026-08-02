@@ -127,9 +127,20 @@ def safe_public_http_url(value: str, *, dns_timeout: float = DNS_LOOKUP_TIMEOUT_
     return _shared_safe_public_http_url(value, dns_timeout=dns_timeout)
 
 
-def _host_only(value: str) -> str:
-    """Strip a port (and IPv6 brackets) from a Host-header-shaped string."""
-    return (urlsplit(f"//{value}").hostname or value).lower()
+def _host_only(value: str) -> str | None:
+    """Strip a port (and IPv6 brackets) from a Host-header-shaped string.
+
+    ``None`` when the value is not host-shaped at all. ``urlsplit`` raises
+    ``ValueError("Invalid IPv6 URL")`` on an unbalanced bracket, and this runs
+    inside the request gate — *before* the token is checked — so the exception
+    reached the server as an unauthenticated 500 that any caller could trigger
+    with one header.
+    """
+    try:
+        parsed = urlsplit(f"//{value}")
+    except ValueError:
+        return None
+    return (parsed.hostname or value).lower()
 
 
 def host_header_allowed(host: str | None, listen_host: str) -> bool:
@@ -150,13 +161,23 @@ def host_header_allowed(host: str | None, listen_host: str) -> bool:
     if host is None or not host.strip():
         return True
     request_host = _host_only(host.strip())
+    if request_host is None:
+        # Not a host at all. A browser never sends this, so refusing costs
+        # nothing and the alternative — letting it through unchecked, as a
+        # missing header is — would hand the guard a bypass.
+        return False
     if loopback_bind_host(listen_host):
         return loopback_bind_host(request_host)
     return request_host == _host_only(listen_host)
 
 
 def origin_allowed(origin: str | None, allowed_origins: tuple[str, ...]) -> bool:
-    """Return whether Origin is acceptable for local API access."""
+    """Return whether Origin is acceptable for local API access.
+
+    Never raises. Besides the gate itself, the 500 handler sends CORS headers —
+    so an ``Origin`` that made this throw faulted the error path too, and the
+    caller got zero bytes rather than a diagnostic.
+    """
     if origin is None or not origin.strip():
         return True
     value = origin.strip().rstrip("/")
@@ -174,8 +195,11 @@ def origin_allowed(origin: str | None, allowed_origins: tuple[str, ...]) -> bool
             continue
         if value == normalized_allowed:
             return True
-        allowed_parts = urlsplit(normalized_allowed)
-        value_parts = urlsplit(value)
+        try:
+            allowed_parts = urlsplit(normalized_allowed)
+            value_parts = urlsplit(value)
+        except ValueError:
+            continue
         if (
             allowed_parts.scheme in {"chrome-extension", "moz-extension"}
             and value_parts.scheme == allowed_parts.scheme
@@ -204,9 +228,20 @@ def request_security_error(
     auth = headers.get("Authorization") or headers.get("authorization")
     if auth and auth.startswith("Bearer "):
         supplied = auth.removeprefix("Bearer ")
-    if supplied is None or not hmac.compare_digest(supplied, token):
+    if supplied is None or not _tokens_match(supplied, token):
         return 401, "invalid API token"
     return None
+
+
+def _tokens_match(supplied: str, token: str) -> bool:
+    """Constant-time comparison that a non-ASCII candidate cannot crash.
+
+    ``hmac.compare_digest`` raises ``TypeError`` on a str containing non-ASCII,
+    so one header value turned an unauthenticated request into a 500. Comparing
+    the UTF-8 bytes keeps the timing property and answers what was always the
+    right answer: a token that is not the token is invalid, not an error.
+    """
+    return hmac.compare_digest(supplied.encode("utf-8"), token.encode("utf-8"))
 
 
 def validated_content_length(

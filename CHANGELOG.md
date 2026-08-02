@@ -32,6 +32,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for `problematic` and only under `--strict`, so a CI gate written from that
   table passed a library of fabricated references. `--strict` keeps its real
   meaning: harder checks, not whether findings are reported.
+- **A malformed `Host` or `Origin` header is a 403, not an unauthenticated 500.**
+  `urlsplit` raises `Invalid IPv6 URL` on an unbalanced bracket, and that ran
+  inside the request gate — before the token is checked — so any caller could
+  crash a request with one header. The 500 handler sends CORS headers too, so
+  the same `Origin` faulted the error path in turn and the caller received zero
+  bytes instead of a diagnostic.
+- **A non-ASCII API token is a 401, not an unauthenticated 500.**
+  `hmac.compare_digest` raises `TypeError` on a str with non-ASCII characters.
+  The comparison now runs on UTF-8 bytes, keeping the constant-time property and
+  giving the answer that was always right: a token that is not the token is
+  invalid.
 - **A metadata candidate claiming a different DOI than the one asked for is
   refused.** It cost 50 points, which a rich record outweighs — and when it was
   the only candidate it won outright however low it scored, so `pzi add

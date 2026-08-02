@@ -383,3 +383,103 @@ def test_fetch_direct_refuses_a_redirect_to_a_private_address() -> None:
     assert result.status == -1
     assert result.body == b""
     assert read_attempts == []
+
+
+# ---------------------------------------------------------------------------
+# A malformed request header is a rejection, not a crash
+# ---------------------------------------------------------------------------
+
+
+def _security(**overrides):
+    base = {
+        "listen_host": "127.0.0.1",
+        "allowed_origins": ("http://localhost", "chrome-extension://"),
+        "auth_token": "correct-token",
+    }
+    base.update(overrides)
+    return base
+
+
+@pytest.mark.parametrize(
+    "host", ["[", "a]b[", "::1]:8", "[::1", "http://[/", "[]:99999"]
+)
+def test_a_malformed_host_header_is_refused_not_a_500(host: str) -> None:
+    """`urlsplit` raises `Invalid IPv6 URL` on an unbalanced bracket.
+
+    Raised out of the request gate, it became an *unauthenticated* 500 — a
+    remote-triggerable crash on the one code path that runs before the token is
+    checked.
+    """
+    from pzi.http_security import request_security_error
+
+    result = request_security_error(
+        method="GET", headers={"Host": host}, security=_security()
+    )
+
+    assert result is not None
+    status, _message = result
+    assert status == 403
+
+
+@pytest.mark.parametrize("origin", ["[[[", "http://[", "https://[::1", "//["])
+def test_a_malformed_origin_header_is_refused_not_a_500(origin: str) -> None:
+    from pzi.http_security import request_security_error
+
+    result = request_security_error(
+        method="GET",
+        headers={"Host": "127.0.0.1", "Origin": origin},
+        security=_security(),
+    )
+
+    assert result is not None
+    status, _message = result
+    assert status == 403
+
+
+def test_a_non_ascii_token_is_a_401_not_a_500() -> None:
+    """`hmac.compare_digest` raises `TypeError` on non-ASCII strings.
+
+    An unauthenticated caller could crash the server with one header value, and
+    the answer had to be 401 in any case: a token that is not the token is
+    simply wrong.
+    """
+    from pzi.http_security import request_security_error
+
+    result = request_security_error(
+        method="GET",
+        headers={"Host": "127.0.0.1", "X-Pzi-Token": "tökén"},
+        security=_security(),
+    )
+
+    assert result == (401, "invalid API token")
+
+
+def test_a_non_ascii_bearer_token_is_a_401_not_a_500() -> None:
+    from pzi.http_security import request_security_error
+
+    result = request_security_error(
+        method="GET",
+        headers={"Host": "127.0.0.1", "Authorization": "Bearer tökén"},
+        security=_security(),
+    )
+
+    assert result == (401, "invalid API token")
+
+
+def test_the_correct_token_is_still_accepted() -> None:
+    from pzi.http_security import request_security_error
+
+    assert request_security_error(
+        method="GET",
+        headers={"Host": "127.0.0.1", "X-Pzi-Token": "correct-token"},
+        security=_security(),
+    ) is None
+
+
+def test_building_cors_headers_cannot_fault_on_a_malformed_origin() -> None:
+    """The 500 handler sends CORS headers too, so a throwing check faulted
+    twice and the caller got zero bytes instead of an error document."""
+    from pzi.http_security import origin_allowed
+
+    for origin in ("[[[", "http://[", "//["):
+        assert origin_allowed(origin, ("http://localhost",)) is False
