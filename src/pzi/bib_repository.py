@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import contextlib
 import difflib
+import errno
 import hashlib
 import os
 import shutil
+import stat
 import tempfile
 import time
 from collections.abc import Callable, Collection, Iterator, Sequence
@@ -29,6 +31,7 @@ from pzi.bib_serialize import (
     _serialize_library,
     _validate_bibtex_roundtrip,
     _validate_library_parseable,
+    build_library,
     merge_preserving_unchanged_source,
     parse_bibtex_with_failures,
 )
@@ -135,10 +138,13 @@ def acquire_lock_with_timeout(
             return
         except portalocker.exceptions.BaseLockException:
             if time.monotonic() >= deadline:
+                # No "remove the stale lock file" advice: `flock` is released by
+                # the kernel when the holder exits, so a leftover lock file is
+                # never stale — deleting it while a holder is live gives the next
+                # `open()` a fresh inode and lets a second writer in immediately.
                 raise PziError(
                     f"timed out after {timeout:.0f}s waiting for the lock on "
-                    f"{bib_path} — another pzi process may still be running, or "
-                    f"a stale {bib_path}.lock may need removing",
+                    f"{bib_path} — another pzi process is still holding it",
                     code=exit_codes.ENVIRONMENT,
                 ) from None
             time.sleep(LOCK_POLL_SECONDS)
@@ -155,8 +161,14 @@ def with_bib_lock(
 
     Uses portalocker, which provides cross-platform file locking
     (fcntl on Unix, LockFileEx on Windows).
+
+    The lock is named after the *canonical* target (:func:`_resolve_write_target`),
+    which is also the file the write replaces. Naming it after the configured
+    path instead let a symlink and its real path — or two symlinks to one bib —
+    take two different locks while replacing the same file, i.e. no mutual
+    exclusion at all for the case that matters.
     """
-    lock_path = Path(bib_path + ".lock")
+    lock_path = Path(str(_resolve_write_target(bib_path)) + ".lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     flags = portalocker.LOCK_SH if shared else portalocker.LOCK_EX
     with open(str(lock_path), "a") as lock_fh:
@@ -253,17 +265,97 @@ def _resolve_write_target(path: str) -> Path:
     return Path(os.path.realpath(path))
 
 
+#: Bytes of an existing bib inspected to decide its line-ending style. The style
+#: is uniform in practice; reading the whole file only to count newlines would
+#: double the cost of every write on a large library.
+_NEWLINE_SNIFF_BYTES = 65536
+_BOM = b"\xef\xbb\xbf"
+
+
+@dataclass(frozen=True)
+class _TextShape:
+    """Byte-level conventions of an existing bib that a rewrite must preserve.
+
+    pzi works in decoded text with LF endings and no BOM, because that is what
+    the parser and every diff want. Neither is the user's choice to lose: a
+    Windows-authored bib rewritten with LF is a 100%-changed file in git after a
+    one-tag edit, and a relocated BOM stops the file starting with an entry.
+    """
+
+    newline: str = "\n"
+    bom: bool = False
+
+
+def _detect_text_shape(file_path: Path) -> _TextShape:
+    try:
+        with open(file_path, "rb") as handle:
+            head = handle.read(_NEWLINE_SNIFF_BYTES)
+    except OSError:
+        return _TextShape()
+    crlf = head.count(b"\r\n")
+    # Dominant style wins, so one stray LF in a CRLF file does not flip the
+    # whole rewrite; a file with no newline at all keeps the LF default.
+    newline = "\r\n" if crlf and crlf * 2 >= head.count(b"\n") else "\n"
+    return _TextShape(newline=newline, bom=head.startswith(_BOM))
+
+
+def _existing_file_mode(file_path: Path) -> int | None:
+    """Permission bits of the file being replaced, or None if it is new."""
+    try:
+        return stat.S_IMODE(os.stat(file_path).st_mode)
+    except OSError:
+        return None
+
+
+def _write_all(fd: int, content: bytes) -> None:
+    """Write every byte of *content*, or raise.
+
+    ``os.write`` is allowed to write fewer bytes than it was given, and its
+    return value was previously discarded — a short write installed a truncated
+    library (a monkeypatched 7-byte write left the file holding ``@articl``)
+    with the fsync and the atomic replace both reporting success.
+    """
+    view = memoryview(content)
+    written = 0
+    while written < len(view):
+        count = os.write(fd, view[written:])
+        if count <= 0:  # pragma: no cover — kernels do not do this in practice
+            raise OSError(
+                errno.EIO,
+                f"short write: {written} of {len(view)} bytes written",
+            )
+        written += count
+
+
 def _write_bib_text_atomic(path: str, text: str) -> None:
+    """Replace the bib at *path* with *text*, all-or-nothing.
+
+    Writes a sibling temporary file, fsyncs it, then ``os.replace``s it over the
+    target, so a crash or a failed write leaves the original untouched. Mode
+    bits are carried over from the file being replaced.
+
+    One fidelity limit is inherent to replace-based atomicity and is not a bug
+    to fix here: a bib with more than one hard link keeps only the replaced name
+    pointing at the new content, so the other links still see the old file.
+    """
     file_path = _resolve_write_target(path)
     file_path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
-    content = text.encode("utf-8")
+    shape = _detect_text_shape(file_path)
+    previous_mode = _existing_file_mode(file_path)
+    if shape.newline != "\n":
+        text = text.replace("\n", shape.newline)
+    content = (_BOM if shape.bom else b"") + text.encode("utf-8")
     fd, tmp = tempfile.mkstemp(dir=str(file_path.parent), prefix=".bib-", suffix=".tmp")
     try:
         try:
-            os.write(fd, content)
+            _write_all(fd, content)
             os.fsync(fd)  # flush to disk before rename so a crash can't leave an empty bib
         finally:
             os.close(fd)
+        if previous_mode is not None:
+            # mkstemp creates 0600; without this every write silently tightened
+            # a 0644 bib and broke anything else reading it.
+            os.chmod(tmp, previous_mode)
         os.replace(tmp, file_path)
     except BaseException:
         with contextlib.suppress(OSError):
@@ -341,7 +433,7 @@ def _update_library_blocks(
             new_blocks.append(block)
     # Append any remaining new entries (inserts beyond original count).
     new_blocks.extend(new_entry_blocks)
-    return Library(blocks=new_blocks)
+    return build_library(new_blocks)
 
 
 def _touched_index(plan: WritePlan) -> int | None:
@@ -412,8 +504,11 @@ def execute_write_plan(
                 f"while acquiring lock; aborting to prevent data loss"
             )
         library = _parse_bib_library(source)
-        if plan["action"] == "update":
-            _validate_library_parseable(library)
+        # Inserts are gated too. An insert rewrites the whole file just as an
+        # update does, so adding to a bib with an unparseable block used to
+        # re-emit that block under bibtexparser's `% WARNING Parsing failed`
+        # header — a fresh copy of the marker on every subsequent add.
+        _validate_library_parseable(library)
         entries, records = _library_to_entries_records(library, path)
 
         if plan["action"] == "update":
@@ -601,8 +696,11 @@ def preview_write_plan(
     with with_bib_lock(path, shared=True):
         source = _read_bib_source(path)
         library = _parse_bib_library(source)
-        if plan["action"] == "update":
-            _validate_library_parseable(library)
+        # Inserts are gated too. An insert rewrites the whole file just as an
+        # update does, so adding to a bib with an unparseable block used to
+        # re-emit that block under bibtexparser's `% WARNING Parsing failed`
+        # header — a fresh copy of the marker on every subsequent add.
+        _validate_library_parseable(library)
         entries, records = _library_to_entries_records(library, path)
 
         if plan["action"] == "update":
@@ -745,6 +843,11 @@ def update_bib_entry(
         updated_record = bibtex_entry_to_record(updated_entry)
         if updated_entry != current_entry:
             entries[index] = updated_entry
+            # The round-trip gate the plan-based sinks have always had. This is
+            # the path behind `tag`, `pdf attach/retry`, `update` and `promote`
+            # — i.e. the commands that were writing unparseable libraries while
+            # the safety net sat unwired two functions away.
+            _validate_bibtex_roundtrip(entries)
             # `entries` already has the update applied at `index`, which is
             # exactly what apply_write_plan would produce for this plan — so
             # there is nothing left to re-derive from `source`.
@@ -809,7 +912,13 @@ def delete_bib_entry(
         if not removed:
             return {"found": False, "entries": [], "entry": None, "record": None}
 
-        new_library = Library(blocks=new_blocks)
+        new_library = build_library(new_blocks)
+        remaining, _remaining_records = _library_to_entries_records(new_library, path)
+        # The same round-trip gate the other write sinks apply. A delete cannot
+        # invent a bad entry on its own, but it rewrites the whole file, so it
+        # can commit one that was already unrepresentable — which is exactly how
+        # a wedged library used to survive a `delete` unnoticed.
+        _validate_bibtex_roundtrip(remaining)
         new_source = _serialize_library(new_library)
         if new_source != source:
             if backup_path is not None:
@@ -820,8 +929,7 @@ def delete_bib_entry(
                 backup_path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
                 shutil.copy2(path, backup_path)
             _write_bib_text_atomic(path, new_source)
-        entries, _records = _library_to_entries_records(new_library, path)
-        return {"found": True, "entries": entries, "entry": None, "record": None}
+        return {"found": True, "entries": remaining, "entry": None, "record": None}
 
 
 def merge_bib_entries(
@@ -878,7 +986,7 @@ def merge_bib_entries(
                     continue
             new_blocks.append(block)
 
-        new_library = Library(blocks=new_blocks)
+        new_library = build_library(new_blocks)
         new_source = _serialize_library(new_library)
         if new_source != source:
             _write_bib_text_atomic(path, new_source)

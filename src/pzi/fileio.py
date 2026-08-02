@@ -16,9 +16,16 @@ from pzi.errors import PziError
 
 
 def read_text_utf8(path: str | Path) -> str:
-    """Read *path* as UTF-8 text, naming the file if it is not valid UTF-8."""
+    """Read *path* as UTF-8 text, naming the file if it is not valid UTF-8.
+
+    Decodes as ``utf-8-sig`` so a byte-order mark is consumed rather than
+    surviving as a leading ``\\ufeff`` character: a BibTeX file written by a
+    Windows editor would otherwise round-trip with the BOM pushed below the
+    first entry, and a ``--from-file`` list would carry an invisible character
+    into its first identifier. Files without a BOM decode identically.
+    """
     try:
-        return Path(path).read_text(encoding="utf-8")
+        return Path(path).read_text(encoding="utf-8-sig")
     except UnicodeDecodeError as exc:
         raise PziError(f"{path} is not valid UTF-8 text") from exc
 

@@ -25,11 +25,13 @@ from bibtexparser.middlewares.enclosing import (
     AddEnclosingMiddleware,
     RemoveEnclosingMiddleware,
 )
+from bibtexparser.model import Block, DuplicateBlockKeyBlock, Field
 from bibtexparser.model import Entry as BibtexEntryV2
-from bibtexparser.model import Field
 from bibtexparser.writer import BibtexFormat
 
+from pzi import exit_codes
 from pzi.bibtex import BibtexEntry, NormalizedRecord, bibtex_entry_to_record
+from pzi.errors import PziError
 
 
 def parse_bibtex(text: str) -> list[BibtexEntry]:
@@ -38,9 +40,37 @@ def parse_bibtex(text: str) -> list[BibtexEntry]:
     return [_library_entry_to_bibtex_entry(entry) for entry in library.entries]
 
 
+def build_library(blocks: list[Block]) -> Library:
+    """Build a ``Library`` from *blocks*, refusing duplicate entry keys.
+
+    ``Library.add`` is "key-safe": a block whose key is already present is
+    *silently* replaced with a ``DuplicateBlockKeyBlock``, which the writer then
+    emits under a ``% WARNING Parsing failed`` header. Written to disk that
+    wedges the library — the entry vanishes from ``entries``, ``export``
+    refuses, and the next parse reports a failed block — so every site that
+    constructs a library destined for disk goes through here instead.
+    """
+    library = Library(blocks=blocks)
+    duplicates = [
+        block.key
+        for block in library.failed_blocks
+        if isinstance(block, DuplicateBlockKeyBlock)
+    ]
+    if duplicates:
+        listed = ", ".join(sorted(set(duplicates)))
+        raise PziError(
+            f"refusing to write: duplicate citekey {listed} — "
+            "two entries would share one key, and BibTeX cannot represent that",
+            code=exit_codes.ENVIRONMENT,
+        )
+    return library
+
+
 def serialize_bibtex(entries: list[BibtexEntry]) -> str:
     """Serialize entries in a deterministic formatting style."""
-    library = Library(blocks=[_bibtex_entry_to_library_entry(entry) for entry in entries])
+    library = build_library(
+        [_bibtex_entry_to_library_entry(entry) for entry in entries]
+    )
     fmt = BibtexFormat()
     fmt.indent = "  "
     return write_string(library, bibtex_format=fmt)
@@ -213,10 +243,17 @@ def _serialize_library(library: Library) -> str:
 
 
 def _validate_bibtex_roundtrip(entries: list[BibtexEntry]) -> None:
-    """Raise ValueError if entries cannot survive a serialize→parse round-trip."""
+    """Raise if entries cannot survive a serialize→parse round-trip.
+
+    A :exc:`PziError` from :func:`build_library` (a duplicate citekey) already
+    says what is wrong in the user's own terms, so it passes through untouched;
+    anything else is a library-internal failure and gets the generic wrapper.
+    """
     try:
         text = serialize_bibtex(entries)
         parse_bibtex(text)
+    except PziError:
+        raise
     except Exception as exc:
         raise ValueError(
             f"write plan produces invalid BibTeX: {exc}"

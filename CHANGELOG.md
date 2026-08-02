@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A partial write can no longer install a truncated bibliography.** The atomic
+  replace discarded `os.write`'s return value, so a short write committed
+  whatever had made it to the temp file — verified by installing a library
+  holding `@articl`. All bytes are now written or the original is left in place.
+- **`tag`, `pdf attach/retry`, `update`, `promote` and `delete` now validate
+  their result before writing it.** `update_bib_entry` and `delete_bib_entry`
+  were the two of six write sinks that never ran the serialize→parse round-trip
+  gate — and they are the paths behind exactly those commands.
+- **A duplicate citekey is refused with a message instead of wedging the
+  library.** Constructing a library with two entries under one key silently
+  produced a `% WARNING Parsing failed` block, which was then written to disk;
+  from there an entry vanished from `pzi entries`, `pzi export` refused, and the
+  next edit raised a raw `ValueError` traceback.
+- **`pzi add` into a bibliography containing an unparseable block now refuses**
+  rather than re-emitting the block under a `% WARNING Parsing failed` header,
+  accumulating a fresh marker on every subsequent add. Inserts are gated by the
+  same parseability check updates always had.
+- **A symlinked bibliography path now locks the file it writes.** The lock was
+  named after the configured path while the write replaced the resolved path, so
+  a symlink and its real path — or two symlinks to one bib — took two different
+  locks over the same file.
+- **A rewrite no longer changes the bibliography's permissions, line endings or
+  byte-order mark.** Writes reset the file to `0600` (from `0644`), converted
+  CRLF to LF (making a Windows-authored bib a 100%-changed file in git after one
+  `pzi tag add`), and moved a BOM below the first entry.
+- The lock-timeout message no longer suggests removing "a stale `<bib>.lock`":
+  `flock` is released by the kernel on exit, so the file is never stale, and
+  deleting it while a holder is live lets a second writer straight in.
+
+### Known limitations
+
+- A bibliography with more than one hard link keeps only the written name
+  pointing at the new content. This is inherent to replace-based atomic writes.
+
 ## [0.1.0b4] - 2026-07-29
 
 ### Added
