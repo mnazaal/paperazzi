@@ -12,6 +12,7 @@ import pytest
 from pzi import url_safety
 from pzi.config import dump_app_config
 from pzi.safe_http import SsrfBlocked
+from tests.browser_probe import default_browsers_path
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -155,9 +156,18 @@ def _pin_home(request, tmp_path_factory, monkeypatch):
     home — `~/.config/pzi/config.toml`, `~/.local/share/pzi/api_token`. That is
     the same class of leak the XDG fixture exists to stop, one variable over,
     and nothing was catching it.
+
+    ``$HOME`` is not ours alone, though: Playwright resolves its browser cache
+    from it, so repointing it hides the downloaded browsers and every browser
+    test fails with "Executable doesn't exist at <tmpdir>/.cache/ms-playwright".
+    Pin ``PLAYWRIGHT_BROWSERS_PATH`` to the real location first — computed
+    before the switch, when ``$HOME`` still points at the real home.
     """
     if _is_live_test(request):
         return
+    browsers_path = default_browsers_path()
+    if browsers_path is not None:
+        monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(browsers_path))
     monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home")))
 
 

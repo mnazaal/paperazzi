@@ -7,7 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0b5] - 2026-08-02
+## [0.1.0b5] - 2026-08-03
+
+### Fixed
+
+- **The hermetic `$HOME` fixture hid the Playwright browsers, so every browser
+  test failed in CI.** `$HOME` is repointed at a tmpdir per test to stop leaks
+  into the developer's real `~/.config/pzi`, but Playwright resolves its browser
+  cache from `$HOME` too, so all 20 tests died on "Executable doesn't exist at
+  `<tmpdir>/.cache/ms-playwright`". The fixture now pins
+  `PLAYWRIGHT_BROWSERS_PATH` to the real cache before the switch. It was
+  invisible locally because the fixture clears `XDG_CONFIG_HOME` and
+  `XDG_DATA_HOME` but not `XDG_CACHE_HOME`, which a developer machine sets and
+  a CI runner does not.
+- **"Browsers were never downloaded" could not be reported as a skip.** The
+  probe tested `executable_path is None`, which Playwright never returns — it
+  yields a path whether or not anything is there, and for headless Chromium not
+  even the path that must exist. The case is now recognised from the launch
+  error, and stays a *failure* under `CI`, where downloading browsers is a job
+  step rather than an optional local install.
 
 ### Changed
 

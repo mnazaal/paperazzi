@@ -15,11 +15,58 @@ looked like the ordinary "no browsers here" case.
 from __future__ import annotations
 
 import functools
+import os
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 #: Long enough for a cold start on a loaded CI runner, short enough that a
 #: browser which will never come up does not eat the job's whole budget.
 LAUNCH_TIMEOUT_MS = 60_000
+
+
+def default_browsers_path() -> Path | None:
+    """Where Playwright looks for downloaded browsers, given the current env.
+
+    Mirrors the driver's own ``registryDirectory`` resolution: an explicit
+    ``PLAYWRIGHT_BROWSERS_PATH`` wins, otherwise it is the platform cache
+    directory plus ``ms-playwright``. Returns ``None`` when the caller has
+    already pinned the path (nothing to compute) or when the platform is one
+    Playwright does not support.
+
+    This exists because the browser cache is resolved from ``$HOME``, and the
+    unit suite repoints ``$HOME`` at a throwaway directory. Without pinning the
+    path *before* that, every browser test looks for Chromium under an empty
+    tmpdir and fails as "installed but failed to launch".
+    """
+    if os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
+        return None
+    if sys.platform == "darwin":
+        cache = Path.home() / "Library" / "Caches"
+    elif sys.platform == "win32":
+        cache = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
+    elif sys.platform.startswith("linux"):
+        cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+    else:
+        # Playwright itself refuses to run here, so there is no path to give.
+        return None
+    return cache / "ms-playwright"
+
+
+#: Playwright's own wording when a browser was never downloaded. Matching the
+#: message is the only way to tell "never installed" from "installed but
+#: broken": ``BrowserType.executable_path`` returns a path whether or not
+#: anything is there, and for headless Chromium the binary that must exist is
+#: not even the one it names (``chrome-headless-shell`` is a separate download).
+_NOT_DOWNLOADED_MARKERS = (
+    "executable doesn't exist",
+    "please run the following command to download new browsers",
+)
+
+
+def _is_not_downloaded(message: str) -> bool:
+    lowered = message.lower()
+    return any(marker in lowered for marker in _NOT_DOWNLOADED_MARKERS)
 
 
 @dataclass(frozen=True)
@@ -53,15 +100,19 @@ def browser_status() -> BrowserStatus:
         with sync_playwright() as p:
             for name in ("chromium", "firefox"):
                 launcher = getattr(p, name)
-                if launcher.executable_path is None:  # pragma: no cover — env-specific
-                    return BrowserStatus(
-                        usable=False,
-                        missing=True,
-                        reason=f"{name} binary not installed. Run: playwright install {name}",
-                    )
                 try:
                     launcher.launch(headless=True, timeout=LAUNCH_TIMEOUT_MS).close()
                 except Exception as exc:
+                    if _is_not_downloaded(str(exc)) and not os.environ.get("CI"):
+                        # Nothing was ever downloaded here — the legitimate
+                        # "no browsers on this machine" case. In CI the
+                        # download is a job step, so the same message means a
+                        # broken workflow and must stay a failure.
+                        return BrowserStatus(
+                            usable=False,
+                            missing=True,
+                            reason=f"{name} binaries not downloaded. Run: playwright install {name}",
+                        )
                     # Installed but broken: a missing system library, a sandbox
                     # restriction, a hang. Reporting this as "skipped" is what
                     # hid a red suite; the fixture turns it into a failure.
