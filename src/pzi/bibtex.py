@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Mapping
 from typing import Any, Literal, TypeAlias, TypedDict
 
 
@@ -388,6 +389,29 @@ def repair_split_initials(
         repaired.extend(buffer)
 
     return repaired
+
+
+#: Fields that belong to the user, never to a metadata provider. `update` and
+#: `promote` both refuse to overwrite these when merging fetched metadata over
+#: an existing entry. One definition because the two commands must not drift:
+#: a field that is user-owned for one and provider-owned for the other means
+#: the same library loses a note or a tag depending on which command touched it.
+USER_OWNED_FIELDS = frozenset({"tags", "local_pdf_path", "citekey", "note"})
+
+
+def changed_fields(before: Mapping[str, object], after: Mapping[str, object]) -> list[str]:
+    """Field names whose value differs between *before* and *after*.
+
+    Over the **union** of both key sets, so a field the change *removed* is
+    reported. Iterating `after` alone can only ever name fields that survived,
+    which is why promotion silently dropped `arxiv_id`, the arXiv DOI and the
+    preprint URLs from its own report of what it had changed.
+    """
+    return sorted(
+        key for key in set(before) | set(after) if after.get(key) != before.get(key)
+    )
+
+
 _STOPWORDS = frozenset(
     {
         "a",

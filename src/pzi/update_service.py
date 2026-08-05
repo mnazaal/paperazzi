@@ -19,13 +19,15 @@ from pzi.bib_repository import (
     update_bib_entry,
 )
 from pzi.bibtex import (
+    USER_OWNED_FIELDS,
     BibtexEntry,
     NormalizedRecord,
     apply_record_to_entry,
     bibtex_entry_to_record,
+    changed_fields,
 )
 from pzi.config import BibResolutionFailure, load_bib_target
-from pzi.identifiers import is_preprint_url
+from pzi.identifiers import has_preprint_identity
 from pzi.protocols import SearchTranslationFetcher
 from pzi.similarity import _canonical_doi
 from pzi.translation_server import fetch_search_translations
@@ -59,7 +61,10 @@ class UpdateBibResult(TypedDict):
 
 
 
-_USER_OWNED_UPDATE_FIELDS = frozenset({"tags", "local_pdf_path", "citekey", "note"})
+#: Alias kept so this module's call site reads unchanged; the set itself is
+#: shared with `promote` so the two commands cannot disagree about what
+#: belongs to the user.
+_USER_OWNED_UPDATE_FIELDS = USER_OWNED_FIELDS
 
 _ENTRY_DISAPPEARED = "entry disappeared during update"
 
@@ -337,16 +342,10 @@ def _conservative_enrich(
 
 
 
-def _has_preprint_identity(record: Mapping[str, Any]) -> bool:
-    """True when the record itself says it is a preprint."""
-    if record.get("arxiv_id"):
-        return True
-    doi = _canonical_doi(record.get("doi"))
-    if doi and doi.startswith("10.48550/"):
-        return True
-    return is_preprint_url(record.get("source_url")) or is_preprint_url(
-        record.get("canonical_url")
-    )
+#: Re-exported under the old private name so this module's call sites read the
+#: same as before; the definition now lives in `identifiers` because `promote`
+#: needs the identical test (see PLAN.md item 3).
+_has_preprint_identity = has_preprint_identity
 
 
 def _candidate_rejection(
@@ -410,7 +409,7 @@ def _changed_fields_for_candidate(
     return _changed_fields(existing, enriched)
 
 
-def _changed_fields(
-    existing: Mapping[str, object], updated: Mapping[str, object]
-) -> list[str]:
-    return sorted(key for key in updated.keys() if updated.get(key) != existing.get(key))
+#: `update` only ever adds fields, so union-vs-`updated`-only gave the same
+#: answer here — but `promote` removes fields, and having two spellings of
+#: "what changed" is what let promotion under-report its own edits.
+_changed_fields = changed_fields
