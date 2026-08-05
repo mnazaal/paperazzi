@@ -2,9 +2,11 @@ import pytest
 
 from pzi.bibtex import (
     USER_OWNED_FIELDS,
+    BibtexEntry,
     apply_record_to_entry,
     bibtex_entry_to_record,
     changed_fields,
+    merge_projected_entry,
     record_to_bibtex_entry,
 )
 
@@ -363,3 +365,31 @@ def test_user_owned_fields_is_shared_by_update_and_promote() -> None:
 
     assert update_service._USER_OWNED_UPDATE_FIELDS is USER_OWNED_FIELDS
     assert promote_service.USER_OWNED_FIELDS is USER_OWNED_FIELDS
+
+
+def test_merge_projected_entry_handles_an_eprint_without_a_prefix() -> None:
+    """A bare `eprint` must not raise.
+
+    `record_to_bibtex_entry` always writes `eprint` and `archiveprefix`
+    together, so indexing the pair worked for every projection it produces. But
+    this function also accepts an already-merged entry as the projection — which
+    is what a rebase passes — and a bioRxiv-style bare `eprint` has no prefix.
+    That combination raised `KeyError: 'archiveprefix'`, which the update
+    service reported to the user as `update failed: 'archiveprefix'`.
+    """
+    existing: BibtexEntry = {
+        "entry_type": "article",
+        "citekey": "a2020",
+        "fields": {"title": "T", "eprint": "2401.12345", "archiveprefix": "arXiv"},
+    }
+    projected: BibtexEntry = {
+        "entry_type": "article",
+        "citekey": "a2020",
+        "fields": {"title": "T", "eprint": "2020.01.01.123456"},
+    }
+
+    merged = merge_projected_entry(existing, projected)
+
+    assert merged["fields"]["eprint"] == "2020.01.01.123456"
+    # The projection is authoritative for the pair, so a prefix it omits goes.
+    assert "archiveprefix" not in merged["fields"]

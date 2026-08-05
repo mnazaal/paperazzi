@@ -516,6 +516,9 @@ def execute_write_plan(
 
         if plan["action"] == "update":
             _validate_update_plan_against_current(records, plan)
+            # Applied in `preview_write_plan` too, or `--dry-run` would show a
+            # diff the real write does not produce.
+            plan = _rebase_update_plan_against_current(records, entries, plan)
         if plan["action"] == "insert":
             plan = _rebase_insert_plan_against_current(records, entries, plan)
 
@@ -708,6 +711,9 @@ def preview_write_plan(
 
         if plan["action"] == "update":
             _validate_update_plan_against_current(records, plan)
+            # Applied in `preview_write_plan` too, or `--dry-run` would show a
+            # diff the real write does not produce.
+            plan = _rebase_update_plan_against_current(records, entries, plan)
         if plan["action"] == "insert":
             plan = _rebase_insert_plan_against_current(records, entries, plan)
 
@@ -805,6 +811,76 @@ def _validate_update_plan_against_current(
     current_citekey = current_records[index].get("citekey")
     if planned_citekey and current_citekey != planned_citekey:
         raise _stale_plan("the entry it targets now has a different citekey")
+
+
+#: `bibtex.USER_OWNED_FIELDS` in BibTeX spelling. These are the fields a rebase
+#: restores from the on-disk entry, because their absence from a plan means "the
+#: writer had no opinion", never "delete it" — unlike the identity fields
+#: `promote --replace` strips deliberately. `citekey` is the entry key, not a
+#: field, and is validated separately.
+_USER_OWNED_ENTRY_FIELDS = ("note", "keywords", "file")
+
+
+def _rebase_update_plan_against_current(
+    current_records: list[NormalizedRecord],
+    current_entries: list[BibtexEntry],
+    plan: WritePlan,
+) -> WritePlan:
+    """Re-project the planned update onto the entry as it is *under the lock*.
+
+    A plan is built long before it is executed: `add_service` reads the library,
+    resolves metadata over the network and downloads a PDF, and only then calls
+    `execute_write_plan`. The digest guard there is snapshotted on the line
+    before the lock, so it catches a race of microseconds and not the window
+    that actually matters. An edit landing in that window therefore passed every
+    check — `_validate_update_plan_against_current` compares the index and the
+    citekey, never field content — and `plan["entry"]`, projected from a record
+    read before the edit, was written verbatim over it.
+
+    Re-running the merge is what `plan_bib_write` itself does to build an update
+    (`merge_entries` → project → `merge_projected_entry`), and what
+    `_rebase_insert_plan_against_current` does for an insert that turns out to
+    match. Merging only the projected *entry* is not enough: a record-owned
+    field the projection omits — `note` is the one that bites, since it is the
+    user's own prose — is authoritatively dropped by
+    :func:`merge_projected_entry`, so the user's newly added note would still
+    vanish. Re-merging at the record level first carries it through, while the
+    plan still wins every field it actually sets.
+    """
+    index = plan.get("index")
+    planned_record = plan.get("record")
+    if not isinstance(index, int) or not isinstance(planned_record, dict):
+        return plan
+    if index < 0 or index >= len(current_entries) or index >= len(current_records):
+        return plan  # already rejected by _validate_update_plan_against_current
+
+    planned_entry = plan.get("entry")
+    if not isinstance(planned_entry, dict):
+        return plan
+    current_entry = current_entries[index]
+
+    # Merge at the *entry* level, because `plan["entry"]` is authoritative —
+    # `apply_write_plan` says so, and some callers build a plan whose entry
+    # carries a change its record does not. That keeps every unmodelled field
+    # (`pages`, `publisher`, …) from the current entry and lets the plan win
+    # everything it sets.
+    rebased = merge_projected_entry(current_entry, planned_entry)
+    # `merge_projected_entry` keeps the *existing* entry's type, which is right
+    # when filling a gap and wrong here: `promote --replace` retypes
+    # `@unpublished` to `@article` on purpose, and the plan is authoritative.
+    rebased["entry_type"] = planned_entry["entry_type"]
+
+    # `merge_projected_entry` treats a record-owned field the projection omits
+    # as a deletion, which is correct for `promote --replace` — it strips
+    # `arxiv_id`, the arXiv DOI and the preprint URLs on purpose — but wrong for
+    # the user's own content, which the writer had no opinion about and simply
+    # did not know existed yet. Restore exactly the user-owned fields, and only
+    # where the plan does not set them.
+    for field in _USER_OWNED_ENTRY_FIELDS:
+        if field not in rebased["fields"] and field in current_entry["fields"]:
+            rebased["fields"][field] = current_entry["fields"][field]
+
+    return cast(WritePlan, {**plan, "entry": rebased})
 
 
 def _rebase_insert_plan_against_current(

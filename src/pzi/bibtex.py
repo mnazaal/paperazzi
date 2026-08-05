@@ -243,7 +243,15 @@ def merge_projected_entry(entry: BibtexEntry, projected_entry: BibtexEntry) -> B
     # eprint was never the record's to delete.
     if "eprint" in projected:
         fields["eprint"] = projected["eprint"]
-        fields["archiveprefix"] = projected["archiveprefix"]
+        # `.get`, not `[...]`: the two travel together out of
+        # `record_to_bibtex_entry`, so indexing worked for every projection it
+        # produces — but this function also accepts an already-merged entry as
+        # the projection, and a bioRxiv-style bare `eprint` carries no prefix.
+        # The projection stays authoritative for the pair either way.
+        if "archiveprefix" in projected:
+            fields["archiveprefix"] = projected["archiveprefix"]
+        else:
+            fields.pop("archiveprefix", None)
     elif existing.get("archiveprefix", "").strip().lower() == "arxiv":
         fields.pop("eprint", None)
         fields.pop("archiveprefix", None)

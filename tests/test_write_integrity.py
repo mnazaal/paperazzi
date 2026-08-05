@@ -356,3 +356,68 @@ def test_write_keeps_a_byte_order_mark_at_the_start_of_the_file(tmp_path: Path) 
 
     raw = bib.read_bytes()
     assert raw.startswith(b"\xef\xbb\xbf@article")
+
+
+def test_update_plan_does_not_discard_an_edit_made_while_the_plan_was_built(
+    tmp_path: Path,
+) -> None:
+    """An update must be rebased onto the entry as it is *under the lock*.
+
+    `execute_write_plan` snapshots the file digest on the line before it takes
+    the lock, so the window it guards is microseconds wide. The window that
+    matters is much longer: `add_service` reads the library, then resolves
+    metadata over the network and downloads a PDF, and only then executes. An
+    edit landing in that window passes the digest check untouched, and
+    `_validate_update_plan_against_current` only checks that the index is in
+    range and the citekey still matches — never field content — so the stale
+    `plan["entry"]` was written verbatim and the edit vanished silently.
+
+    The insert path already rebases onto the on-disk entry when it discovers a
+    match; this pins that the update path does the same.
+    """
+    bib = tmp_path / "lib.bib"
+    bib.write_text(
+        "@article{a2020,\n"
+        "  author = {Smith, Jane},\n"
+        "  title = {Original Title},\n"
+        "  doi = {10.1000/abc123},\n"
+        "  year = {2020}\n"
+        "}\n"
+    )
+
+    # 1. Read the library and build a plan, exactly as a capture does.
+    before = read_bib_file(str(bib))
+    plan = plan_bib_write(
+        {
+            "citekey": "a2020",
+            "title": "A Much Longer Title From Crossref",
+            "authors": ["Smith, Jane"],
+            "year": 2020,
+            "doi": "10.1000/abc123",
+        },
+        before["records"],
+        existing_entries=before["entries"],
+    )
+    assert plan["action"] == "update"
+
+    # 2. The user edits the same entry in their editor while the network call
+    #    is in flight — adding fields the capture knows nothing about.
+    bib.write_text(
+        "@article{a2020,\n"
+        "  author = {Smith, Jane},\n"
+        "  title = {Original Title},\n"
+        "  doi = {10.1000/abc123},\n"
+        "  year = {2020},\n"
+        "  pages = {1--10},\n"
+        "  note = {hand-written by the user}\n"
+        "}\n"
+    )
+
+    # 3. The capture completes and commits its plan.
+    execute_write_plan(str(bib), plan)
+
+    written = bib.read_text()
+    assert "pages = {1--10}" in written, f"external edit was overwritten:\n{written}"
+    assert "hand-written by the user" in written, f"external edit was overwritten:\n{written}"
+    # The update itself still applied.
+    assert "A Much Longer Title From Crossref" in written
