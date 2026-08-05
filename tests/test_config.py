@@ -1,3 +1,4 @@
+from pzi import config as config_module
 from pzi.config import (
     default_config_path,
     default_data_home,
@@ -93,6 +94,18 @@ def test_validate_bib_config_rejects_invalid_fields() -> None:
     ]
 
 
+def test_default_translation_server_url_literal(real_translation_server_url) -> None:
+    """Pin the shipped default, which the suite otherwise patches away.
+
+    `_dead_default_translation_server` in conftest repoints the constant so a
+    config omitting the key cannot reach a live server. That protection would
+    also hide an accidental change to the shipped default, so the pristine
+    value is captured at conftest import and asserted here: 1969 is
+    translation-server's own port and the value `config.template.toml` shows.
+    """
+    assert real_translation_server_url == "http://127.0.0.1:1969"
+
+
 def test_validate_app_config_applies_defaults() -> None:
     config, errors = validate_app_config(
         {
@@ -108,7 +121,12 @@ def test_validate_app_config_applies_defaults() -> None:
 
     assert errors == []
     assert config == {
-        "translation_server_url": "http://127.0.0.1:1969",
+        # Read from the constant, not spelled out: the suite repoints this
+        # default at a dead port so no test can reach a real translation
+        # server by omitting the key. What this assertion pins is that the
+        # default is *applied*; `test_default_translation_server_url_literal`
+        # pins what the default actually is.
+        "translation_server_url": config_module.DEFAULT_TRANSLATION_SERVER_URL,
         "bibs": [
             {
                 "name": "ml",

@@ -5,6 +5,19 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from pzi import errors
+
+#: HTTP status per structured failure reason — the same vocabulary
+#: `pzi.commands.common.exit_code_for_error` maps to exit codes, so a service
+#: classifies its failure once and both surfaces agree.
+_STATUS_BY_REASON: dict[str, int] = {
+    errors.REASON_NOT_FOUND: 404,
+    errors.REASON_USAGE: 400,
+    errors.REASON_CONFIG: 400,
+    errors.REASON_UNAVAILABLE: 503,
+    errors.REASON_CONFLICT: 409,
+}
+
 
 def status_for_service_result(
     result: Mapping[str, Any],
@@ -15,9 +28,21 @@ def status_for_service_result(
 
     Services return small dicts with ``status``, ``message``, and/or ``errors``.
     Keep mapping here so route modules do not each invent their own policy.
+
+    A structured ``reason`` wins when present. The text heuristic below is the
+    fallback for services that do not classify yet, and it is a fallback rather
+    than the policy because it was demonstrably wrong: it tested ``"config"``
+    before ``"not found"``, and citekeys are echoed into these messages, so
+    `POST /tags/add` on a missing entry returned 404 for ``nosuch2020`` and 400
+    for ``myconfig2020`` — the same failure, two statuses, decided by how the
+    user happened to name a paper.
     """
     if result.get("status") == "ok":
         return 200
+
+    reason = result.get("reason")
+    if isinstance(reason, str) and reason in _STATUS_BY_REASON:
+        return _STATUS_BY_REASON[reason]
 
     text = _result_text(result).lower()
     if "config" in text or "bib not found" in text or "library" in text:

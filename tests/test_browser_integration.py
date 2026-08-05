@@ -95,6 +95,12 @@ def test_discover_pdf_direct_link(http_server):
     assert url.endswith("paper.pdf")
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="click-based PDF discovery returns None even when the clicked button "
+    "navigates to a served .pdf — real break, hidden until the assertion was "
+    "made unconditional. PLAN.md Phase 2 item 123.",
+)
 def test_discover_pdf_after_click(http_server):
     with open_browser_session(browser="chromium", url_allowed=_allow_loopback) as s:
         # The button text "Download PDF" should be found by DOWNLOADISH_SELECTORS
@@ -102,8 +108,11 @@ def test_discover_pdf_after_click(http_server):
             f"{http_server}/article_with_download_button.html",
             _session=s,
         )
-    # May or may not find a PDF — button click might not yield a PDF URL
-    assert url is None or url.endswith(".pdf")
+    # Unconditional on purpose: `url is None or ...` was satisfied by click
+    # discovery not working at all, so this test passed throughout the period
+    # the feature was broken.
+    assert url is not None
+    assert url.endswith(".pdf")
 
 
 def test_discover_no_pdf_links(http_server):
@@ -130,6 +139,13 @@ def test_download_pdf_direct(http_server):
     assert body.startswith(b"%PDF-")
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="candidate-link following returns None although the page carries "
+    "<a href='/paper.pdf'> and the fixture server sets application/pdf — real "
+    "break, hidden until the assertion was made unconditional. "
+    "PLAN.md Phase 2 item 124.",
+)
 def test_download_pdf_via_candidate(http_server):
     """download_pdf follows a PDF candidate link on an HTML page."""
     with open_browser_session(browser="chromium", url_allowed=_allow_loopback) as s:
@@ -137,10 +153,12 @@ def test_download_pdf_via_candidate(http_server):
             f"{http_server}/article_with_candidate_link.html",
             _session=s,
         )
-    # The candidate link is found and followed; PDF body returned
-    # (May be None if the server doesn't set correct Content-Type for .pdf)
-    if body is not None:
-        assert body.startswith(b"%PDF-")
+    # Unconditional on purpose: guarding on `body is not None` meant the whole
+    # assertion vanished when the candidate link was not followed, which is the
+    # only failure this test exists to catch. The fixture server does set
+    # Content-Type on .pdf, so a None body is a real regression.
+    assert body is not None
+    assert body.startswith(b"%PDF-")
 
 
 def test_download_non_pdf_page(http_server):

@@ -1316,3 +1316,60 @@ def test_promote_keeps_a_real_doi_the_published_version_supplied(tmp_path):
     text = bib_path.read_text()
     assert "doi = {10.9/jop}" in text
     assert "10.48550" not in text
+
+
+def _fake_search_echoing_the_record(query: str, *, server_url: str):
+    """A provider that returns the very entry it was asked about."""
+    return [
+        {
+            "item_type": "journalArticle",
+            "record": {
+                "title": "An Ordinary Paper",
+                "doi": "10.7777/ordinary",
+                "year": 2018,
+                "authors": ["Doe, John"],
+                "venue": "Journal of Ordinary Things",
+            },
+            "attachments": [],
+        }
+    ]
+
+
+def test_promote_does_not_fork_an_entry_that_merely_lacks_a_venue(tmp_path):
+    """A venue-less entry with a real publisher DOI is not a preprint.
+
+    `is_preprint` returns True for *any* record with no `venue`, which is a
+    large share of an ordinary library. Selecting on it meant promotion forked
+    a second entry out of a plain @article that happened to have no `journal`
+    field — creating exactly the duplicate `pzi fix dedupe` exists to report.
+
+    `update_service` documents this hazard and refuses to use `is_preprint` for
+    the same reason; this pins that `promote` agrees.
+    """
+    bib_path = tmp_path / "ml.bib"
+    config_path = _write_config(tmp_path, bib_path)
+    add_record_to_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        record={
+            "citekey": "venueless2018",
+            "title": "An Ordinary Paper",
+            "doi": "10.7777/ordinary",
+            "year": 2018,
+            "authors": ["Doe, John"],
+        },
+        bib_selector=None,
+        dry_run=False,
+    )
+
+    result = promote_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        dry_run=False,
+        fetch_search=_fake_search_echoing_the_record,
+    )
+
+    assert result["status"] == "ok"
+    assert result["items"] == [], f"venue-less non-preprint was promoted: {result['items']}"
+    assert bib_path.read_text().count("@article") == 1

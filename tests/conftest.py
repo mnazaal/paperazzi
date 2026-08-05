@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from pzi import url_safety
+from pzi.config import DEFAULT_TRANSLATION_SERVER_URL as _REAL_TRANSLATION_SERVER_URL
 from pzi.config import dump_app_config
 from pzi.safe_http import SsrfBlocked
 from tests.browser_probe import default_browsers_path
@@ -39,7 +40,7 @@ def _hermetic_dns(request, monkeypatch):
     if _is_live_test(request):
         return
 
-    def _resolve(host, port, *, timeout):  # noqa: ARG001
+    def _resolve(host, port, *, timeout):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
 
     monkeypatch.setattr(url_safety, "resolve_host_with_timeout", _resolve)
@@ -145,6 +146,40 @@ def _clear_xdg_env(request, monkeypatch):
         return
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+
+
+@pytest.fixture
+def real_translation_server_url() -> str:
+    """The shipped default, captured at import before the autouse patch below.
+
+    Exists so one test can still pin what the default *is*, which
+    ``_dead_default_translation_server`` would otherwise make untestable.
+    """
+    return _REAL_TRANSLATION_SERVER_URL
+
+
+@pytest.fixture(autouse=True)
+def _dead_default_translation_server(request, monkeypatch):
+    """Repoint the *default* translation-server URL at a dead port.
+
+    ``dead_port``/``write_app_config`` only protect configs written through
+    them. Most config-writing test helpers are module-local and simply omit
+    ``translation_server_url``, so the config loader fell back to the real
+    default (``127.0.0.1:1969``) and any such test would reach a translation
+    server the developer happened to be running — passing or failing based on
+    machine state rather than on the code.
+
+    Patching the default itself closes that for every test at once, including
+    ones written later that never hear about the fixture. Live tests set the
+    URL explicitly, so they are unaffected either way, but they are skipped
+    here for the same reason as the other hermeticity fixtures.
+    """
+    if _is_live_test(request):
+        return
+    monkeypatch.setattr(
+        "pzi.config.DEFAULT_TRANSLATION_SERVER_URL",
+        f"http://127.0.0.1:{_free_port()}",
+    )
 
 
 @pytest.fixture(autouse=True)

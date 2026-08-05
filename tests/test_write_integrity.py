@@ -81,7 +81,7 @@ def test_failed_write_removes_the_temporary_file_and_keeps_the_original(
     bib = tmp_path / "main.bib"
     path = _write(bib, ONE_ENTRY)
 
-    def _failing_write(fd: int, data) -> int:  # noqa: ARG001
+    def _failing_write(fd: int, data) -> int:
         raise OSError(28, "No space left on device")
 
     monkeypatch.setattr(os, "write", _failing_write)

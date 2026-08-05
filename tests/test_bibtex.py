@@ -1,8 +1,10 @@
 import pytest
 
 from pzi.bibtex import (
+    USER_OWNED_FIELDS,
     apply_record_to_entry,
     bibtex_entry_to_record,
+    changed_fields,
     record_to_bibtex_entry,
 )
 
@@ -325,3 +327,39 @@ def test_apply_record_keeps_non_arxiv_eprint() -> None:
 
     assert updated["fields"]["eprint"] == "2023.01.01.522"
     assert updated["fields"]["archiveprefix"] == "bioRxiv"
+
+
+# ── changed_fields / USER_OWNED_FIELDS ───────────────────────────
+
+
+def test_changed_fields_reports_a_removed_field() -> None:
+    """Over the union of both key sets, so removals are named.
+
+    Iterating the *after* mapping alone can only report fields that survived.
+    That is why promotion applied the removal of `arxiv_id`, the arXiv DOI and
+    the preprint URLs, and then reported none of them as changed.
+    """
+    before = {"title": "T", "arxiv_id": "2301.07041", "doi": "10.48550/arXiv.2301.07041"}
+    after = {"title": "T", "doi": "10.1145/1327452"}
+
+    assert changed_fields(before, after) == ["arxiv_id", "doi"]
+
+
+def test_changed_fields_ignores_untouched_fields() -> None:
+    assert changed_fields({"title": "T", "year": 2020}, {"title": "T", "year": 2020}) == []
+
+
+def test_changed_fields_reports_an_added_field() -> None:
+    assert changed_fields({"title": "T"}, {"title": "T", "venue": "NeurIPS"}) == ["venue"]
+
+
+def test_user_owned_fields_is_shared_by_update_and_promote() -> None:
+    """One definition, or a field is user-owned for one command and not the other.
+
+    Two copies meant the same library could lose a note or a tag depending on
+    which command last touched the entry.
+    """
+    from pzi import promote_service, update_service
+
+    assert update_service._USER_OWNED_UPDATE_FIELDS is USER_OWNED_FIELDS
+    assert promote_service.USER_OWNED_FIELDS is USER_OWNED_FIELDS

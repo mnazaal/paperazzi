@@ -208,7 +208,6 @@ def download_node(
     data_home: Path,
     *,
     stdout: TextIO,
-    stderr: TextIO,
 ) -> str:
     """Download portable Node.js tarball and extract to ``data_home/node/``.
 
@@ -391,7 +390,7 @@ def ensure_node(
         )
 
     try:
-        path = download_node(data_home, stdout=stdout, stderr=stderr)
+        path = download_node(data_home, stdout=stdout)
         print(f"Node.js installed to {path}", file=stdout)
         return path
     except RuntimeError as exc:

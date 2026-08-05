@@ -466,7 +466,7 @@ def test_update_bib_entry_two_threads_no_lost_update_and_no_stale_lock(
                         },
                     },
                 )
-        except BaseException as exc:  # noqa: BLE001 - captured for the main thread
+        except BaseException as exc:  # captured for the main thread
             errors.append(exc)
 
     threads = [threading.Thread(target=bump) for _ in range(thread_count)]

@@ -173,7 +173,7 @@ def _verify_entry(
             # The documented failure modes of the fetchers: transport and decode.
             source_errors.append(f"{name}: {exc}")
             continue
-        except Exception as exc:  # noqa: BLE001 — a provider bug must not abort the run
+        except Exception as exc:  # a provider bug must not abort the run
             source_errors.append(f"{name}: unexpected {type(exc).__name__}: {exc}")
             continue
         if provider_errors:

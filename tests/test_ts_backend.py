@@ -521,7 +521,7 @@ def test_backend_session_reuses_reachable_server() -> None:
     with patch("pzi.ts_backend.is_ts_reachable", return_value=True):
         with ts_backend.backend_session(
             {"translation_server_url": "http://127.0.0.1:1969"},
-            "/tmp/config.toml", "/home/user",
+            "/home/user",
             stdout=stdout, stderr=stderr,
         ) as backend:
             assert backend["ready"] is True
@@ -533,7 +533,7 @@ def test_backend_session_no_url_is_ready_and_unowned() -> None:
     stdout = io.StringIO()
     stderr = io.StringIO()
     with ts_backend.backend_session(
-        {}, "/tmp/config.toml", "/home/user", stdout=stdout, stderr=stderr,
+        {}, "/home/user", stdout=stdout, stderr=stderr,
     ) as backend:
         assert backend["ready"] is True
         assert backend["owned"] is False
@@ -549,7 +549,7 @@ def test_backend_session_skip_auto_start_does_not_probe(monkeypatch) -> None:
     ):
         with ts_backend.backend_session(
             {"translation_server_url": "http://127.0.0.1:1969"},
-            "/tmp/config.toml", "/home/user",
+            "/home/user",
             stdout=stdout, stderr=stderr,
         ) as backend:
             assert backend["ready"] is True
@@ -570,7 +570,7 @@ def test_backend_session_spawns_and_reaps_owned_child(monkeypatch, tmp_path: Pat
         with ts_backend.backend_session(
             {"translation_server_url": "http://127.0.0.1:1969",
              "pzi_data_home": str(tmp_path)},
-            "/tmp/config.toml", str(tmp_path),
+            str(tmp_path),
             stdout=stdout, stderr=stderr,
         ) as backend:
             assert backend["owned"] is True
@@ -593,7 +593,7 @@ def test_backend_session_node_bootstrap_failure_is_not_ready(
         with ts_backend.backend_session(
             {"translation_server_url": "http://127.0.0.1:1969",
              "pzi_data_home": str(tmp_path)},
-            "/tmp/config.toml", str(tmp_path),
+            str(tmp_path),
             stdout=stdout, stderr=stderr,
         ) as backend:
             assert backend["ready"] is False

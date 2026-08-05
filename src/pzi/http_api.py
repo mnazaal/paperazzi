@@ -88,7 +88,7 @@ def build_handler_class(
                 request,
                 security_config,
             ),
-            "log_message": lambda request, format, *args: None,  # noqa: A002
+            "log_message": lambda request, format, *args: None,
         },
     )
 
@@ -114,7 +114,7 @@ def _guarded(
     request._response_started = False  # type: ignore[attr-defined]
     try:
         handler()
-    except Exception:  # noqa: BLE001 — boundary of last resort; re-raised below
+    except Exception:  # boundary of last resort; re-raised below
         if getattr(request, "_response_started", False):
             # Headers (and possibly a partial body) already went out — a second
             # `send_response` would corrupt the stream. Let the connection drop

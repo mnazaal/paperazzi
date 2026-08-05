@@ -114,9 +114,6 @@ _DISPATCH: dict[str, Callable[[_DispatchContext], int]] = {
     ),
 }
 
-#: Derived from the dispatch table, never hand-written.
-CLI_COMMANDS: tuple[str, ...] = tuple(sorted(_DISPATCH))
-
 
 def _friendly_error(exc: OSError | UnicodeDecodeError) -> str:
     """Render an expected runtime failure as a concise, human-readable message.
@@ -143,7 +140,7 @@ def run_cli(
 ) -> int:
     parser = build_parser()
     try:
-        import argcomplete  # noqa: F811
+        import argcomplete
 
         argcomplete.autocomplete(parser)
     except ImportError:

@@ -168,7 +168,7 @@ def import_from_bibtex(
             pdf_filename_format=config.get("pdf_filename_format"),
             file_path_style=config.get("pdf_file_path_style", "absolute"),
         )
-    except Exception as exc:  # noqa: BLE001 — reported, not swallowed
+    except Exception as exc:  # reported, not swallowed
         # The batch write is transactional: if it raised, nothing was written.
         # Reporting one error per record made that look like a partly-failed
         # batch (PARTIAL) when in fact no record was imported, so this is a

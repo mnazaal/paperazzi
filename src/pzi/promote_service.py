@@ -21,6 +21,7 @@ from pzi.bib_repository import (
     update_bib_entry,
 )
 from pzi.bibtex import (
+    USER_OWNED_FIELDS,
     BibtexEntry,
     NormalizedRecord,
     bibtex_entry_to_record,
@@ -30,11 +31,12 @@ from pzi.bibtex import (
     record_to_bibtex_entry,
     venue_field_for_entry_type,
 )
+from pzi.bibtex import changed_fields as changed_fields_between
 from pzi.capture_context import resolve_contact_email, resolve_optional_value
 from pzi.config import BibResolutionFailure, load_bib_target
 from pzi.fetch_helpers import build_metadata_fetch_text
 from pzi.format_templates import format_citekey
-from pzi.identifiers import is_preprint, is_preprint_url
+from pzi.identifiers import has_preprint_identity, is_preprint_doi, is_preprint_url
 from pzi.metadata_sources import (
     fetch_crossref_record_by_title,
     fetch_dblp_record_by_title,
@@ -163,7 +165,14 @@ def promote_bib(
         preprint_ck = record.get("citekey")
         if not isinstance(preprint_ck, str):
             continue  # pragma: no cover — covered by integration/browser tests
-        if not is_preprint(record):
+        # `has_preprint_identity`, not `is_preprint`: the latter calls any
+        # record without a `venue` a preprint, which is a large share of an
+        # ordinary library, so promotion forked a second entry out of plain
+        # @articles that merely lacked a `journal` field — manufacturing the
+        # duplicates `pzi fix dedupe` exists to report. `update_service` refuses
+        # `is_preprint` here for exactly this reason and says so at its own call
+        # site; the two commands now agree.
+        if not has_preprint_identity(record):
             continue
         if mark_resolved and _RESOLVED_TAG in (record.get("tags") or []):
             # Already promoted on a previous --mark-resolved run; skip re-checking.
@@ -262,7 +271,6 @@ def promote_bib(
                     bib_path=bib["path"],
                     preprint_record=record,
                     candidate=candidate,
-                    records=records,
                     existing_citekeys=existing_citekeys,
                     dry_run=dry_run,
                     citekey_format=config.get("citekey_format"),
@@ -278,7 +286,7 @@ def promote_bib(
                     file_path_style=file_path_style,
                     **pdf_kwargs,
                 )
-        except Exception as exc:  # noqa: BLE001 — one failing entry must not abort the run
+        except Exception as exc:  # one failing entry must not abort the run
             summary["skipped_failed"] += 1
             items.append(
                 _skip_item(preprint_ck, f"promotion failed: {exc}", failed=True)
@@ -773,7 +781,6 @@ def _handle_keep_preprint(
     bib_path: str,
     preprint_record: NormalizedRecord,
     candidate: NormalizedRecord,
-    records: list[NormalizedRecord],
     existing_citekeys: set[str],
     dry_run: bool,
     papers_dir: str,
@@ -817,9 +824,7 @@ def _handle_keep_preprint(
     # Diffed against the *preprint*, which is what the promotion changes — not
     # against the candidate, which listed the fields the candidate did not
     # supply and called them changes.
-    changed_fields = sorted(
-        key for key in published if published.get(key) != preprint_record.get(key)
-    ) or ["venue", "doi"]
+    changed_fields = changed_fields_between(preprint_record, published) or ["venue", "doi"]
 
     diff: str | None = None
     if dry_run:
@@ -974,14 +979,6 @@ def _plan_note_update(
     return None
 
 
-def _entry_for_citekey(bib_path: str, citekey: str) -> BibtexEntry | None:
-    """Return the on-disk entry for *citekey*, or None when it is not there."""
-    for entry in read_bib_file(bib_path)["entries"]:
-        if entry["citekey"] == citekey:
-            return entry
-    return None
-
-
 def _promoted_entry(
     entry: BibtexEntry,
     current_record: NormalizedRecord,
@@ -1123,11 +1120,7 @@ def _handle_update_in_place(
     # Over the union of both key sets: iterating `updated` alone could only ever
     # report fields that survived, so a field the promotion *removed* — the
     # `eprint`, the preprint URL, the arXiv DOI — was applied but never named.
-    changed_fields = sorted(
-        key
-        for key in set(updated) | set(preprint_record)
-        if updated.get(key) != preprint_record.get(key)
-    )
+    changed_fields = changed_fields_between(preprint_record, updated)
 
     return _promote_item(
         preprint_ck, preprint_ck, "update",
@@ -1185,10 +1178,9 @@ def _local_pdf_path(record: NormalizedRecord) -> str | None:
 def _merge_published_metadata(
     preprint: NormalizedRecord, candidate: NormalizedRecord,
 ) -> NormalizedRecord:
-    _USER_OWNED = frozenset({"tags", "local_pdf_path", "citekey", "note"})
     merged = dict(preprint)
     for key, value in candidate.items():
-        if key in _USER_OWNED:
+        if key in USER_OWNED_FIELDS:
             continue
         # A candidate key the provider could not fill is *absent* metadata, not
         # an instruction to clear the preprint's. `_openreview_normalize` always
@@ -1210,7 +1202,7 @@ def _merge_published_metadata(
     # just stopped being — and a later `pzi check` resolves it straight back to
     # the preprint. Only dropped when the candidate offered no DOI of its own;
     # when it did, the loop above has already overwritten this.
-    if _is_preprint_doi(merged.get("doi")):
+    if is_preprint_doi(merged.get("doi")):
         merged.pop("doi", None)
     for url_field in ("canonical_url", "source_url"):
         if candidate.get(url_field):
@@ -1223,11 +1215,6 @@ def _merge_published_metadata(
 #: arXiv's DataCite prefix. Deliberately just this one: bioRxiv and medRxiv
 #: share `10.1101/` with Cold Spring Harbor Laboratory Press's journals, so the
 #: prefix alone cannot tell a preprint from a published paper there.
-_PREPRINT_DOI_PREFIX = "10.48550/"
-
-
-def _is_preprint_doi(doi: object) -> bool:
-    return isinstance(doi, str) and doi.strip().lower().startswith(_PREPRINT_DOI_PREFIX)
 
 
 def _append_note(existing: object, text: str) -> str | None:

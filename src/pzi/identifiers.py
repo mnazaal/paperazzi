@@ -322,6 +322,42 @@ def is_preprint(record: Mapping[str, object]) -> bool:
     return False
 
 
+#: DataCite prefix arXiv mints for every submission, e.g. `10.48550/arXiv.2301.07041`.
+PREPRINT_DOI_PREFIX = "10.48550/"
+
+
+def is_preprint_doi(doi: object) -> bool:
+    """True when *doi* is arXiv's own DataCite DOI rather than a publisher's."""
+    return isinstance(doi, str) and doi.strip().lower().startswith(PREPRINT_DOI_PREFIX)
+
+
+def has_preprint_identity(record: Mapping[str, object]) -> bool:
+    """True when the record itself carries preprint identity.
+
+    Deliberately narrower than :func:`is_preprint`, which also treats a record
+    with no ``venue`` as a preprint. That is most of a working library, so it is
+    far too broad to gate a *write* on: `update` uses this to decide whether a
+    DOI disagreement is the legitimate preprint-vs-published pairing, and
+    `promote` needs the same narrow test to choose what to promote at all.
+    """
+    if record.get("arxiv_id"):
+        return True
+    if is_preprint_doi(_canonical_doi_for_identity(record.get("doi"))):
+        return True
+    return is_preprint_url(record.get("source_url")) or is_preprint_url(
+        record.get("canonical_url")
+    )
+
+
+def _canonical_doi_for_identity(doi: object) -> str | None:
+    """Local canonicalizer, kept here so this module stays leaf-level.
+
+    `similarity._canonical_doi` does the same job, but importing it would point
+    an identifier primitive at the matching layer.
+    """
+    return normalize_doi(doi) if isinstance(doi, str) else None
+
+
 _DOMAIN_TO_SOURCE: dict[str, str] = {
     # Life sciences / medicine
     "arxiv.org": "arXiv",

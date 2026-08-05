@@ -54,7 +54,7 @@ def running_translation_server(tmp_path_factory: pytest.TempPathFactory) -> Iter
         "pzi_data_home": str(data_home),
     }
     with backend_session(
-        config, config_path="", home_dir=os.path.expanduser("~"),
+        config, home_dir=os.path.expanduser("~"),
         interactive=False, stdout=sys.stdout, stderr=sys.stderr,
     ) as backend:
         if not backend["ready"]:

@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, TextIO
 
-from pzi import cli_json, exit_codes
+from pzi import cli_json, errors, exit_codes
 from pzi.cli_parser import usage_error_lines
 from pzi.config import AppConfig, BibConfig, BibResolutionFailure, load_bib_target
 from pzi.errors import PziError
@@ -171,20 +171,35 @@ def print_capture_stream_line(
         print(f"      warning: {warning}", file=stderr)
 
 
+#: Exit code per structured failure reason. Anything absent from this table —
+#: including a missing ``reason`` — means "the command could not run", which is
+#: the safe default: it is never ``1``, so a script can still tell a failure to
+#: run from a successful run that found something.
+_EXIT_CODE_BY_REASON: dict[str, int] = {
+    errors.REASON_NOT_FOUND: exit_codes.NOT_FOUND,
+    errors.REASON_USAGE: exit_codes.USAGE,
+    errors.REASON_CONFIG: exit_codes.ENVIRONMENT,
+    errors.REASON_UNAVAILABLE: exit_codes.ENVIRONMENT,
+    errors.REASON_CONFLICT: exit_codes.ENVIRONMENT,
+}
+
+
 def exit_code_for_error(result: Mapping[str, object]) -> int:
     """Exit code for a service result that failed.
 
     Services report *why* they failed in a structured ``reason`` field rather
     than in prose, so a runner never has to match on message text — and a
     message reworded for humans cannot silently change a script's exit code.
-    ``"not_found"`` is the only value today; anything else, including a missing
-    ``reason``, means the command could not run.
+    The vocabulary is :mod:`pzi.errors`; ``pzi.http_status`` maps the same
+    values to HTTP statuses, so a service that classifies its failure once is
+    correct on both surfaces.
 
     Callers must have already handled the success case: this always returns a
     failure code.
     """
-    if result.get("reason") == "not_found":
-        return exit_codes.NOT_FOUND
+    reason = result.get("reason")
+    if isinstance(reason, str):
+        return _EXIT_CODE_BY_REASON.get(reason, exit_codes.ENVIRONMENT)
     return exit_codes.ENVIRONMENT
 
 
