@@ -1,3 +1,4 @@
+import os
 import threading
 from pathlib import Path
 from unittest.mock import patch
@@ -9,7 +10,9 @@ from pzi.bib_repository import (
     ConcurrentEditError,
     _write_bib_text_atomic,
     apply_write_plan,
+    describe_missing_bib,
     execute_write_plan,
+    merge_bib_entries,
     parse_bib_library,
     parse_bibtex,
     plan_bib_write,
@@ -780,3 +783,76 @@ def test_write_refusal_names_the_duplicate_and_its_real_line(tmp_path: Path) -> 
     assert "line 3" not in message
     # The file is untouched: refusing to rewrite is the whole point.
     assert path.read_text().count("smith2024") == 2
+
+
+def test_merge_bib_entries_refuses_to_merge_an_entry_with_itself(tmp_path: Path) -> None:
+    """Self-merge deleted the entry and reported success.
+
+    The block loop removes the first block matching `citekey_a`, then looks for
+    a block matching `citekey_b` to replace. With one citekey there is only one
+    such block — duplicates are refused upstream — so it was removed as A and
+    never replaced as B: the entry vanished and the result said
+    `found: True, changed_fields: []`.
+
+    `dedupe_service` guards its own call, but the repository owns the data and
+    takes the lock, so the precondition belongs here too. It is not reachable
+    from `pzi fix merge` today; that is what makes it worth pinning.
+    """
+    bib = tmp_path / "lib.bib"
+    bib.write_text(
+        "@article{x2020,\n  title = {X}\n}\n\n@article{y2021,\n  title = {Y}\n}\n"
+    )
+    before = bib.read_text()
+
+    with pytest.raises(PziError) as excinfo:
+        merge_bib_entries(str(bib), citekey_a="x2020", citekey_b="x2020")
+
+    assert "itself" in excinfo.value.message.lower(), excinfo.value.message
+    assert bib.read_text() == before, "the library was modified by a refused merge"
+
+
+def test_reading_a_bib_in_a_read_only_directory_works(tmp_path: Path) -> None:
+    """A shared lock must not require write access to the directory.
+
+    `with_bib_lock` creates `<bib>.lock` unconditionally, including for
+    `shared=True`, so a bib on a read-only mount or in a directory owned by
+    someone else could not even be *listed* — and the error named a lock file
+    the user has never heard of. An advisory shared lock on a file you cannot
+    write is unenforceable anyway.
+    """
+    ro = tmp_path / "ro"
+    ro.mkdir()
+    bib = ro / "lib.bib"
+    bib.write_text("@article{a2020,\n  title = {A}\n}\n")
+    os.chmod(ro, 0o500)
+    try:
+        result = read_bib_file(str(bib))
+        assert [r["citekey"] for r in result["records"]] == ["a2020"]
+    finally:
+        os.chmod(ro, 0o700)
+
+
+def test_reading_a_missing_bib_says_so_instead_of_reporting_an_empty_library(
+    tmp_path: Path,
+) -> None:
+    """A typo'd or unmounted path must not read as a plain "0 entries".
+
+    The `.bib` *is* the database, so "this file does not exist" and "this
+    library is empty" are different facts, and reporting the first as the second
+    meant a renamed file or an unmounted share showed an empty library, exit 0.
+
+    A warning rather than a refusal: the filesystem cannot tell a typo from a
+    library nobody has captured into yet, and a freshly `pzi init`-ed config
+    points at a bib that does not exist until the first `add` creates it.
+    """
+    missing = tmp_path / "nope" / "sub" / "missing.bib"
+
+    warning = describe_missing_bib(str(missing))
+    assert warning is not None and str(missing) in warning
+
+    # The guard is opt-in: `read_bib_file` stays lenient because the write paths
+    # depend on it — the first `pzi add` to a configured library reads it before
+    # creating it. What must never happen either way is a *read* materializing
+    # the directory tree, which is how a typo'd path became a second library.
+    assert read_bib_file(str(missing)) == {"entries": [], "records": []}
+    assert not missing.parent.exists(), "a read created the directory tree"

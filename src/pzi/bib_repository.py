@@ -169,8 +169,31 @@ def with_bib_lock(
     exclusion at all for the case that matters.
     """
     lock_path = Path(str(_resolve_write_target(bib_path)) + ".lock")
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
     flags = portalocker.LOCK_SH if shared else portalocker.LOCK_EX
+    if shared:
+        # A shared lock is only meaningful against writers, and a writer needs a
+        # writable directory anyway — so when the lock file cannot be created,
+        # read without one rather than refusing to read at all. Creating it
+        # unconditionally made a bib on a read-only mount, or in a directory
+        # owned by someone else, unreadable, and blamed a `.lock` file the user
+        # has never heard of.
+        try:
+            # No `mkdir` on the read path: a read has no business materializing
+            # a directory tree for a bib that is not there, which is how a
+            # typo'd path quietly became the start of a second library.
+            lock_fh = open(str(lock_path), "a")
+        except OSError:
+            yield
+            return
+        with lock_fh:
+            acquire_lock_with_timeout(lock_fh, flags, bib_path=bib_path, timeout=timeout)
+            try:
+                yield
+            finally:
+                portalocker.unlock(lock_fh)
+        return
+
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
     with open(str(lock_path), "a") as lock_fh:
         acquire_lock_with_timeout(lock_fh, flags, bib_path=bib_path, timeout=timeout)
         try:
@@ -209,6 +232,25 @@ def apply_write_plan(entries: list[BibtexEntry], plan: WritePlan) -> list[Bibtex
         # pragma: no cover — covered by integration/browser tests
     updated_entries[index] = plan["entry"]
     return updated_entries
+
+
+def describe_missing_bib(path: str) -> str | None:
+    """A warning naming *path* when the configured bib is not there, else None.
+
+    The `.bib` **is** the database, so "this file does not exist" and "this
+    library is empty" are different facts, and reporting the first as the second
+    is how a typo'd path, a renamed file or an unmounted share showed up as a
+    healthy library with zero entries and exit 0.
+
+    A *warning* and not a refusal, because the filesystem cannot tell a typo
+    from a library nobody has captured into yet: a freshly `pzi init`-ed config
+    points at a bib that does not exist until the first `add` creates it, and
+    erroring there would break the normal first run. Naming the path lets the
+    user tell the two apart themselves.
+    """
+    if Path(path).exists():
+        return None
+    return f"bib file does not exist yet: {path}"
 
 
 def read_bib_file(path: str) -> ReadBibResult:
@@ -1098,7 +1140,19 @@ def merge_bib_entries(
     *backup_path* is written from the on-disk file **inside this lock**,
     immediately before the write, exactly as :func:`delete_bib_entry` does — a
     merge destroys a block just as a delete does.
+
+    Raises :exc:`PziError` when the two citekeys are the same. The block loop
+    drops A's block and then replaces B's, and with one citekey there is only
+    one block: it was removed as A and never restored as B, so the entry
+    disappeared while the result reported ``found: True`` and no changed fields.
+    `dedupe_service` guards its own call site, but this layer owns the data and
+    holds the lock, so the precondition belongs here as well.
     """
+    if citekey_a == citekey_b:
+        raise PziError(
+            f"cannot merge {citekey_a!r} with itself",
+            code=exit_codes.ENVIRONMENT,
+        )
     with with_bib_lock(path):
         source = _read_bib_source(path)
         library = _parse_bib_library(source)
