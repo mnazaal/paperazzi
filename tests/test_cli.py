@@ -59,13 +59,11 @@ def test_cli_dispatch_registry_covers_all_parser_commands() -> None:
     parser_commands = _parser_command_names(build_parser())
 
     assert parser_commands == set(cli._DISPATCH)
-    # CLI_COMMANDS is derived, so this can only fail if that derivation breaks.
-    assert set(cli.CLI_COMMANDS) == set(cli._DISPATCH)
-    assert "fix" in cli.CLI_COMMANDS
+    assert "fix" in cli._DISPATCH
     # Removed top-level commands must not linger in the dispatch registry.
     removed = {"list", "set-default", "version", "clean", "dedupe", "merge",
                "reindex", "services"}
-    assert not (removed & set(cli.CLI_COMMANDS))
+    assert not (removed & set(cli._DISPATCH))
 
 
 def test_pdf_runner_name_matches_command_scope() -> None:

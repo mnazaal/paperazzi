@@ -113,7 +113,7 @@ def run_add_command(
         # carries exactly one document, and "cloning translation-server …"
         # printed ahead of it made that document unparseable.
         with backend_session_fn(
-            config, config_path, home_dir,
+            config, home_dir,
             interactive=True, stdout=stderr, stderr=stderr,
         ) as backend:
             if not backend["ready"]:
@@ -289,7 +289,7 @@ def _run_batch(
                 home_dir=home_dir,
                 service_kwargs=service_kwargs,
             )
-        except Exception as exc:  # noqa: BLE001 — one bad item must not lose the batch
+        except Exception as exc:  # one bad item must not lose the batch
             # `inbox drain` already guards its loop this way. Without it, an
             # exception on item K discarded the K-1 results already captured,
             # printed no summary, and wrote no failures file — so a long run had

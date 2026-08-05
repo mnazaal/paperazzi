@@ -388,7 +388,7 @@ def test_download_node_rejects_checksum_mismatch(tmp_path: Path) -> None:
              side_effect=[io.BytesIO(tarball), json_io(shasums)],
          ):
         with pytest.raises(RuntimeError, match="checksum mismatch"):
-            node_runtime.download_node(tmp_path, stdout=io.StringIO(), stderr=io.StringIO())
+            node_runtime.download_node(tmp_path, stdout=io.StringIO())
     # Tampered download must never be left on disk for extraction.
     node_dir = node_runtime._node_bin_dir(tmp_path)
     assert not any(node_dir.glob("*.tar.gz"))
@@ -409,7 +409,7 @@ def test_download_node_passes_checksum_then_fails_extract(tmp_path: Path) -> Non
         # Checksum matches, so it proceeds past verification and only then trips
         # on the bogus (non-gzip) tarball during extraction.
         with pytest.raises(RuntimeError, match="extract"):
-            node_runtime.download_node(tmp_path, stdout=io.StringIO(), stderr=io.StringIO())
+            node_runtime.download_node(tmp_path, stdout=io.StringIO())
 
 
 def test_download_node_reuses_cached_binary(tmp_path: Path) -> None:
@@ -422,9 +422,7 @@ def test_download_node_reuses_cached_binary(tmp_path: Path) -> None:
          patch("pzi.node_runtime._node_dist_name", return_value="linux-x64"), \
          patch("pzi.node_runtime._node_binary_runs", return_value=True), \
          patch("pzi.node_runtime.urlopen") as mock_urlopen:
-        result_path = node_runtime.download_node(
-            tmp_path, stdout=io.StringIO(), stderr=io.StringIO()
-        )
+        result_path = node_runtime.download_node(tmp_path, stdout=io.StringIO())
     assert result_path == str(cached)
     mock_urlopen.assert_not_called()
 

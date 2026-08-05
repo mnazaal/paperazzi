@@ -3,7 +3,7 @@ import os
 import pytest
 
 
-def pytest_collection_modifyitems(config, items):  # noqa: ARG001
+def pytest_collection_modifyitems(config, items):
     if os.environ.get("PZI_LIVE") == "1":
         return
     skip_live = pytest.mark.skip(reason="set PZI_LIVE=1 to run live smoke tests")

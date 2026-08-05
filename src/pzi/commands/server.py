@@ -80,7 +80,7 @@ def run_server_command(args, *, home_dir, config_path, stdout, stderr) -> int:
     from pzi.ts_backend import backend_session
 
     with _sigterm_as_keyboard_interrupt(), backend_session(
-        config, config_path, home_dir,
+        config, home_dir,
         interactive=True, stdout=stdout, stderr=stderr,
     ) as backend:
         if not backend["ready"]:

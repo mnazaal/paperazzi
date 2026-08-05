@@ -122,7 +122,7 @@ def update_bib(
             # swallowing it here made `update` the one command that reported
             # success after losing the race.
             raise
-        except Exception as exc:  # noqa: BLE001 — one bad record must not abort the run
+        except Exception as exc:  # one bad record must not abort the run
             failed_item: UpdatePlanItem = {
                 "citekey": citekey,
                 "changed_fields": [],

@@ -262,7 +262,6 @@ def promote_bib(
                     bib_path=bib["path"],
                     preprint_record=record,
                     candidate=candidate,
-                    records=records,
                     existing_citekeys=existing_citekeys,
                     dry_run=dry_run,
                     citekey_format=config.get("citekey_format"),
@@ -278,7 +277,7 @@ def promote_bib(
                     file_path_style=file_path_style,
                     **pdf_kwargs,
                 )
-        except Exception as exc:  # noqa: BLE001 — one failing entry must not abort the run
+        except Exception as exc:  # one failing entry must not abort the run
             summary["skipped_failed"] += 1
             items.append(
                 _skip_item(preprint_ck, f"promotion failed: {exc}", failed=True)
@@ -773,7 +772,6 @@ def _handle_keep_preprint(
     bib_path: str,
     preprint_record: NormalizedRecord,
     candidate: NormalizedRecord,
-    records: list[NormalizedRecord],
     existing_citekeys: set[str],
     dry_run: bool,
     papers_dir: str,
@@ -971,14 +969,6 @@ def _plan_note_update(
             ),
             "changed_fields": ["note"],
         }
-    return None
-
-
-def _entry_for_citekey(bib_path: str, citekey: str) -> BibtexEntry | None:
-    """Return the on-disk entry for *citekey*, or None when it is not there."""
-    for entry in read_bib_file(bib_path)["entries"]:
-        if entry["citekey"] == citekey:
-            return entry
     return None
 
 

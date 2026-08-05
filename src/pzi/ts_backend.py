@@ -715,7 +715,6 @@ class BackendHandle(TypedDict):
 @contextmanager
 def backend_session(
     config: dict[str, object],
-    config_path: str,
     home_dir: str,
     *,
     interactive: bool = True,
@@ -915,7 +914,7 @@ class TranslationServerWatchdog:
                 self._node_bin, self._ts_dir,
                 port=self._port, stderr_log=self._stderr_log,
             )
-        except Exception as exc:  # noqa: BLE001 — any start failure ends restarts
+        except Exception as exc:  # any start failure ends restarts
             print(
                 f"warning: translation-server restart failed: {exc} — giving up",
                 file=self._stderr,

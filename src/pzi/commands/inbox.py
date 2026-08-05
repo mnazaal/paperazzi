@@ -88,7 +88,7 @@ def run_inbox_command(
         from pzi.ts_backend import backend_session
 
         with backend_session(
-            config, config_path, home_dir,
+            config, home_dir,
             interactive=True, stdout=stdout, stderr=stderr,
         ) as backend:
             if not backend["ready"]:

@@ -39,7 +39,7 @@ def _hermetic_dns(request, monkeypatch):
     if _is_live_test(request):
         return
 
-    def _resolve(host, port, *, timeout):  # noqa: ARG001
+    def _resolve(host, port, *, timeout):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
 
     monkeypatch.setattr(url_safety, "resolve_host_with_timeout", _resolve)
