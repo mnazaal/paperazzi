@@ -30,7 +30,13 @@ from bibtexparser.model import Entry as BibtexEntryV2
 from bibtexparser.writer import BibtexFormat
 
 from pzi import exit_codes
-from pzi.bibtex import BibtexEntry, NormalizedRecord, bibtex_entry_to_record
+from pzi.bibtex import (
+    BibtexEntry,
+    NormalizedRecord,
+    bibtex_entry_to_record,
+    parse_file_field,
+    primary_pdf_path,
+)
 from pzi.errors import PziError
 
 
@@ -90,17 +96,20 @@ def _resolve_file_field(record: NormalizedRecord, entry: BibtexEntry, bib_path: 
 
     Absolute paths and home-relative paths (``~/...``) are kept as-is.
     """
-    raw = entry.get("fields", {}).get("file")
-    if not raw:
-        return
-    value = str(raw).strip()
+    # The path component, never the raw field: a Zotero/JabRef composite is
+    # `description:path:mimetype`, and joining the bib dir to *that* produced
+    # `<bib-dir>/Full Text PDF:/abs/x.pdf:application/pdf` — garbage neither
+    # tool can read, written by any command that touched the entry.
+    value = primary_pdf_path(entry.get("fields", {}).get("file"))
     if not value:
         return
-    # Already absolute or home-relative — leave as stored in record.
+    # Assign, do not `setdefault`: `bibtex_entry_to_record` always sets this key
+    # (to `None` when there is no attachment), so `setdefault` was a no-op and
+    # the absolute branch below never ran — which is exactly the Zotero case.
     if value.startswith(("/", "~")):
-        record.setdefault("local_pdf_path", value)
+        record["local_pdf_path"] = value
         return
-    # Best-effort relative resolution: <bib-dir>/<file-value>.
+    # Best-effort relative resolution: <bib-dir>/<path>.
     bib_dir = str(Path(bib_path).parent)
     record["local_pdf_path"] = str(Path(bib_dir) / value)
 
@@ -117,7 +126,13 @@ def _normalize_file_field(entry: BibtexEntry, bib_path: str) -> BibtexEntry:
     if not raw:
         return entry
     value = str(raw).strip()
-    if not value or not value.startswith("/"):
+    # A composite is left alone entirely. Rewriting only its path component
+    # would mean re-composing the field, which requires owning three producers'
+    # escaping rules to gain nothing — and `merge_preserving_unchanged_source`
+    # keeps the original text anyway whenever the attachment has not changed.
+    if len(parse_file_field(value)) != 1 or parse_file_field(value)[0] != value:
+        return entry
+    if not value.startswith("/"):
         return entry  # already relative, home-relative, or non-path
     bib_dir = str(Path(bib_path).parent)
     file_path = Path(value)
@@ -492,7 +507,13 @@ def merge_preserving_unchanged_source(
         # `removed_enclosing` is keyed by the field key as it was written, so
         # every lookup and every key emitted below uses the source spelling.
         enclosing = original_enclosing.get(source_field.key)
-        if field.value not in _unchanged_forms(source_field.value, enclosing, strings):
+        unchanged = field.value in _unchanged_forms(
+            source_field.value, enclosing, strings
+        ) or (
+            field.key.lower() == "file"
+            and _file_field_still_points_at(source_field.value, field.value)
+        )
+        if not unchanged:
             known.append((position, Field(key=source_field.key, value=field.value)))
             continue
         known.append((position, source_field))
@@ -513,6 +534,39 @@ def merge_preserving_unchanged_source(
     if preserved_enclosing:
         merged.parser_metadata["removed_enclosing"] = preserved_enclosing
     return merged
+
+
+def _file_field_still_points_at(source_value: str, rebuilt_value: str) -> bool:
+    """Rebuilt ``file`` values that still mean *source_value*'s attachment.
+
+    A Zotero/JabRef composite (``description:path:mimetype``, several joined by
+    ``;``) enters the record model as a bare path, so the rebuilt block always
+    disagrees with the source text and the composite — the description, the
+    mimetype, and every attachment after the first — was overwritten by any
+    command that touched the entry, `tag add` included.
+
+    pzi does not re-compose one: that would mean owning three producers'
+    escaping rules to gain nothing, since a bare path is the one form all of
+    them read. Instead the field counts as unchanged while it still points at
+    the same attachment, and the source text is kept verbatim.
+
+    The rebuilt value is derived *from* this source by `_resolve_file_field`, so
+    it is either the primary path itself (absolute) or the bib directory joined
+    to it (relative) — which is why no bib path is needed here. A `..` segment
+    could defeat the suffix test; that fails safe, rewriting to a bare path,
+    which is today's behaviour.
+    """
+    primary = primary_pdf_path(source_value)
+    if primary is None or primary == source_value.strip():
+        return False  # already a bare path; the normal comparison applies
+    if rebuilt_value == primary:
+        return True
+    if not primary.startswith(("/", "~")):
+        # Relative primary: `_resolve_file_field` joined the bib directory to it.
+        return rebuilt_value.endswith("/" + str(Path(primary)))
+    # Absolute primary under `pdf_file_path_style = "relative"`:
+    # `_normalize_file_field` shortened the rebuilt value against the bib dir.
+    return bool(rebuilt_value) and primary.endswith("/" + str(Path(rebuilt_value)))
 
 
 def _unchanged_forms(

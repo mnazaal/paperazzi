@@ -14,8 +14,10 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from pzi.add_service import add_record_with_bib
-from pzi.bib_repository import merge_bib_entries
+from pzi.bib_repository import merge_bib_entries, read_bib_file
 from pzi.bib_service import delete_entry
 from pzi.pdf_service import attach_pdf
 from pzi.tag_service import add_tags, remove_tags
@@ -395,3 +397,80 @@ def test_merge_preserves_surviving_entrys_unmodelled_fields() -> None:
         assert "booktitle = {Proceedings of NeurIPS}" in text
         assert "doi = {10.1145/9999}" in text  # merged-in field still applied
         assert "@inproceedings{smith2020graph," in text
+
+
+@pytest.mark.parametrize("path_style", ["absolute", "relative"])
+@pytest.mark.parametrize(
+    ("label", "file_value"),
+    [
+        ("zotero_absolute_triple", "Full Text PDF:{papers}/x.pdf:application/pdf"),
+        ("jabref_empty_description", ":papers/x.pdf:PDF"),
+        (
+            "two_attachments",
+            "Full Text PDF:papers/x.pdf:application/pdf;Snapshot:papers/x.html:text/html",
+        ),
+        ("bbt_default_two_bare_paths", "papers/x.pdf;papers/y.pdf"),
+    ],
+)
+def test_a_composite_file_field_survives_an_unrelated_write(
+    path_style: str, label: str, file_value: str
+) -> None:
+    """Tagging an entry must not rewrite an attachment it did not change.
+
+    Zotero, JabRef and Better BibTeX all write `description:path:mimetype`,
+    joined by `;` for several attachments. pzi read the whole value as a path,
+    so any command that touched the entry — `tag add` included — prefixed the
+    bib directory onto text that already contained one, producing something
+    neither tool could read and silently dropping every attachment after the
+    first.
+
+    Driven through the real `add_tags` service, not a hand-written updater: the
+    corruption happens when the entry is rebuilt *from the record*, so a test
+    that mutates the entry directly never sees it.
+
+    Parameterised over both `pdf_file_path_style` values on purpose: `relative`
+    used to *cancel* the corruption arithmetically rather than avoid it, so a
+    relative-only test would pass on broken code.
+
+    Composites only. A *bare* path is pzi's own form and is deliberately
+    rewritten to match the configured style — covered by the surrounding tests.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        cp, bib, papers = _config(td, pdf_file_path_style=path_style)
+        for name in ("x.pdf", "y.pdf"):
+            Path(os.path.join(papers, name)).write_bytes(b"%PDF-1.4\n")
+        Path(os.path.join(papers, "x.html")).write_text("<html></html>")
+
+        value = file_value.format(papers=papers)
+        Path(bib).write_text(
+            f"@article{{a2020,\n  title = {{A}},\n  file = {{{value}}}\n}}\n"
+        )
+
+        result = add_tags(
+            config_path=cp, home_dir=td, bib_selector=None,
+            citekey="a2020", tags=["ml"],
+        )
+        assert result["status"] == "ok"
+
+        written = Path(bib).read_text()
+        assert f"file = {{{value}}}" in written, (
+            f"{label} under {path_style}: file field was rewritten\n{written}"
+        )
+        assert "ml" in written
+
+
+@pytest.mark.parametrize("path_style", ["absolute", "relative"])
+def test_a_composite_file_field_resolves_to_its_pdf(path_style: str) -> None:
+    """The point of parsing: the entry must know it has a PDF."""
+    with tempfile.TemporaryDirectory() as td:
+        cp, bib, papers = _config(td, pdf_file_path_style=path_style)
+        pdf = os.path.join(papers, "x.pdf")
+        Path(pdf).write_bytes(b"%PDF-1.4\n")
+        Path(bib).write_text(
+            "@article{a2020,\n  title = {A},\n"
+            f"  file = {{Full Text PDF:{pdf}:application/pdf}}\n}}\n"
+        )
+
+        result = read_bib_file(bib)
+
+        assert result["records"][0]["local_pdf_path"] == pdf

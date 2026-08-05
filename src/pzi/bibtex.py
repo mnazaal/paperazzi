@@ -285,9 +285,120 @@ def bibtex_entry_to_record(entry: BibtexEntry) -> NormalizedRecord:
         "abstract_url": _empty_to_none(fields.get("pzi-abstract-url")),
         "tags": _parse_keywords(fields.get("keywords")),
         "note": _empty_to_none(fields.get("note")),
-        "local_pdf_path": _empty_to_none(fields.get("file")),
+        # The *path*, not the raw field: a Zotero/JabRef composite carries a
+        # description and mimetype around it, and every consumer of
+        # `local_pdf_path` treats it as a filesystem path.
+        "local_pdf_path": primary_pdf_path(fields.get("file")),
         "abstract": _empty_to_none(fields.get("abstract")),
     }
+
+
+#: Characters a producer may backslash-escape inside a `file` component.
+#: JabRef escapes `\ : ;` (FileFieldWriter.quote); Better BibTeX also escapes
+#: `{ } $`. Unescaping a superset is safe — a backslash before anything else is
+#: left alone, which is what Zotero's own decoder does.
+_FILE_FIELD_ESCAPABLE = set("\\:;{}$")
+
+
+def _split_unescaped(value: str, separator: str) -> list[str]:
+    """Split on *separator*, honouring backslash escapes, keeping them in place."""
+    parts: list[str] = []
+    current: list[str] = []
+    escaped = False
+    for char in value:
+        if escaped:
+            current.append(char)
+            escaped = False
+        elif char == "\\":
+            current.append(char)
+            escaped = True
+        elif char == separator:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(char)
+    parts.append("".join(current))
+    return parts
+
+
+def _unescape_file_component(value: str) -> str:
+    out: list[str] = []
+    escaped = False
+    for char in value:
+        if escaped:
+            # A backslash before anything else is literal, matching Zotero's
+            # decoder — `C:\test.pdf` from a Windows JabRef must survive.
+            out.append(char if char in _FILE_FIELD_ESCAPABLE else "\\" + char)
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        else:
+            out.append(char)
+    if escaped:
+        out.append("\\")
+    return "".join(out)
+
+
+def parse_file_field(value: str | None) -> list[str]:
+    """Attachment paths from a BibTeX ``file`` field, in order.
+
+    pzi writes a bare path. Zotero, JabRef and Better BibTeX write a composite:
+    ``description:path:mimetype``, with several attachments joined by ``;`` —
+    so ``Full Text PDF:/p/x.pdf:application/pdf`` is *one* attachment, not a
+    path. Reading the whole value as a path is why a Zotero-imported entry
+    reported no PDF while the file sat right there, and why an incidental
+    `tag add` prefixed the bib directory onto an already-absolute path.
+
+    Only the paths are returned. The description and mimetype are deliberately
+    not surfaced: `file` is a record-owned field, so anything the record cannot
+    carry is deleted by `merge_projected_entry` on the next update. Preserving
+    the original text is the *writer's* job — see
+    `bib_serialize.merge_preserving_unchanged_source`.
+
+    Arity follows Zotero's own rule: a component count of 1 is a bare path, 3 or
+    more is ``desc:path:mime`` (a 4th is JabRef's source URL). A 2-component
+    value is ambiguous — most often a path that simply contains a colon — and is
+    treated as a path, which is what JabRef's parser does with ``file.pdf::``.
+    """
+    if not value or not value.strip():
+        return []
+    paths: list[str] = []
+    for record in _split_unescaped(value.strip(), ";"):
+        if not record.strip():
+            continue
+        parts = _split_unescaped(record, ":")
+        if len(parts) >= 3:
+            candidate = parts[1]
+        elif len(parts) == 2:
+            # `:x.pdf` and `x.pdf:` are the degenerate forms JabRef collapses to
+            # a bare link; anything else with one colon is a path containing one.
+            candidate = parts[1] if not parts[0].strip() else record
+        else:
+            candidate = parts[0]
+        cleaned = _unescape_file_component(candidate).strip()
+        if not cleaned:
+            # `file.pdf::` — a producer wrote the separators but only filled the
+            # description. JabRef collapses this to a bare link, so fall back to
+            # the first component that has anything in it.
+            for part in parts:
+                fallback = _unescape_file_component(part).strip()
+                if fallback:
+                    cleaned = fallback
+                    break
+        if cleaned:
+            paths.append(cleaned)
+    return paths
+
+
+def primary_pdf_path(value: str | None) -> str | None:
+    """The attachment a `file` field is *about*: the first PDF, else the first."""
+    paths = parse_file_field(value)
+    if not paths:
+        return None
+    for path in paths:
+        if path.lower().endswith(".pdf"):
+            return path
+    return paths[0]
 
 
 def _parse_keywords(value: str | None) -> list[str]:
