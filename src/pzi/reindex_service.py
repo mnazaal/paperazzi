@@ -77,7 +77,11 @@ def plan_reindex(
         if new_citekey == old_citekey:
             continue
 
-        existing_keys.discard(old_citekey)
+        # Reserve the vacated key for the rest of the run rather than freeing
+        # it. Discarding it let a later entry be assigned the key an earlier one
+        # had just given up, so `\cite{smith2020study}` in an existing .tex kept
+        # resolving — to a different paper. Every other citekey break is loud
+        # (LaTeX reports an undefined reference); this one is silent and wrong.
         existing_keys.add(new_citekey)
 
         change: CitekeyChange = {

@@ -305,6 +305,33 @@ def clean_library(
         validation["actions"] = actions
         return validation
 
+    # An entry whose `file =` does not resolve means the set of referenced paths
+    # is incomplete, which is the same hazard `partial_parse` guards — so the
+    # quarantine is off, while detection and reporting stay on so the user can
+    # see both lists and decide.
+    #
+    # Two ways this bites. A Zotero/JabRef export writes
+    # `file = {Full Text PDF:/path/x.pdf:application/pdf}`, which is read as one
+    # nonexistent path: the entry contributes no referenced path, so its real
+    # PDF is reported as an orphan *and* as missing in the same run, and `--fix`
+    # acted on the second half — detaching every attachment in an imported
+    # library. Separately, a genuinely missing PDF often means the file was
+    # renamed, in which case the loose file about to be quarantined may be the
+    # very one the entry wants.
+    if move_orphans and validation["missing_pdfs"]:
+        validation["issues"].append({
+            "severity": "warning",
+            "type": "quarantine_skipped",
+            "message": (
+                f"not quarantining {len(validation['orphan_pdfs'])} orphan PDF(s): "
+                f"{len(validation['missing_pdfs'])} entr(ies) reference a PDF that "
+                "could not be resolved, so the set of referenced files is "
+                "incomplete. Fix those references first."
+            ),
+        })
+        validation["actions"] = actions
+        return validation
+
     # --- Move orphan PDFs ---
     if move_orphans and validation["orphan_pdfs"]:
         orphan_dir = Path(papers_dir) / QUARANTINE_DIRNAME

@@ -423,3 +423,36 @@ def test_an_unreadable_sibling_stops_orphan_detection_rather_than_guessing() -> 
 
         assert result["orphan_pdfs"] == []
         assert any("cs.bib" in message for message in result["errors"])
+
+
+def test_fix_does_not_quarantine_when_a_reference_could_not_be_resolved() -> None:
+    """A Zotero/JabRef `file` field must not cost the library its attachments.
+
+    `file = {Full Text PDF:/path/x.pdf:application/pdf}` is read as one
+    nonexistent path, so the entry contributes no referenced path and its real
+    PDF is reported as an orphan *and* as missing in the same run. `--fix` acted
+    on the second half, moving into `.orphans/` a file the bib still points at —
+    on an imported library, every attachment.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "lib.bib")
+        papers = os.path.join(td, "papers")
+        os.makedirs(papers)
+        pdf = os.path.join(papers, "zotero.pdf")
+        Path(pdf).write_bytes(b"%PDF-1.4\n")
+        _write_bib(
+            bib,
+            "@article{zoterostyle,\n"
+            "  title = {Imported From Zotero},\n"
+            f"  file = {{Full Text PDF:{pdf}:application/pdf}}\n"
+            "}\n",
+        )
+
+        result = clean_library(bib_path=bib, papers_dir=papers, dry_run=False)
+
+        assert os.path.exists(pdf), "a referenced PDF was quarantined"
+        assert not os.path.exists(os.path.join(papers, ".orphans", "zotero.pdf"))
+        assert result["actions"] == []
+        assert any(
+            issue["type"] == "quarantine_skipped" for issue in result["issues"]
+        ), f"the skip was not explained to the user: {result['issues']}"

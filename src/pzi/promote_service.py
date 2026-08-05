@@ -36,7 +36,7 @@ from pzi.capture_context import resolve_contact_email, resolve_optional_value
 from pzi.config import BibResolutionFailure, load_bib_target
 from pzi.fetch_helpers import build_metadata_fetch_text
 from pzi.format_templates import format_citekey
-from pzi.identifiers import is_preprint, is_preprint_doi, is_preprint_url
+from pzi.identifiers import has_preprint_identity, is_preprint_doi, is_preprint_url
 from pzi.metadata_sources import (
     fetch_crossref_record_by_title,
     fetch_dblp_record_by_title,
@@ -165,7 +165,14 @@ def promote_bib(
         preprint_ck = record.get("citekey")
         if not isinstance(preprint_ck, str):
             continue  # pragma: no cover — covered by integration/browser tests
-        if not is_preprint(record):
+        # `has_preprint_identity`, not `is_preprint`: the latter calls any
+        # record without a `venue` a preprint, which is a large share of an
+        # ordinary library, so promotion forked a second entry out of plain
+        # @articles that merely lacked a `journal` field — manufacturing the
+        # duplicates `pzi fix dedupe` exists to report. `update_service` refuses
+        # `is_preprint` here for exactly this reason and says so at its own call
+        # site; the two commands now agree.
+        if not has_preprint_identity(record):
             continue
         if mark_resolved and _RESOLVED_TAG in (record.get("tags") or []):
             # Already promoted on a previous --mark-resolved run; skip re-checking.

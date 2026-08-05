@@ -392,3 +392,45 @@ def test_reindex_with_nothing_to_change_writes_no_backup() -> None:
 
         assert result["backup_path"] is None
         assert list(Path(td).glob("*.bak")) == []
+
+
+def test_a_renamed_citekey_is_never_reissued_to_another_entry() -> None:
+    """A key an entry vacates must stay reserved for the rest of the run.
+
+    Freeing it means a later entry can be assigned the key an earlier one just
+    gave up. Every other citekey break is loud — `\\cite{}` stops resolving and
+    LaTeX says so — but this one silently leaves the citation resolving to a
+    *different paper*, which no build error will ever surface.
+
+    Here `smith2020study` is held by a paper by Zulu, and the paper that would
+    naturally be keyed `smith2020study` sits under `alpha2020`. Reindexing
+    renames the first, and must not then hand its old key to the second.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "lib.bib")
+        _write_bib(
+            bib,
+            "@article{smith2020study,\n"
+            "  author = {Zulu, Alan},\n"
+            "  title = {Completely Different Paper},\n"
+            "  year = {1999}\n"
+            "}\n\n"
+            "@article{alpha2020,\n"
+            "  author = {Smith, Jane},\n"
+            "  title = {A Study of Widgets},\n"
+            "  year = {2020}\n"
+            "}\n",
+        )
+
+        result = reindex_library(
+            bib_path=bib,
+            papers_dir=os.path.join(td, "papers"),
+            dry_run=True,
+        )
+
+        new_keys = [c["new_citekey"] for c in result["changed"]]
+        old_keys = {c["old_citekey"] for c in result["changed"]}
+        assert not (set(new_keys) & old_keys), (
+            f"a vacated citekey was reissued: renames were {result['changed']}"
+        )
+        assert len(new_keys) == len(set(new_keys)), "two entries were given the same citekey"
