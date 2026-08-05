@@ -1794,3 +1794,18 @@ def test_opening_a_pdf_never_falls_back_to_the_unauthenticated_url() -> None:
 
     assert 'window.open(url, "_blank")' not in body
     assert "URL.createObjectURL(blob)" in body
+
+
+def test_onboarding_reports_an_unreachable_server(tmp_path: Path) -> None:
+    """`fetchBibs` throws now; the popup got the catch and onboarding did not.
+
+    A first run against a stopped server showed an empty dropdown, an empty
+    status box, and an unhandled rejection — on the one page whose job is to
+    tell a new user what is wrong.
+    """
+    text = (PROJECT_ROOT / "browser-extension" / "onboarding.js").read_text()
+    body = text[text.index("async function populateBibs("):]
+    body = body[: body.index("\n}\n")]
+
+    assert "catch" in body, body
+    assert "setStatus(" in body

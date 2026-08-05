@@ -340,7 +340,6 @@ async function tryPdfCandidates({ endpoint, citekey, bib, candidates, permission
       if (attachResult && attachResult.status === "ok") {
         markLastAttemptSaved(attempts, url);
         if (permission) attachResult.pdf_attach_permission = permission;
-        if (fetched.cookiePermission) attachResult.pdf_attach_cookie_permission = fetched.cookiePermission;
         return attachResult;
       }
       continue;
@@ -670,7 +669,6 @@ async function fetchPdfCandidate(candidate, { pageUrl = null, attempts = [] } = 
           referrer: pageUrl || undefined,
         }, "browser_fetch_cookies", attempts);
         if (second) {
-          second.cookiePermission = cookiePermission;
           return second;
         }
       }

@@ -24,7 +24,17 @@ async function loadSettings() {
 }
 
 async function populateBibs() {
-  const bibs = await fetchBibs();
+  // `fetchBibs` throws now, so this needs the same catch the popup has. Without
+  // it a first run against a stopped server showed an empty dropdown, an empty
+  // status box, and an unhandled rejection in the console — on the one page
+  // whose whole job is to tell a new user what is wrong.
+  let bibs;
+  try {
+    bibs = await fetchBibs();
+  } catch (error) {
+    setStatus(error.message, false);
+    return;
+  }
   bibSelect.innerHTML = '<option value="">default</option>';
   for (const bib of bibs) {
     const opt = document.createElement("option");
