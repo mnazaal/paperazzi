@@ -16,6 +16,8 @@ re-serialized from the record model.
 
 from pathlib import Path
 
+import pytest
+
 from pzi.bib_repository import (
     _parse_bib_library,
     _serialize_library,
@@ -23,7 +25,8 @@ from pzi.bib_repository import (
     preview_write_plan,
     update_bib_entry,
 )
-from pzi.bib_serialize import serialize_bibtex
+from pzi.bib_serialize import describe_failed_blocks, serialize_bibtex
+from pzi.errors import PziError
 
 # ── Fixtures ──────────────────────────────────────────────────────────
 
@@ -540,3 +543,84 @@ def test_write_plan_update_still_encloses_rewritten_values(tmp_path: Path) -> No
     assert len(library.entries) == 1
     assert library.entries[0].fields_dict["title"].value == "An Article"
     assert "pwned" not in library.entries[0].fields_dict["title"].value
+
+
+def test_carriage_return_is_stripped_from_a_field_value(tmp_path: Path) -> None:
+    """`\\r` must not survive into a value.
+
+    `_CONTROL_CHARS` says in its comment that it keeps `\\t` and `\\n`, but the
+    range also admits `\\x0d`. On a CRLF file `_write_bib_text_atomic` then
+    replaces every `\\n` with `\\r\\n`, doubling the carriage return into
+    `\\r\\r\\n`. Values read off disk are safe — `read_text` translates
+    newlines — so this only bites text injected from a metadata provider.
+    `_validate_bibtex_roundtrip` cannot catch it either: it runs on the LF text,
+    before the newline conversion.
+    """
+    bib = tmp_path / "crlf.bib"
+    bib.write_bytes(b"@article{ab2021,\r\n  title = {T}\r\n}\r\n")
+
+    def _add_abstract(entry, record):
+        return {**entry, "fields": {**entry["fields"], "abstract": "para1\r\npara2"}}
+
+    update_bib_entry(str(bib), "ab2021", _add_abstract)
+
+    raw = bib.read_bytes()
+    assert b"\r\r" not in raw, raw
+    assert raw.count(b"\r\n") == raw.count(b"\n"), f"mixed line endings: {raw!r}"
+
+
+def test_duplicate_field_key_refusal_does_not_leak_parser_internals(
+    tmp_path: Path,
+) -> None:
+    """The refusal is shown to the user, so it must not carry library jargon.
+
+    bibtexparser appends "Note: The entry (containing duplicate) is available as
+    `failed_block.entry`" to its error, and the whole thing was spliced into the
+    message — telling a user to inspect a Python attribute in order to fix their
+    .bib file.
+    """
+    bib = tmp_path / "dup.bib"
+    bib.write_text(
+        "@article{a2020,\n  title = {One},\n  title = {Two}\n}\n"
+    )
+
+    with pytest.raises(PziError) as excinfo:
+        update_bib_entry(str(bib), "a2020", lambda entry, record: entry)
+
+    message = excinfo.value.message
+    assert "duplicate" in message.lower()
+    assert "failed_block" not in message, message
+    assert "Note:" not in message, message
+
+
+def test_an_entry_with_no_citekey_is_reported_on_read(tmp_path: Path) -> None:
+    """`@article{,` parses fine, so nothing flagged it.
+
+    bibtexparser accepts a keyless entry: it is not a failed block and not a
+    mangled field, so `pzi entries` listed it with a blank citekey and exit 0.
+    The cost surfaced later and elsewhere — every write to the library, even one
+    touching a different entry, was refused by the serializer with "refusing to
+    write an entry with an empty citekey", naming no file, no line, no entry.
+    """
+    src = "@article{,\n  title = {No Key}\n}\n\n@article{good2020,\n  title = {Fine}\n}\n"
+    library = _parse_bib_library(src)
+
+    warnings = describe_failed_blocks(library)
+
+    assert any("no citekey" in w for w in warnings), warnings
+
+
+def test_a_write_names_the_entry_with_no_citekey(tmp_path: Path) -> None:
+    """The refusal must say what to fix and where."""
+    bib = tmp_path / "nokey.bib"
+    bib.write_text(
+        "@article{,\n  title = {No Key}\n}\n\n@article{good2020,\n  title = {Fine}\n}\n"
+    )
+
+    with pytest.raises(PziError) as excinfo:
+        update_bib_entry(str(bib), "good2020", lambda entry, record: entry)
+
+    message = excinfo.value.message
+    assert "no citekey" in message, message
+    assert "line 1" in message, message
+    assert bib.read_text().startswith("@article{,"), "the file was rewritten"

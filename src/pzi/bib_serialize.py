@@ -150,9 +150,34 @@ def describe_failed_blocks(library: Library) -> list[str]:
     :func:`describe_mangled_field_keys`): the block is not "failed" by
     bibtexparser's reckoning, but a field of it is just as invisible.
     """
-    return [
-        message for _key, message in failed_block_details(library)
-    ] + describe_mangled_field_keys(library)
+    return (
+        [message for _key, message in failed_block_details(library)]
+        + describe_mangled_field_keys(library)
+        + describe_empty_citekeys(library)
+    )
+
+
+def describe_empty_citekeys(library: Library) -> list[str]:
+    """One message per ``@type{,`` entry — parsed fine, but unusable and unwritable.
+
+    bibtexparser accepts an entry with no key, so it is neither a failed block
+    nor a mangled field: `pzi entries` listed it with a blank citekey column and
+    exit 0, and nothing warned. The cost lands later and somewhere else — every
+    *write* to the library, including one touching a different entry, is refused
+    by `_safe_citekey` with "refusing to write an entry with an empty citekey",
+    naming no file, no line and no entry.
+    """
+    messages: list[str] = []
+    for entry in library.entries:
+        if (entry.key or "").strip():
+            continue
+        line = getattr(entry, "start_line", None)
+        where = f" at line {line + 1}" if isinstance(line, int) else ""
+        messages.append(
+            f"entry with no citekey{where} (`@{entry.entry_type}{{,`): give it a "
+            "key — it cannot be cited, and it blocks every write to this library"
+        )
+    return messages
 
 
 #: A field key can only pick these up by absorbing text that was meant to be
@@ -197,10 +222,24 @@ def failed_block_details(library: Library) -> list[tuple[str | None, str]]:
                 f"duplicate citekey {key!r}{where}: only the first occurrence is read",
             ))
             continue
-        detail = str(getattr(block, "error", "") or "").strip().splitlines()
-        suffix = f": {detail[0]}" if detail else ""
+        suffix = _user_facing_parse_error(getattr(block, "error", ""))
         details.append((None, f"unparseable BibTeX block{where}{suffix}"))
     return details
+
+
+#: bibtexparser appends implementation advice to some errors, e.g. "Duplicate
+#: field keys on entry: 'title'.Note: The entry (containing duplicate) is
+#: available as `failed_block.entry`". These messages are shown to the user as
+#: the reason their file was refused, so the half that tells them to inspect a
+#: Python attribute has to go.
+_PARSER_INTERNAL_HINT = re.compile(r"\.?\s*Note:\s*The entry.*", re.IGNORECASE | re.DOTALL)
+
+
+def _user_facing_parse_error(error: object) -> str:
+    """Render a bibtexparser block error as a `: <reason>` suffix, or ``""``."""
+    text = _PARSER_INTERNAL_HINT.sub("", str(error or "")).strip()
+    first_line = text.splitlines()[0].strip() if text else ""
+    return f": {first_line}" if first_line else ""
 
 
 def parse_bibtex_with_failures(text: str) -> tuple[list[BibtexEntry], list[str]]:
@@ -263,6 +302,12 @@ def _validate_library_parseable(library: Library) -> None:
     mangled = describe_mangled_field_keys(library)
     if mangled:
         raise _malformed_bib_refusal(mangled[0])
+    # Refuse here rather than deep in `_safe_citekey`, which fires while
+    # serializing and so names neither the file, the line, nor which entry —
+    # and fires on writes that touch a completely different entry.
+    empty_keys = describe_empty_citekeys(library)
+    if empty_keys:
+        raise _malformed_bib_refusal(empty_keys[0])
     if not library.failed_blocks:
         return
     # `describe_failed_blocks` names the citekey for a duplicate and adds the
@@ -542,7 +587,15 @@ _STRUCTURAL_CITEKEY = re.compile(r"[{},=\"\r\n\x00-\x1f\x7f]")
 _UNSAFE_ENTRY_TYPE = re.compile(r"[^A-Za-z]")
 # Control characters (keep \t and \n) — NUL and friends have no place in a
 # BibTeX field value and can corrupt the file or downstream tools.
-_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+#
+# `\r` (\x0d) is stripped too, and deliberately: line endings are the file's
+# property, applied once by `_write_bib_text_atomic`, which rewrites every `\n`
+# as the file's own newline. A `\r` surviving inside a value therefore became
+# `\r\r\n` on a CRLF file. Values read from disk never contain one — `read_text`
+# translates newlines — so this only ever arrived with text injected from a
+# metadata provider, which is also why `_validate_bibtex_roundtrip` could not
+# catch it: that runs on the LF text, before the newline conversion.
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f]")
 
 
 def _safe_citekey(citekey: str) -> str:
