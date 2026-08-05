@@ -59,7 +59,17 @@ async function storeAuthToken() {
 }
 
 async function populateBibs() {
-  const bibs = await fetchBibs();
+  let bibs;
+  try {
+    bibs = await fetchBibs();
+  } catch (error) {
+    // Say so rather than presenting an empty dropdown. `fetchBibs` used to
+    // swallow this, so a server that was not running looked like a library
+    // with no bibs — and the call site did not await, so even a throw would
+    // have been an unhandled rejection.
+    summary.textContent = `⚠️ ${error.message}`;
+    return;
+  }
   for (const bib of bibs) {
     const option = document.createElement("option");
     option.value = bib.name;
@@ -105,7 +115,11 @@ function _renderRecent(items) {
   recentList.innerHTML = html;
   // Wire buttons
   recentList.querySelectorAll("button[data-action='pdf']").forEach(btn => {
-    btn.addEventListener("click", () => openPdf(btn.dataset.citekey, btn.dataset.bib));
+    btn.addEventListener("click", () => {
+      openPdf(btn.dataset.citekey, btn.dataset.bib).then((outcome) => {
+        if (outcome && !outcome.ok) summary.textContent = `⚠️ ${outcome.message}`;
+      });
+    });
   });
 }
 
@@ -120,14 +134,28 @@ export async function openPdf(citekey, bib) {
   const endpoint = await getEndpoint();
   const url = endpointFor(endpoint, "/pdf/" + encodeURIComponent(citekey)) + (bib && bib !== "main" ? "?bib=" + encodeURIComponent(bib) : "");
   const authHeaders = await getAuthHeaders();
-  const response = await fetch(url, { headers: authHeaders });
+  // Never `window.open(url)` on failure: that is the same URL without the
+  // token, so the user got a browser tab containing `{"error":"invalid API
+  // token"}`. And an unhandled rejection here — the server being down — left
+  // the popup showing nothing at all, since the click handler has no catch.
+  let response;
+  try {
+    response = await fetch(url, { headers: authHeaders });
+  } catch (_error) {
+    return { ok: false, message: "pzi server is not reachable — is `pzi server` running?" };
+  }
   if (!response.ok) {
-    window.open(url, "_blank");
-    return;
+    return {
+      ok: false,
+      message: response.status === 404
+        ? `no PDF stored for ${citekey}`
+        : `could not open the PDF (HTTP ${response.status})`,
+    };
   }
   const blob = await response.blob();
   const objectUrl = URL.createObjectURL(blob);
   window.open(objectUrl, "_blank");
+  return { ok: true };
 }
 
 // ── Populate recent on load ───────────────────────────────────────────────

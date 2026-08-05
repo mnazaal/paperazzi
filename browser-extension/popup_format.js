@@ -78,7 +78,11 @@ function isPdfDownloadWarning(warning) {
 }
 
 function formatErrorResult(result) {
-  const message = result.message || "capture failed";
+  // Through `captureFailureReason`, which reads all three channels. Reading
+  // only `message` meant every route-level rejection — bad token, rate limit,
+  // refused host, 500 — rendered as the literal "capture failed", which is the
+  // one thing the user already knew.
+  const message = captureFailureReason(result);
   const lines = [`❌ Capture failed: ${message}`];
   for (const error of result.errors || []) {
     if (error) lines.push(`- ${error}`);

@@ -63,19 +63,25 @@ export async function getStoredConfig(key) {
 }
 
 export async function fetchBibs() {
+  // Throws rather than returning `[]` on failure. Collapsing both outcomes
+  // meant a server that was not running, or a wrong token, presented as a
+  // library with no bibs — so the popup showed an empty dropdown and said
+  // nothing, and the README documented the symptom as a troubleshooting entry.
   const endpoint = await getEndpoint();
   const bibsUrl = endpointFor(endpoint, "/bibs");
-  try {
-    const response = await fetch(bibsUrl, {
-      headers: await getAuthHeaders(),
-    });
-    if (!response.ok) return [];
-    const data = await response.json();
-    if (data.status !== "ok" || !Array.isArray(data.bibs)) return [];
-    return data.bibs;
-  } catch (_err) {
-    return [];
+  const response = await fetch(bibsUrl, { headers: await getAuthHeaders() });
+  if (!response.ok) {
+    throw new Error(
+      response.status === 401
+        ? "pzi server rejected the API token — re-pair the extension"
+        : `pzi server returned HTTP ${response.status} for /bibs`,
+    );
   }
+  const data = await response.json();
+  if (data.status !== "ok" || !Array.isArray(data.bibs)) {
+    throw new Error("pzi server sent an unexpected response for /bibs");
+  }
+  return data.bibs;
 }
 
 export function detectBrowser() {

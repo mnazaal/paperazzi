@@ -1736,3 +1736,61 @@ def test_an_authenticated_page_body_is_not_retained_for_display() -> None:
     text = (PROJECT_ROOT / "browser-extension" / "background" / "pdf_fetch.js").read_text()
 
     assert "text.slice(0, 500)" not in text
+
+
+def test_a_non_json_response_does_not_crash_before_its_own_guard() -> None:
+    """`jsonOrNull` returns null by design, so the assignment had to come after.
+
+    Setting `extension_version` on the result first threw `Cannot set properties
+    of null` on exactly the case the two branches below were written for — a
+    proxy's HTML 502, a truncated body — and made the `!result` guard
+    unreachable. The user saw an internal JS error instead of the HTTP status.
+    """
+    text = (PROJECT_ROOT / "browser-extension" / "background.js").read_text()
+    body = text[text.index("const result = await jsonOrNull(response);"):]
+    body = body[: body.index("if (!dryRun")]
+
+    assign = body.index("result.extension_version = EXTENSION_VERSION;")
+    assert body.index("if (!response.ok)") < assign
+    assert body.index("if (!result)") < assign
+
+
+def test_a_route_rejection_is_named_not_reduced_to_capture_failed() -> None:
+    """`captureFailureReason` reads all three channels; `message` alone reads one.
+
+    A route-level rejection — bad token, rate limit, refused host, 500 — carries
+    a singular `error`, so every one of them rendered as the literal "capture
+    failed", which is the one thing the user already knew.
+    """
+    text = (PROJECT_ROOT / "browser-extension" / "popup_format.js").read_text()
+    body = text[text.index("function formatErrorResult("):]
+    body = body[: body.index("\n}\n")]
+
+    assert "captureFailureReason(result)" in body
+    assert 'result.message || "capture failed"' not in body
+
+
+def test_a_down_server_is_reported_rather_than_shown_as_no_bibs() -> None:
+    """Returning `[]` on failure made an unreachable server look like an empty
+    library, so the popup showed an empty dropdown and said nothing."""
+    config = (PROJECT_ROOT / "browser-extension" / "background" / "config.js").read_text()
+    body = config[config.index("export async function fetchBibs("):]
+    body = body[: body.index("\n}\n")]
+    assert "return [];" not in body
+    assert "throw new Error(" in body
+
+    popup = (PROJECT_ROOT / "browser-extension" / "popup.js").read_text()
+    populate = popup[popup.index("async function populateBibs("):]
+    populate = populate[: populate.index("\n}\n")]
+    assert "catch" in populate, "the throw must be reported, not left unhandled"
+
+
+def test_opening_a_pdf_never_falls_back_to_the_unauthenticated_url() -> None:
+    """`window.open(url)` on failure is the same URL without the token, so the
+    user got a tab containing `{"error":"invalid API token"}`."""
+    text = (PROJECT_ROOT / "browser-extension" / "popup.js").read_text()
+    body = text[text.index("export async function openPdf("):]
+    body = body[: body.index("\n}\n")]
+
+    assert 'window.open(url, "_blank")' not in body
+    assert "URL.createObjectURL(blob)" in body

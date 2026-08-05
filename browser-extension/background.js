@@ -168,7 +168,10 @@ export async function captureCurrentTab({ tags = [], bib = null, dryRun = false,
     body: JSON.stringify({...captureBody, cookies: cookieHeader}),
   });
     const result = await jsonOrNull(response);
-    result.extension_version = EXTENSION_VERSION;
+    // Assigned *after* both guards. `jsonOrNull` returns null by design, so
+    // doing this first threw `Cannot set properties of null` on exactly the
+    // case the two branches below were written for — a proxy's HTML 502, a
+    // truncated body — and made the `!result` guard unreachable.
     if (!response.ok) {
     return {
       status: "error",
@@ -180,6 +183,7 @@ export async function captureCurrentTab({ tags = [], bib = null, dryRun = false,
   if (!result) {
     return { status: "error", extension_version: EXTENSION_VERSION, capture_body: captureBody, errors: ["capture request failed: invalid JSON response"] };
   }
+  result.extension_version = EXTENSION_VERSION;
   if (!dryRun && result && result.status === "ok" && result.citekey && !result.pdf_path) {
     result.pdf_candidates_debug = pdfCandidates;
     // Progress: server returned metadata; checking for PDF.
