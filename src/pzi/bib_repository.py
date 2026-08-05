@@ -713,10 +713,23 @@ def batch_write_session(
             entries=entries, records=records, index=build_identity_index(records),
         )
         yield session
-        if not write:
-            return
+        # The gates run in dry-run too, so a preview cannot report success for a
+        # batch the real write would refuse. They validate the *whole library*,
+        # not just the incoming entries, and a dry run otherwise only checks each
+        # incoming entry on its own — so a pre-existing entry that blocks the
+        # write was invisible until the real run.
+        #
+        # This costs a dry run roughly what the real write costs (measured: ~1.4s
+        # to ~5s on a 22k-entry library). That is the right price for a preview
+        # whose entire job is to predict the write, and it makes this path behave
+        # like `execute_write_plan`, `preview_write_plan` and
+        # `preview_batch_write` — four paths that previously validated four
+        # different amounts, which is why the gap took so long to characterize.
+        # Neither gate mutates.
         session.check_consistency()
         _validate_bibtex_roundtrip(session.entries)
+        if not write:
+            return
         new_library = _update_library_blocks(
             library,
             session.entries,

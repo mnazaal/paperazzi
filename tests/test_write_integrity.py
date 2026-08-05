@@ -19,6 +19,7 @@ import pytest
 
 from pzi.bib_repository import (
     _write_bib_text_atomic,
+    batch_write_session,
     delete_bib_entry,
     execute_write_plan,
     plan_bib_write,
@@ -491,3 +492,33 @@ def test_a_structurally_unsafe_field_key_is_still_refused(
         update_bib_entry(str(bib), "legacy2019", _add_a_keyword)
 
     assert bib.read_text() == before
+
+
+def test_a_batch_dry_run_refuses_what_the_real_write_would_refuse(tmp_path: Path) -> None:
+    """A preview must not report success for a batch the write would reject.
+
+    `batch_write_session` returned before `check_consistency` and
+    `_validate_bibtex_roundtrip`, and those validate the *whole library* while a
+    dry run otherwise only checks each incoming entry alone. So a pre-existing
+    entry that blocks the write was invisible until the real run: `import
+    --dry-run` said `would_import` at exit 0, then `import` exited 5 having
+    written nothing.
+
+    A field key containing a space is the reachable case — it is not legal
+    BibTeX, so the gate is right to refuse it; what was wrong was refusing it
+    only on the second attempt.
+    """
+    bib = tmp_path / "lib.bib"
+    bib.write_text(
+        "@article{legacy2019,\n  title = {Hand Edited},\n  bad key = {v}\n}\n"
+    )
+
+    with pytest.raises(PziError):
+        with batch_write_session(str(bib), write=False) as session:
+            session.apply_plan(
+                plan_bib_write(
+                    {"citekey": "new2021", "title": "New"},
+                    session.records,
+                    existing_entries=session.entries,
+                )
+            )
