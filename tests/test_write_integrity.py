@@ -19,6 +19,7 @@ import pytest
 
 from pzi.bib_repository import (
     _write_bib_text_atomic,
+    batch_write_session,
     delete_bib_entry,
     execute_write_plan,
     plan_bib_write,
@@ -356,3 +357,168 @@ def test_write_keeps_a_byte_order_mark_at_the_start_of_the_file(tmp_path: Path) 
 
     raw = bib.read_bytes()
     assert raw.startswith(b"\xef\xbb\xbf@article")
+
+
+def test_update_plan_does_not_discard_an_edit_made_while_the_plan_was_built(
+    tmp_path: Path,
+) -> None:
+    """An update must be rebased onto the entry as it is *under the lock*.
+
+    `execute_write_plan` snapshots the file digest on the line before it takes
+    the lock, so the window it guards is microseconds wide. The window that
+    matters is much longer: `add_service` reads the library, then resolves
+    metadata over the network and downloads a PDF, and only then executes. An
+    edit landing in that window passes the digest check untouched, and
+    `_validate_update_plan_against_current` only checks that the index is in
+    range and the citekey still matches — never field content — so the stale
+    `plan["entry"]` was written verbatim and the edit vanished silently.
+
+    The insert path already rebases onto the on-disk entry when it discovers a
+    match; this pins that the update path does the same.
+    """
+    bib = tmp_path / "lib.bib"
+    bib.write_text(
+        "@article{a2020,\n"
+        "  author = {Smith, Jane},\n"
+        "  title = {Original Title},\n"
+        "  doi = {10.1000/abc123},\n"
+        "  year = {2020}\n"
+        "}\n"
+    )
+
+    # 1. Read the library and build a plan, exactly as a capture does.
+    before = read_bib_file(str(bib))
+    plan = plan_bib_write(
+        {
+            "citekey": "a2020",
+            "title": "A Much Longer Title From Crossref",
+            "authors": ["Smith, Jane"],
+            "year": 2020,
+            "doi": "10.1000/abc123",
+        },
+        before["records"],
+        existing_entries=before["entries"],
+    )
+    assert plan["action"] == "update"
+
+    # 2. The user edits the same entry in their editor while the network call
+    #    is in flight — adding fields the capture knows nothing about.
+    bib.write_text(
+        "@article{a2020,\n"
+        "  author = {Smith, Jane},\n"
+        "  title = {Original Title},\n"
+        "  doi = {10.1000/abc123},\n"
+        "  year = {2020},\n"
+        "  pages = {1--10},\n"
+        "  note = {hand-written by the user}\n"
+        "}\n"
+    )
+
+    # 3. The capture completes and commits its plan.
+    execute_write_plan(str(bib), plan)
+
+    written = bib.read_text()
+    assert "pages = {1--10}" in written, f"external edit was overwritten:\n{written}"
+    assert "hand-written by the user" in written, f"external edit was overwritten:\n{written}"
+    # The update itself still applied.
+    assert "A Much Longer Title From Crossref" in written
+
+
+def _add_a_keyword(entry, record):
+    """An updater that really changes something — an identity one never writes."""
+    return {**entry, "fields": {**entry["fields"], "keywords": "ml"}}
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "författare-not",   # Swedish, hand-added — legal biblatex
+        "Nyckelord",
+        "année",
+        "機械",
+        "bdsk-url-1",       # BibDesk
+        "date-added",
+        "__markedentry",    # JabRef
+        "a.b",
+        "a+b",
+        "a:b",
+    ],
+)
+def test_a_unicode_field_key_does_not_block_writing_the_library(
+    tmp_path: Path, key: str
+) -> None:
+    """A field key of letters and digits is legal BibTeX, whatever the alphabet.
+
+    The gate was ASCII-only, so one hand-edited or biblatex-native key anywhere
+    in a library made *every* write fail — including an `import` of unrelated
+    entries, with a message naming an entry the user had not touched. It also
+    made a dry run disagree with the real run, because only the real write
+    validates the whole library.
+    """
+    bib = tmp_path / "lib.bib"
+    bib.write_text(f"@article{{legacy2019,\n  title = {{T}},\n  {key} = {{v}}\n}}\n")
+
+    update_bib_entry(str(bib), "legacy2019", _add_a_keyword)
+
+    assert key.lower() in bib.read_text().lower()
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "a b",   # a space is not a legal BibTeX field name
+        "a/b",
+        "a#b",
+        "a@b",
+        # `a=b` and `a,b` are deliberately absent: the parser truncates the
+        # first to `a` and files the second as a failed block, so neither ever
+        # reaches this gate.
+    ],
+)
+def test_a_structurally_unsafe_field_key_is_still_refused(
+    tmp_path: Path, key: str
+) -> None:
+    """Widening the gate to Unicode must not widen it to anything at all.
+
+    bibtexparser round-trips `a b` happily, but that is leniency, not legality —
+    these characters either break real BibTeX readers or could escape the
+    `key = {value}` structure the serializer writes.
+    """
+    bib = tmp_path / "lib.bib"
+    bib.write_text(f"@article{{legacy2019,\n  title = {{T}},\n  {key} = {{v}}\n}}\n")
+    before = bib.read_text()
+
+    with pytest.raises(PziError):
+        update_bib_entry(str(bib), "legacy2019", _add_a_keyword)
+
+    assert bib.read_text() == before
+
+
+def test_a_batch_dry_run_refuses_what_the_real_write_would_refuse(tmp_path: Path) -> None:
+    """A preview must not report success for a batch the write would reject.
+
+    `batch_write_session` returned before `check_consistency` and
+    `_validate_bibtex_roundtrip`, and those validate the *whole library* while a
+    dry run otherwise only checks each incoming entry alone. So a pre-existing
+    entry that blocks the write was invisible until the real run: `import
+    --dry-run` said `would_import` at exit 0, then `import` exited 5 having
+    written nothing.
+
+    A field key containing a space is the reachable case — it is not legal
+    BibTeX, so the gate is right to refuse it; what was wrong was refusing it
+    only on the second attempt.
+    """
+    bib = tmp_path / "lib.bib"
+    bib.write_text(
+        "@article{legacy2019,\n  title = {Hand Edited},\n  bad key = {v}\n}\n"
+    )
+
+    with pytest.raises(PziError):
+        with batch_write_session(str(bib), write=False) as session:
+            session.apply_plan(
+                plan_bib_write(
+                    {"citekey": "new2021", "title": "New"},
+                    session.records,
+                    existing_entries=session.entries,
+                )
+            )

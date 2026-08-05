@@ -85,6 +85,12 @@ def _run_list(args, home_dir, config_path, stdout, stderr, bib_selector) -> int:
                 )
             else:
                 print("(no entries)", file=stderr)
+            # Before the summary path's call, because this branch returns first:
+            # a library that read as empty *because the parser dropped every
+            # block*, or because the file is not there at all, reported a bare
+            # "(no entries)" and exit 0 — the one case where the warnings matter
+            # most was the one case that never printed them.
+            print_read_warnings(result, stderr)
             return exit_codes.OK
         for item in items:
             ck = item["citekey"]
@@ -149,7 +155,7 @@ def _run_detail(args, home_dir, config_path, stdout, stderr, bib_selector) -> in
         )
         return exit_codes.OK
     print(f"citekey: {record.get('citekey', '')}", file=stdout)
-    print(f"title: {record.get('title', '')}", file=stdout)
+    print(f"title: {record.get('title') or ''}", file=stdout)
     year = record.get("year")
     if year:
         print(f"year: {year}", file=stdout)

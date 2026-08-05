@@ -7,6 +7,7 @@ from typing import Any, NotRequired, TypeAlias, TypedDict
 from pzi.bib_repository import (
     backup_path_for,
     delete_bib_entry,
+    describe_missing_bib,
     find_entry_index,
     parse_bib_library,
     read_bib_file_raw,
@@ -82,6 +83,7 @@ class DeleteEntryResult(TypedDict):
 def bib_stats(*, bib_path: str, papers_dir: str) -> BibStatsResult:
     """Return statistics for a BibTeX library."""
     read_result, dropped = read_bib_file_with_failures(bib_path)
+    dropped = [*dropped, *filter(None, [describe_missing_bib(bib_path)])]
     entries = read_result["entries"]
     records = read_result["records"]
 
@@ -152,6 +154,7 @@ def list_entries(
     # shrinking `total`: a duplicate citekey keeps only the first occurrence, so
     # this used to say "1 of 1 entries" for a two-entry file.
     read_result, dropped = read_bib_file_with_failures(bib_path)
+    dropped = [*dropped, *filter(None, [describe_missing_bib(bib_path)])]
 
     records = read_result["records"]
     # `entry_type` is a property of the BibTeX entry; `bibtex_entry_to_record`
@@ -185,7 +188,7 @@ def list_entries(
     elif sort_field == "title":
         sorted_records = sorted(
             records,
-            key=lambda r: str(r.get("title", "")).lower(),
+            key=lambda r: str(r.get("title") or "").lower(),
         )
     else:
         sorted_records = sorted(
@@ -197,7 +200,11 @@ def list_entries(
     items = [
         {
             "citekey": str(r.get("citekey", "")),
-            "title": str(r.get("title", "")),
+            # `or ""`, not a `.get` default: the key is present with value
+            # `None` for a titleless entry, so `str(...)` rendered the
+            # literal string "None" — while `export --format json`
+            # emitted a correct `null` for the same record.
+            "title": str(r.get("title") or ""),
             "year": r.get("year"),
             "authors": _author_names(r),
             "entry_type": entry_types.get(id(r), "unknown"),
@@ -243,6 +250,7 @@ def entry_detail(
     _config, bib = resolved
 
     read_result, dropped = read_bib_file_with_failures(bib["path"])
+    dropped = [*dropped, *filter(None, [describe_missing_bib(bib["path"])])]
 
     entries = read_result["entries"]
     records = read_result["records"]

@@ -162,3 +162,23 @@ def test_delete_entry_creates_backup_before_removing_entry(tmp_path: Path, write
     updated_text = bib_path.read_text()
     assert "keep2024" in updated_text
     assert "delete2024" not in updated_text
+
+
+def test_a_titleless_entry_does_not_render_the_string_none(
+    tmp_path: Path, write_app_config
+) -> None:
+    """`.get("title", "")` returns None when the key is present *with* value None.
+
+    `str(None)` then produced the literal "None" in both the human table and
+    `entries --json`, while `export --format json` emitted a correct `null` for
+    the same record — two documented JSON surfaces disagreeing, and a script
+    filtering on title getting a plausible-looking fake value.
+    """
+    config_path = write_app_config(tmp_path)
+    Path(os.path.join(str(tmp_path), "ml.bib")).write_text(
+        "@article{untitled2020,\n  year = {2020}\n}\n"
+    )
+
+    result = list_entries(config_path=config_path, home_dir=str(tmp_path), bib_selector=None)
+
+    assert result["items"][0]["title"] == ""

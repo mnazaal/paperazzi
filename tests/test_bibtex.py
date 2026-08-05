@@ -2,11 +2,16 @@ import pytest
 
 from pzi.bibtex import (
     USER_OWNED_FIELDS,
+    BibtexEntry,
     apply_record_to_entry,
     bibtex_entry_to_record,
     changed_fields,
+    merge_projected_entry,
+    parse_file_field,
+    primary_pdf_path,
     record_to_bibtex_entry,
 )
+from pzi.errors import PziError
 
 
 def test_record_to_bibtex_entry_maps_core_fields() -> None:
@@ -107,7 +112,14 @@ def test_record_to_bibtex_entry_uses_source_url_when_canonical_missing() -> None
 
 
 def test_record_to_bibtex_entry_requires_citekey() -> None:
-    with pytest.raises(ValueError, match="record.citekey"):
+    """A `PziError` phrased for the user, not the internal attribute path.
+
+    This is reachable from an entry hand-edited to `@article{,`, which parses
+    fine and only fails here at write time — so "record.citekey must be a
+    non-empty string" was shown to someone who has no record and no citekey,
+    only a .bib file to repair.
+    """
+    with pytest.raises(PziError, match="no citekey"):
         record_to_bibtex_entry({})
 
 
@@ -363,3 +375,93 @@ def test_user_owned_fields_is_shared_by_update_and_promote() -> None:
 
     assert update_service._USER_OWNED_UPDATE_FIELDS is USER_OWNED_FIELDS
     assert promote_service.USER_OWNED_FIELDS is USER_OWNED_FIELDS
+
+
+def test_merge_projected_entry_handles_an_eprint_without_a_prefix() -> None:
+    """A bare `eprint` must not raise.
+
+    `record_to_bibtex_entry` always writes `eprint` and `archiveprefix`
+    together, so indexing the pair worked for every projection it produces. But
+    this function also accepts an already-merged entry as the projection — which
+    is what a rebase passes — and a bioRxiv-style bare `eprint` has no prefix.
+    That combination raised `KeyError: 'archiveprefix'`, which the update
+    service reported to the user as `update failed: 'archiveprefix'`.
+    """
+    existing: BibtexEntry = {
+        "entry_type": "article",
+        "citekey": "a2020",
+        "fields": {"title": "T", "eprint": "2401.12345", "archiveprefix": "arXiv"},
+    }
+    projected: BibtexEntry = {
+        "entry_type": "article",
+        "citekey": "a2020",
+        "fields": {"title": "T", "eprint": "2020.01.01.123456"},
+    }
+
+    merged = merge_projected_entry(existing, projected)
+
+    assert merged["fields"]["eprint"] == "2020.01.01.123456"
+    # The projection is authoritative for the pair, so a prefix it omits goes.
+    assert "archiveprefix" not in merged["fields"]
+
+
+# ── parse_file_field ─────────────────────────────────────────────
+#
+# Cases transcribed from the producers' own sources and test suites:
+# JabRef `FileFieldParserTest.java`, Zotero `BibTeX.js`, Better BibTeX
+# `entry.ts`. pzi writes a bare path; everything else here is what a library
+# imported from those tools actually contains.
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        # pzi's own form.
+        ("papers/x.pdf", ["papers/x.pdf"]),
+        ("/abs/papers/x.pdf", ["/abs/papers/x.pdf"]),
+        # Zotero export: description:path:mimetype.
+        ("Full Text PDF:/abs/x.pdf:application/pdf", ["/abs/x.pdf"]),
+        # JabRef with an empty description.
+        (":wei2005ahp.pdf:PDF", ["wei2005ahp.pdf"]),
+        ("Desc:File.PDF:PDF", ["File.PDF"]),
+        # Better BibTeX default: bare paths, several joined by ';'.
+        ("papers/a.pdf;papers/b.pdf", ["papers/a.pdf", "papers/b.pdf"]),
+        # Multiple composites — the PDF and its HTML snapshot.
+        (
+            "Full Text PDF:papers/x.pdf:application/pdf;Snapshot:papers/x.html:text/html",
+            ["papers/x.pdf", "papers/x.html"],
+        ),
+        # Escaped ':' and ';' inside the description.
+        ("test" + chr(92) + ":" + chr(92) + ";:wei2005ahp.pdf:PDF", ["wei2005ahp.pdf"]),
+        # Windows drive letter, escaped and bare.
+        ("desc:C\\:\\\\test.pdf:PDF", ["C:\\test.pdf"]),
+        # JabRef's degenerate forms all mean a bare link.
+        ("file.pdf::", ["file.pdf"]),
+        (":file.pdf", ["file.pdf"]),
+        # A 4th component is JabRef's source URL; the path is still second.
+        ("desc:file.pdf:PDF:http://example.com", ["file.pdf"]),
+        # Nothing at all.
+        ("", []),
+        ("   ", []),
+        (None, []),
+    ],
+)
+def test_parse_file_field(value, expected) -> None:
+    assert parse_file_field(value) == expected
+
+
+def test_parse_file_field_keeps_a_colon_bearing_path_intact() -> None:
+    """pzi permits ':' in a citekey, so it can write such a filename itself.
+
+    A two-component value is ambiguous, and reading it as `desc:path` would
+    silently drop the first half of a real filename. Zotero's own arity rule —
+    1 or 3+ components — is what makes this safe.
+    """
+    assert parse_file_field("papers/smith:2020.pdf") == ["papers/smith:2020.pdf"]
+
+
+def test_primary_pdf_path_prefers_the_pdf_over_a_snapshot() -> None:
+    """Zotero does not sort attachments, so the PDF may not be first."""
+    value = "Snapshot:papers/x.html:text/html;Full Text PDF:papers/x.pdf:application/pdf"
+    assert primary_pdf_path(value) == "papers/x.pdf"
+    assert primary_pdf_path("papers/only.html") == "papers/only.html"
+    assert primary_pdf_path("") is None

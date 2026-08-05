@@ -30,7 +30,13 @@ from bibtexparser.model import Entry as BibtexEntryV2
 from bibtexparser.writer import BibtexFormat
 
 from pzi import exit_codes
-from pzi.bibtex import BibtexEntry, NormalizedRecord, bibtex_entry_to_record
+from pzi.bibtex import (
+    BibtexEntry,
+    NormalizedRecord,
+    bibtex_entry_to_record,
+    parse_file_field,
+    primary_pdf_path,
+)
 from pzi.errors import PziError
 
 
@@ -90,17 +96,20 @@ def _resolve_file_field(record: NormalizedRecord, entry: BibtexEntry, bib_path: 
 
     Absolute paths and home-relative paths (``~/...``) are kept as-is.
     """
-    raw = entry.get("fields", {}).get("file")
-    if not raw:
-        return
-    value = str(raw).strip()
+    # The path component, never the raw field: a Zotero/JabRef composite is
+    # `description:path:mimetype`, and joining the bib dir to *that* produced
+    # `<bib-dir>/Full Text PDF:/abs/x.pdf:application/pdf` — garbage neither
+    # tool can read, written by any command that touched the entry.
+    value = primary_pdf_path(entry.get("fields", {}).get("file"))
     if not value:
         return
-    # Already absolute or home-relative — leave as stored in record.
+    # Assign, do not `setdefault`: `bibtex_entry_to_record` always sets this key
+    # (to `None` when there is no attachment), so `setdefault` was a no-op and
+    # the absolute branch below never ran — which is exactly the Zotero case.
     if value.startswith(("/", "~")):
-        record.setdefault("local_pdf_path", value)
+        record["local_pdf_path"] = value
         return
-    # Best-effort relative resolution: <bib-dir>/<file-value>.
+    # Best-effort relative resolution: <bib-dir>/<path>.
     bib_dir = str(Path(bib_path).parent)
     record["local_pdf_path"] = str(Path(bib_dir) / value)
 
@@ -117,7 +126,13 @@ def _normalize_file_field(entry: BibtexEntry, bib_path: str) -> BibtexEntry:
     if not raw:
         return entry
     value = str(raw).strip()
-    if not value or not value.startswith("/"):
+    # A composite is left alone entirely. Rewriting only its path component
+    # would mean re-composing the field, which requires owning three producers'
+    # escaping rules to gain nothing — and `merge_preserving_unchanged_source`
+    # keeps the original text anyway whenever the attachment has not changed.
+    if len(parse_file_field(value)) != 1 or parse_file_field(value)[0] != value:
+        return entry
+    if not value.startswith("/"):
         return entry  # already relative, home-relative, or non-path
     bib_dir = str(Path(bib_path).parent)
     file_path = Path(value)
@@ -150,9 +165,34 @@ def describe_failed_blocks(library: Library) -> list[str]:
     :func:`describe_mangled_field_keys`): the block is not "failed" by
     bibtexparser's reckoning, but a field of it is just as invisible.
     """
-    return [
-        message for _key, message in failed_block_details(library)
-    ] + describe_mangled_field_keys(library)
+    return (
+        [message for _key, message in failed_block_details(library)]
+        + describe_mangled_field_keys(library)
+        + describe_empty_citekeys(library)
+    )
+
+
+def describe_empty_citekeys(library: Library) -> list[str]:
+    """One message per ``@type{,`` entry — parsed fine, but unusable and unwritable.
+
+    bibtexparser accepts an entry with no key, so it is neither a failed block
+    nor a mangled field: `pzi entries` listed it with a blank citekey column and
+    exit 0, and nothing warned. The cost lands later and somewhere else — every
+    *write* to the library, including one touching a different entry, is refused
+    by `_safe_citekey` with "refusing to write an entry with an empty citekey",
+    naming no file, no line and no entry.
+    """
+    messages: list[str] = []
+    for entry in library.entries:
+        if (entry.key or "").strip():
+            continue
+        line = getattr(entry, "start_line", None)
+        where = f" at line {line + 1}" if isinstance(line, int) else ""
+        messages.append(
+            f"entry with no citekey{where} (`@{entry.entry_type}{{,`): give it a "
+            "key — it cannot be cited, and it blocks every write to this library"
+        )
+    return messages
 
 
 #: A field key can only pick these up by absorbing text that was meant to be
@@ -197,10 +237,24 @@ def failed_block_details(library: Library) -> list[tuple[str | None, str]]:
                 f"duplicate citekey {key!r}{where}: only the first occurrence is read",
             ))
             continue
-        detail = str(getattr(block, "error", "") or "").strip().splitlines()
-        suffix = f": {detail[0]}" if detail else ""
+        suffix = _user_facing_parse_error(getattr(block, "error", ""))
         details.append((None, f"unparseable BibTeX block{where}{suffix}"))
     return details
+
+
+#: bibtexparser appends implementation advice to some errors, e.g. "Duplicate
+#: field keys on entry: 'title'.Note: The entry (containing duplicate) is
+#: available as `failed_block.entry`". These messages are shown to the user as
+#: the reason their file was refused, so the half that tells them to inspect a
+#: Python attribute has to go.
+_PARSER_INTERNAL_HINT = re.compile(r"\.?\s*Note:\s*The entry.*", re.IGNORECASE | re.DOTALL)
+
+
+def _user_facing_parse_error(error: object) -> str:
+    """Render a bibtexparser block error as a `: <reason>` suffix, or ``""``."""
+    text = _PARSER_INTERNAL_HINT.sub("", str(error or "")).strip()
+    first_line = text.splitlines()[0].strip() if text else ""
+    return f": {first_line}" if first_line else ""
 
 
 def parse_bibtex_with_failures(text: str) -> tuple[list[BibtexEntry], list[str]]:
@@ -263,6 +317,12 @@ def _validate_library_parseable(library: Library) -> None:
     mangled = describe_mangled_field_keys(library)
     if mangled:
         raise _malformed_bib_refusal(mangled[0])
+    # Refuse here rather than deep in `_safe_citekey`, which fires while
+    # serializing and so names neither the file, the line, nor which entry —
+    # and fires on writes that touch a completely different entry.
+    empty_keys = describe_empty_citekeys(library)
+    if empty_keys:
+        raise _malformed_bib_refusal(empty_keys[0])
     if not library.failed_blocks:
         return
     # `describe_failed_blocks` names the citekey for a duplicate and adds the
@@ -447,7 +507,13 @@ def merge_preserving_unchanged_source(
         # `removed_enclosing` is keyed by the field key as it was written, so
         # every lookup and every key emitted below uses the source spelling.
         enclosing = original_enclosing.get(source_field.key)
-        if field.value not in _unchanged_forms(source_field.value, enclosing, strings):
+        unchanged = field.value in _unchanged_forms(
+            source_field.value, enclosing, strings
+        ) or (
+            field.key.lower() == "file"
+            and _file_field_still_points_at(source_field.value, field.value)
+        )
+        if not unchanged:
             known.append((position, Field(key=source_field.key, value=field.value)))
             continue
         known.append((position, source_field))
@@ -468,6 +534,39 @@ def merge_preserving_unchanged_source(
     if preserved_enclosing:
         merged.parser_metadata["removed_enclosing"] = preserved_enclosing
     return merged
+
+
+def _file_field_still_points_at(source_value: str, rebuilt_value: str) -> bool:
+    """Rebuilt ``file`` values that still mean *source_value*'s attachment.
+
+    A Zotero/JabRef composite (``description:path:mimetype``, several joined by
+    ``;``) enters the record model as a bare path, so the rebuilt block always
+    disagrees with the source text and the composite — the description, the
+    mimetype, and every attachment after the first — was overwritten by any
+    command that touched the entry, `tag add` included.
+
+    pzi does not re-compose one: that would mean owning three producers'
+    escaping rules to gain nothing, since a bare path is the one form all of
+    them read. Instead the field counts as unchanged while it still points at
+    the same attachment, and the source text is kept verbatim.
+
+    The rebuilt value is derived *from* this source by `_resolve_file_field`, so
+    it is either the primary path itself (absolute) or the bib directory joined
+    to it (relative) — which is why no bib path is needed here. A `..` segment
+    could defeat the suffix test; that fails safe, rewriting to a bare path,
+    which is today's behaviour.
+    """
+    primary = primary_pdf_path(source_value)
+    if primary is None or primary == source_value.strip():
+        return False  # already a bare path; the normal comparison applies
+    if rebuilt_value == primary:
+        return True
+    if not primary.startswith(("/", "~")):
+        # Relative primary: `_resolve_file_field` joined the bib directory to it.
+        return rebuilt_value.endswith("/" + str(Path(primary)))
+    # Absolute primary under `pdf_file_path_style = "relative"`:
+    # `_normalize_file_field` shortened the rebuilt value against the bib dir.
+    return bool(rebuilt_value) and primary.endswith("/" + str(Path(rebuilt_value)))
 
 
 def _unchanged_forms(
@@ -542,7 +641,15 @@ _STRUCTURAL_CITEKEY = re.compile(r"[{},=\"\r\n\x00-\x1f\x7f]")
 _UNSAFE_ENTRY_TYPE = re.compile(r"[^A-Za-z]")
 # Control characters (keep \t and \n) — NUL and friends have no place in a
 # BibTeX field value and can corrupt the file or downstream tools.
-_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+#
+# `\r` (\x0d) is stripped too, and deliberately: line endings are the file's
+# property, applied once by `_write_bib_text_atomic`, which rewrites every `\n`
+# as the file's own newline. A `\r` surviving inside a value therefore became
+# `\r\r\n` on a CRLF file. Values read from disk never contain one — `read_text`
+# translates newlines — so this only ever arrived with text injected from a
+# metadata provider, which is also why `_validate_bibtex_roundtrip` could not
+# catch it: that runs on the LF text, before the newline conversion.
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f]")
 
 
 def _safe_citekey(citekey: str) -> str:
@@ -617,11 +724,22 @@ def _strip_trailing_backslashes(value: str) -> str:
     return _TRAILING_BACKSLASHES.sub("", value)
 
 
-#: What a BibTeX field name may contain. Deliberately narrow: measured against a
-#: 22k-entry library (282k fields, including JabRef/BibDesk keys like
-#: ``bdsk-url-1``, ``date-added`` and ``__markedentry``), not one key falls
-#: outside it, so refusing the rest costs a real library nothing.
-_SAFE_FIELD_KEY = re.compile(r"\A[A-Za-z0-9_:.+-]+\Z")
+#: What a BibTeX field name may contain: word characters — Unicode letters,
+#: digits and underscore — plus the punctuation real-world keys use
+#: (``bdsk-url-1``, ``date-added``, ``__markedentry``).
+#:
+#: `\w`, not ``A-Za-z0-9_``. The ASCII-only form refused keys that are perfectly
+#: legal biblatex — a Swedish ``författare-not``, a French ``année`` — and the
+#: cost was not local: this gate runs over the *whole library* on every write,
+#: so one such key anywhere made every `import`, `update` and `tag` fail, naming
+#: an entry the user had not touched. It also made a batch dry run disagree with
+#: the real run, since only the real write validates the whole library.
+#:
+#: Still deliberately narrow. A space, ``/``, ``#`` or ``@`` is refused: those
+#: either break real BibTeX readers or could escape the ``key = {value}``
+#: structure the serializer writes. bibtexparser round-trips ``a b`` happily,
+#: but that is leniency, not legality.
+_SAFE_FIELD_KEY = re.compile(r"\A[\w:.+-]+\Z")
 
 
 def _checked_field_key(key: str, citekey: str) -> str:

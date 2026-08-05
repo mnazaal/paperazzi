@@ -425,14 +425,43 @@ def test_an_unreadable_sibling_stops_orphan_detection_rather_than_guessing() -> 
         assert any("cs.bib" in message for message in result["errors"])
 
 
-def test_fix_does_not_quarantine_when_a_reference_could_not_be_resolved() -> None:
-    """A Zotero/JabRef `file` field must not cost the library its attachments.
+def test_fix_does_not_quarantine_while_any_reference_is_unresolved() -> None:
+    """An unresolved `file =` means the referenced-path set is incomplete.
 
-    `file = {Full Text PDF:/path/x.pdf:application/pdf}` is read as one
-    nonexistent path, so the entry contributes no referenced path and its real
-    PDF is reported as an orphan *and* as missing in the same run. `--fix` acted
-    on the second half, moving into `.orphans/` a file the bib still points at —
-    on an imported library, every attachment.
+    The orphan sweep decides what to move by subtracting referenced paths from
+    what is on disk, so a reference it could not resolve makes every genuine
+    file look orphaned. It also covers the commoner case where a missing PDF
+    means the file was *renamed* — in which case the loose file about to be
+    quarantined may be the very one the entry wants.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "lib.bib")
+        papers = os.path.join(td, "papers")
+        os.makedirs(papers)
+        loose = os.path.join(papers, "loose.pdf")
+        Path(loose).write_bytes(b"%PDF-1.4\n")
+        _write_bib(
+            bib,
+            "@article{gone2020,\n"
+            "  title = {Its PDF Was Renamed},\n"
+            f"  file = {{{papers}/renamed-away.pdf}}\n"
+            "}\n",
+        )
+
+        result = clean_library(bib_path=bib, papers_dir=papers, dry_run=False)
+
+        assert os.path.exists(loose), "a file was quarantined on an incomplete reference set"
+        assert result["actions"] == []
+        assert any(issue["type"] == "quarantine_skipped" for issue in result["issues"])
+
+
+def test_a_zotero_style_file_field_resolves_and_is_not_an_orphan() -> None:
+    """`file = {desc:path:mime}` is one attachment, not a path.
+
+    Read as a path it resolved to nothing, so the entry contributed no
+    referenced path: its real PDF was reported as *missing* and as an *orphan*
+    in the same run, and `--fix` acted on the second half. On an imported
+    library that detached every attachment.
     """
     with tempfile.TemporaryDirectory() as td:
         bib = os.path.join(td, "lib.bib")
@@ -450,9 +479,6 @@ def test_fix_does_not_quarantine_when_a_reference_could_not_be_resolved() -> Non
 
         result = clean_library(bib_path=bib, papers_dir=papers, dry_run=False)
 
-        assert os.path.exists(pdf), "a referenced PDF was quarantined"
-        assert not os.path.exists(os.path.join(papers, ".orphans", "zotero.pdf"))
-        assert result["actions"] == []
-        assert any(
-            issue["type"] == "quarantine_skipped" for issue in result["issues"]
-        ), f"the skip was not explained to the user: {result['issues']}"
+        assert result["missing_pdfs"] == []
+        assert result["orphan_pdfs"] == []
+        assert os.path.exists(pdf)

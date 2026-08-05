@@ -169,8 +169,31 @@ def with_bib_lock(
     exclusion at all for the case that matters.
     """
     lock_path = Path(str(_resolve_write_target(bib_path)) + ".lock")
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
     flags = portalocker.LOCK_SH if shared else portalocker.LOCK_EX
+    if shared:
+        # A shared lock is only meaningful against writers, and a writer needs a
+        # writable directory anyway — so when the lock file cannot be created,
+        # read without one rather than refusing to read at all. Creating it
+        # unconditionally made a bib on a read-only mount, or in a directory
+        # owned by someone else, unreadable, and blamed a `.lock` file the user
+        # has never heard of.
+        try:
+            # No `mkdir` on the read path: a read has no business materializing
+            # a directory tree for a bib that is not there, which is how a
+            # typo'd path quietly became the start of a second library.
+            lock_fh = open(str(lock_path), "a")
+        except OSError:
+            yield
+            return
+        with lock_fh:
+            acquire_lock_with_timeout(lock_fh, flags, bib_path=bib_path, timeout=timeout)
+            try:
+                yield
+            finally:
+                portalocker.unlock(lock_fh)
+        return
+
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
     with open(str(lock_path), "a") as lock_fh:
         acquire_lock_with_timeout(lock_fh, flags, bib_path=bib_path, timeout=timeout)
         try:
@@ -209,6 +232,25 @@ def apply_write_plan(entries: list[BibtexEntry], plan: WritePlan) -> list[Bibtex
         # pragma: no cover — covered by integration/browser tests
     updated_entries[index] = plan["entry"]
     return updated_entries
+
+
+def describe_missing_bib(path: str) -> str | None:
+    """A warning naming *path* when the configured bib is not there, else None.
+
+    The `.bib` **is** the database, so "this file does not exist" and "this
+    library is empty" are different facts, and reporting the first as the second
+    is how a typo'd path, a renamed file or an unmounted share showed up as a
+    healthy library with zero entries and exit 0.
+
+    A *warning* and not a refusal, because the filesystem cannot tell a typo
+    from a library nobody has captured into yet: a freshly `pzi init`-ed config
+    points at a bib that does not exist until the first `add` creates it, and
+    erroring there would break the normal first run. Naming the path lets the
+    user tell the two apart themselves.
+    """
+    if Path(path).exists():
+        return None
+    return f"bib file does not exist yet: {path}"
 
 
 def read_bib_file(path: str) -> ReadBibResult:
@@ -516,6 +558,9 @@ def execute_write_plan(
 
         if plan["action"] == "update":
             _validate_update_plan_against_current(records, plan)
+            # Applied in `preview_write_plan` too, or `--dry-run` would show a
+            # diff the real write does not produce.
+            plan = _rebase_update_plan_against_current(records, entries, plan)
         if plan["action"] == "insert":
             plan = _rebase_insert_plan_against_current(records, entries, plan)
 
@@ -668,10 +713,23 @@ def batch_write_session(
             entries=entries, records=records, index=build_identity_index(records),
         )
         yield session
-        if not write:
-            return
+        # The gates run in dry-run too, so a preview cannot report success for a
+        # batch the real write would refuse. They validate the *whole library*,
+        # not just the incoming entries, and a dry run otherwise only checks each
+        # incoming entry on its own — so a pre-existing entry that blocks the
+        # write was invisible until the real run.
+        #
+        # This costs a dry run roughly what the real write costs (measured: ~1.4s
+        # to ~5s on a 22k-entry library). That is the right price for a preview
+        # whose entire job is to predict the write, and it makes this path behave
+        # like `execute_write_plan`, `preview_write_plan` and
+        # `preview_batch_write` — four paths that previously validated four
+        # different amounts, which is why the gap took so long to characterize.
+        # Neither gate mutates.
         session.check_consistency()
         _validate_bibtex_roundtrip(session.entries)
+        if not write:
+            return
         new_library = _update_library_blocks(
             library,
             session.entries,
@@ -708,6 +766,9 @@ def preview_write_plan(
 
         if plan["action"] == "update":
             _validate_update_plan_against_current(records, plan)
+            # Applied in `preview_write_plan` too, or `--dry-run` would show a
+            # diff the real write does not produce.
+            plan = _rebase_update_plan_against_current(records, entries, plan)
         if plan["action"] == "insert":
             plan = _rebase_insert_plan_against_current(records, entries, plan)
 
@@ -805,6 +866,76 @@ def _validate_update_plan_against_current(
     current_citekey = current_records[index].get("citekey")
     if planned_citekey and current_citekey != planned_citekey:
         raise _stale_plan("the entry it targets now has a different citekey")
+
+
+#: `bibtex.USER_OWNED_FIELDS` in BibTeX spelling. These are the fields a rebase
+#: restores from the on-disk entry, because their absence from a plan means "the
+#: writer had no opinion", never "delete it" — unlike the identity fields
+#: `promote --replace` strips deliberately. `citekey` is the entry key, not a
+#: field, and is validated separately.
+_USER_OWNED_ENTRY_FIELDS = ("note", "keywords", "file")
+
+
+def _rebase_update_plan_against_current(
+    current_records: list[NormalizedRecord],
+    current_entries: list[BibtexEntry],
+    plan: WritePlan,
+) -> WritePlan:
+    """Re-project the planned update onto the entry as it is *under the lock*.
+
+    A plan is built long before it is executed: `add_service` reads the library,
+    resolves metadata over the network and downloads a PDF, and only then calls
+    `execute_write_plan`. The digest guard there is snapshotted on the line
+    before the lock, so it catches a race of microseconds and not the window
+    that actually matters. An edit landing in that window therefore passed every
+    check — `_validate_update_plan_against_current` compares the index and the
+    citekey, never field content — and `plan["entry"]`, projected from a record
+    read before the edit, was written verbatim over it.
+
+    Re-running the merge is what `plan_bib_write` itself does to build an update
+    (`merge_entries` → project → `merge_projected_entry`), and what
+    `_rebase_insert_plan_against_current` does for an insert that turns out to
+    match. Merging only the projected *entry* is not enough: a record-owned
+    field the projection omits — `note` is the one that bites, since it is the
+    user's own prose — is authoritatively dropped by
+    :func:`merge_projected_entry`, so the user's newly added note would still
+    vanish. Re-merging at the record level first carries it through, while the
+    plan still wins every field it actually sets.
+    """
+    index = plan.get("index")
+    planned_record = plan.get("record")
+    if not isinstance(index, int) or not isinstance(planned_record, dict):
+        return plan
+    if index < 0 or index >= len(current_entries) or index >= len(current_records):
+        return plan  # already rejected by _validate_update_plan_against_current
+
+    planned_entry = plan.get("entry")
+    if not isinstance(planned_entry, dict):
+        return plan
+    current_entry = current_entries[index]
+
+    # Merge at the *entry* level, because `plan["entry"]` is authoritative —
+    # `apply_write_plan` says so, and some callers build a plan whose entry
+    # carries a change its record does not. That keeps every unmodelled field
+    # (`pages`, `publisher`, …) from the current entry and lets the plan win
+    # everything it sets.
+    rebased = merge_projected_entry(current_entry, planned_entry)
+    # `merge_projected_entry` keeps the *existing* entry's type, which is right
+    # when filling a gap and wrong here: `promote --replace` retypes
+    # `@unpublished` to `@article` on purpose, and the plan is authoritative.
+    rebased["entry_type"] = planned_entry["entry_type"]
+
+    # `merge_projected_entry` treats a record-owned field the projection omits
+    # as a deletion, which is correct for `promote --replace` — it strips
+    # `arxiv_id`, the arXiv DOI and the preprint URLs on purpose — but wrong for
+    # the user's own content, which the writer had no opinion about and simply
+    # did not know existed yet. Restore exactly the user-owned fields, and only
+    # where the plan does not set them.
+    for field in _USER_OWNED_ENTRY_FIELDS:
+        if field not in rebased["fields"] and field in current_entry["fields"]:
+            rebased["fields"][field] = current_entry["fields"][field]
+
+    return cast(WritePlan, {**plan, "entry": rebased})
 
 
 def _rebase_insert_plan_against_current(
@@ -1022,7 +1153,19 @@ def merge_bib_entries(
     *backup_path* is written from the on-disk file **inside this lock**,
     immediately before the write, exactly as :func:`delete_bib_entry` does — a
     merge destroys a block just as a delete does.
+
+    Raises :exc:`PziError` when the two citekeys are the same. The block loop
+    drops A's block and then replaces B's, and with one citekey there is only
+    one block: it was removed as A and never restored as B, so the entry
+    disappeared while the result reported ``found: True`` and no changed fields.
+    `dedupe_service` guards its own call site, but this layer owns the data and
+    holds the lock, so the precondition belongs here as well.
     """
+    if citekey_a == citekey_b:
+        raise PziError(
+            f"cannot merge {citekey_a!r} with itself",
+            code=exit_codes.ENVIRONMENT,
+        )
     with with_bib_lock(path):
         source = _read_bib_source(path)
         library = _parse_bib_library(source)
@@ -1157,9 +1300,14 @@ def rewrite_entries_in_order_locked(
     _validate_library_parseable(library)
     existing_entries, _records = _library_to_entries_records(library, path)
     if len(entries) != len(existing_entries):
-        raise ValueError(
-            "rewrite_entries_in_order requires the same number of entries "
-            f"as on disk (got {len(entries)}, expected {len(existing_entries)})"
+        # A user-facing message, not the internal function's name and arity:
+        # this is reachable when the bib changes between planning a reindex and
+        # writing it, which is an ordinary runtime outcome.
+        raise PziError(
+            f"the bib changed while the reindex was being prepared: {path} now "
+            f"has {len(existing_entries)} entries, not {len(entries)} — "
+            "retry the command",
+            code=exit_codes.ENVIRONMENT,
         )
     _validate_bibtex_roundtrip(entries)
     # No `touched_indices`: reindex rewrites the `file` field of every entry, so
