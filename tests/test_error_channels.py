@@ -8,7 +8,9 @@ document per command is what dropped the keys in the first place.
 from __future__ import annotations
 
 import io
+import json
 from pathlib import Path
+from unittest.mock import patch
 
 from pzi import cli_json, exit_codes
 
@@ -510,3 +512,30 @@ class _NotReadyBackend:
 
     def __exit__(self, *_exc):
         return False
+
+
+def test_a_violated_internal_invariant_still_emits_a_json_document(tmp_path: Path) -> None:
+    """`RuntimeError` escaped the CLI boundary entirely.
+
+    `_invariant` and `BatchWriteSession.apply_plan` raise a bare `RuntimeError`
+    on a violated batch-state guard, and `run_cli` caught `PziError`, `OSError`,
+    `UnicodeDecodeError` and `ValueError` but not that — so a desync printed a
+    traceback and, under `--json`, wrote nothing at all to stdout. Those are the
+    two outcomes `--json` exists to rule out.
+    """
+    from pzi import cli
+
+    out, err = io.StringIO(), io.StringIO()
+    with patch(
+        "pzi.commands.entries.list_entries",
+        side_effect=RuntimeError("internal invariant violated: snapshots disagree"),
+    ):
+        code = cli.run_cli(
+            ["entries", "--json"], home_dir=str(tmp_path), stdout=out, stderr=err
+        )
+
+    assert code == exit_codes.ENVIRONMENT
+    document = json.loads(out.getvalue())
+    assert document["status"] == "error"
+    assert any("invariant" in e for e in document["errors"]), document
+    assert "Traceback" not in err.getvalue()

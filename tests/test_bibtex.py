@@ -11,6 +11,7 @@ from pzi.bibtex import (
     primary_pdf_path,
     record_to_bibtex_entry,
 )
+from pzi.errors import PziError
 
 
 def test_record_to_bibtex_entry_maps_core_fields() -> None:
@@ -111,7 +112,14 @@ def test_record_to_bibtex_entry_uses_source_url_when_canonical_missing() -> None
 
 
 def test_record_to_bibtex_entry_requires_citekey() -> None:
-    with pytest.raises(ValueError, match="record.citekey"):
+    """A `PziError` phrased for the user, not the internal attribute path.
+
+    This is reachable from an entry hand-edited to `@article{,`, which parses
+    fine and only fails here at write time — so "record.citekey must be a
+    non-empty string" was shown to someone who has no record and no citekey,
+    only a .bib file to repair.
+    """
+    with pytest.raises(PziError, match="no citekey"):
         record_to_bibtex_entry({})
 
 

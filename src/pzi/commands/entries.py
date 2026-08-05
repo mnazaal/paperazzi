@@ -155,7 +155,7 @@ def _run_detail(args, home_dir, config_path, stdout, stderr, bib_selector) -> in
         )
         return exit_codes.OK
     print(f"citekey: {record.get('citekey', '')}", file=stdout)
-    print(f"title: {record.get('title', '')}", file=stdout)
+    print(f"title: {record.get('title') or ''}", file=stdout)
     year = record.get("year")
     if year:
         print(f"year: {year}", file=stdout)

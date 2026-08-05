@@ -7,6 +7,9 @@ import unicodedata
 from collections.abc import Mapping
 from typing import Any, Literal, TypeAlias, TypedDict
 
+from pzi import exit_codes
+from pzi.errors import PziError
+
 
 class NormalizedRecord(TypedDict, total=False):
     """Internal canonical representation of a bibliographic record.
@@ -92,7 +95,13 @@ def record_to_bibtex_entry(
     """Project a normalized record into a BibTeX-like entry shape."""
     citekey = record.get("citekey")
     if not isinstance(citekey, str) or not citekey.strip():
-        raise ValueError("record.citekey must be a non-empty string")
+        # A user-facing refusal, not the internal attribute path. This is
+        # reachable from an entry hand-edited to `@article{,`, which parses
+        # fine and only fails here, at write time.
+        raise PziError(
+            "refusing to write an entry with no citekey — give it a key",
+            code=exit_codes.ENVIRONMENT,
+        )
 
     fields: dict[str, str] = {}
 

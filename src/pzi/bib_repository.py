@@ -1287,9 +1287,14 @@ def rewrite_entries_in_order_locked(
     _validate_library_parseable(library)
     existing_entries, _records = _library_to_entries_records(library, path)
     if len(entries) != len(existing_entries):
-        raise ValueError(
-            "rewrite_entries_in_order requires the same number of entries "
-            f"as on disk (got {len(entries)}, expected {len(existing_entries)})"
+        # A user-facing message, not the internal function's name and arity:
+        # this is reachable when the bib changes between planning a reindex and
+        # writing it, which is an ordinary runtime outcome.
+        raise PziError(
+            f"the bib changed while the reindex was being prepared: {path} now "
+            f"has {len(existing_entries)} entries, not {len(entries)} — "
+            "retry the command",
+            code=exit_codes.ENVIRONMENT,
         )
     _validate_bibtex_roundtrip(entries)
     # No `touched_indices`: reindex rewrites the `file` field of every entry, so

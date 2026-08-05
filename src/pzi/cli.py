@@ -245,6 +245,14 @@ def run_cli(
             # file that is not valid UTF-8, …) become a clean diagnostic
             # instead of a raw traceback.  Genuine bugs still propagate.
             return _fail(_friendly_error(exc), [], exit_codes.ENVIRONMENT)
+        except RuntimeError as exc:
+            # `_invariant` and `BatchWriteSession.apply_plan` raise a bare
+            # `RuntimeError` on a violated batch-state guard. Nothing caught it,
+            # so a desync printed a traceback and — under `--json` — wrote
+            # *nothing at all* to stdout, the two outcomes `--json` exists to
+            # rule out. `ConcurrentEditError` is itself a `RuntimeError` and is
+            # handled above, so it keeps its own message.
+            return _fail(str(exc), [], exit_codes.ENVIRONMENT)
         except ValueError as exc:
             # Defence in depth, not a design: a write refusal is supposed to
             # arrive as a `PziError`. One that does not still has to leave

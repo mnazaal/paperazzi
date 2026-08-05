@@ -188,7 +188,7 @@ def list_entries(
     elif sort_field == "title":
         sorted_records = sorted(
             records,
-            key=lambda r: str(r.get("title", "")).lower(),
+            key=lambda r: str(r.get("title") or "").lower(),
         )
     else:
         sorted_records = sorted(
@@ -200,7 +200,11 @@ def list_entries(
     items = [
         {
             "citekey": str(r.get("citekey", "")),
-            "title": str(r.get("title", "")),
+            # `or ""`, not a `.get` default: the key is present with value
+            # `None` for a titleless entry, so `str(...)` rendered the
+            # literal string "None" — while `export --format json`
+            # emitted a correct `null` for the same record.
+            "title": str(r.get("title") or ""),
             "year": r.get("year"),
             "authors": _author_names(r),
             "entry_type": entry_types.get(id(r), "unknown"),
