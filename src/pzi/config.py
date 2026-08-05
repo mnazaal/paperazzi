@@ -19,6 +19,14 @@ from pzi.format_templates import describe_template_error
 # copy that drifts out of step silently loosens or tightens the gate.
 DEFAULT_PROMOTE_CONFIDENCE_THRESHOLD = 60
 
+# Where the translation-server is assumed to be when the config does not say.
+# Named for the same reason as the threshold above — it was written out twice,
+# in the loader and the validator — and additionally so the test suite can
+# repoint it at a dead port. A config that omits the key otherwise resolves to
+# the *real* default, which means a test seeding such a config silently reaches
+# whatever the developer happens to have listening on 1969.
+DEFAULT_TRANSLATION_SERVER_URL = "http://127.0.0.1:1969"
+
 
 class BibConfig(TypedDict):
     name: str
@@ -227,7 +235,7 @@ def _normalize_app_config(
         flaresolverr_url = None
 
     raw_translation_server_url = raw.get(
-        "translation_server_url", "http://127.0.0.1:1969"
+        "translation_server_url", DEFAULT_TRANSLATION_SERVER_URL
     )
     raw_api_listen_host = raw.get("api_listen_host", "127.0.0.1")
     raw_api_listen_port = raw.get("api_listen_port", 8765)
@@ -313,7 +321,7 @@ def validate_app_config(
     errors: list[str] = []
 
     raw_translation_server_url = raw.get(
-        "translation_server_url", "http://127.0.0.1:1969"
+        "translation_server_url", DEFAULT_TRANSLATION_SERVER_URL
     )
     if not isinstance(raw_translation_server_url, str) or not _is_http_url(
         raw_translation_server_url
