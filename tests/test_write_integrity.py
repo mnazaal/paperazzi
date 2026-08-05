@@ -421,3 +421,73 @@ def test_update_plan_does_not_discard_an_edit_made_while_the_plan_was_built(
     assert "hand-written by the user" in written, f"external edit was overwritten:\n{written}"
     # The update itself still applied.
     assert "A Much Longer Title From Crossref" in written
+
+
+def _add_a_keyword(entry, record):
+    """An updater that really changes something — an identity one never writes."""
+    return {**entry, "fields": {**entry["fields"], "keywords": "ml"}}
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "författare-not",   # Swedish, hand-added — legal biblatex
+        "Nyckelord",
+        "année",
+        "機械",
+        "bdsk-url-1",       # BibDesk
+        "date-added",
+        "__markedentry",    # JabRef
+        "a.b",
+        "a+b",
+        "a:b",
+    ],
+)
+def test_a_unicode_field_key_does_not_block_writing_the_library(
+    tmp_path: Path, key: str
+) -> None:
+    """A field key of letters and digits is legal BibTeX, whatever the alphabet.
+
+    The gate was ASCII-only, so one hand-edited or biblatex-native key anywhere
+    in a library made *every* write fail — including an `import` of unrelated
+    entries, with a message naming an entry the user had not touched. It also
+    made a dry run disagree with the real run, because only the real write
+    validates the whole library.
+    """
+    bib = tmp_path / "lib.bib"
+    bib.write_text(f"@article{{legacy2019,\n  title = {{T}},\n  {key} = {{v}}\n}}\n")
+
+    update_bib_entry(str(bib), "legacy2019", _add_a_keyword)
+
+    assert key.lower() in bib.read_text().lower()
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "a b",   # a space is not a legal BibTeX field name
+        "a/b",
+        "a#b",
+        "a@b",
+        # `a=b` and `a,b` are deliberately absent: the parser truncates the
+        # first to `a` and files the second as a failed block, so neither ever
+        # reaches this gate.
+    ],
+)
+def test_a_structurally_unsafe_field_key_is_still_refused(
+    tmp_path: Path, key: str
+) -> None:
+    """Widening the gate to Unicode must not widen it to anything at all.
+
+    bibtexparser round-trips `a b` happily, but that is leniency, not legality —
+    these characters either break real BibTeX readers or could escape the
+    `key = {value}` structure the serializer writes.
+    """
+    bib = tmp_path / "lib.bib"
+    bib.write_text(f"@article{{legacy2019,\n  title = {{T}},\n  {key} = {{v}}\n}}\n")
+    before = bib.read_text()
+
+    with pytest.raises(PziError):
+        update_bib_entry(str(bib), "legacy2019", _add_a_keyword)
+
+    assert bib.read_text() == before

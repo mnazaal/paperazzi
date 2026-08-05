@@ -724,11 +724,22 @@ def _strip_trailing_backslashes(value: str) -> str:
     return _TRAILING_BACKSLASHES.sub("", value)
 
 
-#: What a BibTeX field name may contain. Deliberately narrow: measured against a
-#: 22k-entry library (282k fields, including JabRef/BibDesk keys like
-#: ``bdsk-url-1``, ``date-added`` and ``__markedentry``), not one key falls
-#: outside it, so refusing the rest costs a real library nothing.
-_SAFE_FIELD_KEY = re.compile(r"\A[A-Za-z0-9_:.+-]+\Z")
+#: What a BibTeX field name may contain: word characters — Unicode letters,
+#: digits and underscore — plus the punctuation real-world keys use
+#: (``bdsk-url-1``, ``date-added``, ``__markedentry``).
+#:
+#: `\w`, not ``A-Za-z0-9_``. The ASCII-only form refused keys that are perfectly
+#: legal biblatex — a Swedish ``författare-not``, a French ``année`` — and the
+#: cost was not local: this gate runs over the *whole library* on every write,
+#: so one such key anywhere made every `import`, `update` and `tag` fail, naming
+#: an entry the user had not touched. It also made a batch dry run disagree with
+#: the real run, since only the real write validates the whole library.
+#:
+#: Still deliberately narrow. A space, ``/``, ``#`` or ``@`` is refused: those
+#: either break real BibTeX readers or could escape the ``key = {value}``
+#: structure the serializer writes. bibtexparser round-trips ``a b`` happily,
+#: but that is leniency, not legality.
+_SAFE_FIELD_KEY = re.compile(r"\A[\w:.+-]+\Z")
 
 
 def _checked_field_key(key: str, citekey: str) -> str:
