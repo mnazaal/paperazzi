@@ -1643,3 +1643,96 @@ console.log(JSON.stringify({ created, attempts: results.length }));
     assert result["attempts"] == 8
     # Far fewer helper tabs than candidates: the budget stopped it.
     assert result["created"] <= 3, result
+
+
+def test_permission_prompts_are_capped_per_capture(tmp_path: Path) -> None:
+    """The candidate list comes from the page, so the prompt count must not.
+
+    One capture measured ten consecutive `chrome.permissions.request` dialogs.
+    Prompt fatigue is the only thing between a hostile page and a granted host
+    permission for an origin the user never meant to trust.
+    """
+    result = _run_background_module(
+        r'''
+let requested = 0;
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} } },
+  webRequest: { onHeadersReceived: { addListener: () => {}, removeListener: () => {} } },
+  contextMenus: { create: () => {}, onClicked: { addListener: () => {} } },
+  permissions: {
+    contains: async () => false,
+    request: async () => { requested += 1; return false; },
+  },
+};
+const { requestPdfOriginPermissions } = await import("./background/permissions.mjs");
+const candidates = [];
+for (let i = 0; i < 8; i++) candidates.push({ url: `https://cdn${i}.example.com/p.pdf` });
+const permissions = await requestPdfOriginPermissions(candidates, "https://page.example.org/a");
+console.log(JSON.stringify({ requested, origins: permissions.size }));
+''',
+        tmp_path,
+    )
+
+    assert result["origins"] == 8, "every origin should still get a recorded outcome"
+    assert result["requested"] <= 2, f"{result['requested']} dialogs raised by one capture"
+
+
+def test_a_non_loopback_attach_url_is_not_trusted() -> None:
+    """`new URL(absolute, base)` discards the base.
+
+    `attach.url` is server-supplied and derives from the user-editable `api_url`
+    config key, so an absolute value sent the API token and the PDF bytes to
+    whatever host it named. `isLoopbackEndpoint` exists for exactly this.
+
+    Structural: `rawAttachUrl` is module-local, and the property is "the planned
+    URL is not used unless it is loopback".
+    """
+    text = (PROJECT_ROOT / "browser-extension" / "background" / "pdf_fetch.js").read_text()
+    body = text[text.index("function rawAttachUrl("):]
+    body = body[: body.index("\n}\n")]
+
+    assert "isLoopbackEndpoint(planned)" in body, body
+    # The guarded value, never the raw one, is what may become the base.
+    assert "const base = plannedUrl ||" in body
+
+
+def test_bot_bypass_requires_the_candidate_itself_to_be_allowlisted() -> None:
+    """`||` let an allowlisted *page* authorise a navigation to any candidate.
+
+    The bypass opens a real, cookie-carrying tab, so the allowlist has to apply
+    to the URL being opened.
+    """
+    text = (PROJECT_ROOT / "browser-extension" / "background" / "pdf_fetch.js").read_text()
+
+    assert "isBotBypassWhitelisted(url) && isBotBypassWhitelisted(pageUrl)" in text
+    assert "isBotBypassWhitelisted(url) || isBotBypassWhitelisted(pageUrl)" not in text
+
+
+def test_no_optional_request_for_a_required_cookies_permission() -> None:
+    """`cookies` is required in the manifest and absent from optional_permissions.
+
+    `chrome.permissions.request({permissions:["cookies"]})` is rejected on
+    Firefox for a non-optional permission; the catch returned "denied" and the
+    cookie-header retry never ran.
+    """
+    ext = PROJECT_ROOT / "browser-extension"
+    manifest = json.loads((ext / "manifest.base.json").read_text())
+    assert "cookies" in manifest["permissions"]
+    assert "cookies" not in manifest.get("optional_permissions", [])
+
+    joined = "\n".join(
+        path.read_text() for path in ext.rglob("*.js")
+    )
+    assert 'permissions: ["cookies"]' not in joined
+
+
+def test_an_authenticated_page_body_is_not_retained_for_display() -> None:
+    """The snippet was the body of a page fetched with the user's cookies.
+
+    It is rendered in the popup's raw-response pane, so a login form's CSRF
+    token or a prefilled username could be shown back. The classification beside
+    it is what the diagnostics actually need.
+    """
+    text = (PROJECT_ROOT / "browser-extension" / "background" / "pdf_fetch.js").read_text()
+
+    assert "text.slice(0, 500)" not in text

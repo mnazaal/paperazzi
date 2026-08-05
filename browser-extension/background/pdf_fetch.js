@@ -10,6 +10,7 @@ import {
   _captureTabId,
   endpointFor,
   getAuthHeaders,
+  isLoopbackEndpoint,
 } from "./config.js";
 import {
   arrayBufferToBase64,
@@ -28,7 +29,6 @@ import {
   groupPdfCandidates,
   permissionForCandidate,
   removeTemporaryOriginPermission,
-  requestCookiePermission,
   requestTemporaryOriginPermission,
 } from "./permissions.js";
 import {
@@ -389,7 +389,10 @@ async function fetchPdfViaDiscoverFromPage({ candidate, endpoint, citekey, bib, 
   if (!url) return null;
   attempts.push({ url, mode: "discover_from_page", status: "started", referrer: candidate.referrer || pageUrl || null });
 
-  const useBotBypass = isBotBypassWhitelisted(url) || isBotBypassWhitelisted(pageUrl);
+  // `&&`, not `||`: the bypass opens a real, cookie-carrying navigation via
+  // `chrome.tabs.create`, so the *candidate* must be allowlisted. With `||` an
+  // allowlisted page authorised a navigation to any URL it happened to offer.
+  const useBotBypass = isBotBypassWhitelisted(url) && isBotBypassWhitelisted(pageUrl);
   if (!useBotBypass) {
     attempts.push({ url, mode: "discover_from_page", status: "skipped", reason: "domain not bot-bypass allowlisted" });
     return null;
@@ -536,7 +539,13 @@ async function attachPdfToServer({ endpoint, citekey, bib, sourceUrl, bytes, pdf
 }
 
 function rawAttachUrl(endpoint, { citekey, bib, sourceUrl, pdfRequest = null }) {
-  const plannedUrl = pdfRequest?.attach?.url;
+  // The planned URL comes from the server, which derives it from the
+  // user-editable `api_url` config key. `new URL(absolute, base)` discards the
+  // base, so an absolute value here sent the API token and the PDF bytes to
+  // whatever host it named. `isLoopbackEndpoint` exists for exactly this and
+  // was not applied on this path.
+  const planned = pdfRequest?.attach?.url;
+  const plannedUrl = planned && isLoopbackEndpoint(planned) ? planned : null;
   const base = plannedUrl || `${endpointFor(endpoint, "/attach-pdf-raw")}?${new URLSearchParams({ citekey }).toString()}`;
   const url = new URL(base, endpointFor(endpoint, "/"));
   if (!url.searchParams.get("citekey")) url.searchParams.set("citekey", citekey);
@@ -647,10 +656,12 @@ async function fetchPdfCandidate(candidate, { pageUrl = null, attempts = [] } = 
   const cookieRetry = shouldRetryWithCookies(url, pageUrl);
   attempts.push({ url, mode: "diag", status: "cookie_retry_decision", cookie_retry: cookieRetry, candidate_is_page_url: url === pageUrl });
   if (cookieRetry) {
-    const cookiePermission = await requestCookiePermission();
-    attempts.push({ url, mode: "diag", status: "cookie_permission", permission: cookiePermission.status });
-    if (cookiePermission.status === "granted") {
-      const cookieHeader = await cookieHeaderForUrl(url);
+    // No `chrome.permissions.request` here: `cookies` is a *required*
+    // permission in the manifest and absent from `optional_permissions`, so
+    // requesting it is rejected on Firefox — the catch returned "denied" and
+    // this whole retry never ran. It is granted at install; just read.
+    const cookieHeader = await cookieHeaderForUrl(url);
+    {
       attempts.push({ url, mode: "diag", status: "cookie_header", has_header: !!cookieHeader });
       if (cookieHeader) {
         const second = await fetchCandidateBytes(url, {
@@ -730,7 +741,11 @@ async function fetchCandidateBytes(candidate, options, mode, attempts) {
         } else if (/access\s+denied|forbidden|not\s+authorized|subscription\s+required|payment\s+required/i.test(lower)) {
           htmlStatus = "html_access_denied";
         }
-        textSnippet = text.slice(0, 500);
+        // Deliberately not retained. This is the body of a page fetched with
+        // the user's cookies, so a login form's CSRF token or a prefilled
+        // username could land in the popup's raw-response pane. The
+        // classification below is what the diagnostics actually need.
+        textSnippet = null;
       } catch (_e) { /* ignore decode errors */ }
     }
     attempts.push({ url, mode, status: htmlStatus, http_status: response.status || null, content_type: contentType, byte_count: bytes.byteLength, text_snippet: textSnippet });

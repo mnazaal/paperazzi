@@ -5,15 +5,10 @@
 
 import { candidateUrl, originOf, sameOrigin } from "./utils.js";
 
-export async function requestCookiePermission() {
-  if (!chrome.permissions?.request) return { status: "denied" };
-  try {
-    const granted = Boolean(await chrome.permissions.request({ permissions: ["cookies"] }));
-    return { status: granted ? "granted" : "denied" };
-  } catch (_error) {
-    return { status: "denied" };
-  }
-}
+//: How many distinct cross-origin permission dialogs one capture may raise.
+//: The candidate list comes from the page, so without a cap a hostile page can
+//: queue as many prompts as it likes and wait for one to be accepted.
+const MAX_ORIGIN_PROMPTS_PER_CAPTURE = 2;
 
 export async function cookieHeaderForUrl(url) {
   if (!chrome.cookies?.getAll) return "";
@@ -70,9 +65,20 @@ export async function requestPdfOriginPermissions(candidates, pageUrl) {
     permissions.set(origin, { status: "unavailable", origin, removed: false });
   }
   const originGroups = groupCandidatesByOrigin(grouped.crossOrigin);
+  let prompted = 0;
   for (const group of originGroups) {
     const origin = originOf(candidateUrl(group[0]));
     if (!origin || permissions.has(origin)) continue;
+    // Capped, because the list is page-controlled. One capture measured ten
+    // consecutive permission dialogs, and prompt fatigue is the only thing
+    // between a hostile page and a granted host permission for an origin the
+    // user never meant to trust. Candidates are ordered by confidence, so the
+    // first few are the ones worth asking about.
+    if (prompted >= MAX_ORIGIN_PROMPTS_PER_CAPTURE) {
+      permissions.set(origin, { status: "not_requested", origin, removed: false });
+      continue;
+    }
+    prompted += 1;
     permissions.set(origin, await requestTemporaryOriginPermission(group[0]));
   }
   return permissions;
