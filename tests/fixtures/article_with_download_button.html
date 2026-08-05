@@ -3,5 +3,8 @@
 <body>
 <h1>Research Article</h1>
 <p>Click the button to get the PDF.</p>
-<button>Download PDF</button>
+<!-- A bare <button> with no handler navigates nowhere, so click discovery had
+     nothing to discover and the test asserted only that it returned None.
+     Real publisher "Download PDF" buttons navigate; this one does too. -->
+<button onclick="location.href='/paper.pdf'">Download PDF</button>
 </body></html>
