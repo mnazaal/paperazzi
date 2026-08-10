@@ -1056,7 +1056,7 @@ _MOCK_BACKGROUND_MODULE = (
     "export async function getAuthHeaders() { return globalThis.__authHeaders || {}; }\n"
     "export async function detectAndExtractSearchResults() { return globalThis.__searchResults ?? null; }\n"
     "export async function cookieHeaderForUrl(url) { (globalThis.__cookieCalls ??= []).push(url); return globalThis.__cookieHeader ?? ''; }\n"
-    "export async function captureCurrentTab() { return { status: 'ok' }; }\n"
+    "export async function captureCurrentTab() { if (globalThis.__captureError) throw new Error(globalThis.__captureError); return globalThis.__captureResult ?? { status: 'ok' }; }\n"
     "export function endpointFor(rawEndpoint, path) { const base = new URL(rawEndpoint); const target = new URL(path, base); target.search = ''; return target.href.replace(/\\/$/, ''); }\n"
 )
 
@@ -1212,6 +1212,142 @@ console.log(JSON.stringify({ permission, events: globalThis.events }));
         {"type": "contains", "request": {"origins": ["https://ieeexplore.ieee.org/*"]}},
         {"type": "permission", "request": {"origins": ["https://ieeexplore.ieee.org/*"]}},
     ]
+
+
+# Drives a real single capture through the popup's "go" button, with the origin
+# permission not already held. `_CAPTURE_DOM` leaves `__captureError` unset, so
+# the capture succeeds unless a test sets it.
+_CAPTURE_DOM = r'''
+const elements = new Map();
+const makeElement = (id) => ({
+  id, value: "", checked: false, disabled: false, textContent: "", innerHTML: "",
+  className: "", type: "", style: { cssText: "" }, children: [], handlers: {},
+  appendChild(child) { this.children.push(child); },
+  addEventListener(event, handler) { (this.handlers[event] ??= []).push(handler); },
+  querySelectorAll: () => [],
+});
+globalThis.document = {
+  getElementById: (id) => {
+    if (!elements.has(id)) elements.set(id, makeElement(id));
+    return elements.get(id);
+  },
+  createElement: () => makeElement("created"),
+};
+globalThis.window = { open: () => {} };
+globalThis.fetch = async () => ({ ok: true, json: async () => ({}) });
+globalThis.events = [];
+globalThis.chrome = {
+  storage: {
+    local: { get: async () => ({}), set: async () => ({}), remove: async () => ({}) },
+    session: { get: async () => ({}), set: async () => ({}), remove: async () => ({}) },
+  },
+  tabs: { query: async () => [{ id: 7, url: "https://ieeexplore.ieee.org/document/9840963" }] },
+  runtime: { sendMessage: () => {} },
+  permissions: {
+    contains: async () => Boolean(globalThis.__alreadyGranted),
+    request: async (request) => {
+      globalThis.events.push({ type: "request", request });
+      return true;
+    },
+    remove: async (request) => {
+      globalThis.events.push({ type: "remove", request });
+      return true;
+    },
+  },
+};
+const runCapture = async () => {
+  await import("./popup.js");
+  for (let i = 0; i < 20; i += 1) await new Promise((r) => setTimeout(r, 0));
+  const go = elements.get("go").handlers.click[0];
+  await go();
+  for (let i = 0; i < 20; i += 1) await new Promise((r) => setTimeout(r, 0));
+};
+'''
+
+
+def test_a_capture_gives_back_the_origin_permission_it_borrowed(tmp_path: Path) -> None:
+    """The grant was requested for one capture and never handed back.
+
+    `doSingleCapture` discarded the return value of
+    `requestActiveTabOriginPermission` outright, so the permission was not even
+    reachable to release. The extension therefore accumulated a permanent host
+    permission for every site ever captured from — which also widens what the
+    always-on `webRequest` observer can see.
+    """
+    result = _run_popup_js_test(
+        _CAPTURE_DOM
+        + r'''
+await runCapture();
+console.log(JSON.stringify({ events: globalThis.events }));
+''',
+        tmp_path,
+    )
+
+    pattern = {"origins": ["https://ieeexplore.ieee.org/*"]}
+    assert {"type": "request", "request": pattern} in result["events"], result["events"]
+    assert {"type": "remove", "request": pattern} in result["events"], result["events"]
+    # Borrowed, then returned — in that order.
+    kinds = [event["type"] for event in result["events"]]
+    assert kinds.index("request") < kinds.index("remove")
+
+
+def test_a_permission_the_user_already_granted_is_not_taken_away(tmp_path: Path) -> None:
+    """Releasing must not revoke a grant the user made deliberately.
+
+    `removeTemporaryOriginPermission` draws this line with `already_granted`;
+    the popup has to draw it in the same place, or capturing once from a site
+    the user had permanently allowed would silently downgrade it.
+    """
+    result = _run_popup_js_test(
+        _CAPTURE_DOM
+        + r'''
+globalThis.__alreadyGranted = true;
+await runCapture();
+console.log(JSON.stringify({ events: globalThis.events }));
+''',
+        tmp_path,
+    )
+
+    assert not any(event["type"] == "remove" for event in result["events"]), result["events"]
+    # And nothing was requested either, since it was already held.
+    assert not any(event["type"] == "request" for event in result["events"]), result["events"]
+
+
+def test_a_capture_that_throws_still_gives_the_permission_back(tmp_path: Path) -> None:
+    """The release has to sit in a `finally`.
+
+    `maybeStreamPdfBytes` shipped this exact bug — the release placed after the
+    call it protects, so a throw left the user holding a host permission
+    indefinitely. Repeating it here would be unforced.
+    """
+    result = _run_popup_js_test(
+        _CAPTURE_DOM
+        + r'''
+globalThis.__captureError = "capture blew up";
+await runCapture();
+console.log(JSON.stringify({ events: globalThis.events }));
+''',
+        tmp_path,
+    )
+
+    pattern = {"origins": ["https://ieeexplore.ieee.org/*"]}
+    assert {"type": "remove", "request": pattern} in result["events"], result["events"]
+
+
+def test_a_dry_run_borrows_no_permission_at_all(tmp_path: Path) -> None:
+    """Nothing is fetched on a preview, so nothing needs granting."""
+    result = _run_popup_js_test(
+        _CAPTURE_DOM
+        + r'''
+const dry = document.getElementById("dry");
+dry.checked = true;
+await runCapture();
+console.log(JSON.stringify({ events: globalThis.events }));
+''',
+        tmp_path,
+    )
+
+    assert result["events"] == [], result["events"]
 
 
 def test_popup_stamps_direct_capture_result(tmp_path: Path) -> None:
@@ -1896,6 +2032,125 @@ console.log(JSON.stringify({
         for read in session_reads
         for key in (read["keys"] if isinstance(read["keys"], list) else [read["keys"]])
     ), session_reads
+
+
+def test_every_borrowed_candidate_origin_is_released_not_just_the_winner(
+    tmp_path: Path,
+) -> None:
+    """`requestPdfOriginPermissions` grants upfront; the loop releases per group.
+
+    `background.js:119` asks for every candidate origin before acquisition
+    starts, but `maybeStreamPdfBytes` releases only the group it processed and
+    returns as soon as one succeeds — so every origin *after* the winning one
+    kept a permanent host permission. Same family as the popup's active-tab
+    grant, and found by checking whether that one was really the only site.
+    """
+    result = _run_background_module(
+        r'''
+const pdfBytes = new Uint8Array([37, 80, 68, 70, 45, 49]).buffer;  // "%PDF-1"
+globalThis.events = [];
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} } },
+  storage: {
+    local: { get: async () => ({ endpoint: "http://127.0.0.1:8765/capture" }) },
+    session: { get: async () => ({}), set: async () => ({}) },
+  },
+  tabs: { query: async () => [{ id: 7, url: "https://paper.test/article" }] },
+  webRequest: { onHeadersReceived: { addListener: () => {}, removeListener: () => {} } },
+  permissions: {
+    contains: async () => false,
+    request: async (request) => { globalThis.events.push({ type: "request", request }); return true; },
+    remove: async (request) => { globalThis.events.push({ type: "remove", request }); return true; },
+  },
+  scripting: {
+    executeScript: async ({ func, args }) => {
+      if (String(func).includes("citation_doi")) {
+        return [{ result: { pageTitle: "Paper", sourceUrl: args[0] } }];
+      }
+      // Two cross-origin candidates: the first works, the second is never tried.
+      return [{ result: ["https://first.example/a.pdf", "https://second.example/b.pdf"] }];
+    },
+  },
+};
+globalThis.btoa = (value) => Buffer.from(value, "binary").toString("base64");
+globalThis.fetch = async (url) => {
+  if (url.endsWith(".pdf")) {
+    return { ok: true, status: 200, headers: { get: () => "application/pdf" }, arrayBuffer: async () => pdfBytes };
+  }
+  return { ok: true, status: 200, headers: { get: () => "application/json" }, json: async () => ({ status: "ok", citekey: "smith2024paper" }) };
+};
+const mod = await import("./background.js");
+await mod.captureCurrentTab({ dryRun: false });
+console.log(JSON.stringify({ events: globalThis.events }));
+''',
+        tmp_path,
+    )
+
+    requested = [e["request"]["origins"][0] for e in result["events"] if e["type"] == "request"]
+    released = [e["request"]["origins"][0] for e in result["events"] if e["type"] == "remove"]
+
+    assert requested, result["events"]
+    # Whatever was borrowed is given back, including origins never attempted.
+    assert sorted(released) == sorted(requested), {
+        "requested": requested,
+        "released": released,
+    }
+
+
+def test_a_capture_that_the_server_rejects_still_releases_its_origins(
+    tmp_path: Path,
+) -> None:
+    """`captureCurrentTab` returns early on a non-ok response and on a body it
+    cannot parse, both *after* the origin permissions have been granted. A
+    release placed at the end of the happy path would skip exactly the cases
+    where the user gets nothing in return for the grant.
+    """
+    result = _run_background_module(
+        r'''
+globalThis.events = [];
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} } },
+  storage: {
+    local: { get: async () => ({ endpoint: "http://127.0.0.1:8765/capture" }) },
+    session: { get: async () => ({}), set: async () => ({}) },
+  },
+  tabs: { query: async () => [{ id: 7, url: "https://paper.test/article" }] },
+  webRequest: { onHeadersReceived: { addListener: () => {}, removeListener: () => {} } },
+  permissions: {
+    contains: async () => false,
+    request: async (request) => { globalThis.events.push({ type: "request", request }); return true; },
+    remove: async (request) => { globalThis.events.push({ type: "remove", request }); return true; },
+  },
+  scripting: {
+    executeScript: async ({ func, args }) => {
+      if (String(func).includes("citation_doi")) {
+        return [{ result: { pageTitle: "Paper", sourceUrl: args[0] } }];
+      }
+      return [{ result: ["https://first.example/a.pdf"] }];
+    },
+  },
+};
+globalThis.fetch = async () => ({
+  ok: false,
+  status: 502,
+  statusText: "Bad Gateway",
+  json: async () => { throw new SyntaxError("Unexpected token '<'"); },
+});
+const mod = await import("./background.js");
+const outcome = await mod.captureCurrentTab({ dryRun: false });
+console.log(JSON.stringify({ status: outcome.status, events: globalThis.events }));
+''',
+        tmp_path,
+    )
+
+    assert result["status"] == "error"
+    requested = [e["request"]["origins"][0] for e in result["events"] if e["type"] == "request"]
+    released = [e["request"]["origins"][0] for e in result["events"] if e["type"] == "remove"]
+    assert requested, result["events"]
+    assert sorted(released) == sorted(requested), {
+        "requested": requested,
+        "released": released,
+    }
 
 
 def test_a_non_loopback_endpoint_is_not_used(tmp_path: Path) -> None:

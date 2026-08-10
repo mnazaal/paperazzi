@@ -84,6 +84,23 @@ export async function requestPdfOriginPermissions(candidates, pageUrl) {
   return permissions;
 }
 
+export async function releasePdfOriginPermissions(permissions) {
+  // Whoever borrows, returns. `requestPdfOriginPermissions` grants every
+  // candidate origin *before* acquisition starts, but `maybeStreamPdfBytes`
+  // releases only the origin group it processed and returns as soon as one
+  // succeeds — so every origin after the winning one kept a permanent host
+  // permission, silently widening what the always-on `webRequest` observer
+  // sees. Entries already handed back carry `removed`, and one the user
+  // granted themselves is not ours to revoke (`removeTemporaryOriginPermission`
+  // draws that line).
+  if (!permissions || typeof permissions.values !== "function") return permissions;
+  for (const permission of permissions.values()) {
+    if (!permission || permission.removed) continue;
+    await removeTemporaryOriginPermission(permission.origin, permission);
+  }
+  return permissions;
+}
+
 export function permissionForCandidate(permissions, candidate) {
   if (!permissions || typeof permissions.get !== "function") return null;
   const origin = originOf(candidateUrl(candidate));

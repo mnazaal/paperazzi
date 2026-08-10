@@ -75,7 +75,19 @@ Quick summary:
 - **Optional host permission** — requested at capture time when a PDF candidate
   lives on an origin not in that list. Used for that one fetch and released
   afterwards, on every path including failure. Denying it still captures the
-  metadata.
+  metadata. Candidate origins are granted *before* acquisition starts, so ones
+  the run never reaches — because an earlier candidate already produced the PDF
+  — are released too, not just the one that worked.
+- **Active-tab origin permission** — requested once per non-dry-run capture, for
+  the origin of the page you are on, and released as soon as that capture
+  finishes. This is what lets the capture re-fetch the page with your session.
+  A permission you had already granted for that origin is left alone, since it
+  is yours rather than the capture's to hand back.
+
+Nothing requested on demand is kept: a capture borrows the host permissions it
+needs and returns them, so the set the browser lists for paperazzi does not grow
+as you use it. Earlier versions kept the active-tab grant permanently, which
+also widened what the always-on `webRequest` observer could see.
 
 **What leaves your machine.** PDF bytes and page HTML do not: they go to the
 local pzi server over loopback and stop there. Two things do leave, both to the

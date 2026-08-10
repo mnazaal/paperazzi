@@ -359,6 +359,31 @@ export async function requestActiveTabOriginPermission(tabUrl) {
   }
 }
 
+export async function releaseActiveTabOriginPermission(tabUrl, permission) {
+  // The twin of `requestActiveTabOriginPermission`, drawing the same line
+  // `removeTemporaryOriginPermission` draws for PDF-candidate origins in the
+  // background: a grant the user made deliberately is theirs and must survive,
+  // but one borrowed for a single capture has to be handed back.
+  //
+  // Nothing released this before, and the caller discarded the permission
+  // object entirely, so it was not even reachable to release. The extension
+  // accumulated a permanent host permission for every site ever captured from,
+  // which also widens what the always-on `webRequest` observer can see.
+  if (!permission || permission.status !== "granted" || permission.already_granted) return false;
+  if (!chrome.permissions?.remove) return false;
+  let origin;
+  try {
+    origin = new URL(tabUrl).origin;
+  } catch (_error) {
+    return false;
+  }
+  try {
+    return Boolean(await chrome.permissions.remove({ origins: [`${origin}/*`] }));
+  } catch (_error) {
+    return false;
+  }
+}
+
 export function stampPopupResult(result) {
   const out = (result && typeof result === "object") ? { ...result } : { status: "error", errors: ["invalid capture result"] };
   out.popup_build_marker = POPUP_BUILD_MARKER;
@@ -395,8 +420,11 @@ async function doSingleCapture() {
     return;
   }
 
+  // Kept, not discarded: the release below needs to know whether this capture
+  // is the thing that granted it, or whether the user already had it.
+  let originPermission = null;
   if (!dryRun) {
-    await requestActiveTabOriginPermission(tabUrl);
+    originPermission = await requestActiveTabOriginPermission(tabUrl);
   }
 
   // Run capture in popup context so Firefox keeps optional permission request
@@ -416,6 +444,10 @@ async function doSingleCapture() {
   } finally {
     button.disabled = false;
     _clearBadge();
+    // In the `finally`, not after the `try`: a throw out of the capture must
+    // not leave the user holding a host permission they granted for one fetch.
+    // `maybeStreamPdfBytes` shipped exactly that bug for PDF-candidate origins.
+    await releaseActiveTabOriginPermission(tabUrl, originPermission);
   }
 }
 

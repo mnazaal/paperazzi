@@ -56,11 +56,22 @@ explained below.
 
 **Optional host permissions** (`optional_host_permissions`):
 
-- `https://*/*`, `http://*/*` — requested only when a cross-origin PDF candidate is
-  discovered (e.g., article on `publisher.com` with PDF on `cdn.publisher.com`).
-  The extension asks for a narrow host permission (`https://cdn.publisher.com/*`)
-  after the user clicks capture. This permission is used only for that fetch
-  attempt and is removed immediately afterwards.
+- `https://*/*`, `http://*/*` — requested in two situations, and in both the
+  grant is temporary:
+  - **Cross-origin PDF candidate** (e.g. article on `publisher.com` with the PDF
+    on `cdn.publisher.com`). The extension asks for a narrow host permission
+    (`https://cdn.publisher.com/*`) after the user clicks capture, uses it for
+    that fetch, and removes it afterwards. Candidate origins are granted before
+    acquisition begins, so a run that succeeds on its first candidate still
+    releases the origins it never reached.
+  - **The active tab's own origin**, once per non-dry-run capture, so the
+    capture can re-fetch the page with the user's session. Released as soon as
+    that capture finishes, including when it fails or throws.
+
+A permission the user had already granted for an origin is never revoked by
+this: only grants the capture itself obtained are handed back. The practical
+guarantee is that the permission set the browser lists for paperazzi does not
+grow as the extension is used.
 
 If the user denies the optional permission prompt, metadata capture still
 completes. Only the cross-origin PDF fetch is skipped.
