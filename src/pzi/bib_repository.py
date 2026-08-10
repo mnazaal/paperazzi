@@ -1358,8 +1358,11 @@ validate_bibtex_roundtrip = _validate_bibtex_roundtrip
 # Write planning
 # ---------------------------------------------------------------------------
 
-_USER_OWNED_FIELDS = frozenset({"tags", "citekey"})
-_PREFER_LONGER_TEXT_FIELDS = frozenset({"title", "venue", "note", "abstract"})
+# `note` is deliberately absent: it is user-owned (`bibtex.USER_OWNED_FIELDS`),
+# and listing it here meant an incoming record whose note happened to be longer
+# replaced the user's prose — reachable through `pzi import`. It is filled only
+# when the entry has none, below.
+_PREFER_LONGER_TEXT_FIELDS = frozenset({"title", "venue", "abstract"})
 _FILL_IF_MISSING_FIELDS = frozenset(
     {
         "doi",
@@ -1369,6 +1372,7 @@ _FILL_IF_MISSING_FIELDS = frozenset(
         "pdf_url",
         "abstract_url",
         "local_pdf_path",
+        "note",
         "source_name",
         "source_payload",
     }
@@ -1563,10 +1567,12 @@ def merge_entries(existing: MergeableEntry, incoming: MergeableEntry) -> MergeDe
             merged[field] = merged_value
             changed_fields.append(field)
 
-    for field in _USER_OWNED_FIELDS:
-        if field not in merged and field in existing:
-            merged[field] = existing[field]
-
+    # There used to be a `_USER_OWNED_FIELDS` restore loop here. It could never
+    # fire — `merged` starts as `dict(existing)` and nothing above deletes a key
+    # — so it read as the protection for user-owned fields while being none, and
+    # `note` was quietly overwritten a few lines above it. The protection now
+    # lives where the fields are classified, and is pinned by
+    # `test_every_user_owned_field_is_protected_by_the_merge`.
     return {
         "merged": cast(NormalizedRecord, merged),
         "changed_fields": sorted(set(changed_fields)),

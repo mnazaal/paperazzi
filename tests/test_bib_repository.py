@@ -856,3 +856,50 @@ def test_reading_a_missing_bib_says_so_instead_of_reporting_an_empty_library(
     # the directory tree, which is how a typo'd path became a second library.
     assert read_bib_file(str(missing)) == {"entries": [], "records": []}
     assert not missing.parent.exists(), "a read created the directory tree"
+
+
+def test_merging_never_replaces_the_users_note_with_a_longer_one() -> None:
+    """`note` is user-owned, and merge treated it as prefer-the-longer-string.
+
+    `bibtex.USER_OWNED_FIELDS` carries the comment saying the definitions must
+    not drift, "a field that is user-owned for one and provider-owned for the
+    other means the same library loses a note or a tag depending on which
+    command touched it". `bib_repository` had drifted to its own two-element
+    set and listed `note` as prefer-longer, so an import whose note happened to
+    be longer overwrote the user's prose. Reachable through `pzi import`, which
+    builds records with `bibtex_entry_to_record` and so carries `note`.
+    """
+    from pzi.bib_repository import merge_entries
+
+    decision = merge_entries(
+        {"citekey": "a2020", "note": "read on the train"},
+        {"citekey": "a2020", "note": "Imported from Zotero collection Reading List 2024"},
+    )
+
+    assert decision["merged"]["note"] == "read on the train"
+    assert "note" not in decision["changed_fields"]
+
+
+def test_merging_fills_a_note_the_entry_does_not_have() -> None:
+    """User-owned means "yours wins", not "never written"."""
+    from pzi.bib_repository import merge_entries
+
+    decision = merge_entries(
+        {"citekey": "a2020"}, {"citekey": "a2020", "note": "from the provider"}
+    )
+
+    assert decision["merged"]["note"] == "from the provider"
+    assert "note" in decision["changed_fields"]
+
+
+def test_every_user_owned_field_is_protected_by_the_merge() -> None:
+    """The structural guard against the drift returning.
+
+    Two definitions of "user-owned" is what caused it; this pins that the merge
+    honours the single one in `bibtex`.
+    """
+    from pzi import bib_repository
+    from pzi.bibtex import USER_OWNED_FIELDS
+
+    overlap = USER_OWNED_FIELDS & bib_repository._PREFER_LONGER_TEXT_FIELDS
+    assert not overlap, f"user-owned fields must not prefer the longer value: {overlap}"
