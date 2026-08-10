@@ -109,3 +109,53 @@ def test_fix_merge_self_merge_is_not_tagged_not_found(tmp_path: Path) -> None:
 
     assert result["status"] == "error"
     assert "reason" not in result
+
+
+def test_fix_merge_names_the_survivor_fields_it_overwrites(tmp_path: Path) -> None:
+    """The dry run is where the user decides, and it never mentioned the loss.
+
+    `merge_entries` prefers the longer string for title, venue and abstract, so
+    the dropped entry's value replaces the survivor's. The runner printed
+    `carried_fields` and `dropped_fields` — the latter computed only over
+    identical raw field keys — but never `changed_fields`, which is exactly the
+    set of survivor fields the merge overwrites. In text mode, dry run and real
+    run alike, the loss was never mentioned at all.
+    """
+    from pzi.commands import dedupe as dedupe_command
+
+    bib = tmp_path / "lib.bib"
+    bib.write_text(
+        "@article{keep2020,\n"
+        "  title = {Short Title},\n"
+        "  author = {A, B},\n"
+        "  year = {2020},\n"
+        "}\n\n"
+        "@article{drop2020,\n"
+        "  title = {A Considerably Longer Title That Will Win},\n"
+        "  author = {A, B},\n"
+        "  year = {2020},\n"
+        "}\n"
+    )
+    config = tmp_path / "config.toml"
+    config.write_text(
+        'translation_server_url = "http://127.0.0.1:59999"\n\n'
+        f'[[bibs]]\nname = "main"\npath = "{bib}"\ndefault = true\n'
+    )
+
+    out, err = StringIO(), StringIO()
+    args = Namespace(
+        citekey_a="drop2020", citekey_b="keep2020", dry_run=True, json=False, target=None
+    )
+    dedupe_command.run_merge_command(
+        args,
+        home_dir=str(tmp_path),
+        config_path=str(config),
+        stdout=out,
+        stderr=err,
+        bib_selector=None,
+    )
+
+    text = out.getvalue()
+    assert "overwritten by drop2020: title" in text, text
+    # And it must no longer claim the opposite.
+    assert "fields kept from keep2020 (conflict): title" not in text, text

@@ -54,6 +54,11 @@ class MergeResult(TypedDict):
     #: which is why the dry run used to be unable to preview the loss.
     carried_fields: NotRequired[list[str]]
     dropped_fields: NotRequired[list[str]]
+    #: Fields the survivor *loses*: present in both entries with different
+    #: values, and resolved in the dropped entry's favour (title, venue and
+    #: abstract prefer the longer string). Reported as "kept from the survivor"
+    #: before, which is the opposite of what the run does.
+    overwritten_fields: NotRequired[list[str]]
     #: Where the pre-merge file was copied, mirroring `delete`.
     backup_path: NotRequired[str]
     # Structured failure kind, so the runner picks an exit code without matching
@@ -196,6 +201,16 @@ def _identity_components(
     return [members for members in components.values() if len(members) > 1]
 
 
+#: Where a record field lands in a BibTeX entry, for the few that are not
+#: spelled the same. Used to say which raw fields a merge overwrites.
+_RAW_KEYS_FOR_RECORD_FIELD: dict[str, tuple[str, ...]] = {
+    "venue": ("journal", "booktitle"),
+    "tags": ("keywords",),
+    "local_pdf_path": ("file",),
+    "canonical_url": ("url",),
+}
+
+
 def merge_duplicates(
     *,
     bib_path: str,
@@ -266,9 +281,26 @@ def merge_duplicates(
     fields_a = entries[idx_a].get("fields", {})
     fields_b = entries[idx_b].get("fields", {})
     carried_fields = sorted(key for key in fields_a if key not in fields_b)
+    # A field present in both is only "kept from B" when the merge actually
+    # keeps B's value. `merge_entries` prefers the *longer* string for title,
+    # venue and abstract, so B's value is routinely replaced by A's — and this
+    # list was reported as "fields kept from B (conflict)" regardless, telling
+    # the user the opposite of what the run does. The dry run is where the user
+    # decides, so the two outcomes are now separated by what the merge decided.
+    overwritten_raw_keys = {
+        raw
+        for field in changed_fields
+        for raw in _RAW_KEYS_FOR_RECORD_FIELD.get(field, (field,))
+    }
     conflicting_fields = sorted(
         key for key, value in fields_a.items()
         if key in fields_b and fields_b[key] != value
+        and key not in overwritten_raw_keys
+    )
+    overwritten_fields = sorted(
+        key for key, value in fields_a.items()
+        if key in fields_b and fields_b[key] != value
+        and key in overwritten_raw_keys
     )
 
     if dry_run:
@@ -283,6 +315,7 @@ def merge_duplicates(
             "changed_fields": changed_fields,
             "carried_fields": carried_fields,
             "dropped_fields": conflicting_fields,
+            "overwritten_fields": overwritten_fields,
             "merged_record": {
                 k: v for k, v in merged_record.items() if k != "citekey"
             },

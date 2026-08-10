@@ -72,6 +72,16 @@ def run_merge_command(args, *, home_dir, config_path, stdout, stderr, bib_select
             f"{', '.join(conflicting)}",
             file=stdout,
         )
+    # The survivor's own losses. Merge prefers the longer string for title,
+    # venue and abstract, so these were previously printed under "kept from
+    # <survivor>" — naming the loss as though it were a preservation.
+    overwritten = result.get("overwritten_fields") or []
+    if overwritten:
+        print(
+            f"  fields on {result['citekey_b']} overwritten by "
+            f"{result['citekey_a']}: {', '.join(overwritten)}",
+            file=stdout,
+        )
     backup = result.get("backup_path")
     if backup:
         print(f"  backup: {backup}", file=stdout)
