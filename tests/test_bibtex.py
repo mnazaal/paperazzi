@@ -509,3 +509,27 @@ def test_a_missing_year_is_still_filled_from_the_projection() -> None:
     merged = merge_projected_entry(entry, projection)
 
     assert merged["fields"]["year"] == "2021"
+
+
+def test_a_pdf_path_with_separators_round_trips_through_the_file_field() -> None:
+    """A `:` in a citekey made its PDF permanently invisible.
+
+    The citekey doubles as the PDF filename stem and `:` is legal in a citekey,
+    so `smith:2024:graphs` produced `papers/smith:2024:graphs.pdf`. That was
+    written into `file` verbatim, and `parse_file_field` reads three
+    colon-separated components as Zotero's `desc:path:mime` — so the path read
+    back as `2024`. `pzi entries` reported `has_pdf: false` forever, and
+    `pdf retry` would download it again, with the real file sitting on disk.
+    """
+    from pzi.bibtex import parse_file_field, record_to_bibtex_entry
+
+    for path in (
+        "/lib/papers/smith:2024:graphs.pdf",
+        "/lib/papers/a;b.pdf",
+        "/lib/pa{pers}/x.pdf",
+        r"C:\Users\me\paper.pdf",
+        "/lib/papers/ordinary.pdf",
+    ):
+        entry = record_to_bibtex_entry({"citekey": "k", "local_pdf_path": path})
+
+        assert parse_file_field(entry["fields"]["file"]) == [path], path

@@ -131,7 +131,7 @@ def record_to_bibtex_entry(
 
     local_pdf = _empty_to_none(record.get("local_pdf_path"))
     if local_pdf is not None:
-        fields["file"] = local_pdf
+        fields["file"] = escape_file_component(local_pdf)
 
     abstract = _normalize_abstract_text(record.get("abstract"))
     if abstract is not None:
@@ -330,6 +330,23 @@ def _split_unescaped(value: str, separator: str) -> list[str]:
             current.append(char)
     parts.append("".join(current))
     return parts
+
+
+def escape_file_component(value: str) -> str:
+    """Escape a path so :func:`parse_file_field` reads it back whole.
+
+    The exact inverse of :func:`_unescape_file_component`. Only a decoder
+    existed, so paths were written raw — and a citekey may legally contain `:`,
+    which doubles as the PDF filename stem. `papers/smith:2024:graphs.pdf` then
+    read back as Zotero's ``desc:path:mime`` and the stored path became
+    ``2024``: the entry reported no PDF forever while the file sat on disk.
+
+    A path with none of these characters is returned unchanged, so ordinary
+    libraries see no rewrite.
+    """
+    return "".join(
+        "\\" + char if char in _FILE_FIELD_ESCAPABLE else char for char in value
+    )
 
 
 def _unescape_file_component(value: str) -> str:
