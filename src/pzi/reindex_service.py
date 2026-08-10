@@ -9,7 +9,8 @@ from typing import Any, NotRequired, TypedDict
 
 from pzi.bib_repository import (
     backup_path_for,
-    read_bib_file_raw,
+    read_bib_file_raw_with_failures,
+    read_bib_notices,
     rewrite_entries_in_order_locked,
     with_bib_lock,
 )
@@ -46,6 +47,9 @@ class ReindexResult(TypedDict):
     total_entries: int
     changed: list[dict[str, Any]]
     errors: list[str]
+    #: Read notices that do not stop the audit but change what its counts mean:
+    #: a missing bib, and blocks the lenient parse dropped.
+    warnings: NotRequired[list[str]]
     #: Where the pre-rewrite library was copied, or ``None`` when nothing was
     #: rewritten (a dry run, or a library already matching ``citekey_format``).
     backup_path: NotRequired[str | None]
@@ -206,9 +210,15 @@ def reindex_library(
     when a PDF move is planned), and ``errors``.
     """
     with with_bib_lock(bib_path, shared=dry_run):
-        raw = read_bib_file_raw(bib_path)
+        raw, dropped = read_bib_file_raw_with_failures(bib_path)
         entries: list[BibtexEntry] = raw["entries"]
         records: list[NormalizedRecord] = raw["records"]
+        # The read is lenient, so an unparseable block arrives here as a shorter
+        # library. Reporting the count without saying so made an audit of one
+        # entry look like an audit of the file: `entries: 1` for a two-block
+        # file, `errors: []`, `status: ok`. The apply path refuses outright, so
+        # this was a lying preview rather than a bad write.
+        warnings = [*read_bib_notices(bib_path), *dropped]
 
         if not entries:
             return {
@@ -217,6 +227,7 @@ def reindex_library(
                 "total_entries": 0,
                 "changed": [],
                 "errors": [],
+                "warnings": warnings,
                 "backup_path": None,
             }
 
@@ -280,5 +291,6 @@ def reindex_library(
             "total_entries": len(entries),
             "changed": [dict(change) for change in changes],
             "errors": errors,
+            "warnings": warnings,
             "backup_path": str(backup_path) if backup_path is not None else None,
         }

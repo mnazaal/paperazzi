@@ -7,7 +7,7 @@ import os
 from pzi import cli_json, exit_codes
 from pzi.clean_service import clean_library, validate_library
 from pzi.cli_render import _error_lines, _render_clean_result
-from pzi.commands.common import print_lines, resolve_target
+from pzi.commands.common import print_lines, print_read_warnings, resolve_target
 
 
 def _siblings_sharing_papers_dir(config, target) -> list[str]:
@@ -59,5 +59,6 @@ def run_clean_command(args, *, home_dir, config_path, stdout, stderr, bib_select
         )
         return exit_codes.ENVIRONMENT
 
+    print_read_warnings(result, stderr)
     print_lines(_render_clean_result(result, dry_run=args.dry_run or not args.fix), stdout)
     return exit_codes.OK if not result.get("issues") else exit_codes.FINDINGS

@@ -22,7 +22,7 @@ import time
 from collections.abc import Callable, Mapping
 from typing import Literal, NotRequired, TypedDict
 
-from pzi.bib_repository import read_bib_file_with_failures
+from pzi.bib_repository import read_bib_file_with_notices
 from pzi.bibtex import NormalizedRecord
 from pzi.capture_context import resolve_contact_email, resolve_optional_value
 from pzi.config import BibResolutionFailure, load_bib_target
@@ -425,7 +425,7 @@ def check_bib(
     # `total: 1, verified: 1, problematic: 0, status: "ok"`, exit 0: an
     # unaudited entry inside a clean bill of health. An audit tool cannot report
     # on a file it only partly read.
-    read_result, dropped_blocks = read_bib_file_with_failures(bib["path"])
+    read_result, dropped_blocks = read_bib_file_with_notices(bib["path"])
     records = read_result["records"]
     effective_year = now_year if now_year is not None else time.gmtime().tm_year
     counts = {"verified": 0, "could_not_verify": 0, "problematic": 0}

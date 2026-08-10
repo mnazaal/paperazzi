@@ -253,10 +253,31 @@ def describe_missing_bib(path: str) -> str | None:
     return f"bib file does not exist yet: {path}"
 
 
+def read_bib_notices(path: str) -> list[str]:
+    """Every read notice for *path* that is not about an individual block.
+
+    One home for the fact, because the previous arrangement — each caller
+    appending :func:`describe_missing_bib` itself — reached `bib_service` and
+    none of the other six read sites, so only ``pzi entries`` said the library
+    file was missing while `check`, `search`, `tag list` and the three `fix`
+    subcommands reported a healthy empty library at exit 0.
+    """
+    return [notice for notice in (describe_missing_bib(path),) if notice]
+
+
 def read_bib_file(path: str) -> ReadBibResult:
     """Read a BibTeX file and project its entries into normalized records."""
     with with_bib_lock(path, shared=True):
         return _read_bib_file_raw(path)
+
+
+def read_bib_file_with_notices(path: str) -> tuple[ReadBibResult, list[str]]:
+    """:func:`read_bib_file_with_failures` plus :func:`read_bib_notices`.
+
+    The read entry point for anything that shows a user a count of entries.
+    """
+    result, failures = read_bib_file_with_failures(path)
+    return result, [*read_bib_notices(path), *failures]
 
 
 def read_bib_file_with_failures(path: str) -> tuple[ReadBibResult, list[str]]:

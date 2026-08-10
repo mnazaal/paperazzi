@@ -11,6 +11,7 @@ from typing import Any, NotRequired, TypedDict
 from pzi.bib_repository import (
     read_bib_file,
     read_bib_file_with_failures,
+    read_bib_notices,
 )
 from pzi.bib_serialize import failed_block_details
 from pzi.bibtex import BibtexEntry
@@ -34,6 +35,9 @@ class CleanResult(TypedDict):
     partial_parse: bool
     errors: list[str]
     issues: list[dict[str, Any]]
+    #: Read notices that are not about an individual block — currently only
+    #: "the configured bib does not exist". Printed by `print_read_warnings`.
+    warnings: NotRequired[list[str]]
     actions: NotRequired[list[dict[str, Any]]]
 
 
@@ -131,6 +135,7 @@ def validate_library(
             "partial_parse": partial_parse,
             "errors": [],
             "issues": issues,
+            "warnings": read_bib_notices(bib_path),
         }
 
     # --- Missing PDFs ---
@@ -201,6 +206,7 @@ def validate_library(
         "partial_parse": partial_parse,
         "errors": sibling_errors,
         "issues": issues,
+        "warnings": read_bib_notices(bib_path),
     }
 
 

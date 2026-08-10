@@ -12,6 +12,8 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from pzi import cli_json, exit_codes
 
 # ---------------------------------------------------------------------------
@@ -539,3 +541,46 @@ def test_a_violated_internal_invariant_still_emits_a_json_document(tmp_path: Pat
     assert document["status"] == "error"
     assert any("invariant" in e for e in document["errors"]), document
     assert "Traceback" not in err.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# A configured bib that is not there
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        pytest.param(["entries"], id="entries"),
+        pytest.param(["search", "--query", "x"], id="search"),
+        pytest.param(["tag", "list"], id="tag-list"),
+        pytest.param(["check"], id="check"),
+        pytest.param(["fix", "clean"], id="fix-clean"),
+        pytest.param(["fix", "dedupe"], id="fix-dedupe"),
+        pytest.param(["fix", "reindex"], id="fix-reindex"),
+    ],
+)
+def test_a_read_command_says_the_configured_bib_does_not_exist(
+    argv, tmp_path: Path, write_app_config
+) -> None:
+    """"The file is not there" and "the library is empty" are different facts.
+
+    `describe_missing_bib` exists to keep them apart and was wired into
+    `bib_service` alone, so only `entries` said so. Every other read command
+    reported a healthy empty library at exit 0 — `check` went as far as
+    "checked 0: 0 verified, 0 problematic", a clean audit verdict for a library
+    it never found. A typo'd `path =`, a renamed file and an unmounted share all
+    land here.
+    """
+    from pzi import cli
+
+    config_path = write_app_config(tmp_path)
+    missing = str(tmp_path / "ml.bib")
+    assert not Path(missing).exists()
+
+    out, err = io.StringIO(), io.StringIO()
+    cli.run_cli(
+        [*argv, "--config", config_path], home_dir=str(tmp_path), stdout=out, stderr=err
+    )
+
+    assert missing in err.getvalue(), f"{argv}: stderr said {err.getvalue()!r}"

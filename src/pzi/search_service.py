@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import NotRequired, TypedDict, cast
 
-from pzi.bib_repository import read_bib_file_with_failures
+from pzi.bib_repository import read_bib_file_with_notices
 from pzi.bibtex import normalize_authors
 from pzi.config import BibResolutionFailure, load_bib_target
 from pzi.tag_service import normalize_tags
@@ -80,7 +80,7 @@ def search_bib(
             }
         normalized_tag = tag_norm[0]
 
-    read_result, dropped = read_bib_file_with_failures(bib["path"])
+    read_result, dropped = read_bib_file_with_notices(bib["path"])
     records = read_result["records"]
     matches: list[SearchMatch] = []
     for record in records:

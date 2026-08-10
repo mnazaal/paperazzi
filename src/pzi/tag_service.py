@@ -9,7 +9,7 @@ from typing import Literal, NotRequired, TypedDict, cast
 from pzi.bib_repository import (
     find_entry_index,
     read_bib_file,
-    read_bib_file_with_failures,
+    read_bib_file_with_notices,
     update_bib_entry,
 )
 from pzi.bibtex import NormalizedRecord, apply_record_to_entry
@@ -96,7 +96,7 @@ def list_tags(
             "errors": resolved.errors,
         }
     _config, bib = resolved
-    read_result, dropped_blocks = read_bib_file_with_failures(bib["path"])
+    read_result, dropped_blocks = read_bib_file_with_notices(bib["path"])
     records = read_result["records"]
 
     if citekey is not None:

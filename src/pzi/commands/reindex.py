@@ -6,7 +6,12 @@ import sys
 
 from pzi import cli_json, exit_codes
 from pzi.cli_render import _error_lines, _render_reindex_result
-from pzi.commands.common import emit_usage_error, print_lines, resolve_target
+from pzi.commands.common import (
+    emit_usage_error,
+    print_lines,
+    print_read_warnings,
+    resolve_target,
+)
 from pzi.reindex_service import reindex_library
 
 
@@ -82,6 +87,7 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
         print_lines(_error_lines("reindex failed", result.get("errors", [])), stderr)
         return exit_codes.ENVIRONMENT
 
+    print_read_warnings(result, stderr)
     print_lines(_render_reindex_result(result, dry_run=not apply), stdout)
     backup = result.get("backup_path")
     if isinstance(backup, str):

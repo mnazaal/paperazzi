@@ -10,7 +10,7 @@ from pzi.bib_repository import (
     merge_bib_entries,
     merge_entries,
     read_bib_file,
-    read_bib_file_with_failures,
+    read_bib_file_with_notices,
 )
 from pzi.bibtex import NormalizedRecord
 from pzi.similarity import (
@@ -76,7 +76,7 @@ def find_duplicates(
         dict with ``status``, ``exact_duplicates`` (list of citekey pairs),
         ``fuzzy_candidates`` (list of citekey + hint dicts), and counts.
     """
-    raw, dropped = read_bib_file_with_failures(bib_path)
+    raw, dropped = read_bib_file_with_notices(bib_path)
     records: list[NormalizedRecord] = raw["records"]
 
     if not records:

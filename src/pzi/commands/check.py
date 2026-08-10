@@ -9,7 +9,7 @@ from typing import TextIO
 from pzi import cli_json, exit_codes
 from pzi.check_service import CheckResult, check_bib
 from pzi.cli_render import _error_lines, _render_check_items
-from pzi.commands.common import emit_usage_error, print_lines
+from pzi.commands.common import emit_usage_error, print_lines, print_read_warnings
 
 
 def run_check_command(
@@ -68,6 +68,11 @@ def run_check_command(
         else:
             print_lines(_error_lines("check failed", result["errors"]), stderr)
         return exit_codes.ENVIRONMENT
+
+    # Read notices first: "the library file is not there" changes what every
+    # count below means, and `check` used to print "checked 0: 0 verified, 0
+    # problematic" — a clean audit verdict for a library it never found.
+    print_read_warnings(result, stderr)
 
     # Sources that could not be consulted go to stderr regardless of output
     # format: every verdict below was reached without them, and the reader has
