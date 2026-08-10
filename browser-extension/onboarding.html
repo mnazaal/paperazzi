@@ -38,7 +38,7 @@
 
     <h2>Extension configuration</h2>
     <label>Server endpoint <input id="endpoint" value="http://127.0.0.1:8765/capture" placeholder="http://127.0.0.1:8765/capture" /></label>
-    <label>API token <input id="token" type="password" autocomplete="off" placeholder="from ~/.config/pzi/config.toml" /></label>
+    <label>API token <input id="token" type="password" autocomplete="off" placeholder="from ~/.local/share/pzi/api_token" /></label>
     <label>Bib library <select id="bib"><option value="">default</option></select></label>
 
     <button id="save">Save settings</button>
@@ -56,7 +56,7 @@
     <h2>If capture fails</h2>
     <ul>
       <li>Is the server running? Start it with <code>pzi server</code></li>
-      <li>Is the token correct? Check <code>token</code> in <code>~/.config/pzi/config.toml</code></li>
+      <li>Is the token correct? It is the contents of <code>~/.local/share/pzi/api_token</code> (written by <code>pzi init --setup</code>). It is deliberately not in <code>config.toml</code>, which stays free of secrets.</li>
       <li>Firewall? pzi listens on 127.0.0.1:8765 by default.</li>
     </ul>
 

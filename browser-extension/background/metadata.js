@@ -5,6 +5,13 @@
 
 import { firstString, tryHostname } from "./utils.js";
 
+//: How much of the page's `<head>` travels with a capture. It was sent whole:
+//: publisher pages inline JSON-LD, analytics and stylesheets there, so a
+//: routine capture shipped hundreds of kilobytes that the server keeps in a
+//: page artifact. What is actually read out of it — `<meta>` tags, JSON-LD,
+//: OpenGraph — sits at the top, so a prefix keeps the useful part.
+const MAX_HEAD_HTML_CHARS = 64 * 1024;
+
 const _EMPTY_METADATA = { pageTitle: null, canonicalUrl: null, sourceUrl: null, abstractUrl: null, doi: null };
 
 function normalizeIeeeAuthors(metadata) {
@@ -65,7 +72,7 @@ export async function extractPageMetadata(tabId, pageUrl) {
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId },
       world: "MAIN",
-      func: (currentUrl) => {
+      func: (currentUrl, maxHeadHtml) => {
         const contentOf = (selector) => document.querySelector(selector)?.getAttribute("content")?.trim() || null;
         const hrefOf = (selector) => document.querySelector(selector)?.getAttribute("href")?.trim() || null;
         const allContentOf = (selector) => {
@@ -175,7 +182,7 @@ export async function extractPageMetadata(tabId, pageUrl) {
 
         return {
           pageTitle: ieee?.title || document.title || null,
-          headHtml: document.head ? document.head.innerHTML : null,
+          headHtml: document.head ? document.head.innerHTML.slice(0, maxHeadHtml) : null,
           canonicalUrl: hrefOf('link[rel="canonical"]') || currentUrl || null,
           sourceUrl: currentUrl || null,
           abstractUrl:
@@ -204,7 +211,7 @@ export async function extractPageMetadata(tabId, pageUrl) {
           trusted_fields: ieee ? ["doi", "authors", "year", "title", "venue", "abstract", "pages", "issn", "isbn"] : null,
         };
       },
-      args: [pageUrl],
+      args: [pageUrl, MAX_HEAD_HTML_CHARS],
     });
     return result || {
       ..._EMPTY_METADATA,

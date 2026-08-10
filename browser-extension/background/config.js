@@ -63,15 +63,14 @@ export async function getAuthHeaders() {
   return stored.authToken ? { "X-Pzi-Token": stored.authToken } : {};
 }
 
-// Prefer session storage for popup/runtime choices, but fall back
-// to local storage for documented manual configuration on Chrome.
+// Local storage only. This used to merge `storage.session` *over* local, so a
+// session value shadowed the configured one — which is how an empty token box
+// wrote an empty token over the saved one and 401'd every request until it was
+// retyped. Nothing writes configuration to session storage: the only session
+// keys are `pzi:captureStage` and, historically, the recent list. Reading it
+// here bought nothing and cost that bug.
 export async function getStoredConfig(key) {
-  const localStored = chrome.storage.local
-    ? await chrome.storage.local.get(key)
-    : {};
-  if (!chrome.storage.session) return localStored;
-  const sessionStored = await chrome.storage.session.get(key);
-  return { ...localStored, ...sessionStored };
+  return chrome.storage.local ? await chrome.storage.local.get(key) : {};
 }
 
 export async function fetchBibs() {

@@ -36,11 +36,19 @@ const recentList = document.getElementById("recent-list");
 let _searchItems = [];
 
 // ── Init ─────────────────────────────────────────────────────────────────
-// Capture progress and the recent list are per-session state the *background*
-// writes to `storage.session`, so the popup has to read them from the same
-// place.
+// Capture *progress* is genuinely per-session: the background writes
+// `pzi:captureStage` to `storage.session` while a capture runs, and it means
+// nothing once the browser closes.
 function getStorage() {
   return (chrome.storage.session) ? chrome.storage.session : chrome.storage.local;
+}
+
+// The recent list is not. It is a short history of what the user captured, and
+// living in `storage.session` meant it emptied every time the browser closed —
+// so the one feature that answers "what did I just save?" was blank at the
+// start of every session, which is exactly when it is asked.
+function getRecentStorage() {
+  return chrome.storage.local;
 }
 
 // The API token is not session state. It lived in `storage.session`, which the
@@ -90,17 +98,17 @@ populateBibs();
 const MAX_RECENT = 20;
 
 async function _storeRecent(citekey, title, bib) {
-  const stored = await getStorage().get("pzi:recent");
+  const stored = await getRecentStorage().get("pzi:recent");
   let items = (stored && stored["pzi:recent"]) || [];
   // Remove duplicates of same citekey
   items = items.filter((r) => r.citekey !== citekey);
   items.unshift({ citekey, title: (title || "").slice(0, 80), bib: bib || "main", ts: Date.now() });
   if (items.length > MAX_RECENT) items = items.slice(0, MAX_RECENT);
-  await getStorage().set({ "pzi:recent": items });
+  await getRecentStorage().set({ "pzi:recent": items });
 }
 
 async function _loadRecent() {
-  const stored = await getStorage().get("pzi:recent");
+  const stored = await getRecentStorage().get("pzi:recent");
   return (stored && stored["pzi:recent"]) || [];
 }
 

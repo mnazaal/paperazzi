@@ -123,12 +123,14 @@ const RECENT = [
 ];
 globalThis.chrome = {
   storage: {
-    local: { get: async () => ({}), set: async () => ({}), remove: async () => ({}) },
-    session: {
+    // `pzi:recent` is durable: the list is a history, and living in the
+    // session area meant it emptied every time the browser closed.
+    local: {
       get: async (keys) => (String(keys).includes("pzi:recent") ? { "pzi:recent": RECENT } : {}),
       set: async () => ({}),
       remove: async () => ({}),
     },
+    session: { get: async () => ({}), set: async () => ({}), remove: async () => ({}) },
   },
   tabs: { query: async () => [] },
   runtime: { sendMessage: () => {} },
@@ -2232,16 +2234,11 @@ console.log(JSON.stringify({
     assert empty_writes == [], empty_writes
     assert result["localBacking"]["authToken"] == "saved-by-onboarding"
 
-    # Per-session state still comes from the session area.
-    session_reads = [
-        c for c in result["afterTypedCapture"] if c["area"] == "session" and c["op"] == "get"
-    ]
-    assert session_reads, result["afterTypedCapture"]
-    assert any(
-        "pzi:" in key
-        for read in session_reads
-        for key in (read["keys"] if isinstance(read["keys"], list) else [read["keys"]])
-    ), session_reads
+    # Nothing in this flow touches the session area any more, and that is the
+    # point: the token is configuration and `pzi:recent` is history, so both
+    # are durable. The one genuinely session-scoped key, `pzi:captureStage`, is
+    # covered by `test_the_popup_shows_what_the_capture_is_doing`.
+    assert [c for c in result["afterTypedCapture"] if c["area"] == "session"] == []
 
 
 def test_every_borrowed_candidate_origin_is_released_not_just_the_winner(
@@ -2601,6 +2598,140 @@ console.log(JSON.stringify({
 
     assert result["hasCapture"] is True
     assert result["registrations"] == [], result["registrations"]
+
+
+def test_the_recent_list_survives_the_browser_closing(tmp_path: Path) -> None:
+    """It answers "what did I just save?", and was blank every session start.
+
+    `pzi:recent` lived in `storage.session`, which the browser clears on close,
+    so the list was empty at exactly the moment it is asked.
+    """
+    result = _run_popup_js_test(
+        r'''
+const elements = new Map();
+const makeElement = (id) => ({
+  id, value: "", checked: false, disabled: false, textContent: "", innerHTML: "",
+  className: "", type: "", style: { cssText: "", display: "" }, children: [], handlers: {},
+  appendChild(child) { this.children.push(child); },
+  addEventListener(event, handler) { (this.handlers[event] ??= []).push(handler); },
+  querySelectorAll: () => [],
+});
+globalThis.document = {
+  getElementById: (id) => {
+    if (!elements.has(id)) elements.set(id, makeElement(id));
+    return elements.get(id);
+  },
+  createElement: () => makeElement("created"),
+};
+globalThis.window = { open: () => {} };
+globalThis.fetch = async () => ({ ok: true, json: async () => ({}) });
+const localBacking = {};
+const sessionBacking = {};
+const area = (backing) => ({
+  get: async (keys) => {
+    const out = {};
+    for (const key of [].concat(keys)) if (key in backing) out[key] = backing[key];
+    return out;
+  },
+  set: async (values) => { Object.assign(backing, values); return {}; },
+  remove: async (keys) => { for (const k of [].concat(keys)) delete backing[k]; return {}; },
+});
+globalThis.chrome = {
+  storage: {
+    local: area(localBacking), session: area(sessionBacking),
+    onChanged: { addListener: () => {}, removeListener: () => {} },
+  },
+  tabs: { query: async () => [{ id: 7, url: "https://paper.test/article" }] },
+  runtime: { sendMessage: () => {} },
+  permissions: { contains: async () => true, request: async () => true, remove: async () => true },
+};
+await import("./popup.js");
+for (let i = 0; i < 20; i += 1) await new Promise((r) => setTimeout(r, 0));
+// A capture completes and is remembered.
+globalThis.__captureResult = { status: "ok", citekey: "smith2024paper", bib: "main", title: "A Paper" };
+await elements.get("go").handlers.click[0]();
+for (let i = 0; i < 20; i += 1) await new Promise((r) => setTimeout(r, 0));
+console.log(JSON.stringify({
+  inDurableStore: Object.keys(localBacking),
+  inSessionStore: Object.keys(sessionBacking),
+}));
+''',
+        tmp_path,
+    )
+
+    # The browser clears the session area on close; the recent list must not be there.
+    assert "pzi:recent" in result["inDurableStore"], result
+    assert "pzi:recent" not in result["inSessionStore"], result
+
+
+def test_configuration_is_not_shadowed_by_session_storage(tmp_path: Path) -> None:
+    """`getStoredConfig` merged `storage.session` *over* `storage.local`.
+
+    That shadowing is how an empty token box wrote an empty token over the
+    saved one. Nothing writes configuration to the session area — the only
+    session key is `pzi:captureStage` — so reading it there bought nothing and
+    cost that bug.
+    """
+    result = _run_background_module(
+        r'''
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} } },
+  storage: {
+    local: { get: async (k) => ({ [k]: "from-local" }) },
+    // A stale session value, of the kind that used to win.
+    session: { get: async (k) => ({ [k]: "from-session" }) },
+  },
+};
+const { getStoredConfig } = await import("./background/config.mjs");
+console.log(JSON.stringify({ authToken: (await getStoredConfig("authToken")).authToken }));
+''',
+        tmp_path,
+    )
+
+    assert result["authToken"] == "from-local", result
+
+
+def test_the_head_html_a_capture_sends_is_bounded(tmp_path: Path) -> None:
+    """Publisher pages inline JSON-LD, analytics and CSS in `<head>`.
+
+    The whole thing went out with every capture and the server keeps it in a
+    page artifact, so a routine capture shipped hundreds of kilobytes. Nothing
+    capped it on either side.
+    """
+    result = _run_background_module(
+        r'''
+globalThis.captured = null;
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} } },
+  scripting: {
+    executeScript: async ({ func, args }) => {
+      // Run the injected extractor against a stub `document` with an enormous
+      // <head>, which is what a publisher page actually presents.
+      globalThis.document = {
+        head: { innerHTML: "<meta charset='utf-8'>" + "x".repeat(500000) },
+        querySelector: () => null,
+        querySelectorAll: () => [],
+        title: "A Paper",
+      };
+      // The extractor reads `location.href` and `location.hostname`. Without
+      // them the injection throws and `extractPageMetadata` quietly returns its
+      // empty record — a silent pass, since the assertion would then be on a
+      // record with no head at all.
+      globalThis.location = { href: args[0], hostname: "paper.test", protocol: "https:" };
+      const out = func(...args);
+      globalThis.captured = out;
+      return [{ result: out }];
+    },
+  },
+};
+const { extractPageMetadata } = await import("./background/metadata.mjs");
+const meta = await extractPageMetadata(7, "https://paper.test/article");
+console.log(JSON.stringify({ headLength: (meta.headHtml || "").length }));
+''',
+        tmp_path,
+    )
+
+    assert 0 < result["headLength"] <= 64 * 1024, result
 
 
 def test_hidden_iframe_probes_are_bounded_by_us_not_by_the_page(tmp_path: Path) -> None:
