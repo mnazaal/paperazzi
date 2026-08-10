@@ -56,6 +56,9 @@ def test_capture_doi_creates_entry_and_saves_pdf(tmp_path: Path, write_app_confi
 
     # PDF saved
     pdf_path = result.get("pdf_path")
+    # Unconditional: this test exists to prove the pipeline saves a PDF, and
+    # `if pdf_path:` deleted every assertion below whenever it saved none.
+    assert pdf_path, "no PDF was saved — the whole point of this test"
     if pdf_path:
         assert os.path.exists(str(pdf_path))
         assert Path(str(pdf_path)).read_bytes() == b"%PDF-1.4 integration-test\n"

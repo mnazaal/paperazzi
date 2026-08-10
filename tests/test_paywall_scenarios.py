@@ -17,6 +17,8 @@ import base64
 import os
 from pathlib import Path
 
+import pytest
+
 from pzi.add_service import add_input_to_bib
 from pzi.bib_repository import read_bib_file
 from tests.test_paywall_helpers import (
@@ -164,12 +166,25 @@ def test_extension_attach_pdf_bytes_after_capture(tmp_path: Path, write_app_conf
 # ── Scenario 4: Unpaywall open-access fallback ─────────────────────────────
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "PDF acquisition does not fall back after a chosen candidate fails to "
+        "download: discovery picks the publisher's citation_pdf_url, the fetch "
+        "403s, and the run gives up without ever calling Unpaywall (item 198)"
+    ),
+)
 def test_unpaywall_finds_oa_when_direct_blocked(tmp_path: Path, write_app_config) -> None:
     """Direct PDF fetch blocked by publisher (403).
 
     Unpaywall returns an open-access mirror URL → PDF saved from OA mirror.
+
+    `unpaywall_email` is required: `unpaywall_step` returns the record
+    untouched without one, so the whole OA stage is skipped. This test omitted
+    it and therefore never exercised the path it is named for — invisible while
+    its assertions were gated behind `if pdf_path:`.
     """
-    config_path = write_app_config(tmp_path)
+    config_path = write_app_config(tmp_path, unpaywall_email="pzi-tests@example.org")
 
     # selective fetch: block publisher, allow OA mirror
     fetch_binary = make_fetch_binary_selective(
@@ -195,6 +210,9 @@ def test_unpaywall_finds_oa_when_direct_blocked(tmp_path: Path, write_app_config
     assert result["citekey"] is not None
 
     pdf_path = result.get("pdf_path")
+    # Unconditional: the claim is that Unpaywall's OA mirror is used when the
+    # publisher blocks, and `if pdf_path:` made "no PDF at all" pass as success.
+    assert pdf_path, "no PDF was saved from the OA mirror"
     if pdf_path:
         assert os.path.exists(str(pdf_path))
         with open(str(pdf_path), "rb") as f:

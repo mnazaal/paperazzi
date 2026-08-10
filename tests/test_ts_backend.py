@@ -21,6 +21,9 @@ def test_ts_repos_refs_are_pinned_full_shas() -> None:
     """Every translation-server dependency must be pinned to a 40-char commit
     SHA, never a floating ref like ``main`` or a tag — a moving ref means a
     mid-release translator change can silently break existing installs."""
+    # Without this the whole guarantee evaporates on an empty list: the body is
+    # a bare loop, so emptying `_TS_REPOS` made this pass while pinning nothing.
+    assert ts_backend._TS_REPOS, "no repos to check — this test would certify nothing"
     for repo in ts_backend._TS_REPOS:
         ref = repo["ref"]
         assert _FULL_SHA.match(ref), f"{repo['name']} ref {ref!r} is not a 40-char SHA"
