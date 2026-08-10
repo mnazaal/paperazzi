@@ -91,7 +91,11 @@ export function startPdfObserver(tabId) {
   }
 
   _pdfObserverListener = (details) => {
-    if (details.tabId !== tabId && details.tabId !== -1) return;
+    // Only the tab being captured. `tabId === -1` is a request belonging to no
+    // tab, which for this extension means its *own* background fetches — so
+    // accepting it fed candidate downloads back as fresh discoveries, and a URL
+    // that had just failed reappeared as something newly found.
+    if (details.tabId !== tabId) return;
     const headers = details.responseHeaders || [];
     const ct = headers.find((h) => h.name.toLowerCase() === "content-type");
     const cd = headers.find((h) => h.name.toLowerCase() === "content-disposition");
@@ -142,12 +146,25 @@ export function collectPdfObserverEvents() {
 }
 
 function _observerEventLooksLikePdf(event) {
+  // The content type is the only authoritative signal; the rest are heuristics
+  // for servers that send `application/octet-stream`, and each one costs a
+  // wasted fetch when it guesses wrong.
   const contentType = String(event.content_type || "").toLowerCase();
+  if (contentType.includes("pdf")) return true;
+
+  // `.pdf` in the disposition's filename, not the mere presence of a `filename`
+  // parameter. That looser test made every attachment a publisher page offers —
+  // a CSV export, a BibTeX citation, a supplement zip — into a PDF candidate.
   const disposition = String(event.content_disposition || "").toLowerCase();
-  const url = String(event.url || "").toLowerCase();
-  return contentType.includes("pdf")
-    || disposition.includes(".pdf")
-    || disposition.includes("filename")
-    || url.includes("/stamppdf/")
-    || url.includes(".pdf");
+  if (disposition.includes(".pdf")) return true;
+
+  // The URL *path*, not the whole URL: `?file=paper.pdf` names a viewer, not a
+  // PDF, and `/notes.pdf.html` is a web page.
+  let path;
+  try {
+    path = new URL(String(event.url || "")).pathname.toLowerCase();
+  } catch (_error) {
+    return false;
+  }
+  return path.endsWith(".pdf") || path.includes("/stamppdf/");
 }

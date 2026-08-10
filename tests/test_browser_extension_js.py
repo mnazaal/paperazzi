@@ -2161,6 +2161,115 @@ console.log(JSON.stringify({ sent: globalThis.sent }));
     )
 
 
+def _observe(tmp_path: Path, responses: list[dict]) -> dict:
+    """Feed *responses* to the per-capture PDF observer and return what it kept."""
+    return _run_background_module(
+        r'''
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} } },
+  webRequest: {
+    onHeadersReceived: {
+      addListener: (fn) => { globalThis.__listener = fn; },
+      removeListener: () => {},
+    },
+  },
+};
+const observer = await import("./background/observer.mjs");
+observer.startPdfObserver(7);
+for (const response of RESPONSES) {
+  globalThis.__listener({
+    tabId: response.tab_id,
+    url: response.url,
+    type: response.type || "sub_frame",
+    statusCode: 200,
+    responseHeaders: [
+      ...(response.content_type ? [{ name: "Content-Type", value: response.content_type }] : []),
+      ...(response.disposition ? [{ name: "Content-Disposition", value: response.disposition }] : []),
+    ],
+  });
+}
+console.log(JSON.stringify({ observed: observer.collectObservedPdfUrls() }));
+'''.replace("RESPONSES", json.dumps(responses)),
+        tmp_path,
+    )
+
+
+def test_an_attachment_that_is_not_a_pdf_is_not_a_pdf_candidate(tmp_path: Path) -> None:
+    """The predicate accepted any `Content-Disposition` naming a filename.
+
+    A page that serves a CSV export, a zip, or a BibTeX file — which is most
+    publisher article pages — produced candidates the server then had to
+    reject, and each one costs a fetch before it is found not to be a PDF.
+    """
+    result = _observe(
+        tmp_path,
+        [
+            {"tab_id": 7, "url": "https://paper.test/export", "content_type": "text/csv",
+             "disposition": 'attachment; filename="data.csv"'},
+            {"tab_id": 7, "url": "https://paper.test/cite", "content_type": "text/plain",
+             "disposition": 'attachment; filename="paper.bib"'},
+            {"tab_id": 7, "url": "https://paper.test/bundle", "content_type": "application/zip",
+             "disposition": 'attachment; filename="supplement.zip"'},
+        ],
+    )
+
+    assert result["observed"] == [], result["observed"]
+
+
+def test_a_pdf_named_only_in_the_query_string_is_not_a_candidate(tmp_path: Path) -> None:
+    """`.pdf` was matched anywhere in the URL, including the query, and in the
+    path of something that is plainly not a PDF."""
+    result = _observe(
+        tmp_path,
+        [
+            {"tab_id": 7, "url": "https://paper.test/viewer?file=paper.pdf", "content_type": "text/html"},
+            {"tab_id": 7, "url": "https://paper.test/notes.pdf.html", "content_type": "text/html"},
+        ],
+    )
+
+    assert result["observed"] == [], result["observed"]
+
+
+def test_the_extensions_own_background_fetch_is_not_a_discovery(tmp_path: Path) -> None:
+    """`tabId === -1` is a request belonging to no tab — the extension's own.
+
+    Accepting it fed the extension its own candidate downloads back as fresh
+    discoveries, so a URL it had already tried and failed on reappeared as
+    something newly found.
+    """
+    result = _observe(
+        tmp_path,
+        [
+            {"tab_id": -1, "url": "https://paper.test/already-tried.pdf",
+             "content_type": "application/pdf", "type": "xmlhttprequest"},
+        ],
+    )
+
+    assert result["observed"] == [], result["observed"]
+
+
+def test_the_observer_still_finds_actual_pdfs(tmp_path: Path) -> None:
+    """The tightening must not turn the observer off."""
+    result = _observe(
+        tmp_path,
+        [
+            {"tab_id": 7, "url": "https://paper.test/a", "content_type": "application/pdf"},
+            {"tab_id": 7, "url": "https://paper.test/b.pdf", "content_type": "application/octet-stream"},
+            {"tab_id": 7, "url": "https://paper.test/c", "content_type": "application/octet-stream",
+             "disposition": 'attachment; filename="paper.pdf"'},
+            {"tab_id": 7, "url": "https://ieeexplore.ieee.org/stampPDF/getPDF.jsp?tp=",
+             "content_type": "application/octet-stream"},
+        ],
+    )
+
+    assert result["observed"] == [
+        "https://paper.test/a",
+        "https://paper.test/b.pdf",
+        "https://paper.test/c",
+        "https://ieeexplore.ieee.org/stampPDF/getPDF.jsp?tp=",
+    ], result["observed"]
+
+
 def _exhausted_capture(
     tmp_path: Path,
     *,
