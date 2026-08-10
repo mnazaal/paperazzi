@@ -108,10 +108,12 @@ export async function captureCurrentTab({ tags = [], bib = null, dryRun = false,
     const captureBody = {
       url: tab.url,
       browser: detectBrowser(),
-      extension_version: EXTENSION_VERSION,
       tags,
       bib,
       dry_run: dryRun,
+      // No `extension_version` or `metadata_source`: both went out on every
+      // capture and were read by no route. The version is still reported back
+      // to the popup on the result object below, where something does read it.
       verbose: true,
       force_new: forceNew,
       cookies: cookieHeader != null ? "<redacted>" : null,
@@ -140,7 +142,6 @@ export async function captureCurrentTab({ tags = [], bib = null, dryRun = false,
       embedded_jsonld_title: pageMetadata.embedded_jsonld_title,
       embedded_jsonld_year: pageMetadata.embedded_jsonld_year,
       embedded_og_title: pageMetadata.embedded_og_title,
-      metadata_source: pageMetadata.metadata_source,
       trusted_fields: pageMetadata.trusted_fields,
     };
     const response = await fetch(endpoint, {

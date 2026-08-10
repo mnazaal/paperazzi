@@ -3,6 +3,7 @@
 // observer at module level, so every extension page importing it added another
 // copy — and one right-click issued a `POST /capture` per open page.
 import {
+  EXTENSION_VERSION,
   fetchBibs,
   getEndpoint,
   getAuthHeaders,
@@ -12,7 +13,7 @@ import { detectAndExtractSearchResults, matchesAnySearchPattern } from "./backgr
 import { captureCurrentTab } from "./background/capture.js";
 import { formatCaptureResult, formatMultiCaptureResult } from "./popup_format.js";
 
-const POPUP_BUILD_MARKER = "2025-06-12-phases-012";
+
 
 // ── DOM refs ────────────────────────────────────────────────────────────
 const summary = document.getElementById("summary");
@@ -420,7 +421,7 @@ export function watchCaptureStage(onLabel) {
 
 export function stampPopupResult(result) {
   const out = (result && typeof result === "object") ? { ...result } : { status: "error", errors: ["invalid capture result"] };
-  out.popup_build_marker = POPUP_BUILD_MARKER;
+  out.popup_build_marker = EXTENSION_VERSION;
   return out;
 }
 

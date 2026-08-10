@@ -265,8 +265,11 @@ console.log(JSON.stringify({ capture_body: result.capture_body }));
         tmp_path,
     )
 
-    assert result["capture_body"]["metadata_source"] == "generic_dom"
+    # `trusted_fields`, not `metadata_source`: the server reads the former
+    # (`http_post_routes.py:138`) and never read the latter, which is why the
+    # label was dropped from the wire. A generic DOM scan trusts nothing.
     assert result["capture_body"]["trusted_fields"] is None
+    assert "metadata_source" not in result["capture_body"]
 
 
 def test_bot_bypass_uses_visible_helper_tab_when_hidden_iframe_observes_nothing(tmp_path: Path) -> None:
@@ -819,7 +822,9 @@ console.log(JSON.stringify({ capture, body }));
     assert body["embedded_pages"] == "1--5"
     assert body["embedded_pdf_url"] == "https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=9840963"
     assert "https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=9840963" in body["pdf_url_candidates"]
-    assert body["metadata_source"] == "ieee_xplore"
+    # The IEEE extractor's claim is carried by `trusted_fields`, which the
+    # server reads; the `metadata_source` label beside it never was.
+    assert "metadata_source" not in body
     assert isinstance(body["trusted_fields"], list)
     assert "authors" in body["trusted_fields"]
     assert "doi" in body["trusted_fields"]
@@ -1090,6 +1095,7 @@ def _write_ui_module_mocks(tmp_path: Path) -> None:
 _MOCK_CONFIG_MODULE = (
     "export async function fetchBibs() { if (globalThis.__fetchBibsError) throw new Error(globalThis.__fetchBibsError); return globalThis.__bibs ?? []; }\n"
     "export async function getEndpoint() { return 'http://127.0.0.1:8765/capture'; }\n"
+    'export const EXTENSION_VERSION = "1.2.3-test";\n'
     "export async function getAuthHeaders() { return globalThis.__authHeaders || {}; }\n"
     "export function endpointFor(rawEndpoint, path) { const base = new URL(rawEndpoint); const target = new URL(path, base); target.search = ''; return target.href.replace(/\\/$/, ''); }\n"
     # The real rule, not a restatement of it.
@@ -1578,7 +1584,8 @@ console.log(JSON.stringify(stamped));
     )
 
     assert result["status"] == "error"
-    assert result["popup_build_marker"] == "2025-06-12-phases-012"
+    # The version the manifest carries, not a literal compiled into two files.
+    assert result["popup_build_marker"] == "1.2.3-test"
 
 
 def test_popup_open_pdf_fetches_with_auth_token_and_opens_blob(tmp_path: Path) -> None:

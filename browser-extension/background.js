@@ -1,6 +1,5 @@
 // ---------- Imports from split modules ----------
 import {
-  EXTENSION_VERSION,
   setCaptureTabId,
   getEndpoint,
   getAuthHeaders,
@@ -131,9 +130,9 @@ async function _handleContextMenuCapture(info, tab) {
       body: JSON.stringify({
         url,
         browser: detectBrowser(),
-        extension_version: EXTENSION_VERSION,
+        // No `extension_version` or `page_url`: `/capture` reads neither. The
+        // only `page_url` the server reads belongs to `/browser/discover`.
         cookies: cookieHeader,
-        page_url: tab?.url || null,
       }),
     });
 

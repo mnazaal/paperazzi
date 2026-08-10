@@ -7,7 +7,19 @@ export const DEFAULT_HOST = "http://127.0.0.1:8765";
 export const DEFAULT_ENDPOINT = `${DEFAULT_HOST}/capture`;
 export const PDF_FETCH_TIMEOUT_MS = 30000;
 export const MAX_ATTACH_PDF_BYTES = 47 * 1024 * 1024;
-export const EXTENSION_VERSION = "2025-06-12-phases-012";
+// Read from the manifest the build stamps, not hardcoded. The literal here was
+// `"2025-06-12-phases-012"`, repeated verbatim in `popup.js`, and had been
+// wrong for every release since — while `build_extension.py` was already
+// computing the real version into `version_name`. The fallback covers a test
+// realm with no `chrome.runtime`.
+export const EXTENSION_VERSION = (() => {
+  try {
+    const manifest = chrome.runtime.getManifest();
+    return manifest.version_name || manifest.version || "unknown";
+  } catch (_error) {
+    return "unknown";
+  }
+})();
 
 // The ID of the tab currently being captured (set by captureCurrentTab).
 export let _captureTabId = null;
