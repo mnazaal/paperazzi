@@ -1763,7 +1763,10 @@ def test_near_duplicate_insert_warns_and_notes_the_existing_entry(tmp_path: Path
             "title": "A Study of Graph Parsers",
             "authors": ["Smith, Jane"],
             "year": 2024,
-            "canonical_url": "https://example.org/paper/",
+            # A genuinely different location. A trailing-slash variant of the
+            # existing entry's URL is the *same* page, and reached this fuzzy
+            # path only because identities compared URLs verbatim.
+            "canonical_url": "https://mirror.example.net/2024/graph-parsers",
         },
         dry_run=False,
     )

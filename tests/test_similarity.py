@@ -323,3 +323,73 @@ def test_a_real_doi_is_still_an_identity_however_it_was_written() -> None:
     for spelling in ("10.1145/ABC", "10.1145/abc/", "https://doi.org/10.1145/abc"):
         incoming = {"citekey": "b", "title": "Alpha", "doi": spelling}
         assert find_exact_match(incoming, stored) == 0, spelling  # type: ignore[arg-type]
+
+
+def test_a_shared_landing_url_does_not_match_two_different_papers() -> None:
+    """A URL is a location, not an identifier.
+
+    `_canonical_doi` drops placeholder DOIs because "a placeholder is the
+    absence of a DOI, not a shared one" — every entry carrying the same filler
+    collapsed into one identity. `canonical_url` was taken verbatim and never
+    got that reasoning, so two entries sharing a publisher landing page became
+    one identity and `plan_bib_write` turned the insert into an *update*: the
+    existing paper took the incoming one's title, DOI and abstract.
+    """
+    from pzi.similarity import find_exact_match
+
+    existing = [
+        {
+            "citekey": "alpha2019",
+            "title": "A Study of Alpha Particles",
+            "canonical_url": "https://www.sciencedirect.com/journal/foo",
+        }
+    ]
+    incoming = {
+        "citekey": "beta2020",
+        "title": "A Completely Different Paper About Beta Particles",
+        "doi": "10.1000/beta",
+        "canonical_url": "https://www.sciencedirect.com/journal/foo",
+    }
+
+    assert find_exact_match(incoming, existing) is None
+
+
+def test_a_shared_url_still_matches_the_same_paper() -> None:
+    """Re-capturing one page must still find the entry it already made."""
+    from pzi.similarity import find_exact_match
+
+    existing = [
+        {
+            "citekey": "alpha2019",
+            "title": "A Study of Alpha Particles",
+            "canonical_url": "https://example.org/papers/alpha",
+        }
+    ]
+    incoming = {
+        "title": "A Study of Alpha Particles",
+        "canonical_url": "https://example.org/papers/alpha",
+    }
+
+    assert find_exact_match(incoming, existing) == 0
+
+
+def test_url_spellings_of_one_page_are_one_identity() -> None:
+    """Three spellings of a URL used to be three identities."""
+    from pzi.similarity import find_exact_match
+
+    existing = [
+        {"citekey": "a2019", "title": "Alpha", "canonical_url": "https://example.org/p"}
+    ]
+    incoming = {"title": "Alpha", "canonical_url": "https://Example.org/p/"}
+
+    assert find_exact_match(incoming, existing) == 0
+
+
+def test_a_doi_match_does_not_need_the_title_to_agree() -> None:
+    """Corroboration applies to URLs alone; a DOI is a real identifier."""
+    from pzi.similarity import find_exact_match
+
+    existing = [{"citekey": "a2019", "title": "Old Provisional Title", "doi": "10.1000/xyz"}]
+    incoming = {"title": "The Final Published Title", "doi": "10.1000/xyz"}
+
+    assert find_exact_match(incoming, existing) == 0

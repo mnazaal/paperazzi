@@ -162,13 +162,19 @@ _EXISTING_NEAR_DUPLICATE = {
 
 
 def _incoming_near_duplicate(**overrides: object) -> dict[str, object]:
-    """Same paper, different URL and no shared identifier — the insert case."""
+    """Same paper, different URL and no shared identifier — the insert case.
+
+    The URL has to be a genuinely different location. It used to differ from
+    the existing entry's only by a trailing slash, which made this an exact URL
+    match dressed up as a near-duplicate: it reached the fuzzy path solely
+    because identities compared URLs verbatim.
+    """
     record: dict[str, object] = {
         "citekey": "smith2024graph-2",
         "title": "A Study of Graph Parsers",
         "authors": ["Smith, Jane"],
         "year": 2024,
-        "canonical_url": "https://example.org/paper/",
+        "canonical_url": "https://mirror.example.net/2024/graph-parsers",
     }
     record.update(overrides)
     return record

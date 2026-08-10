@@ -9,7 +9,7 @@ from collections.abc import Iterable, Sequence
 from typing import Any, Literal, NamedTuple, TypeAlias
 
 from pzi.bibtex import NormalizedRecord, normalize_authors
-from pzi.identifiers import normalize_arxiv_id, normalize_doi
+from pzi.identifiers import normalize_arxiv_id, normalize_doi, normalize_url
 
 # ---------------------------------------------------------------------------
 # Type aliases
@@ -38,7 +38,7 @@ def extract_identities(record: MatchableRecord) -> list[Identity]:
     candidates: list[tuple[IdentityKind, str | None]] = [
         ("doi", _canonical_doi(record.get("doi"))),
         ("arxiv", _canonical_arxiv_id(record.get("arxiv_id"))),
-        ("url", record.get("canonical_url")),
+        ("url", _canonical_url(record.get("canonical_url"))),
     ]
 
     identities: list[Identity] = [
@@ -47,6 +47,48 @@ def extract_identities(record: MatchableRecord) -> list[Identity]:
         if isinstance(value, str) and value.strip()
     ]
     return _deduplicate_identities(identities)
+
+
+def _canonical_url(value: object) -> str | None:
+    """Canonical form of a stored URL, or ``None`` when the value is not one.
+
+    Taken verbatim before, so ``https://x.org/p``, ``https://X.org/p`` and
+    ``https://x.org/p/`` were three identities and re-capturing one page wrote a
+    second entry. Normalizing is only safe alongside the corroboration in
+    :func:`find_exact_match`, since it makes strictly *more* records collide.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    normalized = normalize_url(value)
+    if normalized is None:
+        return None
+    # Only for identity. `normalize_url` keeps the trailing slash because the
+    # stored value should stay the URL the user or provider gave; `/p` and `/p/`
+    # are still the same page to compare against.
+    trimmed = normalized.rstrip("/")
+    return trimmed or normalized
+
+
+def _titles_corroborate(a: MatchableRecord, b: MatchableRecord) -> bool:
+    """Do two records' titles agree well enough to call them the same paper?
+
+    Requires positive agreement rather than absence of disagreement: a record
+    with no title cannot corroborate anything, and treating "cannot tell" as
+    "yes" is what the URL identity did wrong in the first place.
+    """
+    left = title_tokens(a.get("title") if isinstance(a.get("title"), str) else None)
+    right = title_tokens(b.get("title") if isinstance(b.get("title"), str) else None)
+    if not left or not right:
+        return False
+    overlap = len(left & right)
+    return overlap / max(len(left), len(right)) >= _URL_TITLE_AGREEMENT
+
+
+#: Share of the longer title's tokens two records must have in common before a
+#: shared URL is accepted as identity. Deliberately loose — it is separating
+#: "the same paper, maybe a subtitle differs" from "two unrelated papers on one
+#: publisher landing page", not scoring a match.
+_URL_TITLE_AGREEMENT = 0.6
 
 
 def _canonical_doi(value: object) -> str | None:
@@ -110,8 +152,26 @@ def find_exact_match(
     identity_index = build_identity_index(existing_records) if index is None else index
     for identity in extract_identities(record):
         matches = identity_index.get((identity["kind"], identity["value"]))
-        if matches:
-            return matches[0]
+        if not matches:
+            continue
+        if identity["kind"] == "url":
+            # A DOI and an arXiv ID name a work; a URL names a *location*, and
+            # publisher landing pages, repository indexes and shared hosts are
+            # routinely one URL across many papers. Accepting it alone turned an
+            # insert into an update, and the existing entry took the incoming
+            # paper's title, DOI and abstract. Same reasoning `_canonical_doi`
+            # applies to placeholder DOIs, and the same trade-off: a missed
+            # match costs a duplicate, which `fix dedupe` can undo, while a
+            # wrong merge cannot be undone.
+            matches = [
+                position
+                for position in matches
+                if position < len(existing_records)
+                and _titles_corroborate(record, existing_records[position])
+            ]
+            if not matches:
+                continue
+        return matches[0]
     return None
 
 
