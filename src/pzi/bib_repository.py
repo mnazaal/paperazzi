@@ -835,6 +835,14 @@ def preview_batch_write(
             entries=entries, records=records, index=build_identity_index(records),
         )
         apply_plans(session)
+        # The same two gates `batch_write_session` runs, for the same reason: a
+        # preview that skips them reports a clean diff for a batch every real
+        # write refuses. This was the fifth path validating a different amount
+        # from the other four — and the one `update --promote --dry-run` uses,
+        # so the command whose dry run exists to be trusted had the weakest one.
+        # Neither gate mutates.
+        session.check_consistency()
+        _validate_bibtex_roundtrip(session.entries)
         new_library = _update_library_blocks(
             library,
             session.entries,

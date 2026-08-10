@@ -670,3 +670,38 @@ def test_a_write_refuses_an_entry_whose_field_keys_collide_on_case(
 
     assert "casedup2020" in excinfo.value.message, excinfo.value.message
     assert bib.read_text() == original, "the file was rewritten"
+
+
+def test_a_batch_preview_runs_the_gates_the_batch_write_runs(tmp_path: Path) -> None:
+    """`preview_batch_write` was the fifth path validating a different amount.
+
+    `batch_write_session` runs `check_consistency` and
+    `_validate_bibtex_roundtrip` even when `write=False`, with a comment
+    claiming four paths now validate the same thing. `preview_batch_write` —
+    what `update --promote --dry-run` uses — ran neither, so a batch whose
+    state every real write refuses previewed as a clean diff.
+    """
+    from pzi.bib_repository import (
+        BatchWriteSession,
+        batch_write_session,
+        preview_batch_write,
+    )
+
+    bib = tmp_path / "batch.bib"
+    bib.write_text("@article{target2020,\n  title = {Target}\n}\n")
+
+    def desync(session: BatchWriteSession) -> None:
+        # An entry with no matching record: the exact state `check_consistency`
+        # exists to catch, since it would let a later record dedup against the
+        # wrong entry.
+        session.entries.append(
+            {"entry_type": "article", "citekey": "ghost2020", "fields": {}}
+        )
+        session.touched.add(len(session.entries) - 1)
+
+    with pytest.raises(RuntimeError):
+        with batch_write_session(str(bib), write=False) as session:
+            desync(session)
+
+    with pytest.raises(RuntimeError):
+        preview_batch_write(str(bib), desync)
