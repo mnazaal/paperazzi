@@ -31,6 +31,15 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Set up Node
+        # Without this the 52 browser-extension tests skip silently inside the
+        # gating `-m 'not browser'` run — they are marked `skipif(node is None)`
+        # — so the release gate passed while running none of them. They pass
+        # today only because the runner image happens to ship Node.
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: Set up uv
         uses: astral-sh/setup-uv@v5
 
@@ -64,6 +73,10 @@ jobs:
         run: uv run --locked playwright install chromium firefox
 
       - name: Run tests
+        # Same env as `ci.yml` and as the browser step below: without it this
+        # run may reach for a real translation server.
+        env:
+          PZI_SKIP_AUTO_START: "1"
         run: uv run --locked pytest -m 'not browser' -q
 
       - name: Browser tests
@@ -75,6 +88,11 @@ jobs:
 
       - name: Lint
         run: uv run --locked ruff check src tools tests
+
+      - name: Pyright
+        # `ci.yml` runs this and the release path did not, so a type regression
+        # could redden CI and still not stop a tag.
+        run: uv run --locked pyright
 
   build:
     name: Build sdist + wheel

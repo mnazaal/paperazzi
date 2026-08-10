@@ -1,10 +1,20 @@
 import json
+import os
 import re
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
+
+# Skipping locally is a convenience; skipping in CI is how 52 tests went
+# unrun in the release gate while it reported success. Under `CI` a missing
+# Node is a failure, matching `test_error_channels.py`'s asserted Node call.
+if shutil.which("node") is None and os.environ.get("CI"):
+    raise RuntimeError(
+        "Node.js is required to run the browser-extension tests, and this is "
+        "CI — a silent skip here means the gate certified nothing"
+    )
 
 pytestmark = pytest.mark.skipif(
     shutil.which("node") is None, reason="Node.js not found on PATH"
