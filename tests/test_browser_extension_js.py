@@ -33,6 +33,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BACKGROUND_JS = PROJECT_ROOT / "browser-extension" / "background.js"
 BACKGROUND_DIR = PROJECT_ROOT / "browser-extension" / "background"
 POPUP_JS = PROJECT_ROOT / "browser-extension" / "popup.js"
+ONBOARDING_JS = PROJECT_ROOT / "browser-extension" / "onboarding.js"
 
 
 def _run_background_module(script: str, tmp_path: Path) -> dict:
@@ -63,22 +64,135 @@ def _run_background_module(script: str, tmp_path: Path) -> dict:
     return json.loads(result.stdout)
 
 
-def test_popup_recent_actions_use_endpoint_path_helper() -> None:
-    text = POPUP_JS.read_text()
+# A DOM stub that materialises the buttons `_renderRecent` writes as HTML, so
+# the recent list can be clicked rather than read as source text.
+_RECENT_LIST_DOM = r'''
+const elements = new Map();
+const makeElement = (id) => {
+  let html = "";
+  const el = {
+    id, value: "", textContent: "", className: "", type: "", disabled: false,
+    style: { cssText: "" }, children: [], handlers: {}, buttons: [],
+    appendChild(child) { this.children.push(child); },
+    addEventListener(event, handler) { (this.handlers[event] ??= []).push(handler); },
+    querySelectorAll(selector) {
+      const wanted = /data-action='([^']+)'/.exec(selector);
+      return this.buttons.filter((b) => !wanted || b.dataset.action === wanted[1]);
+    },
+  };
+  Object.defineProperty(el, "innerHTML", {
+    get: () => html,
+    set: (value) => {
+      html = value;
+      el.buttons = [...value.matchAll(/<button([^>]*)>/g)].map((tag) => {
+        const dataset = {};
+        for (const attr of tag[1].matchAll(/data-([a-z]+)="([^"]*)"/g)) dataset[attr[1]] = attr[2];
+        return {
+          dataset,
+          handlers: {},
+          addEventListener(event, handler) { (this.handlers[event] ??= []).push(handler); },
+        };
+      });
+    },
+  });
+  return el;
+};
+globalThis.document = {
+  getElementById: (id) => {
+    if (!elements.has(id)) elements.set(id, makeElement(id));
+    return elements.get(id);
+  },
+  createElement: () => makeElement("created"),
+};
+globalThis.window = { open: () => {} };
+globalThis.requests = [];
+globalThis.fetch = async (url, options = {}) => {
+  globalThis.requests.push({ url, method: options.method || "GET" });
+  return { ok: true, blob: async () => new Blob(["%PDF-1.4"], { type: "application/pdf" }), json: async () => ({}) };
+};
+const NativeURL = URL;
+globalThis.URL = class extends NativeURL {
+  static createObjectURL() { return "blob:pzi-pdf"; }
+  static revokeObjectURL() {}
+};
+// The endpoint has a path of its own. A URL built by concatenation rather than
+// by `endpointFor` keeps that path and asks the wrong place.
+const RECENT = [
+  { citekey: "smith:2024", title: "First", bib: "ml", ts: 1 },
+  { citekey: "jones2023", title: "Second", bib: "main", ts: 2 },
+];
+globalThis.chrome = {
+  storage: {
+    local: { get: async () => ({}), set: async () => ({}), remove: async () => ({}) },
+    session: {
+      get: async (keys) => (String(keys).includes("pzi:recent") ? { "pzi:recent": RECENT } : {}),
+      set: async () => ({}),
+      remove: async () => ({}),
+    },
+  },
+  tabs: { query: async () => [] },
+  runtime: { sendMessage: () => {} },
+};
+'''
 
-    assert "endpointFor," in text
-    assert "endpointFor(endpoint, \"/pdf/\" + encodeURIComponent(citekey))" in text
-    assert 'base + "/pdf/"' not in text
+
+def test_popup_recent_actions_use_endpoint_path_helper(tmp_path: Path) -> None:
+    """A recent entry's PDF button must resolve against the endpoint's origin.
+
+    Driven rather than grepped: `endpointFor` is a means, and concatenating
+    `base + "/pdf/"` onto an endpoint that has a path of its own is the failure
+    it exists to prevent — which only a real URL shows.
+    """
+    result = _run_popup_js_test(
+        _RECENT_LIST_DOM
+        + r'''
+await import("./popup.js");
+for (let i = 0; i < 20; i += 1) await new Promise((r) => setTimeout(r, 0));
+const buttons = elements.get("recent-list").buttons;
+for (const button of buttons) await button.handlers.click[0]();
+for (let i = 0; i < 20; i += 1) await new Promise((r) => setTimeout(r, 0));
+console.log(JSON.stringify({ requests: globalThis.requests }));
+''',
+        tmp_path,
+    )
+
+    # Resolved against the origin, with the citekey's colon percent-encoded.
+    assert [r["url"] for r in result["requests"]] == [
+        "http://127.0.0.1:8765/pdf/smith%3A2024?bib=ml",
+        "http://127.0.0.1:8765/pdf/jones2023",
+    ], result["requests"]
 
 
-def test_popup_recent_list_is_a_capture_log_without_delete() -> None:
-    """The recent list is a read-only capture log (open-PDF only); no delete UI."""
-    text = POPUP_JS.read_text()
+def test_popup_recent_list_is_a_capture_log_without_delete(tmp_path: Path) -> None:
+    """The recent list is a read-only capture log (open-PDF only); no delete UI.
 
-    assert "data-action=\"pdf\"" in text          # open-PDF affordance kept
-    assert "data-action=\"delete\"" not in text   # delete button removed
-    assert "_deleteEntry" not in text             # delete handler removed
-    assert "endpointFor(endpoint, \"/delete\")" not in text  # no POST /delete from popup
+    Driven rather than grepped: clicking every affordance the list renders must
+    produce reads and nothing else. The assertions this replaced named three
+    identifiers a reintroduced delete need not reuse.
+    """
+    result = _run_popup_js_test(
+        _RECENT_LIST_DOM
+        + r'''
+await import("./popup.js");
+for (let i = 0; i < 20; i += 1) await new Promise((r) => setTimeout(r, 0));
+const list = elements.get("recent-list");
+const actions = list.buttons.map((b) => b.dataset.action);
+for (const button of list.buttons) {
+  for (const handler of button.handlers.click || []) await handler();
+}
+for (let i = 0; i < 20; i += 1) await new Promise((r) => setTimeout(r, 0));
+console.log(JSON.stringify({ actions, html: list.innerHTML, requests: globalThis.requests }));
+''',
+        tmp_path,
+    )
+
+    # One affordance per entry, and it is the read-only one.
+    assert result["actions"] == ["pdf", "pdf"], result["actions"]
+
+    # Exercising the whole list issues reads only.
+    assert all(r["method"] == "GET" for r in result["requests"]), result["requests"]
+    assert not any("delete" in r["url"] for r in result["requests"]), result["requests"]
+    assert "delete" not in result["html"].lower()
 
 
 def test_browser_extension_fetches_bibs_with_token_and_endpoint(tmp_path: Path) -> None:
@@ -933,6 +1047,40 @@ console.log(JSON.stringify({ ok: true, output: out }));
 POPUP_JS = PROJECT_ROOT / "browser-extension" / "popup.js"
 
 
+# Stand-in for background.js, which popup.js and onboarding.js both import.
+# Every export keeps the return value it has always had; the `__`-prefixed
+# globals are opt-in overrides, so a test that sets none behaves as before.
+_MOCK_BACKGROUND_MODULE = (
+    "export async function fetchBibs() { if (globalThis.__fetchBibsError) throw new Error(globalThis.__fetchBibsError); return globalThis.__bibs ?? []; }\n"
+    "export async function getEndpoint() { return 'http://127.0.0.1:8765/capture'; }\n"
+    "export async function getAuthHeaders() { return globalThis.__authHeaders || {}; }\n"
+    "export async function detectAndExtractSearchResults() { return globalThis.__searchResults ?? null; }\n"
+    "export async function cookieHeaderForUrl(url) { (globalThis.__cookieCalls ??= []).push(url); return globalThis.__cookieHeader ?? ''; }\n"
+    "export async function captureCurrentTab() { return { status: 'ok' }; }\n"
+    "export function endpointFor(rawEndpoint, path) { const base = new URL(rawEndpoint); const target = new URL(path, base); target.search = ''; return target.href.replace(/\\/$/, ''); }\n"
+)
+
+
+def _run_onboarding_module(script: str, tmp_path: Path) -> dict:
+    """Run a test script that imports onboarding.js, the first-run settings page."""
+    (tmp_path / "onboarding_test.mjs").write_text(
+        ONBOARDING_JS.read_text().replace("./background.js", "./background.mjs")
+    )
+    (tmp_path / "background.mjs").write_text(_MOCK_BACKGROUND_MODULE)
+    runner_path = tmp_path / "runner.mjs"
+    runner_path.write_text(script.replace("./onboarding.js", "./onboarding_test.mjs"))
+    result = subprocess.run(
+        ["node", str(runner_path)],
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        raise AssertionError(
+            f"node runner failed with {result.returncode}\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+        )
+    return json.loads(result.stdout)
+
+
 def _run_popup_js_test(script: str, tmp_path: Path) -> dict:
     """Run a test script that imports popup.js functions."""
     module_path = tmp_path / "popup_test.mjs"
@@ -941,13 +1089,7 @@ def _run_popup_js_test(script: str, tmp_path: Path) -> dict:
     # popup.js imports from background.js — mock the imports
     mock_path = tmp_path / "background.mjs"
     mock_path.write_text(
-        "export async function fetchBibs() { return []; }\n"
-        "export async function getEndpoint() { return 'http://127.0.0.1:8765/capture'; }\n"
-        "export async function getAuthHeaders() { return globalThis.__authHeaders || {}; }\n"
-        "export async function detectAndExtractSearchResults() { return null; }\n"
-        "export async function cookieHeaderForUrl() { return ''; }\n"
-        "export async function captureCurrentTab() { return { status: 'ok' }; }\n"
-        "export function endpointFor(rawEndpoint, path) { const base = new URL(rawEndpoint); const target = new URL(path, base); target.search = ''; return target.href.replace(/\\/$/, ''); }\n"
+        _MOCK_BACKGROUND_MODULE
     )
     runner_path = tmp_path / "runner.mjs"
     runner_script = script.replace("./popup.js", "./popup_test.mjs")
@@ -1533,19 +1675,112 @@ console.log(JSON.stringify({ out }));
     assert "❌ failed" not in text
 
 
-def test_bulk_capture_does_not_forward_cookies_for_other_domains() -> None:
+def test_bulk_capture_does_not_forward_cookies_for_other_domains(tmp_path: Path) -> None:
     """Each search result is a *different* site the user is not on.
 
     Reading their cookies and forwarding them to the server — which forwards
     them to the publisher — is far beyond "the active tab's session", which is
     what the comment directly above the call already claimed was happening.
+
+    Driven rather than grepped: the real search flow is run to the point of
+    clicking "capture all", and the assertion is over the POST bodies that
+    leave and over whether the cookie helper was called at all. The assertion
+    this replaced named one spelling of one argument.
     """
-    text = POPUP_JS.read_text()
+    result = _run_popup_js_test(
+        r'''
+// An id-keyed DOM: `document.getElementById` must return the *same* object each
+// time, so the click handler popup.js registers on "capture-all" is reachable.
+const elements = new Map();
+const makeElement = (id) => ({
+  id,
+  value: "",
+  checked: false,
+  disabled: false,
+  textContent: "",
+  innerHTML: "",
+  className: "",
+  type: "",
+  style: { cssText: "" },
+  children: [],
+  handlers: {},
+  appendChild(child) { this.children.push(child); },
+  addEventListener(event, handler) { (this.handlers[event] ??= []).push(handler); },
+  querySelectorAll: () => [],
+});
+globalThis.document = {
+  getElementById: (id) => {
+    if (!elements.has(id)) elements.set(id, makeElement(id));
+    return elements.get(id);
+  },
+  createElement: () => makeElement("created"),
+};
+globalThis.window = { open: () => {} };
+globalThis.chrome = {
+  storage: {
+    local: { get: async () => ({}), set: async () => ({}), remove: async () => ({}) },
+    session: { get: async () => ({}), set: async () => ({}), remove: async () => ({}) },
+  },
+  tabs: { query: async () => [{ id: 7, url: "https://scholar.google.com/scholar?q=bayesian" }] },
+  runtime: { sendMessage: () => {} },
+};
+// Three results, each on a different publisher the user is not logged into and
+// is not currently visiting.
+globalThis.__searchResults = {
+  detected: true,
+  patternName: "Google Scholar",
+  items: [
+    { index: 0, url: "https://link.springer.com/article/10.1007/s00001", title: "First" },
+    { index: 1, url: "https://www.nature.com/articles/s41586-024-00002", title: "Second" },
+    { index: 2, url: "https://dl.acm.org/doi/10.1145/3000003", title: "Third" },
+  ],
+};
+// If anything does reach for cookies, hand it something recognisable.
+globalThis.__cookieHeader = "session=PZI-PLANTED-COOKIE";
+globalThis.posts = [];
+globalThis.fetch = async (url, options = {}) => {
+  globalThis.posts.push({
+    url,
+    method: options.method || "GET",
+    body: options.body ? JSON.parse(options.body) : null,
+  });
+  return { ok: true, json: async () => ({ status: "ok", citekey: "k", title: "t", bib: "main" }) };
+};
 
-    assert "cookieHeaderForUrl(item.url)" not in text
+const mod = await import("./popup.js");
+// `initSearchDetection()` runs at module load and is not awaited by popup.js.
+for (let i = 0; i < 20; i += 1) await new Promise((r) => setTimeout(r, 0));
+
+const captureAll = elements.get("capture-all");
+const clicks = (captureAll.handlers.click || []);
+if (clicks.length !== 1) throw new Error("expected one capture-all click handler, got " + clicks.length);
+await clicks[0]();
+for (let i = 0; i < 20; i += 1) await new Promise((r) => setTimeout(r, 0));
+
+console.log(JSON.stringify({
+  posts: globalThis.posts,
+  cookieCalls: globalThis.__cookieCalls || [],
+}));
+''',
+        tmp_path,
+    )
+
+    # The flow really ran: one POST per search result.
+    captures = [p for p in result["posts"] if p["method"] == "POST"]
+    assert [p["body"]["url"] for p in captures] == [
+        "https://link.springer.com/article/10.1007/s00001",
+        "https://www.nature.com/articles/s41586-024-00002",
+        "https://dl.acm.org/doi/10.1145/3000003",
+    ], result["posts"]
+
+    # Nothing asked for cookies, and nothing sent any.
+    assert result["cookieCalls"] == [], result["cookieCalls"]
+    for post in captures:
+        assert "cookies" not in post["body"], post["body"]
+    assert "PZI-PLANTED-COOKIE" not in json.dumps(result["posts"])
 
 
-def test_the_popup_stores_the_api_token_where_it_survives_a_restart() -> None:
+def test_the_popup_stores_the_api_token_where_it_survives_a_restart(tmp_path: Path) -> None:
     """`storage.session` is cleared when the browser closes, and it *shadows*
     `storage.local` in the merge the background does — so the first capture of
     a new session wrote an empty token over the one onboarding had saved, and
@@ -1554,16 +1789,113 @@ def test_the_popup_stores_the_api_token_where_it_survives_a_restart() -> None:
     Only the token moves: capture progress and the recent list are per-session
     state the background writes to `storage.session`, and the popup has to keep
     reading them from there.
-    """
-    text = POPUP_JS.read_text()
 
-    assert "function getTokenStorage() {\n  return chrome.storage.local;\n}" in text
-    assert 'getTokenStorage().get("authToken")' in text
-    # An empty box never overwrites a stored token.
-    assert "if (!token) return;" in text
-    # And the session-scoped keys still come from session storage.
-    assert "chrome.storage.session" in text
-    assert 'getStorage().get(["pzi:lastCapture"' in text
+    Driven rather than grepped: which storage area a value lands in is a
+    runtime fact, and the assertions this replaced pinned three exact source
+    lines, so any reformatting broke them without anything changing.
+    """
+    result = _run_popup_js_test(
+        r'''
+const elements = new Map();
+const makeElement = (id) => ({
+  id, value: "", checked: false, disabled: false, textContent: "", innerHTML: "",
+  className: "", type: "", style: { cssText: "" }, children: [], handlers: {},
+  appendChild(child) { this.children.push(child); },
+  addEventListener(event, handler) { (this.handlers[event] ??= []).push(handler); },
+  querySelectorAll: () => [],
+});
+globalThis.document = {
+  getElementById: (id) => {
+    if (!elements.has(id)) elements.set(id, makeElement(id));
+    return elements.get(id);
+  },
+  createElement: () => makeElement("created"),
+};
+globalThis.window = { open: () => {} };
+
+globalThis.calls = [];
+const area = (name, backing) => ({
+  get: async (keys) => {
+    globalThis.calls.push({ area: name, op: "get", keys });
+    return backing;
+  },
+  set: async (values) => {
+    globalThis.calls.push({ area: name, op: "set", values });
+    Object.assign(backing, values);
+    return {};
+  },
+  remove: async () => ({}),
+});
+// Onboarding already saved a token, to `local`, where a restart cannot clear it.
+const localBacking = { authToken: "saved-by-onboarding" };
+const sessionBacking = {};
+globalThis.chrome = {
+  storage: { local: area("local", localBacking), session: area("session", sessionBacking) },
+  tabs: { query: async () => [] },
+  runtime: { sendMessage: () => {} },
+};
+globalThis.fetch = async () => ({ ok: true, json: async () => ({ status: "ok" }) });
+
+const mod = await import("./popup.js");
+for (let i = 0; i < 20; i += 1) await new Promise((r) => setTimeout(r, 0));
+
+const tokenInput = elements.get("token");
+const loadedIntoBox = tokenInput.value;
+
+// A capture with the box left as loaded: the token is stored where it will
+// still be there next time the browser starts.
+const captureAll = elements.get("capture-all").handlers.click[0];
+await captureAll();
+for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
+const afterTypedCapture = globalThis.calls.slice();
+
+// And a capture with an empty box, which means "I did not type one".
+tokenInput.value = "   ";
+globalThis.calls = [];
+await captureAll();
+for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
+
+console.log(JSON.stringify({
+  loadedIntoBox,
+  afterTypedCapture,
+  afterEmptyCapture: globalThis.calls,
+  localBacking,
+  sessionBacking,
+}));
+''',
+        tmp_path,
+    )
+
+    # Read back from the area a restart does not clear.
+    assert result["loadedIntoBox"] == "saved-by-onboarding"
+
+    # Written there too, and never to the session area.
+    writes = [c for c in result["afterTypedCapture"] if c["op"] == "set"]
+    token_writes = [w for w in writes if "authToken" in w["values"]]
+    assert token_writes, result["afterTypedCapture"]
+    assert all(w["area"] == "local" for w in token_writes), token_writes
+    assert result["localBacking"]["authToken"] == "saved-by-onboarding"
+    assert "authToken" not in result["sessionBacking"]
+
+    # An empty box is not an instruction to clear the saved token.
+    empty_writes = [
+        c
+        for c in result["afterEmptyCapture"]
+        if c["op"] == "set" and "authToken" in c["values"]
+    ]
+    assert empty_writes == [], empty_writes
+    assert result["localBacking"]["authToken"] == "saved-by-onboarding"
+
+    # Per-session state still comes from the session area.
+    session_reads = [
+        c for c in result["afterTypedCapture"] if c["area"] == "session" and c["op"] == "get"
+    ]
+    assert session_reads, result["afterTypedCapture"]
+    assert any(
+        "pzi:" in key
+        for read in session_reads
+        for key in (read["keys"] if isinstance(read["keys"], list) else [read["keys"]])
+    ), session_reads
 
 
 def test_a_non_loopback_endpoint_is_not_used(tmp_path: Path) -> None:
@@ -1598,24 +1930,72 @@ console.log(JSON.stringify({ remote, loopbackIp, loopbackName, DEFAULT_ENDPOINT 
 
 
 
-def test_a_temporary_origin_permission_is_released_on_every_path() -> None:
+def test_a_temporary_origin_permission_is_released_on_every_path(tmp_path: Path) -> None:
     """The release sat after the call it protects, so a throw out of
     `tryPdfCandidates` left the user holding a host permission they had granted
     for one PDF fetch — silently, and indefinitely.
 
-    Asserted structurally: driving `tryPdfCandidates` to throw needs a real
-    network stack, and the property is "the release cannot be skipped", which is
-    exactly what `finally` states.
+    Driven, contrary to the note this replaced: no network stack is needed, only
+    a `chrome` stub that throws where the code does not guard. A candidate on
+    the bot-bypass allowlist reaches `waitForTabLoad`, whose
+    `chrome.tabs.onUpdated.addListener` call sits in a promise executor with no
+    `try` around it, so a failure there rejects straight through
+    `tryPdfCandidates` — the exact path that used to skip the release.
     """
-    text = (PROJECT_ROOT / "browser-extension" / "background" / "pdf_fetch.js").read_text()
-    body = text[text.index("export async function maybeStreamPdfBytes"):]
-    body = body[: body.index("\n}\n")]
+    result = _run_background_module(
+        r'''
+globalThis.events = [];
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} } },
+  storage: { local: { get: async () => ({ endpoint: "http://127.0.0.1:8765/capture" }) } },
+  tabs: {
+    query: async () => [],
+    create: async ({ url }) => { globalThis.events.push({ type: "tab", url }); return { id: 91 }; },
+    update: async () => {},
+    remove: async () => {},
+    onUpdated: {
+      // The failure the release has to survive.
+      addListener: () => { throw new Error("tab listener registration failed"); },
+      removeListener: () => {},
+    },
+  },
+  webRequest: { onHeadersReceived: { addListener: () => {}, removeListener: () => {} } },
+  permissions: {
+    // Not already held, so the grant is temporary and must be given back.
+    contains: async () => false,
+    request: async (request) => { globalThis.events.push({ type: "granted", request }); return true; },
+    remove: async (request) => { globalThis.events.push({ type: "released", request }); return true; },
+  },
+  scripting: { executeScript: async () => [{ result: null }] },
+};
+globalThis.fetch = async () => ({ ok: false, status: 403, headers: { get: () => null }, text: async () => "" });
+const { maybeStreamPdfBytes } = await import("./background/pdf_fetch.mjs");
+let threw = null;
+try {
+  await maybeStreamPdfBytes({
+    endpoint: "http://127.0.0.1:8765/capture",
+    citekey: "smith2024paper",
+    bib: "main",
+    pdfUrlCandidates: [{ url: "https://www.nature.com/articles/s41586-024-00001.pdf", method: "discover_from_page", timeout_ms: 5 }],
+    pageUrl: "https://www.nature.com/articles/s41586-024-00001",
+  });
+} catch (error) {
+  threw = error.message;
+}
+console.log(JSON.stringify({ threw, events: globalThis.events }));
+''',
+        tmp_path,
+    )
 
-    release = body.index("removeTemporaryOriginPermission(candidates[0], permission)")
-    finally_block = body.rindex("} finally {", 0, release)
-    try_block = body.rindex("try {", 0, finally_block)
+    # The run really did fail on the unguarded path.
+    assert result["threw"] == "tab listener registration failed", result
 
-    assert "tryPdfCandidates({" in body[try_block:finally_block]
+    kinds = [event["type"] for event in result["events"]]
+    assert "granted" in kinds, result["events"]
+    # And the permission was handed back anyway.
+    assert "released" in kinds, result["events"]
+    released = next(e for e in result["events"] if e["type"] == "released")
+    assert released["request"] == {"origins": ["https://www.nature.com/*"]}
 
 
 def test_bot_bypass_is_capped_per_capture(tmp_path: Path) -> None:
@@ -1687,123 +2067,579 @@ console.log(JSON.stringify({ requested, origins: permissions.size }));
     assert result["requested"] <= 2, f"{result['requested']} dialogs raised by one capture"
 
 
-def test_a_non_loopback_attach_url_is_not_trusted() -> None:
+def test_a_non_loopback_attach_url_is_not_trusted(tmp_path: Path) -> None:
     """`new URL(absolute, base)` discards the base.
 
     `attach.url` is server-supplied and derives from the user-editable `api_url`
     config key, so an absolute value sent the API token and the PDF bytes to
     whatever host it named. `isLoopbackEndpoint` exists for exactly this.
 
-    Structural: `rawAttachUrl` is module-local, and the property is "the planned
-    URL is not used unless it is loopback".
+    Driven rather than grepped: `rawAttachUrl` is module-local but reachable
+    through `maybeStreamPdfBytes`, and what matters is where the bytes and the
+    token are actually sent. Both a remote `attach.url` and an accepted
+    loopback one are exercised, so the guard is shown to discriminate.
     """
-    text = (PROJECT_ROOT / "browser-extension" / "background" / "pdf_fetch.js").read_text()
-    body = text[text.index("function rawAttachUrl("):]
-    body = body[: body.index("\n}\n")]
+    result = _run_background_module(
+        r'''
+const pdfBytes = new Uint8Array([37, 80, 68, 70, 45, 49]).buffer;  // "%PDF-1"
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} } },
+  storage: { local: { get: async () => ({ endpoint: "http://127.0.0.1:8765/capture", authToken: "tok" }) } },
+  tabs: { query: async () => [] },
+  webRequest: { onHeadersReceived: { addListener: () => {}, removeListener: () => {} } },
+  permissions: { contains: async () => true, request: async () => true, remove: async () => true },
+};
+globalThis.btoa = (value) => Buffer.from(value, "binary").toString("base64");
+const { maybeStreamPdfBytes } = await import("./background/pdf_fetch.mjs");
 
-    assert "isLoopbackEndpoint(planned)" in body, body
-    # The guarded value, never the raw one, is what may become the base.
-    assert "const base = plannedUrl ||" in body
+const attachTo = async (plannedUrl) => {
+  const sent = [];
+  globalThis.fetch = async (url, options = {}) => {
+    sent.push({ url, headers: options.headers || {}, hasBody: Boolean(options.body) });
+    if (url.endsWith(".pdf")) {
+      return { ok: true, status: 200, headers: { get: () => "application/pdf" }, arrayBuffer: async () => pdfBytes };
+    }
+    return { ok: true, status: 200, headers: { get: () => "application/json" }, json: async () => ({ status: "ok" }) };
+  };
+  await maybeStreamPdfBytes({
+    endpoint: "http://127.0.0.1:8765/capture",
+    citekey: "smith2024paper",
+    bib: "main",
+    pdfUrlCandidates: [{ url: "https://paper.test/paper.pdf" }],
+    pageUrl: "https://paper.test/article",
+    pdfRequest: { request_id: "req-1", attach: { url: plannedUrl, token: "attach-tok" } },
+  });
+  return sent;
+};
+
+console.log(JSON.stringify({
+  remote: await attachTo("https://evil.example.com/attach-pdf-raw?citekey=smith2024paper"),
+  loopback: await attachTo("http://127.0.0.1:8765/attach-pdf-raw?request_id=req-1&citekey=smith2024paper"),
+}));
+''',
+        tmp_path,
+    )
+
+    # Nothing at all reached the host the server named.
+    assert not any("evil.example.com" in call["url"] for call in result["remote"]), result["remote"]
+    # The bytes and the attach token went to the configured endpoint instead.
+    remote_attach = [c for c in result["remote"] if "/attach-pdf-raw" in c["url"]]
+    assert remote_attach, result["remote"]
+    assert remote_attach[0]["url"].startswith("http://127.0.0.1:8765/attach-pdf-raw")
+    assert remote_attach[0]["headers"]["X-Pzi-Attach-Token"] == "attach-tok"
+
+    # And a loopback plan is still honoured, so the guard is not a blanket refusal.
+    loopback_attach = [c for c in result["loopback"] if "/attach-pdf-raw" in c["url"]]
+    assert loopback_attach, result["loopback"]
+    assert "request_id=req-1" in loopback_attach[0]["url"]
 
 
-def test_bot_bypass_requires_the_candidate_itself_to_be_allowlisted() -> None:
+def test_bot_bypass_requires_the_candidate_itself_to_be_allowlisted(tmp_path: Path) -> None:
     """`||` let an allowlisted *page* authorise a navigation to any candidate.
 
     The bypass opens a real, cookie-carrying tab, so the allowlist has to apply
     to the URL being opened.
+
+    Driven rather than grepped, and driven both ways: the observable is whether
+    `chrome.tabs.create` runs. Asserting only the `&&` spelling let a mutant
+    keep the literal and short-circuit it to true.
     """
-    text = (PROJECT_ROOT / "browser-extension" / "background" / "pdf_fetch.js").read_text()
+    result = _run_background_module(
+        r'''
+globalThis.created = [];
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} } },
+  storage: { local: { get: async () => ({ endpoint: "http://127.0.0.1:8765/capture" }) } },
+  webRequest: { onHeadersReceived: { addListener: () => {}, removeListener: () => {} } },
+  permissions: { contains: async () => true, request: async () => true, remove: async () => true },
+  tabs: {
+    create: async ({ url }) => { globalThis.created.push(url); return { id: 40 + globalThis.created.length }; },
+    update: async () => {},
+    remove: async () => {},
+    query: async () => [],
+    onUpdated: { addListener: () => {}, removeListener: () => {} },
+  },
+  scripting: { executeScript: async () => [{ result: null }] },
+};
+// Nothing downloadable anywhere, so the run always reaches the end of the chain.
+globalThis.fetch = async () => ({
+  ok: false,
+  status: 403,
+  headers: { get: () => null },
+});
+const { maybeStreamPdfBytes } = await import("./background/pdf_fetch.mjs");
 
-    assert "isBotBypassWhitelisted(url) && isBotBypassWhitelisted(pageUrl)" in text
-    assert "isBotBypassWhitelisted(url) || isBotBypassWhitelisted(pageUrl)" not in text
+// An allowlisted *page* offering a candidate on some other host. The page is
+// nature.com; the candidate is not, so no tab may be opened for it.
+const foreign = await maybeStreamPdfBytes({
+  endpoint: "http://127.0.0.1:8765/capture",
+  citekey: "smith2024paper",
+  bib: "main",
+  pdfUrlCandidates: [{ url: "https://cdn.unlisted.example/paper.pdf", method: "discover_from_page", timeout_ms: 5 }],
+  pageUrl: "https://www.nature.com/articles/s41586-024-00001",
+});
+const createdAfterForeign = globalThis.created.slice();
+
+// The converse: candidate and page both allowlisted, so the bypass is allowed
+// to open its helper tab. Without this the test would pass on a guard that
+// refuses everything.
+const allowed = await maybeStreamPdfBytes({
+  endpoint: "http://127.0.0.1:8765/capture",
+  citekey: "smith2024paper",
+  bib: "main",
+  pdfUrlCandidates: [{ url: "https://www.nature.com/articles/s41586-024-00001.pdf", method: "discover_from_page", timeout_ms: 5 }],
+  pageUrl: "https://www.nature.com/articles/s41586-024-00001",
+});
+console.log(JSON.stringify({
+  foreign,
+  allowed,
+  createdAfterForeign,
+  created: globalThis.created,
+}));
+''',
+        tmp_path,
+    )
+
+    # No tab was opened at the unlisted candidate.
+    assert result["createdAfterForeign"] == [], result["createdAfterForeign"]
+    skipped = [
+        a
+        for a in result["foreign"]["pdf_attach_attempts"]
+        if a.get("mode") == "discover_from_page" and a.get("status") == "skipped"
+    ]
+    assert skipped, result["foreign"]["pdf_attach_attempts"]
+    assert skipped[0]["reason"] == "domain not bot-bypass allowlisted"
+
+    # And the guard is discriminating, not blanket: an allowlisted candidate on
+    # the same allowlisted page does get its helper tab.
+    assert result["created"] == [
+        "https://www.nature.com/articles/s41586-024-00001.pdf"
+    ], result["created"]
 
 
-def test_no_optional_request_for_a_required_cookies_permission() -> None:
+def test_no_optional_request_for_a_required_cookies_permission(tmp_path: Path) -> None:
     """`cookies` is required in the manifest and absent from optional_permissions.
 
     `chrome.permissions.request({permissions:["cookies"]})` is rejected on
     Firefox for a non-optional permission; the catch returned "denied" and the
     cookie-header retry never ran.
+
+    The manifest half below is a real data assertion and stays. The code half
+    used to be a substring sweep over every `.js`, which any other spelling of
+    the same request would walk past; it is now driven with a `permissions`
+    stub that rejects the way Firefox does, so the consequence — a cookie retry
+    that never happens — is what fails.
     """
     ext = PROJECT_ROOT / "browser-extension"
     manifest = json.loads((ext / "manifest.base.json").read_text())
     assert "cookies" in manifest["permissions"]
     assert "cookies" not in manifest.get("optional_permissions", [])
+    required = set(manifest["permissions"])
 
-    joined = "\n".join(
-        path.read_text() for path in ext.rglob("*.js")
+    result = _run_background_module(
+        r'''
+globalThis.permissionRequests = [];
+globalThis.fetchCalls = [];
+const REQUIRED = new Set(''' + json.dumps(sorted(required)) + r''');
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} } },
+  storage: { local: { get: async () => ({ endpoint: "http://127.0.0.1:8765/capture" }) } },
+  tabs: { query: async () => [] },
+  webRequest: { onHeadersReceived: { addListener: () => {}, removeListener: () => {} } },
+  cookies: { getAll: async () => [{ name: "session", value: "s3cret" }] },
+  permissions: {
+    contains: async () => true,
+    remove: async () => true,
+    // Firefox rejects a request for a permission that is required rather than
+    // optional. Asking for one is the bug, so the stub makes asking fatal.
+    request: async (request) => {
+      globalThis.permissionRequests.push(request);
+      for (const name of request.permissions || []) {
+        if (REQUIRED.has(name)) {
+          throw new Error("permissions.request may not be used for a required permission: " + name);
+        }
+      }
+      return true;
+    },
+  },
+};
+globalThis.fetch = async (url, options = {}) => {
+  globalThis.fetchCalls.push({ url, headers: options.headers || null });
+  return { ok: false, status: 403, headers: { get: () => null }, text: async () => "" };
+};
+const { maybeStreamPdfBytes } = await import("./background/pdf_fetch.mjs");
+const outcome = await maybeStreamPdfBytes({
+  endpoint: "http://127.0.0.1:8765/capture",
+  citekey: "smith2024paper",
+  bib: "main",
+  pdfUrlCandidates: [{ url: "https://paper.test/paper.pdf" }],
+  pageUrl: "https://paper.test/article",
+});
+console.log(JSON.stringify({
+  outcome,
+  permissionRequests: globalThis.permissionRequests,
+  fetchCalls: globalThis.fetchCalls,
+}));
+''',
+        tmp_path,
     )
-    assert 'permissions: ["cookies"]' not in joined
+
+    # Origin permissions may be requested; the required ones may never be.
+    for request in result["permissionRequests"]:
+        assert not (set(request.get("permissions", [])) & required), request
+
+    # And the retry the bug suppressed actually ran, carrying the cookie header.
+    attempts = result["outcome"]["pdf_attach_attempts"]
+    header = [a for a in attempts if a.get("status") == "cookie_header"]
+    assert header and header[0]["has_header"] is True, attempts
+    assert any(a.get("mode") == "browser_fetch_cookies" for a in attempts), attempts
+    cookie_calls = [
+        call for call in result["fetchCalls"] if (call["headers"] or {}).get("Cookie")
+    ]
+    assert cookie_calls, result["fetchCalls"]
+    assert cookie_calls[0]["headers"]["Cookie"] == "session=s3cret"
 
 
-def test_an_authenticated_page_body_is_not_retained_for_display() -> None:
+def test_an_authenticated_page_body_is_not_retained_for_display(tmp_path: Path) -> None:
     """The snippet was the body of a page fetched with the user's cookies.
 
     It is rendered in the popup's raw-response pane, so a login form's CSRF
     token or a prefilled username could be shown back. The classification beside
     it is what the diagnostics actually need.
+
+    Driven rather than grepped: the property is "nothing from the body reaches
+    the caller", so the check is that two planted secrets are absent from the
+    whole returned structure. The assertion this replaced named one spelling of
+    one slice length, and a mutant using any other survived it.
     """
-    text = (PROJECT_ROOT / "browser-extension" / "background" / "pdf_fetch.js").read_text()
+    result = _run_background_module(
+        r'''
+const LOGIN_HTML = [
+  "<html><body><h1>Sign in</h1>",
+  '<input name="csrf" value="PZI-PLANTED-CSRF-a1b2c3">',
+  '<input name="user" value="planted.user@example.org">',
+  "</body></html>",
+].join("");
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} } },
+  storage: { local: { get: async () => ({ endpoint: "http://127.0.0.1:8765/capture" }) } },
+  tabs: { query: async () => [] },
+  webRequest: { onHeadersReceived: { addListener: () => {}, removeListener: () => {} } },
+  // Granted, so the outcome reports the login page rather than short-circuiting
+  // on a permission verdict.
+  permissions: { contains: async () => true, request: async () => true, remove: async () => true },
+};
+globalThis.fetch = async (url) => ({
+  ok: true,
+  status: 200,
+  headers: { get: (name) => (name.toLowerCase() === "content-type" ? "text/html; charset=utf-8" : null) },
+  arrayBuffer: async () => new TextEncoder().encode(LOGIN_HTML).buffer,
+  text: async () => LOGIN_HTML,
+});
+const { maybeStreamPdfBytes } = await import("./background/pdf_fetch.mjs");
+const outcome = await maybeStreamPdfBytes({
+  endpoint: "http://127.0.0.1:8765/capture",
+  citekey: "smith2024paper",
+  bib: "main",
+  pdfUrlCandidates: [{ url: "https://paper.test/paper.pdf" }],
+  pageUrl: "https://paper.test/article",
+});
+console.log(JSON.stringify({ outcome }));
+''',
+        tmp_path,
+    )
 
-    assert "text.slice(0, 500)" not in text
+    outcome = result["outcome"]
+    attempts = outcome["pdf_attach_attempts"]
+
+    # The classification is kept — that is what the diagnostics need.
+    login = [a for a in attempts if a.get("status") == "html_login"]
+    assert login, attempts
+    assert login[0]["content_type"] == "text/html; charset=utf-8"
+    assert login[0]["byte_count"] > 0
+    assert outcome["message"].startswith("PDF requires authentication")
+
+    # The body is not, by any route.
+    assert all(a.get("text_snippet") is None for a in attempts), attempts
+    serialised = json.dumps(outcome)
+    assert "PZI-PLANTED-CSRF-a1b2c3" not in serialised
+    assert "planted.user@example.org" not in serialised
+    assert "Sign in" not in serialised
 
 
-def test_a_non_json_response_does_not_crash_before_its_own_guard() -> None:
+def test_a_non_json_response_does_not_crash_before_its_own_guard(tmp_path: Path) -> None:
     """`jsonOrNull` returns null by design, so the assignment had to come after.
 
     Setting `extension_version` on the result first threw `Cannot set properties
     of null` on exactly the case the two branches below were written for — a
     proxy's HTML 502, a truncated body — and made the `!result` guard
     unreachable. The user saw an internal JS error instead of the HTTP status.
+
+    Driven rather than grepped: the ordering the assertions this replaced
+    checked is a means, and the end is that both bodies produce a reported
+    status instead of a thrown TypeError.
     """
-    text = (PROJECT_ROOT / "browser-extension" / "background.js").read_text()
-    body = text[text.index("const result = await jsonOrNull(response);"):]
-    body = body[: body.index("if (!dryRun")]
+    result = _run_background_module(
+        r'''
+const stub = () => ({
+  runtime: { onInstalled: { addListener: () => {} } },
+  storage: {
+    local: { get: async () => ({ endpoint: "http://127.0.0.1:8765/capture" }) },
+    session: { get: async () => ({}), set: async () => ({}) },
+  },
+  tabs: { query: async () => [{ id: 7, url: "https://paper.test/article" }] },
+  webRequest: { onHeadersReceived: { addListener: () => {}, removeListener: () => {} } },
+  scripting: {
+    executeScript: async ({ func, args }) => {
+      if (String(func).includes("citation_doi")) return [{ result: { pageTitle: "Paper", sourceUrl: args[0] } }];
+      return [{ result: [] }];
+    },
+  },
+});
+globalThis.chrome = stub();
+const mod = await import("./background.js");
 
-    assign = body.index("result.extension_version = EXTENSION_VERSION;")
-    assert body.index("if (!response.ok)") < assign
-    assert body.index("if (!result)") < assign
+const capture = async (respond) => {
+  globalThis.fetch = async () => respond();
+  try {
+    return { returned: await mod.captureCurrentTab({ dryRun: true }) };
+  } catch (error) {
+    return { threw: String(error && error.message || error) };
+  }
+};
+
+// A proxy's HTML 502: not ok, and the body does not parse.
+const proxyError = await capture(() => ({
+  ok: false,
+  status: 502,
+  statusText: "Bad Gateway",
+  json: async () => { throw new SyntaxError("Unexpected token '<'"); },
+}));
+
+// A truncated body behind a 200: ok, but still not JSON.
+const truncated = await capture(() => ({
+  ok: true,
+  status: 200,
+  statusText: "OK",
+  json: async () => { throw new SyntaxError("Unexpected end of JSON input"); },
+}));
+
+console.log(JSON.stringify({ proxyError, truncated }));
+''',
+        tmp_path,
+    )
+
+    # Neither body may escape as a thrown error.
+    assert "threw" not in result["proxyError"], result["proxyError"]
+    assert "threw" not in result["truncated"], result["truncated"]
+
+    # The HTTP status the user needed is what comes back.
+    proxy = result["proxyError"]["returned"]
+    assert proxy["status"] == "error"
+    assert any("502" in error for error in proxy["errors"]), proxy
+
+    # And the `!result` guard, which the assignment used to make unreachable.
+    truncated = result["truncated"]["returned"]
+    assert truncated["status"] == "error"
+    assert truncated["errors"] == ["capture request failed: invalid JSON response"]
 
 
-def test_a_route_rejection_is_named_not_reduced_to_capture_failed() -> None:
+def test_a_route_rejection_is_named_not_reduced_to_capture_failed(tmp_path: Path) -> None:
     """`captureFailureReason` reads all three channels; `message` alone reads one.
 
     A route-level rejection — bad token, rate limit, refused host, 500 — carries
     a singular `error`, so every one of them rendered as the literal "capture
     failed", which is the one thing the user already knew.
+
+    Driven rather than grepped: what matters is that the reason reaches the
+    rendered text, whichever channel carried it.
     """
-    text = (PROJECT_ROOT / "browser-extension" / "popup_format.js").read_text()
-    body = text[text.index("function formatErrorResult("):]
-    body = body[: body.index("\n}\n")]
+    result = _run_popup_format_module(
+        r'''
+const mod = await import("./popup_format.js");
+const rendered = {
+  // A route rejection: singular `error`, no `message`.
+  route: mod.formatCaptureResult({ status: "error", error: "invalid API token" }),
+  // A service result: plural `errors`.
+  service: mod.formatCaptureResult({ status: "error", errors: ["translation server returned no results"] }),
+  // And the plain `message` channel, which always worked.
+  message: mod.formatCaptureResult({ status: "error", message: "bad request" }),
+  // Nothing at all is the only case allowed to fall back.
+  empty: mod.formatCaptureResult({ status: "error" }),
+};
+console.log(JSON.stringify(rendered));
+''',
+        tmp_path,
+    )
 
-    assert "captureFailureReason(result)" in body
-    assert 'result.message || "capture failed"' not in body
+    assert "invalid API token" in result["route"]
+    assert "translation server returned no results" in result["service"]
+    assert "bad request" in result["message"]
+    # Only the channel-less case may render the bare fallback.
+    assert result["empty"] == "❌ Capture failed: failed"
 
 
-def test_a_down_server_is_reported_rather_than_shown_as_no_bibs() -> None:
+def test_a_down_server_is_reported_rather_than_shown_as_no_bibs(tmp_path: Path) -> None:
     """Returning `[]` on failure made an unreachable server look like an empty
-    library, so the popup showed an empty dropdown and said nothing."""
-    config = (PROJECT_ROOT / "browser-extension" / "background" / "config.js").read_text()
-    body = config[config.index("export async function fetchBibs("):]
-    body = body[: body.index("\n}\n")]
-    assert "return [];" not in body
-    assert "throw new Error(" in body
+    library, so the popup showed an empty dropdown and said nothing.
 
-    popup = (PROJECT_ROOT / "browser-extension" / "popup.js").read_text()
-    populate = popup[popup.index("async function populateBibs("):]
-    populate = populate[: populate.index("\n}\n")]
-    assert "catch" in populate, "the throw must be reported, not left unhandled"
+    Both halves are driven. The assertions this replaced looked for `return [];`
+    in one function and the bare word `catch` in another — the second of which
+    says nothing about whether anything is shown to the user.
+    """
+    raised = _run_background_module(
+        r'''
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} } },
+  storage: { local: { get: async () => ({ endpoint: "http://127.0.0.1:8765/capture", authToken: "tok" }) } },
+};
+const { fetchBibs } = await import("./background/config.mjs");
+const call = async (respond) => {
+  globalThis.fetch = respond;
+  try {
+    return { returned: await fetchBibs() };
+  } catch (error) {
+    return { message: error.message };
+  }
+};
+console.log(JSON.stringify({
+  down: await call(async () => { throw new TypeError("Failed to fetch"); }),
+  rejected: await call(async () => ({ ok: false, status: 401 })),
+  broken: await call(async () => ({ ok: false, status: 500 })),
+  nonsense: await call(async () => ({ ok: true, json: async () => ({ status: "ok" }) })),
+  working: await call(async () => ({ ok: true, json: async () => ({ status: "ok", bibs: [{ name: "ml" }] }) })),
+}));
+''',
+        tmp_path,
+    )
+
+    # No failure is reported as an empty library.
+    for case in ("down", "rejected", "broken", "nonsense"):
+        assert "returned" not in raised[case], (case, raised[case])
+    assert "re-pair the extension" in raised["rejected"]["message"]
+    assert "HTTP 500" in raised["broken"]["message"]
+    assert raised["working"]["returned"] == [{"name": "ml"}]
+
+    # And the popup shows the reason rather than an empty dropdown.
+    shown = _run_popup_js_test(
+        r'''
+const elements = new Map();
+const makeElement = (id) => ({
+  id, value: "", checked: false, disabled: false, textContent: "", innerHTML: "",
+  className: "", type: "", style: { cssText: "" }, children: [], handlers: {},
+  appendChild(child) { this.children.push(child); },
+  addEventListener(event, handler) { (this.handlers[event] ??= []).push(handler); },
+  querySelectorAll: () => [],
+});
+globalThis.document = {
+  getElementById: (id) => {
+    if (!elements.has(id)) elements.set(id, makeElement(id));
+    return elements.get(id);
+  },
+  createElement: () => makeElement("created"),
+};
+globalThis.window = { open: () => {} };
+globalThis.chrome = {
+  storage: {
+    local: { get: async () => ({}), set: async () => ({}), remove: async () => ({}) },
+    session: { get: async () => ({}), set: async () => ({}), remove: async () => ({}) },
+  },
+  tabs: { query: async () => [] },
+  runtime: { sendMessage: () => {} },
+};
+globalThis.__fetchBibsError = "pzi server is not reachable";
+let unhandled = null;
+process.on("unhandledRejection", (reason) => { unhandled = String(reason); });
+await import("./popup.js");
+for (let i = 0; i < 20; i += 1) await new Promise((r) => setTimeout(r, 0));
+console.log(JSON.stringify({
+  summary: elements.get("summary").textContent,
+  bibOptions: elements.get("bib").children.length,
+  unhandled,
+}));
+''',
+        tmp_path,
+    )
+
+    assert "pzi server is not reachable" in shown["summary"]
+    assert shown["bibOptions"] == 0
+    assert shown["unhandled"] is None, shown["unhandled"]
 
 
-def test_opening_a_pdf_never_falls_back_to_the_unauthenticated_url() -> None:
+def test_opening_a_pdf_never_falls_back_to_the_unauthenticated_url(tmp_path: Path) -> None:
     """`window.open(url)` on failure is the same URL without the token, so the
-    user got a tab containing `{"error":"invalid API token"}`."""
-    text = (PROJECT_ROOT / "browser-extension" / "popup.js").read_text()
-    body = text[text.index("export async function openPdf("):]
-    body = body[: body.index("\n}\n")]
+    user got a tab containing `{"error":"invalid API token"}`.
 
-    assert 'window.open(url, "_blank")' not in body
-    assert "URL.createObjectURL(blob)" in body
+    Driven rather than grepped: the property is "no failure path opens a tab",
+    which no substring can express. The assertion this replaced looked for
+    `window.open(url, "_blank")` — a string the bug does not contain — so it
+    stayed green with the fallback restored verbatim.
+    """
+    result = _run_popup_js_test(
+        r'''
+const element = () => ({
+  value: "", checked: false, disabled: false, textContent: "", innerHTML: "",
+  style: {}, appendChild: () => {}, addEventListener: () => {}, querySelectorAll: () => [],
+});
+globalThis.document = { getElementById: () => element(), createElement: () => element() };
+globalThis.chrome = {
+  storage: {
+    local: { get: async () => ({}), set: async () => ({}), remove: async () => ({}) },
+    session: { get: async () => ({}), set: async () => ({}), remove: async () => ({}) },
+  },
+  tabs: { query: async () => [] },
+  runtime: { sendMessage: () => {} },
+};
+globalThis.__authHeaders = { "X-Pzi-Token": "tok" };
+globalThis.opens = [];
+globalThis.window = { open: (url, target) => { globalThis.opens.push({ url, target }); } };
+const NativeURL = URL;
+globalThis.URL = class extends NativeURL {
+  static createObjectURL() { return "blob:pzi-pdf"; }
+  static revokeObjectURL() {}
+};
+const mod = await import("./popup.js");
+
+// Every way the server can refuse. None of them may end in an open tab.
+const fetched = [];
+const respondWith = (make) => {
+  globalThis.fetch = async (url, options = {}) => {
+    fetched.push({ url, headers: options.headers || {} });
+    return make();
+  };
+};
+
+respondWith(() => ({ ok: false, status: 401 }));
+const unauthorized = await mod.openPdf("smith2024paper", "main");
+
+respondWith(() => ({ ok: false, status: 404 }));
+const missing = await mod.openPdf("smith2024paper", "main");
+
+respondWith(() => { throw new TypeError("Failed to fetch"); });
+const down = await mod.openPdf("smith2024paper", "main");
+
+console.log(JSON.stringify({ unauthorized, missing, down, opens: globalThis.opens, fetched }));
+''',
+        tmp_path,
+    )
+
+    # The whole property, independent of how a fallback might be spelled.
+    assert result["opens"] == [], f"a failure path opened a tab: {result['opens']}"
+
+    # The URL a fallback would have leaked: same path, no token header.
+    assert [call["url"] for call in result["fetched"]] == [
+        "http://127.0.0.1:8765/pdf/smith2024paper"
+    ] * 3
+    assert all(call["headers"] == {"X-Pzi-Token": "tok"} for call in result["fetched"])
+
+    # And each refusal is reported to the caller instead.
+    assert result["unauthorized"] == {
+        "ok": False,
+        "message": "could not open the PDF (HTTP 401)",
+    }
+    assert result["missing"] == {"ok": False, "message": "no PDF stored for smith2024paper"}
+    assert result["down"]["ok"] is False
+    assert "not reachable" in result["down"]["message"]
 
 
 def test_onboarding_reports_an_unreachable_server(tmp_path: Path) -> None:
@@ -1812,10 +2648,52 @@ def test_onboarding_reports_an_unreachable_server(tmp_path: Path) -> None:
     A first run against a stopped server showed an empty dropdown, an empty
     status box, and an unhandled rejection — on the one page whose job is to
     tell a new user what is wrong.
-    """
-    text = (PROJECT_ROOT / "browser-extension" / "onboarding.js").read_text()
-    body = text[text.index("async function populateBibs("):]
-    body = body[: body.index("\n}\n")]
 
-    assert "catch" in body, body
-    assert "setStatus(" in body
+    Driven rather than grepped: the assertion this replaced was the bare word
+    `catch` appearing somewhere in the function, which says nothing about
+    whether the user is told anything.
+    """
+    result = _run_onboarding_module(
+        r'''
+const elements = new Map();
+const makeElement = (id) => ({
+  id, value: "", textContent: "", innerHTML: "", disabled: false,
+  style: {}, children: [], handlers: {},
+  appendChild(child) { this.children.push(child); },
+  addEventListener(event, handler) { (this.handlers[event] ??= []).push(handler); },
+});
+globalThis.document = {
+  getElementById: (id) => {
+    if (!elements.has(id)) elements.set(id, makeElement(id));
+    return elements.get(id);
+  },
+  createElement: () => makeElement("created"),
+};
+globalThis.chrome = {
+  storage: {
+    local: { get: async () => ({}), set: async () => ({}) },
+    session: { get: async () => ({}), set: async () => ({}) },
+  },
+  runtime: { sendMessage: () => {} },
+};
+globalThis.__fetchBibsError = "pzi server is not reachable — is `pzi server` running?";
+let unhandled = null;
+process.on("unhandledRejection", (reason) => { unhandled = String(reason); });
+await import("./onboarding.js");
+for (let i = 0; i < 20; i += 1) await new Promise((r) => setTimeout(r, 0));
+const status = elements.get("status");
+console.log(JSON.stringify({
+  status: status.textContent,
+  background: status.style.background,
+  bibOptions: elements.get("bib").children.length,
+  unhandled,
+}));
+''',
+        tmp_path,
+    )
+
+    assert "pzi server is not reachable" in result["status"]
+    # Shown as a failure, not a neutral note.
+    assert result["background"] == "#ffebee"
+    assert result["bibOptions"] == 0
+    assert result["unhandled"] is None, result["unhandled"]
