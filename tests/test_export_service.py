@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import re
@@ -218,6 +219,56 @@ def test_export_of_a_clean_library_stays_ok() -> None:
 
         assert result["status"] == "ok"
         assert result["errors"] == []
+
+
+def test_a_missing_bib_is_an_export_error_in_every_format(tmp_path: Path) -> None:
+    """"The library file is not there" and "the library is empty" are different.
+
+    `read_bib_source` returns empty for a nonexistent path, so every exporter
+    used to report a clean export of zero entries — and the CLI then wrote that
+    emptiness over the destination. `_export_status`' own docstring already says
+    an export that silently omits entries is not an `ok` export; a missing file
+    omits all of them.
+    """
+    missing = str(tmp_path / "not-created-yet.bib")
+
+    for export in (export_bibtex, export_json, export_csv, export_ris):
+        result = export(missing)
+
+        assert result["status"] == "error", export.__name__
+        assert any(missing in err for err in result["errors"]), export.__name__
+
+
+def test_export_does_not_overwrite_a_destination_when_the_bib_is_missing(
+    tmp_path: Path,
+) -> None:
+    """The data-loss case: `--force` over a backup after the library moved.
+
+    A renamed file, an unmounted share or a typo'd `path =` used to make
+    `pzi export --force -o backup.bib` truncate the backup to zero bytes and
+    report "exported 0 entries", exit 0.
+    """
+    from pzi.cli import run_cli
+
+    backup = tmp_path / "backup.bib"
+    backup.write_text(SIMPLE_BIB)
+    config = tmp_path / "config.toml"
+    config.write_text(
+        'translation_server_url = "http://127.0.0.1:59999"\n\n'
+        '[[bibs]]\nname = "main"\n'
+        f'path = "{tmp_path / "vanished.bib"}"\ndefault = true\n'
+    )
+
+    out, err = io.StringIO(), io.StringIO()
+    code = run_cli(
+        ["export", "--force", "-o", str(backup), "--config", str(config)],
+        home_dir=str(tmp_path),
+        stdout=out,
+        stderr=err,
+    )
+
+    assert code != 0
+    assert backup.read_text() == SIMPLE_BIB
 
 
 def test_export_ris_emits_one_ur_line_per_unique_url(tmp_path: Path) -> None:

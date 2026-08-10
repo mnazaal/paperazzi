@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import json as _json
+from pathlib import Path
 from typing import Any, TypedDict
 
 from pzi.bib_repository import (
@@ -86,9 +87,26 @@ def _normalize_tags(tags: object) -> str:
     return ""
 
 
+def _missing_bib_errors(bib_path: str) -> list[str]:
+    """The configured bib not existing, as an export error rather than a warning.
+
+    Reading treats a missing bib as a warning on purpose (see
+    :func:`bib_repository.describe_missing_bib`): a freshly ``pzi init``-ed
+    config names a bib that does not exist until the first ``add``. Export
+    cannot afford that leniency, because its output *replaces* something — a
+    renamed file, an unmounted share or a typo'd ``path =`` made
+    ``pzi export --force -o backup.bib`` truncate the backup to zero bytes and
+    report "exported 0 entries", exit 0.
+    """
+    if Path(bib_path).exists():
+        return []
+    return [f"bib file does not exist: {bib_path}"]
+
+
 def _read_for_export(bib_path: str) -> tuple[ReadBibResult, list[str]]:
     with with_bib_lock(bib_path, shared=True):
-        return read_bib_file_raw_with_failures(bib_path)
+        raw, dropped = read_bib_file_raw_with_failures(bib_path)
+    return raw, [*_missing_bib_errors(bib_path), *dropped]
 
 
 def _export_status(dropped: list[str]) -> str:
@@ -117,7 +135,7 @@ def export_bibtex(bib_path: str) -> ExportResult:
         entries = [
             _library_entry_to_bibtex_entry(entry) for entry in library.entries
         ]
-        dropped = describe_failed_blocks(library)
+        dropped = [*_missing_bib_errors(bib_path), *describe_failed_blocks(library)]
         bibtex_str = _serialize_library(library)
     return {
         "status": _export_status(dropped),
