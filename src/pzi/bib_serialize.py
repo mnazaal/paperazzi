@@ -169,7 +169,47 @@ def describe_failed_blocks(library: Library) -> list[str]:
         [message for _key, message in failed_block_details(library)]
         + describe_mangled_field_keys(library)
         + describe_empty_citekeys(library)
+        + describe_case_colliding_field_keys(library)
     )
+
+
+def describe_case_colliding_field_keys(library: Library) -> list[str]:
+    """One message per entry carrying two spellings of one field key.
+
+    Field keys are case-folded at the parse boundary
+    (:func:`_library_entry_to_bibtex_entry`), which is what makes a JabRef-style
+    ``Author =`` readable at all. The fold targets a ``dict``, so an entry
+    holding *both* ``Title`` and ``title`` keeps only the last and the other
+    value is gone — and nothing else catches it: bibtexparser flags only
+    byte-identical duplicate keys, and :func:`_validate_bibtex_roundtrip`
+    compares the already-collapsed entry against itself. The first write to
+    touch the entry commits the deletion.
+
+    Such a file is invalid BibTeX (field names are case-insensitive), so this is
+    a refusal rather than a repair: pzi cannot know which spelling the user
+    meant to keep.
+    """
+    messages: list[str] = []
+    for entry in library.entries:
+        seen: dict[str, str] = {}
+        collisions: dict[str, list[str]] = {}
+        for field in entry.fields:
+            folded = field.key.lower()
+            if folded in seen:
+                collisions.setdefault(folded, [seen[folded]]).append(field.key)
+            else:
+                seen[folded] = field.key
+        for folded, spellings in collisions.items():
+            line = getattr(entry, "start_line", None)
+            where = f" at line {line + 1}" if isinstance(line, int) else ""
+            names = ", ".join(f"`{name}`" for name in spellings)
+            messages.append(
+                f"entry '{entry.key}'{where} sets the field '{folded}' twice "
+                f"({names}): BibTeX field names are case-insensitive, so keeping "
+                "either one would silently drop the other — remove the spelling "
+                "you do not want"
+            )
+    return messages
 
 
 def describe_empty_citekeys(library: Library) -> list[str]:
@@ -323,6 +363,12 @@ def _validate_library_parseable(library: Library) -> None:
     empty_keys = describe_empty_citekeys(library)
     if empty_keys:
         raise _malformed_bib_refusal(empty_keys[0])
+    # Same reasoning as a mangled key, one step earlier: the case-fold at the
+    # parse boundary has already discarded one of the two values by the time any
+    # write gate runs, so the round-trip check cannot see the loss.
+    case_collisions = describe_case_colliding_field_keys(library)
+    if case_collisions:
+        raise _malformed_bib_refusal(case_collisions[0])
     if not library.failed_blocks:
         return
     # `describe_failed_blocks` names the citekey for a duplicate and adds the

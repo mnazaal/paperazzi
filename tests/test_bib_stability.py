@@ -624,3 +624,49 @@ def test_a_write_names_the_entry_with_no_citekey(tmp_path: Path) -> None:
     assert "no citekey" in message, message
     assert "line 1" in message, message
     assert bib.read_text().startswith("@article{,"), "the file was rewritten"
+
+
+def test_field_keys_differing_only_in_case_are_reported_on_read() -> None:
+    """`Title` and `title` in one entry: one of them is silently deleted.
+
+    Field keys are case-folded at the parse boundary, which is correct and is
+    what makes a JabRef-style `Author =` readable. But the fold happens into a
+    `dict`, so an entry carrying *both* spellings keeps only the last, and
+    nothing notices: bibtexparser flags only byte-identical duplicate keys, and
+    the round-trip gate compares the already-collapsed entry against itself. The
+    first write that touches the entry commits the deletion.
+    """
+    src = (
+        "@article{casedup2020,\n"
+        "  Title = {The capitalised title the user wrote},\n"
+        "  title = {a stray lowercase duplicate},\n"
+        "  author = {A, B},\n"
+        "}\n"
+    )
+    library = _parse_bib_library(src)
+
+    warnings = describe_failed_blocks(library)
+
+    assert any("title" in w for w in warnings), warnings
+    assert any("casedup2020" in w for w in warnings), warnings
+
+
+def test_a_write_refuses_an_entry_whose_field_keys_collide_on_case(
+    tmp_path: Path,
+) -> None:
+    """The deletion is committed by the write, so the write is where it stops."""
+    bib = tmp_path / "casedup.bib"
+    original = (
+        "@article{casedup2020,\n"
+        "  Title = {The capitalised title the user wrote},\n"
+        "  title = {a stray lowercase duplicate},\n"
+        "}\n\n"
+        "@article{good2020,\n  title = {Fine}\n}\n"
+    )
+    bib.write_text(original)
+
+    with pytest.raises(PziError) as excinfo:
+        update_bib_entry(str(bib), "good2020", lambda entry, record: entry)
+
+    assert "casedup2020" in excinfo.value.message, excinfo.value.message
+    assert bib.read_text() == original, "the file was rewritten"
