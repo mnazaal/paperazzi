@@ -10,8 +10,10 @@ import urllib.error
 import webbrowser
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any, NamedTuple
 from urllib.parse import quote, urlsplit
 
+from pzi.bibtex import NormalizedRecord
 from pzi.fetch_helpers import fetch_text as _fetch_text
 from pzi.pdf_download import fetch_and_store_pdf, write_pdf_bytes
 from pzi.pdf_planning import (
@@ -330,6 +332,88 @@ def fetch_and_store_pdf_with_fallbacks(
             "or attach from the browser extension"
         )
     return None, None, detail
+
+
+#: Ask for the next PDF source, given the record so far and the URLs that have
+#: already failed to download. Returns a record carrying a fresh ``pdf_url``, or
+#: ``None`` when discovery has nothing left to offer.
+NextPdfCandidate = Callable[
+    ["NormalizedRecord", frozenset[str]], "NormalizedRecord | None"
+]
+
+#: How many distinct *sources* one acquisition may try. Discovery terminates on
+#: its own (each round excludes one more URL), but a provider that keeps
+#: inventing URLs should not keep a single command downloading forever.
+MAX_PDF_SOURCE_ATTEMPTS = 4
+
+
+class PdfSourceOutcome(NamedTuple):
+    """What trying successive PDF sources produced."""
+
+    local_pdf_path: str | None
+    warning: str | None
+    #: One entry per source that failed, in the order they were tried.
+    errors: list[str]
+    #: The record whose ``pdf_url`` produced the file — not necessarily the one
+    #: passed in, since a later candidate may be what actually worked.
+    record: NormalizedRecord
+
+
+def fetch_and_store_pdf_trying_sources(
+    *,
+    url: str,
+    record: NormalizedRecord,
+    next_candidate: NextPdfCandidate | None = None,
+    fetch_pdf: Callable[..., tuple[str | None, str | None, str | None]] | None = None,
+    **fallback_kwargs: Any,
+) -> PdfSourceOutcome:
+    """Download *url*, falling back to the next discovered source on failure.
+
+    Every rung of :func:`fetch_and_store_pdf_with_fallbacks` — direct, server
+    browser, ``browser_pdf_cmd``, FlareSolverr, desktop download — retries the
+    *same* URL. They are transport fallbacks, not source fallbacks, so a
+    candidate the publisher 403s ended acquisition outright, with an
+    open-access mirror one discovery step further down never consulted.
+
+    ``next_candidate`` is what asks for that next source. Callers with no way to
+    re-run discovery pass ``None`` and get the old single-attempt behaviour.
+
+    Lazy on purpose: ``next_candidate`` runs only after a candidate has
+    exhausted every transport, so the ordinary case where the first URL
+    downloads costs no extra provider calls.
+
+    This lives here rather than at any one call site because there are three —
+    ``add``, ``pdf retry`` and ``promote`` — and a loop copied into each is how
+    they drift.
+    """
+    downloader = fetch_pdf or fetch_and_store_pdf_with_fallbacks
+    tried: list[str] = []
+    errors: list[str] = []
+    attempt_record = record
+    attempt_url = url
+    for _ in range(MAX_PDF_SOURCE_ATTEMPTS):
+        local_pdf_path, warning, error = downloader(
+            url=attempt_url, record=attempt_record, **fallback_kwargs
+        )
+        if local_pdf_path is not None:
+            return PdfSourceOutcome(local_pdf_path, warning, errors, attempt_record)
+
+        tried.append(attempt_url)
+        if error is not None:
+            errors.append(error)
+        if next_candidate is None:
+            break
+        following = next_candidate(attempt_record, frozenset(tried))
+        if following is None:
+            break
+        following_url = following.get("pdf_url")
+        if not isinstance(following_url, str) or not following_url.strip():
+            break
+        if following_url in tried:  # pragma: no cover — discovery excludes these
+            break
+        attempt_record, attempt_url = following, following_url
+
+    return PdfSourceOutcome(None, None, errors, record)
 
 
 def _auto_browser_pdf_cmd_for_url(

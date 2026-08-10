@@ -17,8 +17,6 @@ import base64
 import os
 from pathlib import Path
 
-import pytest
-
 from pzi import pdf_service
 from pzi.add_service import add_input_to_bib
 from pzi.bib_repository import read_bib_file
@@ -215,23 +213,14 @@ def test_unpaywall_finds_oa_when_direct_blocked(tmp_path: Path, write_app_config
 # ── Scenario 5: the same fallback, one command later ───────────────────────
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "`pzi pdf retry` fetches the stored pdf_url once and gives up: it runs "
-        "no discovery, so a blocked publisher URL is never replaced by an OA "
-        "mirror the way the add path does it (item 198, retry half)"
-    ),
-)
 def test_pdf_retry_falls_back_to_oa_when_the_stored_url_is_blocked(
     tmp_path: Path, write_app_config, monkeypatch
 ) -> None:
-    """The retry path has the add path's defect, and its own reason for it.
+    """The entry `pzi pdf retry` exists to rescue is one whose URL has gone 403.
 
-    `retry_pdf` reads one `pdf_url` off the entry (`pdf_service.py:116`) and
-    hands it to the transport ladder, whose every rung retries that same URL.
-    An entry whose stored URL has gone 403 — the exact entry `pzi pdf retry`
-    exists to rescue — can never reach a different source.
+    `retry_pdf` used to read one `pdf_url` off the entry and hand it to the
+    transport ladder, whose every rung retries that same URL — so the command
+    left the entry in exactly the state that made the user run it.
     """
     config_path = write_app_config(tmp_path, unpaywall_email="pzi-tests@example.org")
     bib_path = tmp_path / "ml.bib"

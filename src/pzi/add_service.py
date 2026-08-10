@@ -46,7 +46,6 @@ from pzi.bibtex import (
 )
 from pzi.capture_context import CaptureContext, build_capture_context
 from pzi.capture_local_pdf import (
-    NextPdfCandidate,
     add_local_pdf,
     attach_pdf_if_available,
     build_add_record_result,
@@ -57,6 +56,7 @@ from pzi.errors import PziError
 from pzi.fetch_helpers import build_metadata_fetch_text
 from pzi.format_templates import format_citekey
 from pzi.identifiers import classify_input
+from pzi.pdf import NextPdfCandidate
 from pzi.pdf import remove_new_pdf as _remove_new_pdf
 from pzi.pdf import snapshot_pdf_paths as _snapshot_pdf_paths
 from pzi.pdf_discovery import (

@@ -121,7 +121,7 @@ def test_every_source_failing_reports_every_source(tmp_path: Path) -> None:
 
 def test_a_source_that_never_runs_out_is_still_bounded(tmp_path: Path) -> None:
     """Discovery terminates on its own; a hostile provider need not."""
-    from pzi.capture_local_pdf import MAX_PDF_SOURCE_ATTEMPTS
+    from pzi.pdf import MAX_PDF_SOURCE_ATTEMPTS
 
     attempted: list[str] = []
 

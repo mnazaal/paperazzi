@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from typing import Any, TypeAlias, cast
 
+from pzi.add_planning import next_pdf_candidate_for_config
 from pzi.bib_repository import find_entry_index, read_bib_file, update_bib_entry
 from pzi.bibtex import (
     BibtexEntry,
@@ -15,7 +16,11 @@ from pzi.bibtex import (
 )
 from pzi.capture_context import resolve_api_auth_token
 from pzi.config import AppConfig, BibResolutionFailure, load_bib_target
-from pzi.pdf import fetch_and_store_pdf_with_fallbacks, write_pdf_bytes
+from pzi.pdf import (
+    fetch_and_store_pdf_trying_sources,
+    fetch_and_store_pdf_with_fallbacks,
+    write_pdf_bytes,
+)
 from pzi.pdf import remove_new_pdf as _remove_new_pdf
 from pzi.pdf import snapshot_pdf_paths as _snapshot_pdf_paths
 from pzi.pdf_download import copy_pdf_to_papers_dir
@@ -130,16 +135,22 @@ def retry_pdf(
     # duplicated that decision.
     filename_format = config.get("pdf_filename_format")
     existing_pdf_paths = _snapshot_pdf_paths(bib["papers_dir"])
-    local_pdf_path, warning, error = fetch_and_store_pdf_with_fallbacks(
+    outcome = fetch_and_store_pdf_trying_sources(
         url=pdf_url,
+        record=cast(NormalizedRecord, _record_at(read_result, index)),
+        next_candidate=next_pdf_candidate_for_config(config, bib),
         papers_dir=bib["papers_dir"],
         citekey=citekey,
         fetch_binary=fetch_binary,
-        record=_record_at(read_result, index),
         filename_format=filename_format,
         **_fallback_kwargs(config),
     )
-    warning = error or warning
+    local_pdf_path = outcome.local_pdf_path
+    # The URL that produced the file, which is not necessarily the stored one:
+    # the whole point of the fallback is that a different source may have
+    # answered, and writing the dead URL back would misreport it.
+    pdf_url = str(outcome.record.get("pdf_url") or pdf_url)
+    warning = ("; ".join(outcome.errors) or None) if local_pdf_path is None else outcome.warning
     if local_pdf_path is None:
         return {
             "status": "error",
@@ -216,6 +227,9 @@ def retry_failed_pdfs(
     entries = read_result["entries"]
     records = read_result.get("records") or []
     fallback_kwargs = _fallback_kwargs(config)
+    # Built once for the whole run: it resolves credentials, which are the same
+    # for every entry in the batch.
+    next_candidate = next_pdf_candidate_for_config(config, bib)
     filename_format = config.get("pdf_filename_format")
     existing_pdf_paths = _snapshot_pdf_paths(bib["papers_dir"])
 
@@ -263,15 +277,20 @@ def retry_failed_pdfs(
         record = records[index] if index < len(records) else None
         record_dict = _record_at(read_result, index)
 
-        local_pdf_path, warning, error = fetch_and_store_pdf_with_fallbacks(
+        outcome = fetch_and_store_pdf_trying_sources(
             url=pdf_url,
+            record=cast(NormalizedRecord, record_dict),
+            next_candidate=next_candidate,
             papers_dir=bib["papers_dir"],
             citekey=citekey,
-            record=record_dict,
             filename_format=filename_format,
             **fallback_kwargs,
         )
-        warning = error or warning
+        local_pdf_path = outcome.local_pdf_path
+        pdf_url = str(outcome.record.get("pdf_url") or pdf_url)
+        warning = (
+            ("; ".join(outcome.errors) or None) if local_pdf_path is None else outcome.warning
+        )
 
         if local_pdf_path is None:
             failures.append({"citekey": citekey, "error": warning or "failed to fetch PDF"})

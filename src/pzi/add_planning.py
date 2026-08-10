@@ -20,6 +20,8 @@ from typing import Any, cast
 from urllib.parse import urlsplit
 
 from pzi.bibtex import NormalizedRecord
+from pzi.capture_context import CaptureContext, build_capture_context
+from pzi.config import AppConfig, BibConfig
 from pzi.flaresolverr import fetch_html_via_flaresolverr
 from pzi.html_metadata import extract_metadata_from_html
 from pzi.metadata_sources import (
@@ -27,6 +29,7 @@ from pzi.metadata_sources import (
     fetch_openalex_record,
     fetch_semantic_scholar_record,
 )
+from pzi.pdf import NextPdfCandidate
 from pzi.pdf_discovery import (
     DEFAULT_DISCOVERY_STEPS,
     PdfDiscoveryContext,
@@ -335,6 +338,71 @@ def build_discovery_context(
         "pdf_discovery_parallel": pdf_discovery_parallel,
         "exclude_pdf_urls": exclude_pdf_urls,
     }
+
+
+def next_pdf_candidate_for_config(config: AppConfig, bib: BibConfig) -> NextPdfCandidate:
+    """Re-run PDF discovery for a *stored* entry, excluding what has failed.
+
+    `pdf retry` and `promote` work from a bib entry rather than a live capture,
+    so they hold no discovery context and used to run no discovery at all: they
+    took the one stored `pdf_url`, pushed it through every *transport* fallback,
+    and gave up — leaving the entry in exactly the state that made the user run
+    the command.
+
+    Credentials come from `build_capture_context` rather than being re-read from
+    config here, so their resolution keeps one implementation. Note that
+    `pdf_service._fallback_kwargs` skips that builder on the grounds that these
+    credentials "play no part in fetching a PDF"; that stopped being true when
+    the open-access fallback became part of fetching a PDF.
+
+    The add path builds its own closure instead, because it *has* a live context
+    carrying the caller's injected fetchers and cookies — which is strictly more
+    than can be reconstructed from config.
+
+    The capture context is built on first use, not here. Building it resolves
+    credentials, and `unpaywall_email_cmd` / `semantic_scholar_api_key_cmd`
+    resolve by *running a shell command* — so doing it eagerly would charge
+    every `pdf retry` for secrets it needs only when a download has already
+    failed, which is the eager cost this whole fallback is designed to avoid.
+    """
+    cached: list[CaptureContext] = []
+
+    def _context() -> CaptureContext:
+        if not cached:
+            cached.append(
+                build_capture_context(
+                    config=config, bib=bib, browser_pdf_cmd_override=None, browser=None
+                )
+            )
+        return cached[0]
+
+    def _next(record: NormalizedRecord, tried: frozenset[str]) -> NormalizedRecord | None:
+        context = _context()
+        return apply_pdf_discovery(
+            record,
+            DEFAULT_DISCOVERY_STEPS,
+            build_discovery_context(
+                raw_value=str(
+                    record.get("source_url")
+                    or record.get("canonical_url")
+                    or record.get("doi")
+                    or ""
+                ),
+                server_url=config["translation_server_url"],
+                unpaywall_email=context.unpaywall_email,
+                contact_email=context.contact_email,
+                s2_api_key=context.s2_api_key,
+                flaresolverr_url=config.get("flaresolverr_url"),
+                browser_pdf_cmd=context.browser_pdf_cmd,
+                api_url=context.api_url,
+                api_auth_token=context.api_auth_token,
+                desktop_fallback_hosts=context.desktop_fallback_hosts,
+                pdf_discovery_parallel=context.pdf_discovery_parallel,
+                exclude_pdf_urls=tried,
+            ),
+        )
+
+    return _next
 
 
 def _carry_item_type(record: dict[str, Any], selected: Mapping[str, Any]) -> None:

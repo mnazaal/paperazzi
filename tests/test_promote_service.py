@@ -308,6 +308,47 @@ def test_promote_attaches_pdf_when_available(tmp_path):
     assert item["pdf_attached"] is True
 
 
+def test_promote_falls_back_to_oa_when_the_candidate_url_is_blocked(tmp_path, monkeypatch):
+    """`promote` had the same one-URL defect as `add` and `pdf retry`.
+
+    Its `_maybe_attach_pdf` pushed the candidate's `pdf_url` through every
+    *transport* fallback, all of which retry that one URL, and reported
+    `pdf_attached: False` with an open-access mirror one discovery step away.
+    """
+    bib_path = tmp_path / "ml.bib"
+    config_path = _write_config(tmp_path, bib_path, unpaywall_email="pzi-tests@example.org")
+    _seed_bib_with_preprint(tmp_path, bib_path, config_path)
+
+    monkeypatch.setattr(
+        "pzi.pdf.fetch_unpaywall_pdf_url",
+        lambda doi, *, email=None: "https://oa.example.org/mirror.pdf",
+    )
+
+    attempted: list[str] = []
+
+    def fake_fetch_binary(url):
+        attempted.append(url)
+        if "oa.example.org" not in url:
+            from urllib.error import HTTPError
+
+            raise HTTPError(url, 403, "Forbidden", {}, None)
+        return b"%PDF-1.4 from-OA-mirror", "application/pdf"
+
+    result = promote_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        keep_preprint=False,
+        dry_run=False,
+        fetch_search=_fake_search_with_venue,
+        fetch_binary=fake_fetch_binary,
+    )
+
+    item = result["items"][0]
+    assert item["pdf_attached"] is True, result
+    assert any("oa.example.org" in url for url in attempted), attempted
+
+
 def test_promote_pdf_failure_still_updates_metadata(tmp_path):
     bib_path = tmp_path / "ml.bib"
     config_path = _write_config(tmp_path, bib_path)

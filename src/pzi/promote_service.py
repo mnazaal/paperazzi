@@ -7,6 +7,7 @@ from collections.abc import Callable, Mapping
 from typing import Any, NotRequired, TypedDict, cast
 from urllib.error import HTTPError
 
+from pzi.add_planning import next_pdf_candidate_for_config
 from pzi.bib_repository import (
     BatchWriteSession,
     ConcurrentEditError,
@@ -44,7 +45,7 @@ from pzi.metadata_sources import (
     fetch_openreview_record_by_title,
     fetch_semantic_scholar_record_by_title_with_error,
 )
-from pzi.pdf import fetch_and_store_pdf_with_fallbacks
+from pzi.pdf import NextPdfCandidate, fetch_and_store_pdf_trying_sources
 from pzi.pdf import remove_new_pdf as _remove_new_pdf
 from pzi.pdf import snapshot_pdf_paths as _snapshot_pdf_paths
 from pzi.protocols import (
@@ -259,6 +260,10 @@ def promote_bib(
             browser_pdf_cmd=effective_browser_pdf_cmd,
             pdf_filename_format=config.get("pdf_filename_format"),
             browser_hook=config.get("browser_hook", True),
+            # Built once for the run: it resolves credentials, which do not vary
+            # per entry. Without it `promote` retries one URL through every
+            # transport and gives up, the same defect `add` and `retry` had.
+            next_candidate=next_pdf_candidate_for_config(config, bib),
         )
 
         # Isolate the write/handler for one preprint: an unexpected failure here
@@ -791,6 +796,7 @@ def _handle_keep_preprint(
     citekey_format: str | None = None,
     browser_hook: bool = True,
     file_path_style: str = "absolute",
+    next_candidate: NextPdfCandidate | None = None,
 ) -> PromoteItem:
     preprint_ck = cast(str, preprint_record.get("citekey", ""))
 
@@ -819,6 +825,7 @@ def _handle_keep_preprint(
         browser_pdf_cmd,
         pdf_filename_format,
         browser_hook=browser_hook,
+        next_candidate=next_candidate,
     )
 
     # Diffed against the *preprint*, which is what the promotion changes — not
@@ -1057,6 +1064,7 @@ def _handle_update_in_place(
     pdf_filename_format: str | None = None,
     browser_hook: bool = True,
     file_path_style: str = "absolute",
+    next_candidate: NextPdfCandidate | None = None,
 ) -> PromoteItem:
     preprint_ck = cast(str, preprint_record.get("citekey", ""))
 
@@ -1090,6 +1098,7 @@ def _handle_update_in_place(
             browser_pdf_cmd,
             pdf_filename_format,
             browser_hook=browser_hook,
+            next_candidate=next_candidate,
         )
 
         def _updater(entry, current):
@@ -1146,27 +1155,31 @@ def _maybe_attach_pdf(
     browser_pdf_cmd: str | None,
     pdf_filename_format: str | None = None,
     browser_hook: bool = True,
+    next_candidate: NextPdfCandidate | None = None,
 ) -> tuple[NormalizedRecord, bool]:
     pdf_url = record.get("pdf_url")
     if not isinstance(pdf_url, str) or not pdf_url.strip() or dry_run:
         return record, False
 
-    path, _warn, _err = fetch_and_store_pdf_with_fallbacks(
+    outcome = fetch_and_store_pdf_trying_sources(
         url=pdf_url,
+        record=record,
+        next_candidate=next_candidate,
         papers_dir=papers_dir,
         citekey=citekey,
         fetch_binary=fetch_binary,
         flaresolverr_url=flaresolverr_url,
         browser_pdf_cmd=browser_pdf_cmd,
         browser_hook=browser_hook,
-        record=record,
         filename_format=pdf_filename_format,
     )
-    if path is None:
+    if outcome.local_pdf_path is None:
         return record, False
 
-    updated = dict(record)
-    updated["local_pdf_path"] = path
+    # `outcome.record`, so a promotion that fell back to another source records
+    # the URL that produced the file rather than the one that failed.
+    updated = dict(outcome.record)
+    updated["local_pdf_path"] = outcome.local_pdf_path
     return cast(NormalizedRecord, updated), True
 
 
