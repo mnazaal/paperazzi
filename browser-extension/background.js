@@ -28,10 +28,7 @@ import {
   requestPdfOriginPermissions,
 } from "./background/permissions.js";
 
-import {
-  extractPageMetadata,
-  extractIeeeXploreMetadata,
-} from "./background/metadata.js";
+import { extractPageMetadata } from "./background/metadata.js";
 
 import {
   startPdfObserver,
@@ -63,8 +60,7 @@ export { isSafePublicHttpUrl };
 // `getEndpoint` applies, so the two cannot disagree about what is storable.
 export { isLoopbackEndpoint } from "./background/config.js";
 export { cookieHeaderForUrl };
-export { extractIeeeXploreMetadata };
-export { detectAndExtractSearchResults, captureSearchResults } from "./background/search.js";
+export { detectAndExtractSearchResults } from "./background/search.js";
 export { startPdfObserver, collectPdfObserverEvents };
 export {
   scanDomForPdfUrls,

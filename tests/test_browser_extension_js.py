@@ -699,54 +699,6 @@ console.log(JSON.stringify({ capture, calls }));
     assert result["capture"]["pdf_attach"]["status"] == "ok"
 
 
-def test_ieee_xplore_metadata_extractor_reads_embedded_xplglobal(tmp_path: Path) -> None:
-    result = _run_background_module(
-        r'''
-globalThis.chrome = { runtime: { onInstalled: { addListener: () => {} } } };
-const mod = await import("./background.js");
-const doc = {
-  baseURI: "https://ieeexplore.ieee.org/document/9840963",
-  defaultView: {
-    xplGlobal: {
-      document: {
-        metadata: {
-          displayDocTitle: "Analysis of the Use of the Kalman Filter",
-          authors: [{ name: "N. E. Poborchaya" }, { name: "E. O. Lobova" }],
-          publicationYear: "2022",
-          publicationTitle: "2022 Systems of Signal Synchronization",
-          abstract: "IEEE abstract text",
-          startPage: "1",
-          endPage: "5",
-          issn: [{ value: "2832-0514" }],
-          isbn: [{ value: "978-1-6654-7064-3" }],
-          pdfUrl: "/stamp/stamp.jsp?tp=&arnumber=9840963",
-          doi: "10.1109/SYNCHROINFO55067.2022.9840963"
-        }
-      }
-    }
-  },
-  querySelectorAll: () => [],
-};
-const out = mod.extractIeeeXploreMetadata(doc, "https://ieeexplore.ieee.org/document/9840963");
-console.log(JSON.stringify(out));
-''',
-        tmp_path,
-    )
-
-    assert result == {
-        "title": "Analysis of the Use of the Kalman Filter",
-        "authors": ["N. E. Poborchaya", "E. O. Lobova"],
-        "year": "2022",
-        "venue": "2022 Systems of Signal Synchronization",
-        "abstract": "IEEE abstract text",
-        "pages": "1--5",
-        "issn": "2832-0514",
-        "isbn": "978-1-6654-7064-3",
-        "pdfUrl": "https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=9840963",
-        "doi": "10.1109/SYNCHROINFO55067.2022.9840963",
-    }
-
-
 def test_capture_posts_ieee_xplore_embedded_metadata(tmp_path: Path) -> None:
     result = _run_background_module(
         r'''
@@ -2598,6 +2550,72 @@ console.log(JSON.stringify({
 
     assert result["hasCapture"] is True
     assert result["registrations"] == [], result["registrations"]
+
+
+def test_the_ieee_mapping_that_actually_runs_is_the_one_tested(tmp_path: Path) -> None:
+    """The extractor runs *in the page*, so it cannot call module helpers.
+
+    `metadata.js` carried a module-level IEEE mapper whose only caller was a
+    test, beside an inline copy inside the injected function that no test
+    touched — the tested one was the dead one. This drives the copy that runs,
+    through `chrome.scripting`, the way a capture does.
+    """
+    result = _run_background_module(
+        r'''
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} } },
+  scripting: {
+    executeScript: async ({ func, args }) => {
+      globalThis.document = {
+        head: { innerHTML: "<meta charset='utf-8'>" },
+        querySelector: () => null,
+        querySelectorAll: () => [],
+        title: "Fallback Title",
+      };
+      globalThis.location = { href: args[0], hostname: "ieeexplore.ieee.org", protocol: "https:" };
+      globalThis.window = {
+        xplGlobal: { document: { metadata: {
+          displayDocTitle: "Deep Graph Networks",
+          authors: [{ name: "Jane Smith" }, { name: "Ada Lovelace" }],
+          publicationYear: "2024",
+          publicationTitle: "IEEE Transactions on Parsing",
+          abstract: "IEEE abstract text",
+          startPage: "1", endPage: "5",
+          issn: "1234-5678",
+          doi: "10.1109/TEST.2024.1",
+          pdfPath: "/stamp/stamp.jsp?tp=&arnumber=9840963",
+        } } },
+      };
+      return [{ result: func(...args) }];
+    },
+  },
+};
+const { extractPageMetadata } = await import("./background/metadata.mjs");
+const meta = await extractPageMetadata(7, "https://ieeexplore.ieee.org/document/9840963");
+console.log(JSON.stringify({
+  title: meta.pageTitle,
+  authors: meta.embedded_authors,
+  year: meta.embedded_year,
+  venue: meta.embedded_venue,
+  pages: meta.embedded_pages,
+  doi: meta.doi,
+  pdf: meta.embedded_pdf_url,
+  trusted: meta.trusted_fields,
+}));
+''',
+        tmp_path,
+    )
+
+    assert result["title"] == "Deep Graph Networks", result
+    assert result["authors"] == ["Jane Smith", "Ada Lovelace"], result
+    assert result["year"] == "2024", result
+    assert result["venue"] == "IEEE Transactions on Parsing", result
+    assert result["pages"] == "1--5", result
+    assert result["doi"] == "10.1109/TEST.2024.1", result
+    # Relative in the page's metadata; absolute by the time it leaves.
+    assert result["pdf"].startswith("https://ieeexplore.ieee.org/stamp/"), result
+    # The claim the server reads.
+    assert "authors" in result["trusted"] and "doi" in result["trusted"], result
 
 
 def test_the_recent_list_survives_the_browser_closing(tmp_path: Path) -> None:

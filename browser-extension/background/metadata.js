@@ -14,53 +14,6 @@ const MAX_HEAD_HTML_CHARS = 64 * 1024;
 
 const _EMPTY_METADATA = { pageTitle: null, canonicalUrl: null, sourceUrl: null, abstractUrl: null, doi: null };
 
-function normalizeIeeeAuthors(metadata) {
-  if (Array.isArray(metadata?.authors)) {
-    const authors = [];
-    for (const author of metadata.authors) {
-      const name = firstString(author?.name ?? author);
-      if (name && !authors.includes(name)) authors.push(name);
-    }
-    if (authors.length) return authors;
-  }
-  const authorNames = firstString(metadata?.authorNames);
-  if (!authorNames) return null;
-  const authors = authorNames.split(";").map((s) => s.trim()).filter(Boolean);
-  return authors.length ? [...new Set(authors)] : null;
-}
-
-function mapIeeeXploreMetadata(metadata, pageUrl) {
-  if (!metadata || typeof metadata !== "object") return null;
-  const startPage = firstString(metadata.startPage);
-  const endPage = firstString(metadata.endPage);
-  const pdfUrl = firstString(metadata.pdfUrl || metadata.pdfPath);
-  let absolutePdfUrl = null;
-  if (pdfUrl) {
-    try { absolutePdfUrl = new URL(pdfUrl, pageUrl).href; } catch (_e) { absolutePdfUrl = pdfUrl; }
-  }
-  return {
-    title: firstString(metadata.displayDocTitle) || firstString(metadata.title) || firstString(metadata.formulaStrippedArticleTitle),
-    authors: normalizeIeeeAuthors(metadata),
-    year: firstString(metadata.publicationYear),
-    venue: firstString(metadata.publicationTitle) || firstString(metadata.displayPublicationTitle),
-    abstract: firstString(metadata.abstract),
-    pages: startPage && endPage ? `${startPage}--${endPage}` : startPage,
-    issn: firstString(metadata.issn),
-    isbn: firstString(metadata.isbn),
-    pdfUrl: absolutePdfUrl,
-    doi: firstString(metadata.doi) || firstString(metadata.doiLink)?.replace(/^https?:\/\/doi\.org\//i, ""),
-  };
-}
-
-export function extractIeeeXploreMetadata(doc, pageUrl) {
-  const host = tryHostname(pageUrl);
-  if (!host || !host.endsWith("ieeexplore.ieee.org")) return null;
-  const direct = doc?.defaultView?.xplGlobal?.document?.metadata;
-  const mapped = mapIeeeXploreMetadata(direct, pageUrl);
-  if (mapped && (mapped.title || mapped.doi)) return mapped;
-  return null;
-}
-
 export async function extractPageMetadata(tabId, pageUrl) {
   if (!tabId) {
     return {
