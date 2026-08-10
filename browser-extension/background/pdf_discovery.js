@@ -63,15 +63,33 @@ export function scanDomForPdfUrls(doc = document) {
 // so truncating keeps the best ones.
 export const MAX_PDF_URL_CANDIDATES = 20;
 
+/**
+ * Append *value* to *candidates* if it passes every rule the server enforces.
+ *
+ * Exported because it was a closure, and three later appends in
+ * `background.js` — the embedded PDF URL, the click-discovery results and the
+ * network observer's hits — pushed onto the same array directly and so obeyed
+ * neither rule. Both failures reject the *whole* capture at the server, taking
+ * the metadata with it: an over-long list, and a loopback or private URL that
+ * `isSafePublicHttpUrl` exists to stop and which the observer can genuinely
+ * produce, since the extension holds `http://127.0.0.1/*`.
+ *
+ * Returns true when the candidate was added, so callers can report a drop.
+ */
+export function addPdfUrlCandidate(candidates, value) {
+  if (!Array.isArray(candidates)) return false;
+  if (typeof value !== "string") return false;
+  if (candidates.length >= MAX_PDF_URL_CANDIDATES) return false;
+  const trimmed = value.trim();
+  if (!trimmed || !isSafePublicHttpUrl(trimmed)) return false;
+  if (candidates.includes(trimmed)) return false;
+  candidates.push(trimmed);
+  return true;
+}
+
 export async function extractPdfUrlCandidates(tabId, pageUrl) {
   const candidates = [];
-  const addCandidate = (value) => {
-    if (typeof value !== "string") return;
-    if (candidates.length >= MAX_PDF_URL_CANDIDATES) return;
-    const trimmed = value.trim();
-    if (!trimmed || !isSafePublicHttpUrl(trimmed)) return;
-    if (!candidates.includes(trimmed)) candidates.push(trimmed);
-  };
+  const addCandidate = (value) => addPdfUrlCandidate(candidates, value);
   // Always-on observer: prepend PDF URLs recently seen for this domain.
   let pageDomain;
   try { pageDomain = new URL(pageUrl).hostname; } catch (_e) { pageDomain = null; }

@@ -45,6 +45,7 @@ import {
 import {
   scanDomForPdfUrls,
   extractPdfUrlCandidates,
+  addPdfUrlCandidate,
   MAX_PDF_URL_CANDIDATES,
   clickPdfDiscovery,
   buildPdfCandidates,
@@ -95,26 +96,25 @@ export async function captureCurrentTab({ tags = [], bib = null, dryRun = false,
   pageMetadata.sourceUrl = normalizeMetadataUrl(pageMetadata.sourceUrl, tab.url) || tab.url;
   pageMetadata.abstractUrl = normalizeMetadataUrl(pageMetadata.abstractUrl, tab.url) || pageMetadata.canonicalUrl || tab.url;
   pageMetadata.doi = normalizeDoi(pageMetadata.doi) || doiFromKnownPreprintUrl(tab.url);
+  // Every append below goes through `addPdfUrlCandidate`, which is the single
+  // place the 20-candidate cap and the public-URL check live. These three sites
+  // used to push onto the array directly, so a page offering many PDF-ish links
+  // sent an over-long list, and a loopback URL the observer had seen went out
+  // unfiltered — and the server rejects the *whole* capture for either, losing
+  // the metadata along with the PDF.
   const pdfUrlCandidates = await extractPdfUrlCandidates(tab.id, tab.url);
   if (typeof pageMetadata.embedded_pdf_url === "string" && pageMetadata.embedded_pdf_url.trim()) {
-    const embeddedPdfUrl = normalizeMetadataUrl(pageMetadata.embedded_pdf_url, tab.url);
-    if (embeddedPdfUrl && !pdfUrlCandidates.includes(embeddedPdfUrl)) {
-      pdfUrlCandidates.push(embeddedPdfUrl);
-    }
+    addPdfUrlCandidate(pdfUrlCandidates, normalizeMetadataUrl(pageMetadata.embedded_pdf_url, tab.url));
   }
 
   // Tier 3: click-based PDF discovery — try clicking "PDF" / "Download PDF" buttons.
   const clickPdfUrls = await clickPdfDiscovery(tab.id, tab.url);
-  for (const u of clickPdfUrls) {
-    if (!pdfUrlCandidates.includes(u)) pdfUrlCandidates.push(u);
-  }
+  for (const u of clickPdfUrls) addPdfUrlCandidate(pdfUrlCandidates, u);
 
   // Collect network-observed PDF URLs and stop observer.
   const observedUrls = collectObservedPdfUrls();
   stopPdfObserver();
-  for (const u of observedUrls) {
-    if (!pdfUrlCandidates.includes(u)) pdfUrlCandidates.push(u);
-  }
+  for (const u of observedUrls) addPdfUrlCandidate(pdfUrlCandidates, u);
 
   const pdfCandidates = buildPdfCandidates(pdfUrlCandidates, tab.url, observedUrls);
   const pdfOriginPermissions = dryRun ? new Map() : await requestPdfOriginPermissions(pdfCandidates, tab.url);

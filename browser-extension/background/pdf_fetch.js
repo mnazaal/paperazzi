@@ -177,6 +177,7 @@ export async function maybeStreamPdfBytes({ endpoint, citekey, bib, pdfUrlCandid
   const attempts = [];
   const grouped = groupPdfCandidates(pdfUrlCandidates || [], pageUrl);
   let lastPermission = null;
+  const deniedPermissions = [];
   const originGroups = [
     ...groupCandidatesByOrigin(grouped.sameOrigin).map((candidates) => ({ candidates, allowWithoutPermissionApi: true })),
     ...groupCandidatesByOrigin(grouped.crossOrigin).map((candidates) => ({ candidates, allowWithoutPermissionApi: false })),
@@ -189,6 +190,11 @@ export async function maybeStreamPdfBytes({ endpoint, citekey, bib, pdfUrlCandid
       // Allow same-origin candidates even when permission is "denied" —
       // generic background fetch + cookies works without host permissions.
       if (!(allowWithoutPermissionApi && permission.status === "denied")) {
+        // Recorded here, not at the top of the loop: this is the point where a
+        // refusal actually costs the user a candidate. A same-origin group is
+        // tried anyway despite a denial, so counting that one would name an
+        // origin that was never in fact blocked.
+        if (permission.status === "denied") deniedPermissions.push(permission);
         continue;
       }
       // Fall through: tryPdfCandidates will skip navigate/discover methods
@@ -217,30 +223,41 @@ export async function maybeStreamPdfBytes({ endpoint, citekey, bib, pdfUrlCandid
       return attach;
     }
   }
-  if (lastPermission && lastPermission.status !== "granted") {
-    return {
-      status: "error",
-      message: "PDF permission denied",
-      pdf_attach_permission: lastPermission,
-      pdf_attach_attempts: attempts,
-    };
-  }
-  // All candidates exhausted — return structured failure so attempts surface.
+  // What the run actually learned comes first. This block used to sit *after* a
+  // permission check that returned on any status other than "granted" —
+  // including "unavailable" (no permissions API at all) and "not_requested"
+  // (the per-capture prompt cap was reached), neither of which is a denial. So
+  // a paper behind a login wall reported "PDF permission denied", sending the
+  // user to grant something nobody had asked them for, and the message that
+  // named the real obstacle was unreachable.
   let message = "browser PDF fetch failed — all candidates exhausted";
   const authStatuses = attempts.filter(a => a.status === "html_login" || a.status === "html_access_denied");
   if (authStatuses.length > 0) {
-    const status = authStatuses[0].status;
-    if (status === "html_login") {
-      message = "PDF requires authentication — log in to the site in your browser first, then retry capture";
-    } else {
-      message = "PDF access denied — you may need institutional access or a subscription";
-    }
+    message = authStatuses[0].status === "html_login"
+      ? "PDF requires authentication — log in to the site in your browser first, then retry capture"
+      : "PDF access denied — you may need institutional access or a subscription";
+  } else if (deniedPermissions.length > 0) {
+    // Every origin the user turned down, not just whichever group happened to
+    // run last.
+    const origins = deniedPermissions.map((p) => p.origin).filter(Boolean);
+    message = origins.length
+      ? `PDF permission denied for ${origins.join(", ")}`
+      : "PDF permission denied";
   }
-  return {
+  const failure = {
     status: "error",
     message,
     pdf_attach_attempts: attempts,
   };
+  if (deniedPermissions.length > 0) {
+    failure.pdf_attach_permission = deniedPermissions[0];
+    failure.pdf_attach_denied_origins = deniedPermissions.map((p) => p.origin).filter(Boolean);
+  } else if (lastPermission && lastPermission.status !== "granted") {
+    // Still surfaced for diagnostics — it explains why a candidate was skipped
+    // — but it no longer decides the message.
+    failure.pdf_attach_permission = lastPermission;
+  }
+  return failure;
 }
 
 async function tryPdfCandidates({ endpoint, citekey, bib, candidates, permission = null, pageUrl = null, attempts = [], pdfRequest = null }) {
@@ -508,13 +525,23 @@ function waitForTabLoad(tabId, timeoutMs) {
 }
 
 async function attachPdfToServer({ endpoint, citekey, bib, sourceUrl, bytes, pdfRequest = null }) {
-  const rawResponse = await fetch(rawAttachUrl(endpoint, { citekey, bib, sourceUrl, pdfRequest }), {
-    method: "POST",
-    headers: { "Content-Type": "application/pdf", ...attachTokenHeader(pdfRequest), ...(await getAuthHeaders()) },
-    body: bytes,
-  });
-  const rawResult = await jsonOrNull(rawResponse);
-  if (rawResponse.ok && rawResult && rawResult.status === "ok") return rawResult;
+  // The raw route requires a `request_id` naming an attach session, and refuses
+  // without one — deliberately, since the session carries the TTL, byte-limit,
+  // source-URL and citekey checks, and a control the caller can decline is no
+  // control at all. A capture with no `pdfRequest` has no session to name, so
+  // this used to upload the entire PDF to a route certain to 403 and then
+  // upload the identical bytes again to the fallback: double the bandwidth, and
+  // a rejected security check in the server log for every such capture.
+  const hasAttachSession = Boolean(pdfRequest?.request_id);
+  if (hasAttachSession) {
+    const rawResponse = await fetch(rawAttachUrl(endpoint, { citekey, bib, sourceUrl, pdfRequest }), {
+      method: "POST",
+      headers: { "Content-Type": "application/pdf", ...attachTokenHeader(pdfRequest), ...(await getAuthHeaders()) },
+      body: bytes,
+    });
+    const rawResult = await jsonOrNull(rawResponse);
+    if (rawResponse.ok && rawResult && rawResult.status === "ok") return rawResult;
+  }
 
   const base64 = arrayBufferToBase64(bytes);
   // Inherit the bib the capture actually wrote to. The raw URL above carries

@@ -2097,6 +2097,289 @@ console.log(JSON.stringify({ events: globalThis.events }));
     }
 
 
+# Drives a capture whose later stages each offer candidates, so the appends that
+# used to bypass the cap and the safe-URL filter are the ones under test.
+def _capture_with_candidate_sources(
+    tmp_path: Path,
+    *,
+    page_urls: list[str],
+    observed_urls: list[str],
+    embedded_url: str = "https://paper.test/embedded.pdf",
+) -> dict:
+    return _run_background_module(
+        r'''
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} } },
+  storage: {
+    local: { get: async () => ({ endpoint: "http://127.0.0.1:8765/capture" }) },
+    session: { get: async () => ({}), set: async () => ({}) },
+  },
+  tabs: { query: async () => [{ id: 7, url: "https://paper.test/article" }] },
+  webRequest: {
+    onHeadersReceived: {
+      addListener: (fn) => { globalThis.__observerFn = fn; },
+      removeListener: () => {},
+    },
+  },
+  permissions: { contains: async () => true, request: async () => true, remove: async () => true },
+  scripting: {
+    // Dispatched on call order, which `captureCurrentTab` fixes: metadata
+    // extraction first, then the DOM scan, then click discovery. Sniffing the
+    // injected function's source instead would be guessing at internals —
+    // `scanDomForPdfUrls` shares vocabulary with the click-discovery injection.
+    executeScript: async ({ args }) => {
+      globalThis.__injections = (globalThis.__injections || 0) + 1;
+      if (globalThis.__injections === 1) {
+        return [{ result: { pageTitle: "Paper", sourceUrl: args[0], embedded_pdf_url: EMBEDDED } }];
+      }
+      return [{ result: PAGE_URLS }];
+    },
+  },
+};
+globalThis.sent = null;
+globalThis.fetch = async (url, options = {}) => {
+  if (url.endsWith("/capture")) {
+    globalThis.sent = JSON.parse(options.body);
+    return { ok: true, status: 200, headers: { get: () => "application/json" }, json: async () => ({ status: "ok" }) };
+  }
+  return { ok: false, status: 404, headers: { get: () => null }, json: async () => ({}) };
+};
+const mod = await import("./background.js");
+// Feed the always-on observer the URLs it would have seen on the wire.
+for (const u of OBSERVED_URLS) {
+  mod.startPdfObserver(7);
+  if (globalThis.__observerFn) {
+    globalThis.__observerFn({ tabId: 7, url: u, responseHeaders: [{ name: "content-type", value: "application/pdf" }] });
+  }
+}
+await mod.captureCurrentTab({ dryRun: false });
+console.log(JSON.stringify({ sent: globalThis.sent }));
+'''.replace("EMBEDDED", json.dumps(embedded_url))
+        .replace("PAGE_URLS", json.dumps(page_urls))
+        .replace("OBSERVED_URLS", json.dumps(observed_urls)),
+        tmp_path,
+    )
+
+
+def _exhausted_capture(
+    tmp_path: Path,
+    *,
+    permissions_js: str,
+    response_js: str,
+    candidates: list[str] | None = None,
+) -> dict:
+    """Drive `maybeStreamPdfBytes` to failure and return what it reported."""
+    return _run_background_module(
+        r'''
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} } },
+  storage: { local: { get: async () => ({ endpoint: "http://127.0.0.1:8765/capture" }) } },
+  tabs: { query: async () => [] },
+  webRequest: { onHeadersReceived: { addListener: () => {}, removeListener: () => {} } },
+  PERMISSIONS
+};
+globalThis.fetch = async () => (RESPONSE);
+const { maybeStreamPdfBytes } = await import("./background/pdf_fetch.mjs");
+const outcome = await maybeStreamPdfBytes({
+  endpoint: "http://127.0.0.1:8765/capture",
+  citekey: "smith2024paper",
+  bib: "main",
+  pdfUrlCandidates: CANDIDATES.map((url) => ({ url })),
+  pageUrl: "https://paper.test/article",
+});
+console.log(JSON.stringify({ outcome }));
+'''.replace("PERMISSIONS", permissions_js)
+        .replace("RESPONSE", response_js)
+        .replace("CANDIDATES", json.dumps(candidates or ["https://cdn.paper.test/paper.pdf"])),
+        tmp_path,
+    )
+
+
+_LOGIN_PAGE_RESPONSE = r'''{
+  ok: true,
+  status: 200,
+  headers: { get: (name) => (name.toLowerCase() === "content-type" ? "text/html" : null) },
+  arrayBuffer: async () => new TextEncoder().encode("<html><body>Please sign in to continue</body></html>").buffer,
+  text: async () => "<html><body>Please sign in to continue</body></html>",
+}'''
+
+
+def test_a_login_wall_is_reported_as_a_login_wall(tmp_path: Path) -> None:
+    """Nothing was denied, so nothing may be blamed on permissions.
+
+    With the permissions API present and granting, the run reaches the page and
+    finds a login wall. The message that names that was unreachable, because
+    the permission branch above it returned on any status other than
+    "granted" — and after a successful grant the *last* status recorded is
+    still not necessarily "granted".
+    """
+    result = _exhausted_capture(
+        tmp_path,
+        permissions_js='permissions: { contains: async () => true, request: async () => true, remove: async () => true },',
+        response_js=_LOGIN_PAGE_RESPONSE,
+    )
+
+    assert result["outcome"]["message"].startswith("PDF requires authentication")
+
+
+def test_a_login_wall_wins_over_a_later_group_that_was_never_granted(
+    tmp_path: Path,
+) -> None:
+    """Item 139's headline: the verdict came from whichever group ran *last*.
+
+    Here the same-origin candidate is fetched and hits a login wall, and a
+    cross-origin candidate is then refused. The old code reported only the last
+    permission status, so the actionable finding — you need to log in — was
+    replaced by a permission complaint about a different host entirely.
+    """
+    result = _exhausted_capture(
+        tmp_path,
+        permissions_js='permissions: { contains: async () => false, request: async () => false, remove: async () => true },',
+        response_js=_LOGIN_PAGE_RESPONSE,
+        candidates=["https://paper.test/paper.pdf", "https://cdn.other.test/paper.pdf"],
+    )
+
+    outcome = result["outcome"]
+    assert outcome["message"].startswith("PDF requires authentication"), outcome["message"]
+    # The refusal is not lost, it just does not get to be the headline.
+    assert outcome["pdf_attach_denied_origins"] == ["https://cdn.other.test"], outcome
+
+
+def test_no_permissions_api_is_not_a_denial(tmp_path: Path) -> None:
+    """`"unavailable"` means the browser has no permissions API at all.
+
+    Telling the user their permission was denied, when nothing ever asked them
+    for one, sends them looking for a setting that does not exist. The honest
+    answer here is the generic one: with no permissions API the cross-origin
+    group is skipped without being fetched, so the run learned nothing more
+    specific — which is exactly why it must not invent a cause.
+    """
+    result = _exhausted_capture(
+        tmp_path,
+        permissions_js="",  # no chrome.permissions at all
+        response_js=_LOGIN_PAGE_RESPONSE,
+    )
+
+    outcome = result["outcome"]
+    assert "permission denied" not in outcome["message"], outcome["message"]
+    assert outcome["message"] == "browser PDF fetch failed — all candidates exhausted"
+    assert outcome["pdf_attach_attempts"] == [], outcome
+    # The status is still carried for diagnostics; it just no longer sets the message.
+    assert outcome["pdf_attach_permission"]["status"] == "unavailable", outcome
+
+
+def test_a_real_denial_still_names_the_origin_that_was_denied(tmp_path: Path) -> None:
+    """The guard must not become a way to swallow genuine denials."""
+    result = _exhausted_capture(
+        tmp_path,
+        permissions_js='permissions: { contains: async () => false, request: async () => false, remove: async () => true },',
+        response_js='{ ok: false, status: 403, headers: { get: () => null }, text: async () => "" }',
+    )
+
+    outcome = result["outcome"]
+    assert "permission denied" in outcome["message"], outcome["message"]
+    # Named, not just counted — the user has to know which site to allow.
+    assert "https://cdn.paper.test" in outcome["message"], outcome["message"]
+    assert outcome["pdf_attach_denied_origins"] == ["https://cdn.paper.test"], outcome
+
+
+def test_a_capture_without_an_attach_session_skips_the_route_that_must_refuse_it(
+    tmp_path: Path,
+) -> None:
+    """`/attach-pdf-raw` refuses any request with no `request_id`.
+
+    That refusal is deliberate — the attach session carries the TTL, byte-limit,
+    source-URL and citekey checks, so a caller that could decline to name one
+    would be declining every control. But the extension sent the full PDF there
+    anyway on captures with no session, then sent the identical bytes to the
+    fallback: twice the upload, and a rejected security check logged each time.
+    """
+    result = _run_background_module(
+        r'''
+const pdfBytes = new Uint8Array([37, 80, 68, 70, 45, 49]).buffer;  // "%PDF-1"
+globalThis.uploads = [];
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} } },
+  storage: { local: { get: async () => ({ endpoint: "http://127.0.0.1:8765/capture" }) } },
+  tabs: { query: async () => [] },
+  webRequest: { onHeadersReceived: { addListener: () => {}, removeListener: () => {} } },
+  permissions: { contains: async () => true, request: async () => true, remove: async () => true },
+};
+globalThis.btoa = (value) => Buffer.from(value, "binary").toString("base64");
+globalThis.fetch = async (url, options = {}) => {
+  if (options.method === "POST") globalThis.uploads.push(url);
+  if (url.includes("/attach-pdf-raw")) {
+    // What the server really does without a request_id.
+    return { ok: false, status: 403, headers: { get: () => "application/json" },
+             json: async () => ({ error: "request_id required: attach must reference a capture" }) };
+  }
+  if (url.includes("/attach-pdf-bytes")) {
+    return { ok: true, status: 200, headers: { get: () => "application/json" }, json: async () => ({ status: "ok" }) };
+  }
+  return { ok: true, status: 200, headers: { get: () => "application/pdf" }, arrayBuffer: async () => pdfBytes };
+};
+const { maybeStreamPdfBytes } = await import("./background/pdf_fetch.mjs");
+const outcome = await maybeStreamPdfBytes({
+  endpoint: "http://127.0.0.1:8765/capture",
+  citekey: "smith2024paper",
+  bib: "main",
+  pdfUrlCandidates: [{ url: "https://paper.test/paper.pdf" }],
+  pageUrl: "https://paper.test/article",
+  // No `pdfRequest`: this capture has no attach session.
+});
+console.log(JSON.stringify({ status: outcome.status, uploads: globalThis.uploads }));
+''',
+        tmp_path,
+    )
+
+    assert result["status"] == "ok", result
+    raw_uploads = [u for u in result["uploads"] if "/attach-pdf-raw" in u]
+    assert raw_uploads == [], raw_uploads
+    # And the PDF still gets attached, by the route that can actually accept it.
+    assert any("/attach-pdf-bytes" in u for u in result["uploads"]), result["uploads"]
+
+
+def test_the_candidate_cap_holds_against_every_source(tmp_path: Path) -> None:
+    """The server rejects the whole capture for an over-long list.
+
+    `extractPdfUrlCandidates` capped what it collected, then three later
+    appends in `background.js` pushed onto the same array without checking —
+    so a page offering many PDF-ish links sent more than the server accepts
+    and lost its metadata along with the PDF.
+    """
+    result = _capture_with_candidate_sources(
+        tmp_path,
+        page_urls=[f"https://paper.test/dom-{i}.pdf" for i in range(30)],
+        observed_urls=[f"https://paper.test/seen-{i}.pdf" for i in range(15)],
+    )
+
+    candidates = result["sent"]["pdf_url_candidates"]
+    assert len(candidates) <= 20, len(candidates)
+
+
+def test_a_loopback_url_from_the_page_never_reaches_the_server(tmp_path: Path) -> None:
+    """`isSafePublicHttpUrl` guards the collector and was skipped by the appends.
+
+    The extension holds `http://127.0.0.1/*` and the page supplies
+    `embedded_pdf_url`, so a loopback or private URL genuinely arrives — and the
+    server 400s the *entire* capture on one, losing the metadata too.
+    """
+    result = _capture_with_candidate_sources(
+        tmp_path,
+        page_urls=["https://paper.test/real.pdf"],
+        observed_urls=["https://paper.test/seen.pdf"],
+        # Arrives through `embedded_pdf_url`, one of the three appends that
+        # bypassed the filter. Routing it through the collector instead would
+        # test the guard that already worked.
+        embedded_url="http://127.0.0.1:8765/pdf/other",
+    )
+
+    candidates = result["sent"]["pdf_url_candidates"]
+    assert not any("127.0.0.1" in url for url in candidates), candidates
+    # The public ones still got through, so this is a filter and not a blanket.
+    assert "https://paper.test/real.pdf" in candidates, candidates
+
+
 def test_a_capture_that_the_server_rejects_still_releases_its_origins(
     tmp_path: Path,
 ) -> None:
