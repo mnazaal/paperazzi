@@ -103,19 +103,41 @@ def apply_pdf_discovery(
     result" and the chain continues to the next step, matching
     ``apply_pdf_discovery_parallel``'s per-step isolation — a single failing
     source must not abort the whole add.
+
+    The incoming record is validated before the loop, not only each step's
+    result: on a re-run after a failed download it still carries the URL that
+    failed, and the ``if record.get("pdf_url")`` guard would otherwise return it
+    again untouched without running a single step.
     """
+    record = _validated_discovery(record, context)
     for step in steps:
         if record.get("pdf_url"):
             break
         try:
-            record = _validated_discovery(step(record, context))
+            record = _validated_discovery(step(record, context), context)
         except Exception:
             continue
     return record
 
 
-def _validated_discovery(record: NormalizedRecord) -> NormalizedRecord:
-    """Drop a ``pdf_url`` that is not a public http(s) URL.
+def excluded_pdf_urls(context: PdfDiscoveryContext | None) -> frozenset[str]:
+    """URLs a caller has already tried and does not want offered again.
+
+    The download stage puts a candidate here once every transport fallback has
+    failed on it, so that re-running discovery yields the *next* source rather
+    than the same dead URL. Without this, discovery is deterministic and a
+    second run returns exactly what the first one did.
+    """
+    raw = (context or {}).get("exclude_pdf_urls")
+    if not raw:
+        return frozenset()
+    return frozenset(str(url) for url in raw)
+
+
+def _validated_discovery(
+    record: NormalizedRecord, context: PdfDiscoveryContext | None = None
+) -> NormalizedRecord:
+    """Drop a ``pdf_url`` that is not a public http(s) URL, or is excluded.
 
     Only the browser step checked what it had found. Every other step takes its
     URL from a provider response or from the captured page, and the server then
@@ -124,10 +146,14 @@ def _validated_discovery(record: NormalizedRecord) -> NormalizedRecord:
     `file:///…` was followed.
 
     Enforced here, at the one place a step's result is accepted, so a step added
-    later is covered without having to remember.
+    later is covered without having to remember. The caller's exclusion list is
+    applied in the same place and for the same reason: a step that happens to
+    rediscover an already-failed URL must not end the chain with it.
     """
     pdf_url = record.get("pdf_url")
-    if not pdf_url or _safe_public_http_url(str(pdf_url)):
+    if not pdf_url:
+        return record
+    if _safe_public_http_url(str(pdf_url)) and str(pdf_url) not in excluded_pdf_urls(context):
         return record
     cleaned = dict(record)
     cleaned.pop("pdf_url", None)
@@ -148,12 +174,15 @@ def apply_pdf_discovery_parallel(
 
     ``max_workers`` controls the thread pool size for parallel HTTP steps.
     """
-    # Phase 1: run pure/fast steps sequentially
+    # Phase 1: run pure/fast steps sequentially. The incoming record is
+    # validated first for the same reason as in ``apply_pdf_discovery``: after a
+    # failed download it still carries the URL that failed.
+    record = _validated_discovery(record, context)
     for step in steps:
         if record.get("pdf_url"):
             return record
         if phase_of(step) == "pure":
-            record = _validated_discovery(step(record, context))
+            record = _validated_discovery(step(record, context), context)
 
     if record.get("pdf_url"):
         return record
@@ -172,7 +201,7 @@ def apply_pdf_discovery_parallel(
             results: dict[PdfDiscoveryStep, NormalizedRecord | None] = {}
             for step, future in futures.items():
                 try:
-                    results[step] = _validated_discovery(future.result())
+                    results[step] = _validated_discovery(future.result(), context)
                 except Exception:
                     # A single discovery source failing (network, parse, provider
                     # error) must not abort the whole fan-out: treat it as "no
@@ -188,7 +217,7 @@ def apply_pdf_discovery_parallel(
         if record.get("pdf_url"):
             return record
         if phase_of(step) == "browser":
-            record = _validated_discovery(step(record, context))
+            record = _validated_discovery(step(record, context), context)
 
     return record
 

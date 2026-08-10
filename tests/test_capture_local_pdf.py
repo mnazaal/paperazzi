@@ -22,6 +22,149 @@ def test_attach_pdf_if_available_copies_local_pdf_candidate(tmp_path: Path) -> N
     assert Path(local_pdf_path).read_bytes() == source_pdf.read_bytes()
 
 
+def test_a_working_first_candidate_asks_discovery_for_nothing(tmp_path: Path) -> None:
+    """The fallback must cost nothing when the first URL downloads.
+
+    Re-running discovery means fresh calls to Crossref, Unpaywall and the
+    translation server. Paying for those on every add — the overwhelmingly
+    common case where the first candidate works — would be a worse bug than
+    the one the fallback fixes.
+    """
+    asked: list[frozenset[str]] = []
+
+    def next_candidate(record, tried):
+        asked.append(tried)
+        raise AssertionError("discovery must not run when the download succeeded")
+
+    record, warnings = attach_pdf_if_available(
+        record={"citekey": "smith2024paper", "pdf_url": "https://oa.example.org/a.pdf"},
+        papers_dir=str(tmp_path / "papers"),
+        dry_run=False,
+        fetch_binary=None,
+        fetch_pdf=lambda **kwargs: ("/papers/smith2024paper.pdf", None, None),
+        next_candidate=next_candidate,
+    )
+
+    assert asked == []
+    assert record["local_pdf_path"] == "/papers/smith2024paper.pdf"
+    assert warnings == []
+
+
+def test_a_blocked_candidate_is_replaced_by_the_next_source(tmp_path: Path) -> None:
+    """The whole point of item 198: one 403 must not end acquisition."""
+    attempted: list[str] = []
+    asked: list[frozenset[str]] = []
+
+    def fetch_pdf(**kwargs):
+        url = kwargs["url"]
+        attempted.append(url)
+        if "blocked.example.com" in url:
+            return None, None, f"all download methods failed for {url}"
+        return "/papers/smith2024paper.pdf", None, None
+
+    def next_candidate(record, tried):
+        asked.append(tried)
+        return {**record, "pdf_url": "https://oa.example.org/mirror.pdf", "pdf_source": "unpaywall"}
+
+    record, warnings = attach_pdf_if_available(
+        record={
+            "citekey": "smith2024paper",
+            "pdf_url": "https://blocked.example.com/a.pdf",
+            "pdf_source": "publisher",
+        },
+        papers_dir=str(tmp_path / "papers"),
+        dry_run=False,
+        fetch_binary=None,
+        fetch_pdf=fetch_pdf,
+        next_candidate=next_candidate,
+    )
+
+    assert attempted == [
+        "https://blocked.example.com/a.pdf",
+        "https://oa.example.org/mirror.pdf",
+    ]
+    assert asked == [frozenset({"https://blocked.example.com/a.pdf"})]
+    assert record["local_pdf_path"] == "/papers/smith2024paper.pdf"
+    # The stored source is the one that produced the file, not the one that 403'd.
+    assert record["pdf_url"] == "https://oa.example.org/mirror.pdf"
+    assert record["pdf_source"] == "unpaywall"
+    assert warnings == []
+
+
+def test_every_source_failing_reports_every_source(tmp_path: Path) -> None:
+    """A caller that tried three sources must not be told about only the last."""
+    mirrors = iter(["https://second.example/b.pdf", "https://third.example/c.pdf"])
+
+    def fetch_pdf(**kwargs):
+        return None, None, f"all download methods failed for {kwargs['url']}"
+
+    def next_candidate(record, tried):
+        following = next(mirrors, None)
+        return {**record, "pdf_url": following} if following else None
+
+    record, warnings = attach_pdf_if_available(
+        record={"citekey": "smith2024paper", "pdf_url": "https://first.example/a.pdf"},
+        papers_dir=str(tmp_path / "papers"),
+        dry_run=False,
+        fetch_binary=None,
+        fetch_pdf=fetch_pdf,
+        next_candidate=next_candidate,
+    )
+
+    assert "local_pdf_path" not in record
+    assert [w.rsplit(" ", 1)[-1] for w in warnings] == [
+        "https://first.example/a.pdf",
+        "https://second.example/b.pdf",
+        "https://third.example/c.pdf",
+    ]
+
+
+def test_a_source_that_never_runs_out_is_still_bounded(tmp_path: Path) -> None:
+    """Discovery terminates on its own; a hostile provider need not."""
+    from pzi.capture_local_pdf import MAX_PDF_SOURCE_ATTEMPTS
+
+    attempted: list[str] = []
+
+    def fetch_pdf(**kwargs):
+        attempted.append(kwargs["url"])
+        return None, None, "nope"
+
+    def next_candidate(record, tried):
+        return {**record, "pdf_url": f"https://endless.example/{len(tried)}.pdf"}
+
+    attach_pdf_if_available(
+        record={"citekey": "smith2024paper", "pdf_url": "https://endless.example/start.pdf"},
+        papers_dir=str(tmp_path / "papers"),
+        dry_run=False,
+        fetch_binary=None,
+        fetch_pdf=fetch_pdf,
+        next_candidate=next_candidate,
+    )
+
+    assert len(attempted) == MAX_PDF_SOURCE_ATTEMPTS
+
+
+def test_no_next_candidate_keeps_the_old_single_attempt_behaviour(tmp_path: Path) -> None:
+    """Callers that cannot re-run discovery must be unaffected."""
+    attempted: list[str] = []
+
+    def fetch_pdf(**kwargs):
+        attempted.append(kwargs["url"])
+        return None, None, "blocked"
+
+    record, warnings = attach_pdf_if_available(
+        record={"citekey": "smith2024paper", "pdf_url": "https://blocked.example.com/a.pdf"},
+        papers_dir=str(tmp_path / "papers"),
+        dry_run=False,
+        fetch_binary=None,
+        fetch_pdf=fetch_pdf,
+    )
+
+    assert attempted == ["https://blocked.example.com/a.pdf"]
+    assert "local_pdf_path" not in record
+    assert warnings == ["blocked"]
+
+
 def test_local_pdf_base_record_reports_provider_failures(tmp_path: Path) -> None:
     """Provider failures here were swallowed, leaving `--strict-metadata` blind."""
     from pzi.capture_local_pdf import local_pdf_base_record

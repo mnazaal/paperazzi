@@ -27,7 +27,7 @@ _DISCOVERY_CONTEXT_KEYS = {
     "flaresolverr_url", "browser_pdf_cmd", "pdf_url_candidates", "cookies",
     "fetch_web", "fetch_unpaywall", "fetch_crossref", "fetch_openalex", "fetch_s2",
     "fetch_flaresolverr", "translation_attachments", "api_url", "api_auth_token",
-    "desktop_fallback_hosts", "pdf_discovery_parallel",
+    "desktop_fallback_hosts", "pdf_discovery_parallel", "exclude_pdf_urls",
 }
 
 
@@ -38,6 +38,8 @@ def test_build_discovery_context_has_full_key_set() -> None:
     # so the fallback path can never omit a key the steps expect.
     assert ctx["cookies"] is None
     assert ctx["pdf_discovery_parallel"] is False
+    # No exclusions by default: a first attempt must be offered every candidate.
+    assert ctx["exclude_pdf_urls"] is None
 
 
 def test_split_record_overrides_separates_fallback_prefixes() -> None:

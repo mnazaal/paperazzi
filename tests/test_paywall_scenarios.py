@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 
+from pzi import pdf_service
 from pzi.add_service import add_input_to_bib
 from pzi.bib_repository import read_bib_file
 from tests.test_paywall_helpers import (
@@ -166,14 +167,6 @@ def test_extension_attach_pdf_bytes_after_capture(tmp_path: Path, write_app_conf
 # ── Scenario 4: Unpaywall open-access fallback ─────────────────────────────
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "PDF acquisition does not fall back after a chosen candidate fails to "
-        "download: discovery picks the publisher's citation_pdf_url, the fetch "
-        "403s, and the run gives up without ever calling Unpaywall (item 198)"
-    ),
-)
 def test_unpaywall_finds_oa_when_direct_blocked(tmp_path: Path, write_app_config) -> None:
     """Direct PDF fetch blocked by publisher (403).
 
@@ -217,3 +210,64 @@ def test_unpaywall_finds_oa_when_direct_blocked(tmp_path: Path, write_app_config
         assert os.path.exists(str(pdf_path))
         with open(str(pdf_path), "rb") as f:
             assert f.read() == b"%PDF-1.4 from-OA-mirror\n"
+
+
+# ── Scenario 5: the same fallback, one command later ───────────────────────
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "`pzi pdf retry` fetches the stored pdf_url once and gives up: it runs "
+        "no discovery, so a blocked publisher URL is never replaced by an OA "
+        "mirror the way the add path does it (item 198, retry half)"
+    ),
+)
+def test_pdf_retry_falls_back_to_oa_when_the_stored_url_is_blocked(
+    tmp_path: Path, write_app_config, monkeypatch
+) -> None:
+    """The retry path has the add path's defect, and its own reason for it.
+
+    `retry_pdf` reads one `pdf_url` off the entry (`pdf_service.py:116`) and
+    hands it to the transport ladder, whose every rung retries that same URL.
+    An entry whose stored URL has gone 403 — the exact entry `pzi pdf retry`
+    exists to rescue — can never reach a different source.
+    """
+    config_path = write_app_config(tmp_path, unpaywall_email="pzi-tests@example.org")
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text(
+        "@article{smith2024paper,\n"
+        "  title = {A Great Paper},\n"
+        "  author = {Smith, Jane},\n"
+        "  year = {2024},\n"
+        f"  doi = {{{DOI}}},\n"
+        # `pzi-pdf-url`, not `pdf_url`: that is the field name the record
+        # projection reads (`bibtex.py:295`), and a plain `pdf_url` makes the
+        # test fail with "no PDF URL found on entry" — a setup error wearing
+        # the defect's clothes.
+        "  pzi-pdf-url = {https://jmlr.org/papers/v26/25-0142.pdf},\n"
+        "}\n"
+    )
+
+    # The OA mirror the entry should end up at.
+    monkeypatch.setattr(
+        "pzi.pdf.fetch_unpaywall_pdf_url",
+        lambda doi, *, email=None: "https://arxiv.org/pdf/2503.12345.pdf",
+    )
+
+    result = pdf_service.retry_pdf(
+        config_path=config_path,
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        citekey="smith2024paper",
+        fetch_binary=make_fetch_binary_selective(
+            blocked_hosts=["jmlr.org"],
+            pdf_content=b"%PDF-1.4 from-OA-mirror\n",
+        ),
+    )
+
+    assert result["status"] == "ok", result
+    local_pdf_path = result["local_pdf_path"]
+    assert local_pdf_path, "retry gave up instead of trying another source"
+    with open(str(local_pdf_path), "rb") as f:
+        assert f.read() == b"%PDF-1.4 from-OA-mirror\n"

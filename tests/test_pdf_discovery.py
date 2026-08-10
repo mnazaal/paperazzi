@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -48,6 +49,96 @@ def test_apply_pdf_discovery_runs_all_steps_when_no_match() -> None:
     result = apply_pdf_discovery(record, [add_tag], context)
     assert result.get("tag") == "found"
     assert "pdf_url" not in result
+
+
+def test_an_excluded_url_does_not_end_the_chain() -> None:
+    """The download stage failed on the first URL, so discovery must go on.
+
+    Without this the chain is deterministic: a second run picks the same
+    winner, so the caller has no way to reach a later source.
+    """
+    record = {"title": "Paper"}
+    context: PdfDiscoveryContext = {
+        "exclude_pdf_urls": ["https://blocked.example.com/paper.pdf"]
+    }
+
+    def blocked_step(r, c):
+        updated = dict(r)
+        updated["pdf_url"] = "https://blocked.example.com/paper.pdf"
+        updated["pdf_source"] = "publisher"
+        return updated
+
+    def oa_step(r, c):
+        updated = dict(r)
+        updated["pdf_url"] = "https://oa.example.org/mirror.pdf"
+        updated["pdf_source"] = "unpaywall"
+        return updated
+
+    result = apply_pdf_discovery(record, [blocked_step, oa_step], context)
+    assert result["pdf_url"] == "https://oa.example.org/mirror.pdf"
+    assert result["pdf_source"] == "unpaywall"
+
+
+def test_an_excluded_url_already_on_the_record_is_dropped_before_any_step() -> None:
+    """A re-run receives the record as it stands, failed URL and all.
+
+    `apply_pdf_discovery` returns early when the record already has a
+    `pdf_url`, so without validating the *incoming* record the second round
+    would hand back the dead URL without running one step.
+    """
+    record = {
+        "title": "Paper",
+        "pdf_url": "https://blocked.example.com/paper.pdf",
+        "pdf_source": "publisher",
+    }
+    context: PdfDiscoveryContext = {
+        "exclude_pdf_urls": ["https://blocked.example.com/paper.pdf"]
+    }
+
+    def oa_step(r, c):
+        updated = dict(r)
+        updated["pdf_url"] = "https://oa.example.org/mirror.pdf"
+        return updated
+
+    result = apply_pdf_discovery(record, [oa_step], context)
+    assert result["pdf_url"] == "https://oa.example.org/mirror.pdf"
+
+
+def test_exclusion_applies_to_the_parallel_scheduler_too() -> None:
+    """Both entry points, or the fix reaches one call site of two."""
+    record = {"title": "Paper"}
+    context: PdfDiscoveryContext = {
+        "exclude_pdf_urls": ["https://blocked.example.com/paper.pdf"]
+    }
+
+    @discovery_phase("http")
+    def blocked_step(r, c):
+        updated = dict(r)
+        updated["pdf_url"] = "https://blocked.example.com/paper.pdf"
+        return updated
+
+    @discovery_phase("http")
+    def oa_step(r, c):
+        updated = dict(r)
+        updated["pdf_url"] = "https://oa.example.org/mirror.pdf"
+        return updated
+
+    result = apply_pdf_discovery_parallel(record, [blocked_step, oa_step], context)
+    assert result["pdf_url"] == "https://oa.example.org/mirror.pdf"
+
+
+def test_no_exclusions_leaves_the_winner_alone() -> None:
+    """The guard must not become a way to lose a perfectly good URL."""
+    record = {"title": "Paper"}
+
+    def step(r, c):
+        updated = dict(r)
+        updated["pdf_url"] = "https://oa.example.org/mirror.pdf"
+        return updated
+
+    for context in ({}, {"exclude_pdf_urls": []}, {"exclude_pdf_urls": None}):
+        result = apply_pdf_discovery(record, [step], cast(PdfDiscoveryContext, context))
+        assert result["pdf_url"] == "https://oa.example.org/mirror.pdf"
 
 
 

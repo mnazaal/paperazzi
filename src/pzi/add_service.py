@@ -46,6 +46,7 @@ from pzi.bibtex import (
 )
 from pzi.capture_context import CaptureContext, build_capture_context
 from pzi.capture_local_pdf import (
+    NextPdfCandidate,
     add_local_pdf,
     attach_pdf_if_available,
     build_add_record_result,
@@ -174,11 +175,47 @@ def add_input_to_bib(
         raw_value=value,
     )
 
+    def _next_pdf_candidate(
+        record: NormalizedRecord, tried: frozenset[str]
+    ) -> NormalizedRecord | None:
+        """Ask discovery for the next PDF source, given what has already failed.
+
+        The download's own fallbacks are transport-level and all retry the same
+        URL, so without this a publisher 403 ended acquisition with an
+        open-access mirror sitting one discovery step further down the chain.
+        """
+        return apply_pdf_discovery(
+            record,
+            DEFAULT_DISCOVERY_STEPS,
+            build_discovery_context(
+                raw_value=value,
+                server_url=config["translation_server_url"],
+                unpaywall_email=unpaywall_email,
+                contact_email=contact_email,
+                s2_api_key=s2_api_key,
+                flaresolverr_url=config.get("flaresolverr_url"),
+                browser_pdf_cmd=effective_browser_pdf_cmd,
+                pdf_url_candidates=pdf_url_candidates,
+                cookies=cookies,
+                fetch_web=fetch_web,
+                fetch_unpaywall=fetch_unpaywall,
+                fetch_crossref=fetch_crossref,
+                fetch_openalex=fetch_openalex,
+                fetch_s2=fetch_s2,
+                fetch_flaresolverr=fetch_flaresolverr,
+                api_url=api_url,
+                api_auth_token=api_auth_token,
+                desktop_fallback_hosts=desktop_fallback_hosts,
+                exclude_pdf_urls=tried,
+            ),
+        )
+
     def _add(record: Mapping[str, object]) -> AddRecordResult:
         return add_record_with_bib(
             bib=bib,
             record=record,
             dry_run=dry_run,
+            next_pdf_candidate=_next_pdf_candidate,
             fetch_binary=fetch_binary,
             flaresolverr_url=config.get("flaresolverr_url"),
             browser_pdf_cmd=effective_browser_pdf_cmd,
@@ -488,6 +525,7 @@ def add_record_with_bib(
     desktop_fallback_hosts: set[str] | None = None,
     ezproxy_host: str | None = None,
     file_path_style: str = "absolute",
+    next_pdf_candidate: NextPdfCandidate | None = None,
 ) -> AddRecordResult:
     read_result = read_bib_file(bib["path"])
     typed_existing_records = [
@@ -534,6 +572,7 @@ def add_record_with_bib(
             api_auth_token=api_auth_token,
             desktop_fallback_hosts=desktop_fallback_hosts,
             ezproxy_host=ezproxy_host,
+            next_candidate=next_pdf_candidate,
         )
     except Exception as exc:
         # Attaching a PDF is enrichment; the entry is what `pzi add` is for. A

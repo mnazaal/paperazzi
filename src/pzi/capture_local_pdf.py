@@ -33,6 +33,18 @@ from pzi.translation_server import fetch_web_translations
 
 AddRecordResult: TypeAlias = dict[str, Any]
 FetchPdf = Callable[..., tuple[str | None, str | None, str | None]]
+
+#: Ask for the next PDF source, given the record so far and the URLs that have
+#: already failed to download. Returns a record carrying a fresh ``pdf_url``, or
+#: ``None`` when discovery has nothing left to offer.
+NextPdfCandidate: TypeAlias = Callable[
+    [NormalizedRecord, frozenset[str]], "NormalizedRecord | None"
+]
+
+#: How many distinct *sources* one attach may try. Discovery terminates on its
+#: own (each round excludes one more URL), but a provider that keeps inventing
+#: URLs should not keep a single `pzi add` downloading forever.
+MAX_PDF_SOURCE_ATTEMPTS = 4
 FetchRecord = Callable[..., tuple[NormalizedRecord, list[str], list[dict]]]
 FetchSearch = Callable[..., list[dict[str, object]]]
 CopyPdf = Callable[..., tuple[str | None, str | None]]
@@ -292,6 +304,7 @@ def attach_pdf_if_available(
     api_auth_token: str | None = None,
     desktop_fallback_hosts: set[str] | None = None,
     ezproxy_host: str | None = None,
+    next_candidate: NextPdfCandidate | None = None,
 ) -> tuple[NormalizedRecord, list[str]]:
     pdf_url = record.get("pdf_url")
     if not isinstance(pdf_url, str) or not pdf_url.strip():
@@ -333,31 +346,59 @@ def attach_pdf_if_available(
         return cast(NormalizedRecord, updated), []
 
     fetch_pdf_fn = fetch_and_store_pdf_with_fallbacks if fetch_pdf is None else fetch_pdf
-    local_pdf_path, warning, error = fetch_pdf_fn(
-        url=pdf_url,
-        papers_dir=papers_dir,
-        citekey=citekey,
-        fetch_binary=fetch_binary,
-        flaresolverr_url=flaresolverr_url,
-        browser_pdf_cmd=browser_pdf_cmd,
-        browser=browser,
-        browser_hook=browser_hook,
-        record=record,
-        filename_format=pdf_filename_format,
-        api_url=api_url,
-        api_auth_token=api_auth_token,
-        desktop_fallback_hosts=desktop_fallback_hosts,
-        ezproxy_host=ezproxy_host,
-    )
-    if local_pdf_path is None:
-        return record, [error] if error is not None else []
 
-    updated = dict(record)
-    updated["local_pdf_path"] = local_pdf_path
-    warnings: list[str] = []
-    if warning is not None:
-        warnings.append(warning)
-    return cast(NormalizedRecord, updated), warnings
+    # Every rung of `fetch_and_store_pdf_with_fallbacks` retries the *same* URL:
+    # direct, server browser, `browser_pdf_cmd`, FlareSolverr and the desktop
+    # download are transport fallbacks, not source fallbacks. So a candidate the
+    # publisher 403s ended the whole acquisition, with an open-access mirror one
+    # discovery step further down never consulted. `next_candidate` is what asks
+    # for that next source; callers that cannot re-run discovery pass None and
+    # get the old single-attempt behaviour.
+    tried: list[str] = []
+    errors: list[str] = []
+    attempt_record = record
+    attempt_url = pdf_url
+    for _ in range(MAX_PDF_SOURCE_ATTEMPTS):
+        local_pdf_path, warning, error = fetch_pdf_fn(
+            url=attempt_url,
+            papers_dir=papers_dir,
+            citekey=citekey,
+            fetch_binary=fetch_binary,
+            flaresolverr_url=flaresolverr_url,
+            browser_pdf_cmd=browser_pdf_cmd,
+            browser=browser,
+            browser_hook=browser_hook,
+            record=attempt_record,
+            filename_format=pdf_filename_format,
+            api_url=api_url,
+            api_auth_token=api_auth_token,
+            desktop_fallback_hosts=desktop_fallback_hosts,
+            ezproxy_host=ezproxy_host,
+        )
+        if local_pdf_path is not None:
+            # From `attempt_record`, not `record`: a later candidate carries the
+            # `pdf_url` and `pdf_source` that actually produced the file, and
+            # storing the one that 403'd would misreport where it came from.
+            updated = dict(attempt_record)
+            updated["local_pdf_path"] = local_pdf_path
+            return cast(NormalizedRecord, updated), [warning] if warning is not None else []
+
+        tried.append(attempt_url)
+        if error is not None:
+            errors.append(error)
+        if next_candidate is None:
+            break
+        following = next_candidate(attempt_record, frozenset(tried))
+        if following is None:
+            break
+        following_url = following.get("pdf_url")
+        if not isinstance(following_url, str) or not following_url.strip():
+            break
+        if following_url in tried:  # pragma: no cover — discovery excludes these
+            break
+        attempt_record, attempt_url = following, following_url
+
+    return record, errors
 
 
 # ---------------------------------------------------------------------------

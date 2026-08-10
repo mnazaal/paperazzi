@@ -299,6 +299,7 @@ def build_discovery_context(
     api_auth_token: str | None = None,
     desktop_fallback_hosts: set[str] | None = None,
     pdf_discovery_parallel: bool = False,
+    exclude_pdf_urls: frozenset[str] | None = None,
 ) -> PdfDiscoveryContext:
     """Assemble the context dict consumed by the PDF-discovery steps.
 
@@ -307,6 +308,9 @@ def build_discovery_context(
     in :mod:`pzi.add_service` build their context here, so the two can no longer
     drift (the fallback previously hand-rolled a subset and silently omitted
     keys like ``cookies`` / ``contact_email``).
+
+    ``exclude_pdf_urls`` carries the URLs a download has already failed on, so a
+    re-run yields the next source instead of the same dead one.
     """
     return {
         "raw_value": raw_value,
@@ -329,6 +333,7 @@ def build_discovery_context(
         "api_auth_token": api_auth_token,
         "desktop_fallback_hosts": desktop_fallback_hosts,
         "pdf_discovery_parallel": pdf_discovery_parallel,
+        "exclude_pdf_urls": exclude_pdf_urls,
     }
 
 
