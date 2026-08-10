@@ -213,16 +213,18 @@ def merge_projected_entry(entry: BibtexEntry, projected_entry: BibtexEntry) -> B
     fields = dict(existing)
 
     for key in _RECORD_OWNED_FIELDS:
+        # The record models `year` as an int, so a year it cannot represent —
+        # `2020a`, `in press`, `{\noopsort{1997}}1997` — is missing from *every*
+        # projection, not because anyone cleared it. Neither removing it nor
+        # overwriting it is a decision the projection is entitled to make: the
+        # incoming year was derived without ever seeing the suffix, so writing
+        # it destroys exactly the character distinguishing 2021a from 2021b.
+        # "Absent" is a different case and stays fillable, and a year the record
+        # *can* model stays writable, so `year` is not frozen in general.
+        if key == "year" and _has_unmodellable_year(existing):
+            continue
         if key in projected:
             fields[key] = projected[key]
-        elif key == "year" and not _is_modelled_year(existing.get("year")):
-            # The record models `year` as an int, so a year it cannot represent
-            # — `2020a`, `in press`, `{\noopsort{1997}}1997` — is missing from
-            # *every* projection, not because anyone cleared it. Removing it
-            # would delete ordinary library content on an update that merely
-            # touched a neighbouring field. A year the record can model is still
-            # removed when the record cleared it, so `year` stays writable.
-            continue
         else:
             fields.pop(key, None)
 
@@ -441,6 +443,17 @@ def _parse_year(value: str | None) -> int | None:
 def _is_modelled_year(value: str | None) -> bool:
     """Whether :func:`_parse_year` can carry *value* through the record model."""
     return _parse_year(value) is not None
+
+
+def _has_unmodellable_year(fields: Mapping[str, str]) -> bool:
+    """Does *fields* hold a ``year`` the record model cannot represent?
+
+    Distinct from "has no year": an absent year is a gap a projection may fill,
+    while a present-but-unmodellable one is library content the projection never
+    saw and must not overwrite.
+    """
+    raw = fields.get("year")
+    return bool(raw and raw.strip()) and not _is_modelled_year(raw)
 
 
 def _empty_to_none(value: str | None) -> str | None:

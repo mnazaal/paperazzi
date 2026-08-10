@@ -465,3 +465,47 @@ def test_primary_pdf_path_prefers_the_pdf_over_a_snapshot() -> None:
     assert primary_pdf_path(value) == "papers/x.pdf"
     assert primary_pdf_path("papers/only.html") == "papers/only.html"
     assert primary_pdf_path("") is None
+
+
+def test_an_unmodellable_year_survives_a_projection_that_carries_one() -> None:
+    """`2021a` is a disambiguator; the record model cannot hold it.
+
+    `_parse_year` returns None for `2021a`, `in press` and
+    `{\\noopsort{1997}}1997`, so the record reads as having no year. Merge then
+    treated the incoming provider year as filling a gap and wrote it over the
+    user's suffix — losing exactly the character that distinguishes 2021a from
+    2021b. The existing guard only fired when the *projection* had no year,
+    which is not this case.
+    """
+    from pzi.bibtex import merge_projected_entry
+
+    entry = {"entry_type": "article", "citekey": "a2021a", "fields": {"year": "2021a"}}
+    projection = {"entry_type": "article", "citekey": "a2021a", "fields": {"year": "2021"}}
+
+    merged = merge_projected_entry(entry, projection)
+
+    assert merged["fields"]["year"] == "2021a"
+
+
+def test_a_year_the_record_can_model_is_still_writable() -> None:
+    """The guard must not freeze ordinary years."""
+    from pzi.bibtex import merge_projected_entry
+
+    entry = {"entry_type": "article", "citekey": "a2020", "fields": {"year": "2020"}}
+    projection = {"entry_type": "article", "citekey": "a2020", "fields": {"year": "2021"}}
+
+    merged = merge_projected_entry(entry, projection)
+
+    assert merged["fields"]["year"] == "2021"
+
+
+def test_a_missing_year_is_still_filled_from_the_projection() -> None:
+    """"Absent" and "present but unmodellable" are different."""
+    from pzi.bibtex import merge_projected_entry
+
+    entry = {"entry_type": "article", "citekey": "a", "fields": {"title": "T"}}
+    projection = {"entry_type": "article", "citekey": "a", "fields": {"year": "2021"}}
+
+    merged = merge_projected_entry(entry, projection)
+
+    assert merged["fields"]["year"] == "2021"
