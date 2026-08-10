@@ -113,6 +113,29 @@ const SEARCH_PATTERNS = [
 ];
 
 
+//: The URL patterns of the site-specific detectors, in declaration order.
+//: Exported so the popup can gate on them instead of keeping its own copy —
+//: that copy listed five of the nine, so the ResearchGate, CORE, BASE and SSRN
+//: extractors below could never be reached.
+export const SEARCH_URL_PATTERNS = SEARCH_PATTERNS
+  .map((pattern) => pattern.urlPattern)
+  .filter(Boolean);
+
+/**
+ * True when *url* is a search page one of the site detectors handles.
+ *
+ * `generic-doi-list` is deliberately absent: it has no `urlPattern` because it
+ * detects by counting `doi.org` links, and it needs ten. Any article page with
+ * a reference list that long would match, so gating on it would present a
+ * paper as a page of search results. It stays reachable only to a caller that
+ * runs detection without this gate.
+ */
+export function matchesAnySearchPattern(url) {
+  if (typeof url !== "string" || !url) return false;
+  return SEARCH_URL_PATTERNS.some((pattern) => new RegExp(pattern, "i").test(url));
+}
+
+
 export async function detectAndExtractSearchResults(tabId, pageUrl) {
   if (!tabId || !pageUrl) return { detected: false, items: [] };
 

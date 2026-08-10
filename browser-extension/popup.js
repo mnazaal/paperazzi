@@ -8,7 +8,7 @@ import {
   getAuthHeaders,
   endpointFor,
 } from "./background/config.js";
-import { detectAndExtractSearchResults } from "./background/search.js";
+import { detectAndExtractSearchResults, matchesAnySearchPattern } from "./background/search.js";
 import { captureCurrentTab } from "./background/capture.js";
 import { formatCaptureResult, formatMultiCaptureResult } from "./popup_format.js";
 
@@ -174,7 +174,9 @@ async function initSearchDetection() {
   if (!tab || !tab.id || !tab.url) return;
 
   // Fast path: skip executeScript if URL doesn't match any known search pattern.
-  if (!_urlMatchesAnySearchPattern(tab.url)) return;
+  // Gated on `search.js`'s own patterns. The popup used to keep a copy of
+  // five of the nine, so four sites had extractors it could never reach.
+  if (!matchesAnySearchPattern(tab.url)) return;
 
   const result = await detectAndExtractSearchResults(tab.id, tab.url);
   if (!result || !result.detected || !result.items || result.items.length === 0) return;
@@ -216,22 +218,6 @@ async function initSearchDetection() {
   }
 
   updateSelectedButton();
-}
-
-// URL patterns for known search sites (fast path — avoids executeScript on
-// every article page the user opens).
-function _urlMatchesAnySearchPattern(url) {
-  const patterns = [
-    "scholar\\.google\\.com\\/scholar",
-    "pubmed\\.ncbi\\.nlm\\.nih\\.gov",
-    "semanticscholar\\.org\\/search",
-    "arxiv\\.org\\/search",
-    "dblp\\.org\\/search",
-  ];
-  for (const pat of patterns) {
-    if (new RegExp(pat, "i").test(url)) return true;
-  }
-  return false;
 }
 
 function updateSelectedButton() {

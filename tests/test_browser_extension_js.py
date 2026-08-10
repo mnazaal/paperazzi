@@ -1067,6 +1067,19 @@ def _write_ui_module_mocks(tmp_path: Path) -> None:
         _rewrite_local_imports((BACKGROUND_DIR / "config.js").read_text())
     )
     (destination / "config.mjs").write_text(_MOCK_CONFIG_MODULE)
+    # `search.js` imports `config.js` and `utils.js`; both are copied in beside
+    # it so the real pattern-matching half can be re-exported from the mock.
+    # Real modules copied in point at `config_real.mjs`, never the mock: the
+    # mock only carries what the *UI* imports, so a real module reaching it
+    # would fail on the first constant the UI happens not to use.
+    (destination / "search_real.mjs").write_text(
+        _rewrite_local_imports((BACKGROUND_DIR / "search.js").read_text())
+        .replace('from "./config.mjs"', 'from "./config_real.mjs"')
+    )
+    (destination / "utils.mjs").write_text(
+        _rewrite_local_imports((BACKGROUND_DIR / "utils.js").read_text())
+        .replace('from "./config.mjs"', 'from "./config_real.mjs"')
+    )
     (destination / "search.mjs").write_text(_MOCK_SEARCH_MODULE)
     (destination / "capture.mjs").write_text(_MOCK_CAPTURE_MODULE)
     (destination / "permissions.mjs").write_text(_MOCK_PERMISSIONS_MODULE)
@@ -1085,6 +1098,10 @@ _MOCK_CONFIG_MODULE = (
 
 _MOCK_SEARCH_MODULE = (
     "export async function detectAndExtractSearchResults() { return globalThis.__searchResults ?? null; }\n"
+    # The real gate, not a stub. A stub that answered `true` would let the popup
+    # pass these tests while gating on a pattern list that had drifted again —
+    # which is the defect this export exists to close.
+    'export { matchesAnySearchPattern, SEARCH_URL_PATTERNS } from "./search_real.mjs";\n'
 )
 
 _MOCK_CAPTURE_MODULE = (
@@ -1173,38 +1190,35 @@ console.log(JSON.stringify({ r1, r2, r3 }));
 
 
 def test_url_matches_search_pattern_scholar(tmp_path: Path) -> None:
-    """Test _urlMatchesAnySearchPattern against known search URLs."""
-    result = _run_popup_js_test(
+    """Drives the real `matchesAnySearchPattern`, not a copy of it.
+
+    This test used to redefine the function inside its own script, so it
+    asserted that its copy agreed with itself — which is how the popup's
+    divergent copy of the pattern list survived long enough to make four site
+    detectors unreachable.
+    """
+    result = _run_background_module(
         r'''
-function _urlMatchesAnySearchPattern(url) {
-  const patterns = [
-    "scholar\\.google\\.com\\/scholar",
-    "pubmed\\.ncbi\\.nlm\\.nih\\.gov",
-    "semanticscholar\\.org\\/search",
-    "arxiv\\.org\\/search",
-    "dblp\\.org\\/search",
-  ];
-  for (const pat of patterns) {
-    if (new RegExp(pat, "i").test(url)) return true;
-  }
-  return false;
-}
-const r1 = _urlMatchesAnySearchPattern("https://scholar.google.com/scholar?q=test");
-const r2 = _urlMatchesAnySearchPattern("https://pubmed.ncbi.nlm.nih.gov/?term=covid");
-const r3 = _urlMatchesAnySearchPattern("https://arxiv.org/search/?query=ml");
-const r4 = _urlMatchesAnySearchPattern("https://semanticscholar.org/search?q=transformers");
-const r5 = _urlMatchesAnySearchPattern("https://dblp.org/search/publ?q=ai");
-const r6 = _urlMatchesAnySearchPattern("https://example.com/paper");
-console.log(JSON.stringify({ r1, r2, r3, r4, r5, r6 }));
+globalThis.chrome = { runtime: { onInstalled: { addListener: () => {} } } };
+const { matchesAnySearchPattern } = await import("./background/search.mjs");
+console.log(JSON.stringify({
+  scholar: matchesAnySearchPattern("https://scholar.google.com/scholar?q=test"),
+  pubmed: matchesAnySearchPattern("https://pubmed.ncbi.nlm.nih.gov/?term=covid"),
+  arxiv: matchesAnySearchPattern("https://arxiv.org/search/?query=ml"),
+  semanticScholar: matchesAnySearchPattern("https://semanticscholar.org/search?q=transformers"),
+  dblp: matchesAnySearchPattern("https://dblp.org/search/publ?q=ai"),
+  article: matchesAnySearchPattern("https://example.com/paper"),
+}));
 ''',
         tmp_path,
     )
-    assert result["r1"] is True
-    assert result["r2"] is True
-    assert result["r3"] is True
-    assert result["r4"] is True
-    assert result["r5"] is True
-    assert result["r6"] is False
+
+    assert result["scholar"] is True
+    assert result["pubmed"] is True
+    assert result["arxiv"] is True
+    assert result["semanticScholar"] is True
+    assert result["dblp"] is True
+    assert result["article"] is False
 
 
 def test_popup_requests_active_tab_origin_permission(tmp_path: Path) -> None:
@@ -2381,6 +2395,140 @@ console.log(JSON.stringify({ observed: observer.collectObservedPdfUrls() }));
 '''.replace("RESPONSES", json.dumps(responses)),
         tmp_path,
     )
+
+
+def test_every_site_with_a_url_pattern_can_reach_its_extractor(tmp_path: Path) -> None:
+    """The popup gates detection on a list it kept its own copy of.
+
+    `search.js` defines nine site patterns with a URL pattern; the popup
+    hardcoded five, and `initSearchDetection` returns early when its copy
+    misses — so ResearchGate, CORE, BASE and SSRN had working extractors that
+    could never be reached.
+
+    The expected set is derived from the module rather than restated here, so
+    adding a tenth site cannot quietly reintroduce the same gap.
+    """
+    result = _run_background_module(
+        r'''
+globalThis.chrome = { runtime: { onInstalled: { addListener: () => {} } } };
+const { matchesAnySearchPattern, SEARCH_URL_PATTERNS } = await import("./background/search.mjs");
+const probes = {
+  "scholar.google.com": "https://scholar.google.com/scholar?q=graph+networks",
+  "pubmed": "https://pubmed.ncbi.nlm.nih.gov/?term=graph+networks",
+  "semanticscholar": "https://www.semanticscholar.org/search?q=graph",
+  "arxiv": "https://arxiv.org/search/?query=graph",
+  "dblp": "https://dblp.org/search?q=graph",
+  "researchgate": "https://www.researchgate.net/search?q=graph",
+  "core": "https://core.ac.uk/search?q=graph",
+  "base": "https://www.base-search.net/Search/Results?lookfor=graph",
+  "ssrn": "https://papers.ssrn.com/sol3/results.cfm",
+};
+const matched = {};
+for (const [site, url] of Object.entries(probes)) matched[site] = matchesAnySearchPattern(url);
+console.log(JSON.stringify({
+  matched,
+  patternCount: SEARCH_URL_PATTERNS.length,
+  ordinaryArticle: matchesAnySearchPattern("https://www.nature.com/articles/s41586-024-00001"),
+  nonsense: matchesAnySearchPattern(""),
+}));
+''',
+        tmp_path,
+    )
+
+    unreachable = [site for site, hit in result["matched"].items() if not hit]
+    assert unreachable == [], unreachable
+    # Nine, because the tenth pattern matches by page content and has no URL.
+    assert result["patternCount"] == 9, result["patternCount"]
+
+    # The gate still gates: an ordinary article page does not look like a search.
+    assert result["ordinaryArticle"] is False
+    assert result["nonsense"] is False
+
+
+def test_opening_the_popup_on_a_researchgate_search_offers_its_results(
+    tmp_path: Path,
+) -> None:
+    """The user-visible half of item 131, and the only test here that could
+    fail against the old code for the right reason.
+
+    ResearchGate has a working extractor. The popup's own copy of the pattern
+    list did not mention it, so `initSearchDetection` returned before ever
+    calling the detector and the popup showed the ordinary single-capture form.
+    """
+    result = _run_popup_js_test(
+        r'''
+const elements = new Map();
+const makeElement = (id) => ({
+  id, value: "", checked: false, disabled: false, textContent: "", innerHTML: "",
+  className: "", type: "", style: { cssText: "", display: "unset" }, children: [], handlers: {},
+  appendChild(child) { this.children.push(child); },
+  addEventListener(event, handler) { (this.handlers[event] ??= []).push(handler); },
+  querySelectorAll: () => [],
+});
+globalThis.document = {
+  getElementById: (id) => {
+    if (!elements.has(id)) elements.set(id, makeElement(id));
+    return elements.get(id);
+  },
+  createElement: () => makeElement("created"),
+};
+globalThis.window = { open: () => {} };
+globalThis.fetch = async () => ({ ok: true, json: async () => ({}) });
+globalThis.chrome = {
+  storage: {
+    local: { get: async () => ({}), set: async () => ({}), remove: async () => ({}) },
+    session: { get: async () => ({}), set: async () => ({}), remove: async () => ({}) },
+    onChanged: { addListener: () => {}, removeListener: () => {} },
+  },
+  tabs: { query: async () => [{ id: 7, url: "https://www.researchgate.net/search?q=graph+networks" }] },
+  runtime: { sendMessage: () => {} },
+};
+globalThis.__searchResults = {
+  detected: true,
+  patternName: "ResearchGate",
+  items: [{ index: 0, url: "https://www.researchgate.net/publication/1", title: "A Paper" }],
+};
+await import("./popup.js");
+for (let i = 0; i < 20; i += 1) await new Promise((r) => setTimeout(r, 0));
+console.log(JSON.stringify({
+  searchShown: elements.get("search-results").style.display,
+  formHidden: elements.get("capture-form").style.display,
+  site: elements.get("result-site").textContent,
+}));
+''',
+        tmp_path,
+    )
+
+    assert result["searchShown"] == "", result
+    assert result["formHidden"] == "none", result
+    assert result["site"] == "ResearchGate", result
+
+
+def test_the_popup_keeps_no_copy_of_the_search_patterns(tmp_path: Path) -> None:
+    """A second copy is what made four sites unreachable; one is the fix."""
+    text = POPUP_JS.read_text()
+    assert "scholar\\\\.google\\\\.com" not in text, "popup has its own pattern list again"
+    assert "matchesAnySearchPattern" in text
+
+
+def test_the_content_only_detector_stays_behind_the_gate(tmp_path: Path) -> None:
+    """`generic-doi-list` has no URL pattern and must not be reached this way.
+
+    It detects by counting `doi.org` links and needs ten, so every article page
+    carrying a reference list of that size would match — the popup would
+    present a paper as a page of search results. Deriving the gate from *all*
+    patterns, as item 131 suggested, would have enabled exactly that.
+    """
+    result = _run_background_module(
+        r'''
+globalThis.chrome = { runtime: { onInstalled: { addListener: () => {} } } };
+const { SEARCH_URL_PATTERNS } = await import("./background/search.mjs");
+console.log(JSON.stringify({ patterns: SEARCH_URL_PATTERNS }));
+''',
+        tmp_path,
+    )
+
+    assert all(pattern for pattern in result["patterns"]), result["patterns"]
 
 
 def test_no_ui_page_loads_the_service_worker(tmp_path: Path) -> None:
