@@ -60,6 +60,9 @@ import {
 // Re-export for external consumers (tests, popup)
 export { getEndpoint, getAuthHeaders, fetchBibs, detectBrowser, endpointFor };
 export { isSafePublicHttpUrl };
+// Onboarding validates the endpoint the user types with the same predicate
+// `getEndpoint` applies, so the two cannot disagree about what is storable.
+export { isLoopbackEndpoint } from "./background/config.js";
 export { cookieHeaderForUrl };
 export { extractIeeeXploreMetadata };
 export { detectAndExtractSearchResults, captureSearchResults } from "./background/search.js";

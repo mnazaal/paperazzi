@@ -1,4 +1,4 @@
-import { fetchBibs, getEndpoint, getAuthHeaders } from "./background.js";
+import { fetchBibs, getEndpoint, getAuthHeaders, isLoopbackEndpoint } from "./background.js";
 
 const endpointInput = document.getElementById("endpoint");
 const tokenInput = document.getElementById("token");
@@ -56,7 +56,28 @@ saveBtn.addEventListener("click", async () => {
   const endpoint = endpointInput.value.trim() || DEFAULT_ENDPOINT;
   const token = tokenInput.value.trim();
 
-  await getStorage().set({ endpoint, authToken: token });
+  // Checked with the same predicate `getEndpoint` applies, because that is what
+  // decides whether the setting has any effect. A non-loopback endpoint used to
+  // be stored, reported as saved, and then silently replaced by the default at
+  // every read — and "Test connection" resolves through `getEndpoint`, so it
+  // tested the default, passed, and confirmed the illusion.
+  if (!isLoopbackEndpoint(endpoint)) {
+    setStatus(
+      `✗ Not saved: the endpoint must be on loopback (127.0.0.1 or localhost). `
+      + `pzi runs on your own machine, and the extension refuses to send captures anywhere else.`,
+      false,
+    );
+    saveBtn.textContent = "Save settings";
+    saveBtn.disabled = false;
+    return;
+  }
+
+  // An empty box means "I did not type one", never "clear the saved token" —
+  // the rule `popup.js` already applies. Writing it unconditionally meant
+  // editing only the endpoint unpaired the extension, and every request 401'd
+  // until the user retyped a token they had never intended to change.
+  const settings = token ? { endpoint, authToken: token } : { endpoint };
+  await getStorage().set(settings);
   setStatus("Settings saved.", true);
 
   saveBtn.textContent = "Save settings";

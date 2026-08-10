@@ -1047,12 +1047,31 @@ console.log(JSON.stringify({ ok: true, output: out }));
 POPUP_JS = PROJECT_ROOT / "browser-extension" / "popup.js"
 
 
+def _write_real_config_module(tmp_path: Path) -> None:
+    """Copy the real `background/config.js` in, for mocks that re-export from it.
+
+    `config.js` imports nothing, so it drops in whole. Anything the UI checks
+    with a predicate the extension also enforces — the loopback endpoint rule —
+    has to be tested against that predicate, not a copy of it that can drift.
+    """
+    destination = tmp_path / "background"
+    destination.mkdir(exist_ok=True)
+    (destination / "config.mjs").write_text(
+        _rewrite_local_imports((BACKGROUND_DIR / "config.js").read_text())
+    )
+
+
 # Stand-in for background.js, which popup.js and onboarding.js both import.
 # Every export keeps the return value it has always had; the `__`-prefixed
 # globals are opt-in overrides, so a test that sets none behaves as before.
 _MOCK_BACKGROUND_MODULE = (
     "export async function fetchBibs() { if (globalThis.__fetchBibsError) throw new Error(globalThis.__fetchBibsError); return globalThis.__bibs ?? []; }\n"
     "export async function getEndpoint() { return 'http://127.0.0.1:8765/capture'; }\n"
+    # Re-exported from the *real* config module, which the harness copies in.
+    # A hand-written copy would drift: the real one also accepts any
+    # `127.x.x.x` and rejects non-http(s) schemes, and onboarding's check is
+    # only worth testing against exactly what `getEndpoint` enforces.
+    'export { isLoopbackEndpoint } from "./background/config.mjs";\n'
     "export async function getAuthHeaders() { return globalThis.__authHeaders || {}; }\n"
     "export async function detectAndExtractSearchResults() { return globalThis.__searchResults ?? null; }\n"
     "export async function cookieHeaderForUrl(url) { (globalThis.__cookieCalls ??= []).push(url); return globalThis.__cookieHeader ?? ''; }\n"
@@ -1068,6 +1087,7 @@ def _run_onboarding_module(script: str, tmp_path: Path) -> dict:
     (tmp_path / "onboarding_test.mjs").write_text(
         ONBOARDING_JS.read_text().replace("./background.js", "./background.mjs")
     )
+    _write_real_config_module(tmp_path)
     (tmp_path / "background.mjs").write_text(_MOCK_BACKGROUND_MODULE)
     runner_path = tmp_path / "runner.mjs"
     runner_path.write_text(script.replace("./onboarding.js", "./onboarding_test.mjs"))
@@ -1089,6 +1109,7 @@ def _run_popup_js_test(script: str, tmp_path: Path) -> dict:
     module_path.write_text(POPUP_JS.read_text().replace('./background.js', './background.mjs'))
     (tmp_path / "popup_format.js").write_text(POPUP_FORMAT_JS.read_text())
     # popup.js imports from background.js — mock the imports
+    _write_real_config_module(tmp_path)
     mock_path = tmp_path / "background.mjs"
     mock_path.write_text(
         _MOCK_BACKGROUND_MODULE
@@ -3439,6 +3460,125 @@ console.log(JSON.stringify({ unauthorized, missing, down, opens: globalThis.open
     assert result["missing"] == {"ok": False, "message": "no PDF stored for smith2024paper"}
     assert result["down"]["ok"] is False
     assert "not reachable" in result["down"]["message"]
+
+
+# The onboarding page with a settings store that remembers, so a save can be
+# checked against what was already there.
+_ONBOARDING_DOM = r'''
+const elements = new Map();
+const makeElement = (id) => ({
+  id, value: "", textContent: "", innerHTML: "", disabled: false,
+  style: {}, children: [], handlers: {},
+  appendChild(child) { this.children.push(child); },
+  addEventListener(event, handler) { (this.handlers[event] ??= []).push(handler); },
+});
+globalThis.document = {
+  getElementById: (id) => {
+    if (!elements.has(id)) elements.set(id, makeElement(id));
+    return elements.get(id);
+  },
+  createElement: () => makeElement("created"),
+};
+globalThis.stored = { endpoint: "http://127.0.0.1:8765/capture", authToken: "saved-by-a-previous-run" };
+const local = {
+  get: async (keys) => {
+    const out = {};
+    for (const key of [].concat(keys)) if (key in globalThis.stored) out[key] = globalThis.stored[key];
+    return out;
+  },
+  set: async (values) => { Object.assign(globalThis.stored, values); return {}; },
+  remove: async () => ({}),
+};
+globalThis.chrome = {
+  storage: { local, session: local, onChanged: { addListener: () => {}, removeListener: () => {} } },
+  runtime: { sendMessage: () => {} },
+};
+globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ status: "ok", bibs: [] }) });
+const openOnboarding = async () => {
+  await import("./onboarding.js");
+  for (let i = 0; i < 20; i += 1) await new Promise((r) => setTimeout(r, 0));
+};
+const clickSave = async () => {
+  await elements.get("save").handlers.click[0]();
+  for (let i = 0; i < 20; i += 1) await new Promise((r) => setTimeout(r, 0));
+};
+'''
+
+
+def test_onboarding_does_not_erase_a_token_it_was_not_given(tmp_path: Path) -> None:
+    """Saving with an empty token box means "I did not type one".
+
+    The popup carries exactly this rule and says so; onboarding wrote whatever
+    the box held, so changing only the endpoint silently unpaired the
+    extension, and every later request 401'd until the token was retyped.
+    """
+    result = _run_onboarding_module(
+        _ONBOARDING_DOM
+        + r'''
+await openOnboarding();
+// The user clears the token box and edits only the endpoint.
+elements.get("token").value = "";
+elements.get("endpoint").value = "http://127.0.0.1:9999/capture";
+await clickSave();
+console.log(JSON.stringify({ stored: globalThis.stored, status: elements.get("status").textContent }));
+''',
+        tmp_path,
+    )
+
+    assert result["stored"]["authToken"] == "saved-by-a-previous-run", result["stored"]
+    assert result["stored"]["endpoint"] == "http://127.0.0.1:9999/capture", result["stored"]
+
+
+def test_onboarding_still_saves_a_token_the_user_typed(tmp_path: Path) -> None:
+    """The guard must not become a way to refuse a new token."""
+    result = _run_onboarding_module(
+        _ONBOARDING_DOM
+        + r'''
+await openOnboarding();
+elements.get("token").value = "  a-freshly-pasted-token  ";
+await clickSave();
+console.log(JSON.stringify({ stored: globalThis.stored }));
+''',
+        tmp_path,
+    )
+
+    assert result["stored"]["authToken"] == "a-freshly-pasted-token", result["stored"]
+
+
+def test_onboarding_refuses_an_endpoint_the_extension_would_discard(
+    tmp_path: Path,
+) -> None:
+    """`getEndpoint` accepts only a loopback URL and silently falls back.
+
+    So a remote endpoint was stored, reported as "Settings saved", and then
+    "Test connection" — which resolves through `getEndpoint` — tested the
+    *default*, succeeded, and said the server was reachable. The user was told
+    twice that a setting had taken effect after it was discarded.
+    """
+    result = _run_onboarding_module(
+        _ONBOARDING_DOM
+        + r'''
+await openOnboarding();
+elements.get("endpoint").value = "https://pzi.example.com/capture";
+await clickSave();
+const status = elements.get("status");
+console.log(JSON.stringify({
+  stored: globalThis.stored,
+  status: status.textContent,
+  background: status.style.background,
+}));
+''',
+        tmp_path,
+    )
+
+    # Not stored, because storing it would be a setting that does nothing.
+    assert result["stored"]["endpoint"] == "http://127.0.0.1:8765/capture", result["stored"]
+    # And said so, rather than claiming success.
+    assert "not saved" in result["status"].lower(), result["status"]
+    assert "loopback" in result["status"].lower(), result["status"]
+    assert result["background"] == "#ffebee", result["background"]
+    # The token survives a rejected endpoint too.
+    assert result["stored"]["authToken"] == "saved-by-a-previous-run", result["stored"]
 
 
 def test_onboarding_reports_an_unreachable_server(tmp_path: Path) -> None:
