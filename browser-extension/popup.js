@@ -1,11 +1,15 @@
+// Imported from the split modules, never from `background.js`: that module
+// registers a `contextMenus.onClicked` listener and an always-on `webRequest`
+// observer at module level, so every extension page importing it added another
+// copy — and one right-click issued a `POST /capture` per open page.
 import {
   fetchBibs,
   getEndpoint,
   getAuthHeaders,
-  detectAndExtractSearchResults,
-  captureCurrentTab,
   endpointFor,
-} from "./background.js";
+} from "./background/config.js";
+import { detectAndExtractSearchResults } from "./background/search.js";
+import { captureCurrentTab } from "./background/capture.js";
 import { formatCaptureResult, formatMultiCaptureResult } from "./popup_format.js";
 
 const POPUP_BUILD_MARKER = "2025-06-12-phases-012";

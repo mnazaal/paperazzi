@@ -1047,48 +1047,66 @@ console.log(JSON.stringify({ ok: true, output: out }));
 POPUP_JS = PROJECT_ROOT / "browser-extension" / "popup.js"
 
 
-def _write_real_config_module(tmp_path: Path) -> None:
-    """Copy the real `background/config.js` in, for mocks that re-export from it.
+def _write_ui_module_mocks(tmp_path: Path) -> None:
+    """Write the split modules the popup and onboarding page import.
 
-    `config.js` imports nothing, so it drops in whole. Anything the UI checks
-    with a predicate the extension also enforces — the loopback endpoint rule —
-    has to be tested against that predicate, not a copy of it that can drift.
+    They no longer import `background.js` — that module registers a
+    `contextMenus.onClicked` listener and an always-on `webRequest` observer at
+    load, so every extension page importing it added another copy. The mocks
+    therefore stand in for `background/config.js`, `background/search.js` and
+    `background/capture.js` individually.
+
+    `isLoopbackEndpoint` is re-exported from the *real* config module rather
+    than restated: onboarding rejects an endpoint using the same predicate
+    `getEndpoint` enforces, so testing it against a copy would only prove the
+    copy agreed with itself. `config.js` imports nothing, so it drops in whole.
     """
     destination = tmp_path / "background"
     destination.mkdir(exist_ok=True)
-    (destination / "config.mjs").write_text(
+    (destination / "config_real.mjs").write_text(
         _rewrite_local_imports((BACKGROUND_DIR / "config.js").read_text())
     )
+    (destination / "config.mjs").write_text(_MOCK_CONFIG_MODULE)
+    (destination / "search.mjs").write_text(_MOCK_SEARCH_MODULE)
+    (destination / "capture.mjs").write_text(_MOCK_CAPTURE_MODULE)
+    (destination / "permissions.mjs").write_text(_MOCK_PERMISSIONS_MODULE)
 
 
-# Stand-in for background.js, which popup.js and onboarding.js both import.
 # Every export keeps the return value it has always had; the `__`-prefixed
 # globals are opt-in overrides, so a test that sets none behaves as before.
-_MOCK_BACKGROUND_MODULE = (
+_MOCK_CONFIG_MODULE = (
     "export async function fetchBibs() { if (globalThis.__fetchBibsError) throw new Error(globalThis.__fetchBibsError); return globalThis.__bibs ?? []; }\n"
     "export async function getEndpoint() { return 'http://127.0.0.1:8765/capture'; }\n"
-    # Re-exported from the *real* config module, which the harness copies in.
-    # A hand-written copy would drift: the real one also accepts any
-    # `127.x.x.x` and rejects non-http(s) schemes, and onboarding's check is
-    # only worth testing against exactly what `getEndpoint` enforces.
-    'export { isLoopbackEndpoint } from "./background/config.mjs";\n'
     "export async function getAuthHeaders() { return globalThis.__authHeaders || {}; }\n"
-    "export async function detectAndExtractSearchResults() { return globalThis.__searchResults ?? null; }\n"
-    "export async function cookieHeaderForUrl(url) { (globalThis.__cookieCalls ??= []).push(url); return globalThis.__cookieHeader ?? ''; }\n"
-    # Writes the same `pzi:captureStage` values the real background does, one
-    # per await, so a test can watch the popup react to them.
-    "export async function captureCurrentTab() { for (const stage of (globalThis.__captureStages || [])) { await chrome.storage.session.set({ 'pzi:captureStage': stage }); } if (globalThis.__captureError) throw new Error(globalThis.__captureError); return globalThis.__captureResult ?? { status: 'ok' }; }\n"
     "export function endpointFor(rawEndpoint, path) { const base = new URL(rawEndpoint); const target = new URL(path, base); target.search = ''; return target.href.replace(/\\/$/, ''); }\n"
+    # The real rule, not a restatement of it.
+    'export { isLoopbackEndpoint } from "./config_real.mjs";\n'
+)
+
+_MOCK_SEARCH_MODULE = (
+    "export async function detectAndExtractSearchResults() { return globalThis.__searchResults ?? null; }\n"
+)
+
+_MOCK_CAPTURE_MODULE = (
+    # Writes the same `pzi:captureStage` values the real capture does, one per
+    # await, so a test can watch the popup react to them.
+    "export async function captureCurrentTab() { for (const stage of (globalThis.__captureStages || [])) { await chrome.storage.session.set({ 'pzi:captureStage': stage }); } if (globalThis.__captureError) throw new Error(globalThis.__captureError); return globalThis.__captureResult ?? { status: 'ok' }; }\n"
+)
+
+_MOCK_PERMISSIONS_MODULE = (
+    # Present so a mutation that reintroduces cookie forwarding has something to
+    # import; `__cookieCalls` is how a test asserts the popup never reached for
+    # cookies at all.
+    "export async function cookieHeaderForUrl(url) { (globalThis.__cookieCalls ??= []).push(url); return globalThis.__cookieHeader ?? ''; }\n"
 )
 
 
 def _run_onboarding_module(script: str, tmp_path: Path) -> dict:
     """Run a test script that imports onboarding.js, the first-run settings page."""
     (tmp_path / "onboarding_test.mjs").write_text(
-        ONBOARDING_JS.read_text().replace("./background.js", "./background.mjs")
+        _rewrite_local_imports(ONBOARDING_JS.read_text())
     )
-    _write_real_config_module(tmp_path)
-    (tmp_path / "background.mjs").write_text(_MOCK_BACKGROUND_MODULE)
+    _write_ui_module_mocks(tmp_path)
     runner_path = tmp_path / "runner.mjs"
     runner_path.write_text(script.replace("./onboarding.js", "./onboarding_test.mjs"))
     result = subprocess.run(
@@ -1106,14 +1124,12 @@ def _run_onboarding_module(script: str, tmp_path: Path) -> dict:
 def _run_popup_js_test(script: str, tmp_path: Path) -> dict:
     """Run a test script that imports popup.js functions."""
     module_path = tmp_path / "popup_test.mjs"
-    module_path.write_text(POPUP_JS.read_text().replace('./background.js', './background.mjs'))
-    (tmp_path / "popup_format.js").write_text(POPUP_FORMAT_JS.read_text())
+    module_path.write_text(_rewrite_local_imports(POPUP_JS.read_text()))
+    # `.mjs`, because `_rewrite_local_imports` now rewrites popup.js's import
+    # of it along with everything else.
+    (tmp_path / "popup_format.mjs").write_text(_rewrite_local_imports(POPUP_FORMAT_JS.read_text()))
     # popup.js imports from background.js — mock the imports
-    _write_real_config_module(tmp_path)
-    mock_path = tmp_path / "background.mjs"
-    mock_path.write_text(
-        _MOCK_BACKGROUND_MODULE
-    )
+    _write_ui_module_mocks(tmp_path)
     runner_path = tmp_path / "runner.mjs"
     runner_script = script.replace("./popup.js", "./popup_test.mjs")
     # Also replace background.js references with mock
@@ -2365,6 +2381,71 @@ console.log(JSON.stringify({ observed: observer.collectObservedPdfUrls() }));
 '''.replace("RESPONSES", json.dumps(responses)),
         tmp_path,
     )
+
+
+def test_no_ui_page_loads_the_service_worker(tmp_path: Path) -> None:
+    """Importing `background.js` registers its listeners in the importing realm.
+
+    `contextMenus.onClicked` and the always-on `webRequest` observer are
+    registered at module level, and `contextMenus.onClicked` is delivered to
+    every extension page that has a listener — so with the onboarding tab open,
+    one right-click issued two `POST /capture`. The popup and the onboarding
+    page must therefore reach their dependencies without loading that module.
+
+    Asserted on the source rather than at runtime because the property is about
+    what is *loaded*: once a UI page imports the service worker, the
+    registrations have already happened, and a runtime probe would be measuring
+    the harness's own module graph rather than the extension's.
+    """
+    for page in (POPUP_JS, ONBOARDING_JS):
+        text = page.read_text()
+        assert '"./background.js"' not in text, page.name
+        assert "'./background.js'" not in text, page.name
+
+    # And the module they must not import is still the one holding the
+    # registrations, so this test keeps meaning what it says.
+    service_worker = (PROJECT_ROOT / "browser-extension" / "background.js").read_text()
+    assert "chrome.contextMenus.onClicked.addListener" in service_worker
+    assert "_registerAlwaysOnPdfObserver" in service_worker
+
+
+def test_the_capture_pipeline_is_reachable_without_the_service_worker(
+    tmp_path: Path,
+) -> None:
+    """`captureCurrentTab` moved to `background/capture.js` for this reason.
+
+    Importing it must not drag in the listener registrations, which is what
+    made splitting it out necessary rather than just tidy.
+    """
+    result = _run_background_module(
+        r'''
+globalThis.registrations = [];
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => { globalThis.registrations.push("onInstalled"); } } },
+  contextMenus: {
+    create: () => {},
+    onClicked: { addListener: () => { globalThis.registrations.push("contextMenus"); } },
+  },
+  webRequest: {
+    onHeadersReceived: {
+      addListener: () => { globalThis.registrations.push("webRequest"); },
+      removeListener: () => {},
+    },
+  },
+  storage: { local: { get: async () => ({}) }, session: { get: async () => ({}), set: async () => ({}) } },
+  tabs: { query: async () => [] },
+};
+const mod = await import("./background/capture.mjs");
+console.log(JSON.stringify({
+  hasCapture: typeof mod.captureCurrentTab === "function",
+  registrations: globalThis.registrations,
+}));
+''',
+        tmp_path,
+    )
+
+    assert result["hasCapture"] is True
+    assert result["registrations"] == [], result["registrations"]
 
 
 def test_an_attachment_that_is_not_a_pdf_is_not_a_pdf_candidate(tmp_path: Path) -> None:

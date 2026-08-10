@@ -1,4 +1,7 @@
-import { fetchBibs, getEndpoint, getAuthHeaders, isLoopbackEndpoint } from "./background.js";
+// From `background/config.js`, not `background.js`: importing the service
+// worker registers its context-menu and webRequest listeners a second time,
+// so an open onboarding tab doubled every right-click capture.
+import { fetchBibs, getEndpoint, getAuthHeaders, isLoopbackEndpoint } from "./background/config.js";
 
 const endpointInput = document.getElementById("endpoint");
 const tokenInput = document.getElementById("token");
