@@ -169,11 +169,68 @@ def _write_manifest(dest: Path, manifest: dict[str, Any]) -> None:
         f.write("\n")
 
 
+def missing_manifest_references(build_dir: Path) -> list[str]:
+    """Return the files ``build_dir``'s manifest names but does not contain.
+
+    The manifest is written independently of the copy, so a renamed or
+    uncopied file produces a build that only fails when a browser tries to
+    load it. Nothing checked this: the build tests assert manifest *shape*.
+
+    Covers the keys that name a path — icons, the popup, and the background
+    script under either browser's spelling. It does not follow ES module
+    imports: `background.js` importing a missing module is a different failure,
+    caught by the extension test suite, which executes those modules.
+    """
+    manifest = json.loads((build_dir / "manifest.json").read_text(encoding="utf-8"))
+    referenced: list[str] = []
+    referenced.extend(str(path) for path in manifest.get("icons", {}).values())
+    action_icon = manifest.get("action", {}).get("default_icon")
+    if isinstance(action_icon, str):
+        referenced.append(action_icon)
+    elif isinstance(action_icon, dict):
+        referenced.extend(str(path) for path in action_icon.values())
+    popup = manifest.get("action", {}).get("default_popup")
+    if isinstance(popup, str):
+        referenced.append(popup)
+    background = manifest.get("background", {})
+    if isinstance(background.get("service_worker"), str):
+        referenced.append(background["service_worker"])
+    referenced.extend(str(path) for path in background.get("scripts", []))
+
+    return sorted({name for name in referenced if not (build_dir / name).is_file()})
+
+
+#: Every entry is stamped with this instead of its source mtime. The value is
+#: arbitrary but must be constant and >= 1980, which is the earliest a ZIP can
+#: represent. Chosen as the DOS epoch so it is obviously not a real build time.
+_ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
+
+
 def _zip_directory(src: Path, zip_path: Path) -> None:
+    """Zip *src* reproducibly: same inputs, byte-identical output.
+
+    `rglob` yields in filesystem order and `shutil.copy2` preserves source
+    mtimes, so the archive's entry order and every `ZipInfo` timestamp came
+    from the checkout it was built in. Two clones of the same commit produced
+    different bytes, which makes the published artifact impossible to verify
+    against the source it claims to be built from.
+    """
+    # Sorted by the name each file is stored under, not by `Path`, which orders
+    # by path parts: `background.js` and `background/capture.js` come out in
+    # opposite orders under the two rules. Either is deterministic, but only
+    # this one matches what `namelist()` shows a reader.
+    files = sorted(
+        ((p.relative_to(src).as_posix(), p) for p in src.rglob("*") if p.is_file()),
+    )
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for path in src.rglob("*"):
-            if path.is_file():
-                zf.write(path, path.relative_to(src))
+        for name, path in files:
+            info = zipfile.ZipInfo(name, date_time=_ZIP_TIMESTAMP)
+            info.compress_type = zipfile.ZIP_DEFLATED
+            # `ZipInfo` built by hand defaults to 0o600, unlike `ZipFile.write`,
+            # which takes the mode from the file. Left alone it would ship an
+            # archive whose members only the extracting user can read.
+            info.external_attr = 0o644 << 16
+            zf.writestr(info, path.read_bytes())
 
 
 def main() -> int:
@@ -194,6 +251,16 @@ def main() -> int:
     # Build Chrome
     _copy_extension_files(chrome_dir)
     _write_manifest(chrome_dir, _build_chrome_manifest(base))
+
+    # Before packaging, not after: a manifest naming a file the build did not
+    # copy loads as a broken extension, and the failure surfaces in the
+    # browser rather than here.
+    for build_dir in (firefox_dir, chrome_dir):
+        missing = missing_manifest_references(build_dir)
+        if missing:
+            named = ", ".join(missing)
+            print(f"error: {build_dir.name} manifest references missing files: {named}")
+            return 1
 
     # Create zip packages
     _zip_directory(firefox_dir, DIST_DIR / "paperazzi-capture-firefox.zip")
