@@ -1056,7 +1056,9 @@ _MOCK_BACKGROUND_MODULE = (
     "export async function getAuthHeaders() { return globalThis.__authHeaders || {}; }\n"
     "export async function detectAndExtractSearchResults() { return globalThis.__searchResults ?? null; }\n"
     "export async function cookieHeaderForUrl(url) { (globalThis.__cookieCalls ??= []).push(url); return globalThis.__cookieHeader ?? ''; }\n"
-    "export async function captureCurrentTab() { if (globalThis.__captureError) throw new Error(globalThis.__captureError); return globalThis.__captureResult ?? { status: 'ok' }; }\n"
+    # Writes the same `pzi:captureStage` values the real background does, one
+    # per await, so a test can watch the popup react to them.
+    "export async function captureCurrentTab() { for (const stage of (globalThis.__captureStages || [])) { await chrome.storage.session.set({ 'pzi:captureStage': stage }); } if (globalThis.__captureError) throw new Error(globalThis.__captureError); return globalThis.__captureResult ?? { status: 'ok' }; }\n"
     "export function endpointFor(rawEndpoint, path) { const base = new URL(rawEndpoint); const target = new URL(path, base); target.search = ''; return target.href.replace(/\\/$/, ''); }\n"
 )
 
@@ -1348,6 +1350,156 @@ console.log(JSON.stringify({ events: globalThis.events }));
     )
 
     assert result["events"] == [], result["events"]
+
+
+# A popup DOM whose summary records every value written to it, over a storage
+# stub that raises change events the way a browser does.
+_PROGRESS_DOM = r'''
+const elements = new Map();
+globalThis.summaryWrites = [];
+const makeElement = (id) => {
+  const el = {
+    id, value: "", checked: false, disabled: false, innerHTML: "",
+    className: "", type: "", style: { cssText: "" }, children: [], handlers: {},
+    appendChild(child) { this.children.push(child); },
+    addEventListener(event, handler) { (this.handlers[event] ??= []).push(handler); },
+    querySelectorAll: () => [],
+  };
+  let text = "";
+  Object.defineProperty(el, "textContent", {
+    get: () => text,
+    set: (value) => {
+      text = value;
+      if (id === "summary") globalThis.summaryWrites.push(value);
+    },
+  });
+  return el;
+};
+globalThis.document = {
+  getElementById: (id) => {
+    if (!elements.has(id)) elements.set(id, makeElement(id));
+    return elements.get(id);
+  },
+  createElement: () => makeElement("created"),
+};
+globalThis.window = { open: () => {} };
+globalThis.fetch = async () => ({ ok: true, json: async () => ({}) });
+
+const storageListeners = [];
+const sessionBacking = {};
+const notify = (changes) => { for (const fn of [...storageListeners]) fn(changes, "session"); };
+const session = {
+  get: async () => ({ ...sessionBacking }),
+  set: async (values) => {
+    const changes = {};
+    for (const [key, value] of Object.entries(values)) {
+      changes[key] = { oldValue: sessionBacking[key], newValue: value };
+      sessionBacking[key] = value;
+    }
+    notify(changes);
+    return {};
+  },
+  remove: async (keys) => {
+    const changes = {};
+    for (const key of [].concat(keys)) {
+      changes[key] = { oldValue: sessionBacking[key], newValue: undefined };
+      delete sessionBacking[key];
+    }
+    notify(changes);
+    return {};
+  },
+};
+globalThis.chrome = {
+  storage: {
+    local: { get: async () => ({}), set: async () => ({}), remove: async () => ({}) },
+    session,
+    onChanged: {
+      addListener: (fn) => storageListeners.push(fn),
+      removeListener: (fn) => {
+        const i = storageListeners.indexOf(fn);
+        if (i >= 0) storageListeners.splice(i, 1);
+      },
+    },
+  },
+  tabs: { query: async () => [{ id: 7, url: "https://paper.test/article" }] },
+  runtime: { sendMessage: () => {} },
+  permissions: { contains: async () => true, request: async () => true, remove: async () => true },
+};
+const runCapture = async () => {
+  await import("./popup.js");
+  for (let i = 0; i < 20; i += 1) await new Promise((r) => setTimeout(r, 0));
+  await elements.get("go").handlers.click[0]();
+  for (let i = 0; i < 20; i += 1) await new Promise((r) => setTimeout(r, 0));
+};
+'''
+
+
+def test_the_popup_shows_what_the_capture_is_doing(tmp_path: Path) -> None:
+    """The four stage writes existed and nothing read them.
+
+    A capture can spend 30 s on one fetch and 15-20 s opening a bot-bypass tab,
+    all behind a single static "Capturing…". The stages were already written at
+    the right points; the only reader was a poller nothing called.
+    """
+    result = _run_popup_js_test(
+        _PROGRESS_DOM
+        + r'''
+globalThis.__captureStages = ["extracting", "fetching", "processing", "downloading"];
+globalThis.__captureResult = { status: "ok", citekey: "smith2024paper", bib: "main", title: "A Paper" };
+await runCapture();
+console.log(JSON.stringify({
+  writes: globalThis.summaryWrites,
+  leftoverStage: sessionBacking["pzi:captureStage"] ?? null,
+  listenersLeft: storageListeners.length,
+}));
+''',
+        tmp_path,
+    )
+
+    writes = result["writes"]
+    assert "Scanning page for metadata…" in writes, writes
+    assert "Fetching paper details…" in writes, writes
+    assert "Processing metadata…" in writes, writes
+    assert "Downloading PDF…" in writes, writes
+    # In the order the pipeline runs them.
+    order = [w for w in writes if w.endswith("…") and w != "Capturing…"]
+    assert order == [
+        "Scanning page for metadata…",
+        "Fetching paper details…",
+        "Processing metadata…",
+        "Downloading PDF…",
+    ], order
+
+    # The outcome is what the user is left looking at, not a stage.
+    assert "smith2024paper" in writes[-1], writes[-1]
+
+    # And the popup tidies up after itself.
+    assert result["leftoverStage"] is None
+    assert result["listenersLeft"] == 0
+
+
+def test_a_late_stage_write_cannot_overwrite_the_result(tmp_path: Path) -> None:
+    """Unsubscribing has to happen before anything else in the `finally`.
+
+    A stage write landing after the capture resolved would replace the outcome
+    the user needs with "Downloading PDF…", which is both wrong and permanent —
+    nothing writes the summary again.
+    """
+    result = _run_popup_js_test(
+        _PROGRESS_DOM
+        + r'''
+globalThis.__captureStages = ["extracting"];
+globalThis.__captureResult = { status: "ok", citekey: "smith2024paper", bib: "main", title: "A Paper" };
+await runCapture();
+// The background service worker outliving the capture, writing one more stage.
+await chrome.storage.session.set({ "pzi:captureStage": "downloading" });
+for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
+console.log(JSON.stringify({ writes: globalThis.summaryWrites }));
+''',
+        tmp_path,
+    )
+
+    assert "smith2024paper" in result["writes"][-1], result["writes"][-1]
 
 
 def test_popup_stamps_direct_capture_result(tmp_path: Path) -> None:

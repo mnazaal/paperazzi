@@ -378,6 +378,11 @@ function _clearBadge() {
 // to the background loses the click and the permission request fails.
 //
 // The listener was therefore unreachable code asserting a property the
-// extension does not have. Removed rather than wired: the context-menu path
-// still runs in the background and reports through `pzi:lastCapture`, which is
-// what `_checkStoredCapture` in the popup displays.
+// extension does not have. Removed rather than wired.
+//
+// The context-menu path does still run in the background, and reports through
+// the toolbar badge (`✓` / `✗`) in `_handleContextMenuCapture` — not through
+// `pzi:lastCapture`, as this comment used to claim. Nothing ever wrote that
+// key, so the popup reader it named displayed nothing on every run since it
+// was written; both halves are gone now. Anything richer than the badge for a
+// context-menu capture would be a new feature, not a repair.

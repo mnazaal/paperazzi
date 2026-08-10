@@ -384,6 +384,50 @@ export async function releaseActiveTabOriginPermission(tabUrl, permission) {
   }
 }
 
+// ── Capture progress ────────────────────────────────────────────────────
+
+// `background.js` writes one of these four stages as a capture proceeds. They
+// were written and never read: the only reader was a poller nothing called, so
+// the popup showed a static "Capturing…" across a pipeline that can spend 30 s
+// on a single fetch and 15-20 s on a bot bypass.
+const CAPTURE_STAGE_LABELS = {
+  extracting: "Scanning page for metadata…",
+  fetching: "Fetching paper details…",
+  processing: "Processing metadata…",
+  downloading: "Downloading PDF…",
+};
+
+export function captureStageLabel(stage) {
+  return CAPTURE_STAGE_LABELS[stage] || null;
+}
+
+/**
+ * Report capture progress to *onLabel* until the returned function is called.
+ *
+ * Subscribes rather than polls: the capture runs in this same realm, so its
+ * `storage.session` writes raise a change event here directly. A browser
+ * without `storage.onChanged` gets a no-op unsubscriber, so the missing API
+ * costs the progress display and nothing else.
+ */
+export function watchCaptureStage(onLabel) {
+  const onChanged = chrome.storage?.onChanged;
+  if (!onChanged || typeof onChanged.addListener !== "function") return () => {};
+  const listener = (changes) => {
+    const change = changes && changes["pzi:captureStage"];
+    if (!change) return;
+    const label = captureStageLabel(change.newValue);
+    if (label) onLabel(label);
+  };
+  onChanged.addListener(listener);
+  return () => {
+    try {
+      onChanged.removeListener(listener);
+    } catch (_error) {
+      /* listener already gone */
+    }
+  };
+}
+
 export function stampPopupResult(result) {
   const out = (result && typeof result === "object") ? { ...result } : { status: "error", errors: ["invalid capture result"] };
   out.popup_build_marker = POPUP_BUILD_MARKER;
@@ -429,7 +473,8 @@ async function doSingleCapture() {
 
   // Run capture in popup context so Firefox keeps optional permission request
   // tied to the user's click and avoids stale background service workers.
-  await getStorage().remove(["pzi:lastCapture", "pzi:captureInProgress", "pzi:captureStage"]);
+  await getStorage().remove(["pzi:captureStage"]);
+  const stopProgress = watchCaptureStage((label) => { summary.textContent = label; });
   try {
     const result = stampPopupResult(await captureCurrentTab({ tags, bib, dryRun, forceNew, tabId, tabUrl }));
     summary.textContent = formatCaptureResult(result);
@@ -442,6 +487,10 @@ async function doSingleCapture() {
     summary.textContent = formatCaptureResult(result);
     raw.textContent = JSON.stringify(result, null, 2);
   } finally {
+    // First in the `finally`, so a stage write arriving late cannot overwrite
+    // the outcome the `try` just displayed with "Downloading PDF…".
+    stopProgress();
+    await getStorage().remove(["pzi:captureStage"]);
     button.disabled = false;
     _clearBadge();
     // In the `finally`, not after the `try`: a throw out of the capture must
@@ -451,63 +500,10 @@ async function doSingleCapture() {
   }
 }
 
-async function _pollCaptureResult(retries) {
-  const stored = await getStorage().get(["pzi:lastCapture", "pzi:captureInProgress", "pzi:captureStage"]);
-  const result = stored && stored["pzi:lastCapture"];
-  const stage = stored && stored["pzi:captureStage"];
-
-  if (result) {
-    if (!result.extension_version) result.popup_build_marker = POPUP_BUILD_MARKER;
-    summary.textContent = formatCaptureResult(result);
-    raw.textContent = JSON.stringify(result, null, 2);
-    button.disabled = false;
-    // Store in recent captures
-    if (result.citekey) {
-      _storeRecent(result.citekey, result.title || "", result.bib || "").then(() => _initRecent());
-    }
-    await getStorage().remove(["pzi:lastCapture", "pzi:captureInProgress", "pzi:captureStage"]);
-    _clearBadge();
-    return;
-  }
-
-  if (stage) {
-    const stageLabels = {
-      extracting: "Scanning page for metadata…",
-      fetching: "Fetching paper details…",
-      processing: "Processing metadata…",
-      downloading: "Downloading PDF…",
-    };
-    summary.textContent = stageLabels[stage] || stage;
-  }
-
-  if (retries > 0) {
-    setTimeout(() => _pollCaptureResult(retries - 1), 500);
-  } else {
-    summary.textContent += " (still in progress…)";
-    // Keep polling while service worker is alive.
-    setTimeout(() => _pollCaptureResult(120), 500);
-  }
-}
 
 function _clearBadge() {
   if (typeof chrome !== "undefined" && chrome.action) {
     chrome.action.setBadgeText({ text: "" }).catch(() => {});
-  }
-}
-
-// ── Check for stored capture from previous popup close ──────────────────
-
-async function _checkStoredCapture() {
-  // Don't interfere if the user already clicked capture.
-  if (button.disabled) return;
-  const stored = await getStorage().get(["pzi:lastCapture", "pzi:captureInProgress", "pzi:captureStage"]);
-  const result = stored && stored["pzi:lastCapture"];
-  if (result) {
-    if (!result.extension_version) result.popup_build_marker = POPUP_BUILD_MARKER;
-    summary.textContent = formatCaptureResult(result);
-    raw.textContent = JSON.stringify(result, null, 2);
-    await getStorage().remove(["pzi:lastCapture", "pzi:captureInProgress", "pzi:captureStage"]);
-    _clearBadge();
   }
 }
 
@@ -521,4 +517,3 @@ cancelSearchBtn.addEventListener("click", cancelSearch);
 
 // Auto-detect search results and check for stored capture on popup open.
 initSearchDetection();
-_checkStoredCapture();
