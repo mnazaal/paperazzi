@@ -46,6 +46,7 @@ import {
 } from "./pdf_discovery.js";
 import {
   maybeStreamPdfBytes,
+  resetBotBypassBudget,
 } from "./pdf_fetch.js";
 
 export async function captureCurrentTab({ tags = [], bib = null, dryRun = false, tabId = null, tabUrl = null, forceNew = false } = {}) {
@@ -59,6 +60,9 @@ export async function captureCurrentTab({ tags = [], bib = null, dryRun = false,
     return { status: "error", errors: ["no active tab"] };
   }
   setCaptureTabId(tab.id);
+  // Per capture, not per tab: without this a second capture in the same tab
+  // inherited the first one's spent bypass attempts.
+  resetBotBypassBudget(tab.id);
 
   // Progress: scanning page for metadata and PDF links.
   chrome.storage.session?.set?.({ "pzi:captureStage": "extracting" });

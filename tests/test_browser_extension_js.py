@@ -2603,6 +2603,130 @@ console.log(JSON.stringify({
     assert result["registrations"] == [], result["registrations"]
 
 
+def test_hidden_iframe_probes_are_bounded_by_us_not_by_the_page(tmp_path: Path) -> None:
+    """Each probe is a real navigation carrying the user's session.
+
+    `clickPdfDiscovery` injected one hidden iframe per discovered URL, in
+    parallel, and the match set is whatever the page offers — a publisher page
+    with a "PDF" link beside every reference produced dozens of simultaneous
+    navigations.
+    """
+    result = _run_background_module(
+        r'''
+globalThis.injected = [];
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} } },
+  webRequest: { onHeadersReceived: { addListener: () => {}, removeListener: () => {} } },
+  scripting: {
+    executeScript: async ({ args }) => {
+      // First call is the DOM scan; later ones are the iframe injections.
+      if (!args || args.length === 0) {
+        return [{ result: Array.from({ length: 40 }, (_, i) => `https://paper.test/ref-${i}.pdf`) }];
+      }
+      globalThis.injected.push(args[0]);
+      return [{ result: null }];
+    },
+  },
+};
+const mod = await import("./background/pdf_discovery.mjs");
+await mod.clickPdfDiscovery(7, "https://paper.test/article");
+console.log(JSON.stringify({
+  injected: globalThis.injected.length,
+  offered: 40,
+  cap: mod.MAX_HIDDEN_IFRAME_PROBES ?? null,
+}));
+''',
+        tmp_path,
+    )
+
+    # Behavioural: fewer probes than the page offered. Stated this way so the
+    # test fails against the unbounded version rather than on a missing export.
+    assert result["injected"] < result["offered"], result
+    assert result["cap"] and result["injected"] <= result["cap"], result
+
+
+def test_the_bypass_budget_is_per_capture_not_per_tab(tmp_path: Path) -> None:
+    """Three captures in one tab used to exhaust the bypass permanently.
+
+    The budget reset only when the tab *changed*, so a second capture of a
+    second paper in the same tab inherited the first one's spent attempts —
+    and after three, the bypass stayed off until the user switched tabs and
+    back. The cap was always described as being per capture.
+    """
+    result = _run_background_module(
+        r'''
+let created = 0;
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} } },
+  webRequest: { onHeadersReceived: { addListener: () => {}, removeListener: () => {} } },
+  scripting: { executeScript: async () => [{ result: null }] },
+  tabs: {
+    create: async () => { created += 1; return { id: 99 }; },
+    update: async () => {},
+    remove: async () => {},
+    onUpdated: { addListener: () => {}, removeListener: () => {} },
+  },
+};
+const mod = await import("./background/pdf_fetch.mjs");
+const { botBypassPdfUrl } = mod;
+// Optional: absent on the version that reset only when the tab changed, so
+// this test measures behaviour there rather than failing to import.
+const resetBotBypassBudget = mod.resetBotBypassBudget ?? (() => {});
+const spend = async () => {
+  for (let i = 0; i < 5; i += 1) {
+    await botBypassPdfUrl(7, "https://www.nature.com/articles/x" + i + ".pdf", { visibleTimeoutMs: 1 });
+  }
+};
+resetBotBypassBudget(7);
+await spend();
+const afterFirstCapture = created;
+// A second capture, same tab.
+resetBotBypassBudget(7);
+await spend();
+console.log(JSON.stringify({ afterFirstCapture, afterSecondCapture: created }));
+''',
+        tmp_path,
+    )
+
+    # The first capture spends its budget and stops.
+    assert result["afterFirstCapture"] > 0
+    # The second gets its own, rather than inheriting an exhausted one.
+    assert result["afterSecondCapture"] > result["afterFirstCapture"], result
+
+
+def test_the_bypass_helper_tab_does_not_steal_focus(tmp_path: Path) -> None:
+    """It opens mid-capture and closes seconds later. Focused, it took over the
+    window the user was reading. A background tab still runs the page's JS,
+    which is all the observer needs."""
+    result = _run_background_module(
+        r'''
+globalThis.created = [];
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} } },
+  webRequest: { onHeadersReceived: { addListener: () => {}, removeListener: () => {} } },
+  // Succeeds and observes nothing, which is what sends the bypass on to the
+  // visible-tab fallback. A throw here returns from `botBypassPdfUrl` first.
+  scripting: { executeScript: async () => [{ result: null }] },
+  tabs: {
+    create: async (options) => { globalThis.created.push(options); return { id: 99 }; },
+    update: async () => {},
+    remove: async () => {},
+    onUpdated: { addListener: () => {}, removeListener: () => {} },
+  },
+};
+const mod = await import("./background/pdf_fetch.mjs");
+const { botBypassPdfUrl } = mod;
+(mod.resetBotBypassBudget ?? (() => {}))(7);
+await botBypassPdfUrl(7, "https://www.nature.com/articles/x.pdf", { visibleTimeoutMs: 1 });
+console.log(JSON.stringify({ created: globalThis.created }));
+''',
+        tmp_path,
+    )
+
+    assert result["created"], "the visible-tab fallback did not run"
+    assert all(opened.get("active") is False for opened in result["created"]), result["created"]
+
+
 def test_an_attachment_that_is_not_a_pdf_is_not_a_pdf_candidate(tmp_path: Path) -> None:
     """The predicate accepted any `Content-Disposition` naming a filename.
 

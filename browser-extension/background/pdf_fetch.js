@@ -56,10 +56,22 @@ const MAX_BOT_BYPASS_ATTEMPTS_PER_CAPTURE = 3;
 let _bypassBudgetTabId = null;
 let _bypassAttemptsUsed = 0;
 
+/**
+ * Start a fresh bypass budget. Called once per capture.
+ *
+ * The budget used to reset only when the *tab* changed, so a second capture in
+ * the same tab inherited the first one's spent attempts — three captures on one
+ * tab and the bypass was off for good, until the user switched away and back.
+ * "Per capture" is what the cap was always described as.
+ */
+export function resetBotBypassBudget(tabId) {
+  _bypassBudgetTabId = tabId;
+  _bypassAttemptsUsed = 0;
+}
+
 function takeBotBypassBudget(tabId) {
   if (_bypassBudgetTabId !== tabId) {
-    _bypassBudgetTabId = tabId;
-    _bypassAttemptsUsed = 0;
+    resetBotBypassBudget(tabId);
   }
   if (_bypassAttemptsUsed >= MAX_BOT_BYPASS_ATTEMPTS_PER_CAPTURE) return false;
   _bypassAttemptsUsed += 1;
@@ -127,13 +139,17 @@ async function botBypassViaVisibleTab(candidateUrl, { timeoutMs }) {
   if (!chrome.tabs?.create) return null;
   let helperTab = null;
   try {
-    helperTab = await chrome.tabs.create({ url: "about:blank", active: true });
+    // `active: false`: this opens mid-capture, navigates to a publisher URL and
+    // is closed again seconds later. Focused, it took over the user's window
+    // while they were reading something else. A background tab still loads and
+    // runs the page's JS, which is all the observer needs.
+    helperTab = await chrome.tabs.create({ url: "about:blank", active: false });
     if (!helperTab || helperTab.id == null) return null;
     startPdfObserver(helperTab.id);
     if (chrome.tabs?.update) {
       await chrome.tabs.update(helperTab.id, { url: candidateUrl });
     } else {
-      await chrome.tabs.create({ url: candidateUrl, active: true });
+      await chrome.tabs.create({ url: candidateUrl, active: false });
     }
     // Wait for tab navigation to complete, then give JS redirects time to fire.
     await new Promise((resolve) => {

@@ -63,6 +63,11 @@ export function scanDomForPdfUrls(doc = document) {
 // so truncating keeps the best ones.
 export const MAX_PDF_URL_CANDIDATES = 20;
 
+//: How many discovered URLs `clickPdfDiscovery` may load in hidden iframes for
+//: one capture. Each is a real navigation with the user's session attached, so
+//: the count must come from us and not from the page.
+export const MAX_HIDDEN_IFRAME_PROBES = 5;
+
 /**
  * Append *value* to *candidates* if it passes every rule the server enforces.
  *
@@ -275,9 +280,14 @@ export async function clickPdfDiscovery(tabId, pageUrl) {
   // 2. Snapshot current observer cache.
   const beforeUrls = observerCacheUrls();
 
-  // 3. Load each discovered URL in a hidden iframe (parallel).
-  const iframePromises = discoveredUrls.map((url) => _injectHiddenIframe(tabId, url));
-  await Promise.all(iframePromises);
+  // 3. Load the most promising discovered URLs in hidden iframes (parallel).
+  // Bounded: this used to inject one iframe per match, all at once, and the
+  // match set is whatever the page offers — a publisher page with a "PDF" link
+  // per reference produced dozens of simultaneous navigations, each carrying
+  // the user's cookies. The list is in discovery order, so the first few are
+  // the ones worth probing.
+  const probes = discoveredUrls.slice(0, MAX_HIDDEN_IFRAME_PROBES);
+  await Promise.all(probes.map((url) => _injectHiddenIframe(tabId, url)));
 
   // 4. Small wait for observer to process responses.
   await new Promise((r) => setTimeout(r, 500));
