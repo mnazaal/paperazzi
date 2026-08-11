@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import json
 import time
 import urllib.error
 import urllib.parse
@@ -193,6 +194,40 @@ def fetch_text(
     )
 
 
+#: Bodies a provider returns with HTTP 200 that are refusals, not results.
+#: Semantic Scholar answers a quota refusal this way, so the status code cannot
+#: be the whole cache-worthiness test.
+_TRANSIENT_ERROR_MARKERS = (
+    "rate limit",
+    "too many requests",
+    "quota",
+    "temporarily unavailable",
+)
+
+
+def _is_transient_error_body(text: str) -> bool:
+    """True when a 200 body is a provider refusal rather than a record.
+
+    Deliberately narrow: it only fires on a small JSON object whose sole
+    meaningful key is `error`/`message`, so a paper whose *abstract* discusses
+    rate limiting is not mistaken for a refusal.
+    """
+    stripped = text.strip()
+    if not stripped.startswith("{") or len(stripped) > 512:
+        return False
+    try:
+        parsed = json.loads(stripped)
+    except ValueError:
+        return False
+    if not isinstance(parsed, dict):
+        return False
+    message = parsed.get("error") or parsed.get("message")
+    if not isinstance(message, str):
+        return False
+    lowered = message.lower()
+    return any(marker in lowered for marker in _TRANSIENT_ERROR_MARKERS)
+
+
 def build_metadata_fetch_text(
     config: Mapping[str, Any],
     *,
@@ -226,7 +261,12 @@ def build_metadata_fetch_text(
                 return hit
         limiter.wait(url)
         text = base(url, **kwargs)
-        if cache is not None:
+        # Semantic Scholar reports a quota refusal as HTTP *200* with an
+        # `error` body, so caching every 200 froze a transient rate-limit into
+        # a permanent one: three lookups, one network call, the same
+        # "rate limit exceeded" returned for the whole TTL. A failure is not a
+        # result and must not be stored.
+        if cache is not None and not _is_transient_error_body(text):
             cache.set(url, text)
         return text
 

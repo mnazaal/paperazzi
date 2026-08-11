@@ -1569,7 +1569,11 @@ def test_add_reports_a_broken_key_command_as_a_structured_error(tmp_path: Path) 
     # The service-level wrapper survives, proving the error was handled inside
     # the service rather than escaping to the CLI boundary.
     assert "failed to resolve capture context" in out
-    assert "secret command" in out
+    # And it names the key. It used to say "secret command", which could have
+    # been any of five `*_cmd` config lines — `resolve_optional_value` takes a
+    # `config_key` for exactly this and `build_capture_context` called it
+    # without one.
+    assert "semantic_scholar_api_key_cmd" in out
 
 
 # --- exit-code contract (Batch 5) -------------------------------------------

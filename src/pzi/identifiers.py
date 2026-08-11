@@ -162,6 +162,19 @@ def classify_input(value: str) -> ClassifiedInput:
         stripped = value.strip()
         if stripped.lower().endswith(".pdf") and "://" not in stripped:
             return {"kind": "local_pdf", "raw": value, "normalized": stripped}
+        # A bare arXiv ID — `2301.07041`, `arXiv:2301.07041v2`, `math.GT/0309136`.
+        # `normalize_arxiv_id` has handled prefixes, versions and old-style
+        # subject classes all along; `classify_input` simply never consulted it,
+        # so the identifier arXiv papers are *actually* cited by was "not a DOI,
+        # URL, or local PDF path". Resolved through the abs page, which is what
+        # a user pasting the URL would have got.
+        arxiv_id = normalize_arxiv_id(stripped)
+        if arxiv_id is not None:
+            return {
+                "kind": "url",
+                "raw": value,
+                "normalized": f"https://arxiv.org/abs/{arxiv_id}",
+            }
         return {"kind": "unknown", "raw": value, "normalized": None}
 
     url_parts = urlsplit(normalized_url)

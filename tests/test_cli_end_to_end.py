@@ -123,7 +123,12 @@ def test_add_from_file_reports_an_error_when_nothing_was_captured(tmp_path: Path
             home=tmp_path,
         )
 
-    assert proc.returncode == exit_codes.PARTIAL
+    # ENVIRONMENT, not PARTIAL. 4 is documented as "some items succeeded" and
+    # fired whenever anything failed — so a batch in which *every* item failed
+    # exited 4 while its own envelope said `status: "error"`: two channels
+    # giving opposite answers about the same run. The envelope was the correct
+    # half.
+    assert proc.returncode == exit_codes.ENVIRONMENT
     envelope = json.loads(proc.stdout)
     assert envelope["status"] == "error"
     assert envelope["errors"]

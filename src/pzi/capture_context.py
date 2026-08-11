@@ -184,14 +184,27 @@ def build_capture_context(
     resolve_secret: Callable[[str | None, str | None], str | None] | None = None,
 ) -> CaptureContext:
     """Build runtime capture context from resolved config and bib selection."""
-    resolver = resolve_secret or (
-        lambda command, fallback: resolve_optional_value(
-            command=command, fallback=fallback
+    # Each secret resolves under its own key, so a failing `*_cmd` says which
+    # config line to fix. `resolve_optional_value` takes `config_key` for
+    # exactly this and was called without it, so one failure could have been any
+    # of five keys and the message named none of them.
+    def _resolve(command: object, fallback: object, key: str) -> str | None:
+        if resolve_secret is not None:
+            return resolve_secret(
+                command if isinstance(command, str) else None,
+                fallback if isinstance(fallback, str) else None,
+            )
+        return resolve_optional_value(
+            command=command if isinstance(command, str) else None,
+            fallback=fallback if isinstance(fallback, str) else None,
+            config_key=key,
         )
+
+    contact_email = _resolve(
+        config.get("contact_email_cmd"), config.get("contact_email"), "contact_email_cmd"
     )
-    contact_email = resolver(config.get("contact_email_cmd"), config.get("contact_email"))
-    unpaywall_email = resolver(
-        config["unpaywall_email_cmd"], config["unpaywall_email"]
+    unpaywall_email = _resolve(
+        config["unpaywall_email_cmd"], config["unpaywall_email"], "unpaywall_email_cmd"
     ) or contact_email
     # Derive api_url from configured host/port.
     api_url = config.get("api_url")
@@ -204,16 +217,17 @@ def build_capture_context(
         bib=bib,
         contact_email=contact_email,
         unpaywall_email=unpaywall_email,
-        s2_api_key=resolver(
+        s2_api_key=_resolve(
             config["semantic_scholar_api_key_cmd"],
             config["semantic_scholar_api_key"],
+            "semantic_scholar_api_key_cmd",
         ),
         browser_pdf_cmd=browser_pdf_cmd_override or config.get("browser_pdf_cmd"),
         browser=browser,
         citekey_format=config.get("citekey_format"),
         pdf_filename_format=config.get("pdf_filename_format"),
         api_url=api_url,
-        api_auth_token=resolve_api_auth_token(config, resolve_secret=resolver),
+        api_auth_token=resolve_api_auth_token(config, resolve_secret=resolve_secret),
         desktop_fallback_hosts=set(config.get("desktop_fallback_hosts", [])),
         pdf_discovery_parallel=config.get("pdf_discovery_parallel", False),
         ezproxy_host=config.get("ezproxy_host"),

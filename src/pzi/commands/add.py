@@ -418,7 +418,16 @@ def _run_batch(
         # envelope and failures file are out. The user gets what the run
         # achieved and a list to resume from; the shell gets the right signal.
         return exit_codes.INTERRUPTED
-    return exit_codes.PARTIAL if counts["failed"] else exit_codes.OK
+    if not counts["failed"]:
+        return exit_codes.OK
+    # 4 is documented as "some items succeeded", and it fired whenever anything
+    # failed — including when *nothing* succeeded, where the JSON envelope
+    # simultaneously said `status: "error"`. Two channels, opposite answers, for
+    # a batch in which every single item failed. Nothing succeeded is a failed
+    # run, which is ENVIRONMENT, the same code a single failed `add` returns.
+    if counts["added"] + counts["exists"] == 0:
+        return exit_codes.ENVIRONMENT
+    return exit_codes.PARTIAL
 
 
 def _classify(result: Mapping[str, Any]) -> str:

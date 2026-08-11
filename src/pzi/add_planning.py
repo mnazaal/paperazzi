@@ -181,7 +181,10 @@ def minimum_metadata_diagnostics(record: Mapping[str, object]) -> list[str]:
     year = record.get("year")
 
     if not isinstance(title, str) or not title.strip():
-        lines.append("missing title: browser extension did not extract page title")
+        # Neutral: this is printed by `pzi add 10.x/y` on the command line just
+        # as often as by a capture, and blaming the browser extension for a
+        # run that never involved it sends the user to debug the wrong thing.
+        lines.append("missing title: no source supplied one")
     else:
         contributors: list[str] = []
         if isinstance(doi, str) and doi.strip():

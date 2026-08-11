@@ -98,8 +98,23 @@ def describe_invalid_add_input(value: str) -> str | None:
     classified = classify_input(value)
     if classified["kind"] == "unknown":
         return f"{value!r} is not a DOI, URL, or local PDF path"
-    if classified["kind"] == "local_pdf" and not Path(value).expanduser().is_file():
-        return f"PDF file not found: {value}"
+    if classified["kind"] == "local_pdf":
+        path = Path(value).expanduser()
+        if not path.is_file():
+            return f"PDF file not found: {value}"
+        # Extension and existence were the whole check, and this function
+        # *expands* `~` while nothing downstream does — so a quoted `~/x.pdf`
+        # passed here and failed to open later, and a text file named `.pdf`
+        # passed entirely. Both wrote an empty `@article{unknownxxxxuntitled}`
+        # placeholder and exited 0. Read the magic bytes: it is four bytes and
+        # it is the only thing that distinguishes a PDF from a file named one.
+        try:
+            with open(path, "rb") as handle:
+                magic = handle.read(5)
+        except OSError as exc:
+            return f"PDF file could not be read: {value} ({exc.strerror or exc})"
+        if not magic.startswith(b"%PDF-"):
+            return f"not a PDF (no %PDF- header): {value}"
     return None
 
 
@@ -275,6 +290,8 @@ def add_input_to_bib(
             citekey_format=citekey_format,
             pdf_filename_format=pdf_filename_format,
             strict_metadata=effective_strict,
+            force_new=force_new,
+            file_path_style=config.get("pdf_file_path_style", "absolute"),
         )
 
     try:
@@ -911,6 +928,12 @@ def ensure_citekey_for_write(
             return record
         updated = dict(record)
         updated["citekey"] = resolved
+        # The user asked for a specific key and got a different one. Silently
+        # renaming `mykey` to `mykey-2` and reporting `warnings: []` means their
+        # `\cite{mykey}` points at nothing and nothing said so. Carried as a
+        # transient field the result builder lifts off, so it never reaches the
+        # library.
+        updated["_citekey_renamed_from"] = ck.strip()
         return cast(NormalizedRecord, updated)
 
     generated = dict(record)

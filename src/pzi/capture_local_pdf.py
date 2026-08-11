@@ -24,6 +24,7 @@ from pzi.pdf import (
     snapshot_pdf_paths,
 )
 from pzi.pdf_download import copy_pdf_to_papers_dir
+from pzi.pdf_planning import plan_pdf_path
 from pzi.pdf_service import extract_pdf_metadata
 from pzi.protocols import (
     BinaryFetcher,
@@ -180,8 +181,25 @@ def copy_local_pdf_after_citekey(
     pdf_filename_format: str | None = None,
 ) -> tuple[NormalizedRecord, list[str], str | None]:
     citekey = record.get("citekey")
-    if dry_run or not isinstance(citekey, str) or not citekey.strip():
+    if not isinstance(citekey, str) or not citekey.strip():
         return record, [], None
+
+    if dry_run:
+        # The preview names the file the real run writes, without copying a
+        # byte. Returning early left `local_pdf_path` unset, so `--dry-run`
+        # showed an entry with no `file =` line and the real run added one —
+        # the preview describing a different entry from the one it previews.
+        # `plan_pdf_path` is the pure half of `write_pdf_bytes`; only the
+        # collision suffix (`-1`, `-2`) is unknowable without touching disk.
+        planned = plan_pdf_path(
+            papers_dir=papers_dir,
+            citekey=citekey,
+            record=record,
+            filename_format=pdf_filename_format,
+        )
+        previewed = dict(record)
+        previewed["local_pdf_path"] = str(planned)
+        return cast(NormalizedRecord, previewed), [], None
 
     copy_pdf_fn = copy_pdf_to_papers_dir if copy_pdf is None else copy_pdf
     local_path, error = copy_pdf_fn(
@@ -225,6 +243,15 @@ def add_local_pdf(
     citekey_format: str | None = None,
     pdf_filename_format: str | None = None,
     strict_metadata: bool = False,
+    # Everything below reaches the writer for every *other* input kind and
+    # reached it for none of the local-PDF ones, because this call site simply
+    # did not pass them. `--force-new` silently updated the existing entry
+    # instead of inserting beside it, `pdf_file_path_style = "relative"` was
+    # ignored so the library recorded absolute paths, and the `fallback_*`
+    # overrides a caller supplies for a PDF with no usable metadata — the
+    # commonest reason to add one by path — never took effect.
+    force_new: bool = False,
+    file_path_style: str = "absolute",
 ) -> AddRecordResult:
     read_result = read_bib_file(bib["path"])
     existing_records = [
@@ -284,6 +311,8 @@ def add_local_pdf(
             browser_hook=browser_hook,
             citekey_format=citekey_format,
             pdf_filename_format=pdf_filename_format,
+            force_new=force_new,
+            file_path_style=file_path_style,
         )
     except Exception:
         remove_new_pdf(copied_local_path, existing_pdf_paths)
@@ -439,6 +468,14 @@ def build_add_record_result(
         if isinstance(pdf_url, str) or warnings
         else {}
     )
+    renamed_from = plan["record"].get("_citekey_renamed_from")
+    if isinstance(renamed_from, str) and renamed_from and renamed_from != citekey:
+        warnings = [
+            *warnings,
+            f"requested citekey {renamed_from!r} was already taken; "
+            f"used {citekey!r} instead",
+        ]
+
     prefix = "would " if dry_run else ""
     if plan["action"] == "update" and not plan.get("changed_fields", []):
         message = f"{prefix}entry unchanged (already captured)"
