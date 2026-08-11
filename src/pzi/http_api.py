@@ -77,7 +77,16 @@ def build_handler_class(
             "_rate_limiter": RateLimiter(max_requests=security_config["rate_limit_rpm"]),
             "_browser_session_manager": browser_manager,
             "_attach_session_store": store,
-            "do_OPTIONS": lambda request: _handle_options(request, security_config),
+            # Guarded like the other three. Latent — `_handle_options` could
+            # not be made to raise — but the reason `_guarded` exists (an
+            # unguarded exception closes the socket having sent zero bytes,
+            # which a client cannot distinguish from the server being down)
+            # applies to every handler or to none.
+            "do_OPTIONS": lambda request: _guarded(
+                lambda: _handle_options(request, security_config),
+                request,
+                security_config,
+            ),
             "do_GET": lambda request: _guarded(
                 lambda: _handle_get(request, config_path, home_dir, security_config),
                 request,
@@ -383,8 +392,12 @@ def _handle_post(
         query = parse_qs(parsed_path.query)
         body = {
             "request_id": query.get("request_id", [None])[0],
-            "attach_token": request.headers.get("X-Pzi-Attach-Token")
-            or query.get("attach_token", [None])[0],
+            # Header only. `pdf_acquisition_plan._attach_url` deliberately
+            # keeps the token out of the URL and returns it in a header,
+            # because a URL lands in access logs, `Referer`, and shell history —
+            # so accepting it from the query string here reintroduced exactly
+            # the leak the other half was written to avoid.
+            "attach_token": request.headers.get("X-Pzi-Attach-Token"),
             "citekey": query.get("citekey", [None])[0],
             "bib": query.get("bib", [None])[0],
             "source_url": query.get("source_url", [None])[0],

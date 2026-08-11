@@ -118,7 +118,13 @@ def _build_firefox_manifest(base: dict[str, Any]) -> dict[str, Any]:
     manifest["browser_specific_settings"] = {
         "gecko": {
             "id": FIREFOX_ID,
-            "strict_min_version": "109.0",
+            # 128, not 109. Two features this manifest depends on land later
+            # than 109 (MDN browser-compat-data): `background.type: "module"`
+            # is 112+, and `optional_host_permissions` — the entire cross-origin
+            # PDF path — is 128+. So 109–111 could not load `background.js` at
+            # all, and 109–127 installed cleanly and silently lost cross-origin
+            # PDF fetching, which is the failure the user cannot diagnose.
+            "strict_min_version": "128.0",
         }
     }
     # No `webRequestFilterResponse`. It was added here on the belief that MV3

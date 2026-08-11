@@ -17,11 +17,53 @@ import contextlib
 import os
 import shutil
 import tempfile
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+#: Prefix for cloned-profile temp dirs, shared by the cleanup sweep below.
+_CLONE_PREFIX = "pzi-chrome-"
+
+#: A clone older than this cannot belong to a live session: the browser-hook
+#: child is killed at 180 s by its parent, and `pzi server`'s sessions are
+#: closed on idle well inside it.
+_CLONE_MAX_AGE_SECONDS = 6 * 60 * 60
+
+
+def _sweep_stale_profile_clones(
+    *, now: float | None = None, temp_root: Path | None = None
+) -> list[Path]:
+    """Remove abandoned clones of the user's Chrome profile from $TMPDIR.
+
+    The clone is a full copy of the real profile, cookie database included, and
+    cleanup lived only in `BrowserSession.close()` — which a browser-hook child
+    killed at its 180 s timeout never reaches. There is no `atexit` and nothing
+    else sweeps, so every hook timeout left another readable copy of the user's
+    logged-in sessions behind until the machine was rebooted.
+
+    Age-based rather than PID-based: a clone has no owner to check once the
+    process is gone. Returns what it removed, so a test can assert on it.
+    """
+    root = temp_root or Path(tempfile.gettempdir())
+    cutoff = (now if now is not None else time.time()) - _CLONE_MAX_AGE_SECONDS
+    removed: list[Path] = []
+    try:
+        candidates = list(root.glob(f"{_CLONE_PREFIX}*"))
+    except OSError:  # pragma: no cover — an unreadable $TMPDIR is the OS's problem
+        return removed
+    for candidate in candidates:
+        try:
+            if not candidate.is_dir() or candidate.stat().st_mtime > cutoff:
+                continue
+        except OSError:
+            continue
+        shutil.rmtree(candidate, ignore_errors=True)
+        if not candidate.exists():
+            removed.append(candidate)
+    return removed
 
 
 def _clone_chrome_profile(profile: Path) -> Path:
@@ -31,7 +73,8 @@ def _clone_chrome_profile(profile: Path) -> Path:
     directory. Copying to a temp dir satisfies the "non-default" requirement
     while preserving cookies and session state.
     """
-    temp_dir = Path(tempfile.mkdtemp(prefix="pzi-chrome-"))
+    _sweep_stale_profile_clones()
+    temp_dir = Path(tempfile.mkdtemp(prefix=_CLONE_PREFIX))
     # Tighten permissions so other users on the system cannot read
     # the cloned profile (which contains cookies and session tokens).
     os.chmod(temp_dir, 0o700)

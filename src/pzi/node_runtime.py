@@ -9,9 +9,11 @@ coupling is that :func:`ensure_node` returns the node binary path that
 from __future__ import annotations
 
 import hashlib
+import http.client
 import ipaddress
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -58,13 +60,30 @@ def _node_mirror() -> str:
     )
 
 
+#: Caps for the two mirror reads. Both were `resp.read()` with no bound, so a
+#: mirror (or anything that can answer as one) could stream until the process
+#: ran out of memory. The real files are a few KB and a few MB respectively.
+_MAX_CHECKSUMS_BYTES = 1 * 1024 * 1024
+_MAX_INDEX_BYTES = 16 * 1024 * 1024
+
+
+def _read_capped(resp: object, limit: int, url: str) -> bytes:
+    """Read at most *limit* bytes, refusing anything longer."""
+    data = resp.read(limit + 1)  # type: ignore[attr-defined]
+    if len(data) > limit:
+        raise RuntimeError(f"refusing oversized response from {url} (over {limit} bytes)")
+    return data
+
+
 def _expected_node_sha256(*, mirror: str, version: str, tarball_name: str) -> str:
     """Return the published sha256 for *tarball_name* from SHASUMS256.txt."""
     url = f"{mirror}/v{version}/SHASUMS256.txt"
     try:
         with urlopen(Request(url, method="GET"), timeout=30) as resp:
-            text = resp.read().decode("utf-8")
-    except (URLError, OSError) as exc:
+            text = _read_capped(resp, _MAX_CHECKSUMS_BYTES, url).decode("utf-8")
+    except (URLError, OSError, http.client.IncompleteRead) as exc:
+        # `IncompleteRead` is neither `URLError` nor `OSError`, so a truncated
+        # response escaped both clauses and reached the caller as a traceback.
         raise RuntimeError(f"failed to fetch Node.js checksums from {url}: {exc}") from exc
     for line in text.splitlines():
         fields = line.split()
@@ -149,6 +168,48 @@ def _node_dist_name() -> str:
     return f"{plat_name}-{arch_name}"
 
 
+def _pinned_node_version() -> str | None:
+    """An explicitly pinned Node version, or None to take the newest major.
+
+    Without a pin, `_latest_node_version()` returns whichever 22.x the mirror
+    lists today, so the runtime pzi installs drifts with upstream and every
+    point release triggers a fresh download. `PZI_NODE_VERSION` lets a user (or
+    a reproducible build) fix it.
+    """
+    raw = os.environ.get("PZI_NODE_VERSION", "").strip().lstrip("v")
+    if not raw:
+        return None
+    if not re.fullmatch(r"\d+\.\d+\.\d+", raw):
+        raise RuntimeError(
+            f"invalid PZI_NODE_VERSION {raw!r}: expected a full version like 22.11.0"
+        )
+    return raw
+
+
+def _cached_node_binary(
+    node_dir: Path, dist_name: str, *, version: str | None
+) -> str | None:
+    """A usable Node already in the data home, without asking the network.
+
+    With *version* pinned only that one counts. Otherwise any extracted
+    `node-vN-<dist>` of the required major will do — it is the same runtime the
+    download would have produced, and preferring a fetch over it is what made
+    an offline machine with a working Node report "could not install Node.js".
+    """
+    if version is not None:
+        candidate = node_dir / f"node-v{version}-{dist_name}" / "bin" / "node"
+        return str(candidate) if candidate.exists() and _node_binary_runs(candidate) else None
+    try:
+        entries = sorted(node_dir.glob(f"node-v*-{dist_name}"), reverse=True)
+    except OSError:  # pragma: no cover — unreadable data home
+        return None
+    for entry in entries:
+        candidate = entry / "bin" / "node"
+        if candidate.exists() and _node_binary_runs(candidate):
+            return str(candidate)
+    return None
+
+
 def _latest_node_version() -> str:
     """Return the latest v{_MIN_NODE_MAJOR}.x version string from the index."""
     mirror = _node_mirror()
@@ -157,8 +218,8 @@ def _latest_node_version() -> str:
         with urlopen(Request(index_url, method="GET"), timeout=15) as resp:
             import json
 
-            data = json.loads(resp.read())
-    except (URLError, OSError, ValueError) as exc:
+            data = json.loads(_read_capped(resp, _MAX_INDEX_BYTES, index_url))
+    except (URLError, OSError, ValueError, http.client.IncompleteRead) as exc:
         raise RuntimeError(f"failed to fetch Node.js version index: {exc}") from exc
 
     for entry in data:
@@ -213,13 +274,24 @@ def download_node(
 
     Returns the path to the node binary.
     """
-    version = _latest_node_version()
     dist_name = _node_dist_name()
+    node_dir = _node_bin_dir(data_home)
+
+    # Cached binary first, *before* any network call. `_latest_node_version()`
+    # is a fetch and the cache key is the version string it returns, so a
+    # working Node in the data home plus no network resolved to `None` — and
+    # any upstream 22.x point release invalidated the cache and forced a fresh
+    # download of a runtime that was already there and working.
+    pinned = _pinned_node_version()
+    cached = _cached_node_binary(node_dir, dist_name, version=pinned)
+    if cached is not None:
+        return cached
+
+    version = pinned or _latest_node_version()
     mirror = _node_mirror()
     tarball_name = f"node-v{version}-{dist_name}.tar.gz"
     url = f"{mirror}/v{version}/{tarball_name}"
 
-    node_dir = _node_bin_dir(data_home)
     existing_bin = node_dir / f"node-v{version}-{dist_name}" / "bin" / "node"
     if existing_bin.exists() and _node_binary_runs(existing_bin):
         return str(existing_bin)
@@ -251,9 +323,16 @@ def download_node(
                 pass
         raise RuntimeError(f"failed to download Node.js from {url}: {exc}") from exc
 
-    # Verify the tarball against the published checksum *before* extracting, so a
-    # tampered/corrupt download (e.g. a poisoned mirror) can never be unpacked
-    # and run.
+    # Verify the tarball against the published checksum *before* extracting, so
+    # a corrupt or truncated download can never be unpacked and run.
+    #
+    # This is an integrity check, not an authenticity one, and the comment here
+    # used to claim it protected against "a poisoned mirror": `SHASUMS256.txt`
+    # comes from the same origin as the tarball, so anything able to serve a
+    # bad tarball can serve a matching digest. What actually bounds the risk is
+    # that the mirror must be https (`_node_mirror` refuses otherwise, except
+    # on loopback) and that `_MIN_NODE_MAJOR`/`PZI_NODE_VERSION` decide which
+    # version is fetched rather than "whatever is newest today".
     expected_digest = _expected_node_sha256(
         mirror=mirror, version=version, tarball_name=tarball_name
     )

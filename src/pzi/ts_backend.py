@@ -397,6 +397,22 @@ def _install_lock(data_home: Path, *, stderr: TextIO) -> Iterator[None]:
             portalocker.unlock(handle)
 
 
+def _npm_install_argv(node_bin: str, build_dir: Path) -> list[str]:
+    """`npm ci` when a lockfile is there, `npm install` when it is not.
+
+    `npm install --production` may resolve *outside* the lockfile and rewrite
+    it, so the dependency tree pzi ends up running is not the one the upstream
+    repo pinned — and the whole transitive tree's lifecycle scripts run either
+    way. `npm ci` installs exactly what the lockfile says and fails on a
+    mismatch instead of silently updating it. The fallback exists because a
+    repo without `package-lock.json` cannot use `ci` at all.
+    """
+    npm = [node_bin, str(_npm_cli_path(node_bin))]
+    if (build_dir / "package-lock.json").is_file():
+        return [*npm, "ci", "--omit=dev"]
+    return [*npm, "install", "--production"]
+
+
 def _build_translation_server(
     ts_dir: Path,
     build_dir: Path,
@@ -462,7 +478,7 @@ def _build_translation_server(
 
     try:
         subprocess.run(
-            [node_bin, str(_npm_cli_path(node_bin)), "install", "--production"],
+            _npm_install_argv(node_bin, build_dir),
             cwd=str(build_dir),
             env=npm_env,
             check=True,

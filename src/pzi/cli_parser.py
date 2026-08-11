@@ -584,7 +584,15 @@ def build_parser() -> argparse.ArgumentParser:
     # or from the HTTP API itself may switch authentication off.
     server_parser.add_argument(
         "--no-auth", action="store_true",
-        help="serve without an API token (any local process can use the API)",
+        # It does not disable authentication. It only lifts the refusal to
+        # start when *no* token exists — with one configured it changes
+        # nothing, while the old wording promised the opposite, so a user
+        # reading it would think they had opened the API up (or, worse, that
+        # they could not close it).
+        help=(
+            "start without an API token when none is configured "
+            "(does not disable auth if a token exists)"
+        ),
     )
 
     # ── init ─────────────────────────────────────────────────────────────

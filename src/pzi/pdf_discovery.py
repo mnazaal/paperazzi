@@ -307,6 +307,35 @@ def _existing_pdf_path(value: str) -> bool:
     return path.is_file() and path.suffix.lower() == ".pdf"
 
 
+def cookies_for_url(context: PdfDiscoveryContext, url: str) -> str | None:
+    """The `--cookie-file` cookies, but only for the origin they belong to.
+
+    One cookie string was reused across every landing-page candidate, and those
+    candidates come from provider-supplied `canonical_url` and `source_url` as
+    well as from what the user typed — so a session cookie captured for the
+    user's institutional proxy was sent to whatever host a metadata record
+    happened to name. The cookies were captured while the user was on *their*
+    URL, so that origin is the only one they are scoped to.
+    """
+    cookies = context.get("cookies")
+    if not isinstance(cookies, str) or not cookies.strip():
+        return None
+    origin = context.get("cookie_origin")
+    if not isinstance(origin, str) or not origin:
+        raw = context.get("raw_value")
+        origin = _origin_of(raw) if isinstance(raw, str) else None
+    if not origin or _origin_of(url) != origin:
+        return None
+    return cookies
+
+
+def _origin_of(url: str) -> str | None:
+    parts = urlsplit(url.strip())
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        return None
+    return f"{parts.scheme}://{parts.netloc.lower()}"
+
+
 @discovery_phase("http")
 def web_attachment_step(
     record: NormalizedRecord, context: PdfDiscoveryContext
@@ -322,8 +351,8 @@ def web_attachment_step(
 
     for url in candidate_urls:
         try:
-            cookies = context.get("cookies")
-            if isinstance(cookies, str) and cookies.strip():
+            cookies = cookies_for_url(context, url)
+            if cookies is not None:
                 results = fetch_web(url, server_url=context["server_url"], cookies=cookies)
             else:
                 results = fetch_web(url, server_url=context["server_url"])

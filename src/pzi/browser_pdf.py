@@ -80,6 +80,45 @@ def discover_pdf_url_with_browser(
     return pdf_url if pdf_url else None
 
 
+#: Everything the child spends outside the challenge wait: browser launch, the
+#: 60 s navigate, the candidate sweep afterwards, plus headroom for a cold
+#: first-run profile copy.
+_HOOK_OVERHEAD_SECONDS = 150
+
+#: The parent's budget when the child is not waiting on a human.
+_HOOK_DEFAULT_TIMEOUT_SECONDS = 180
+
+
+def _hook_timeout_seconds(tokens: list[str]) -> int:
+    """How long to let the browser hook run, given what it was asked to do.
+
+    `pdf_planning` synthesizes `--headful --challenge-timeout 120` so a user can
+    solve a CAPTCHA by hand. The child then spends up to 60 s navigating *plus*
+    the full 120 s waiting, inside a fixed 180 s parent budget — so the wait was
+    killed at the moment it became useful, and that is before counting browser
+    startup or a first-run profile copy. The flow could not fit its own timeout.
+
+    Read off the child's own arguments rather than hardcoded again here, so the
+    two cannot drift apart.
+    """
+    for index, token in enumerate(tokens):
+        if token == "--challenge-timeout" and index + 1 < len(tokens):
+            try:
+                challenge = int(tokens[index + 1])
+            except ValueError:
+                return _HOOK_DEFAULT_TIMEOUT_SECONDS
+            if challenge > 0:
+                return challenge + _HOOK_OVERHEAD_SECONDS
+        elif token.startswith("--challenge-timeout="):
+            try:
+                challenge = int(token.split("=", 1)[1])
+            except ValueError:
+                return _HOOK_DEFAULT_TIMEOUT_SECONDS
+            if challenge > 0:
+                return challenge + _HOOK_OVERHEAD_SECONDS
+    return _HOOK_DEFAULT_TIMEOUT_SECONDS
+
+
 def download_pdf_with_browser(
     *, command: str, pdf_url: str
 ) -> bytes | None:
@@ -101,7 +140,7 @@ def download_pdf_with_browser(
             shell=False,
             capture_output=True,
             text=True,
-            timeout=180,
+            timeout=_hook_timeout_seconds(tokens),
         )
     except subprocess.TimeoutExpired:
         print(

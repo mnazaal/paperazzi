@@ -31,6 +31,25 @@ FlareSolverrCookies: TypeAlias = dict[str, Any]
 
 
 
+def _target_url_allowed(url: str) -> bool:
+    """Whether *url* may be handed to FlareSolverr to fetch.
+
+    FlareSolverr drives a real headless Chrome, and the URL was forwarded
+    straight through — so the local browser was an open proxy for whatever a
+    metadata provider or a captured page put in `pdf_url`. Reproduced against
+    the cloud metadata endpoint: pzi asked FlareSolverr for
+    `169.254.169.254/latest/meta-data/iam/security-credentials/`, which every
+    other fetch path in pzi already refuses.
+
+    Same predicate as the rest of pzi (`safe_public_http_url`), so a link-local,
+    loopback or private destination is rejected here for the same reason it is
+    everywhere else.
+    """
+    from pzi.url_safety import safe_public_http_url
+
+    return safe_public_http_url(url)
+
+
 def fetch_html_via_flaresolverr(
     url: str,
     *,
@@ -38,7 +57,7 @@ def fetch_html_via_flaresolverr(
     post_json: FetchText | None = None,
 ) -> str | None:
     """Return page HTML fetched via FlareSolverr, or None on failure."""
-    if not _valid_server_url(server_url):
+    if not _valid_server_url(server_url) or not _target_url_allowed(url):
         return None
     fn = post_json or _post_json
     try:
@@ -63,7 +82,7 @@ def fetch_pdf_via_flaresolverr(
     Uses FlareSolverr to bypass Cloudflare, then downloads the PDF
     using the obtained cookies.
     """
-    if not _valid_server_url(server_url):
+    if not _valid_server_url(server_url) or not _target_url_allowed(url):
         return None
     fn = post_json or _post_json
     try:
