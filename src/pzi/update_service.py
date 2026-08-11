@@ -29,7 +29,8 @@ from pzi.bibtex import (
 from pzi.config import BibResolutionFailure, load_bib_target
 from pzi.identifiers import has_preprint_identity
 from pzi.protocols import SearchTranslationFetcher
-from pzi.similarity import _canonical_doi
+from pzi.resolution_match import score_match
+from pzi.similarity import _canonical_doi, normalize_title
 from pzi.translation_server import fetch_search_translations
 
 
@@ -389,6 +390,38 @@ def _candidate_rejection(
             return (
                 f"skipped: candidate DOI {candidate_doi} contradicts the entry's "
                 f"{record_doi}"
+            )
+    # Does the candidate confirm *this* entry? `score_metadata_candidate` below
+    # measures how rich a candidate is, never whether it is the same paper, and
+    # `metadata_confidence_min_score` defaults to 0 — so a title search with no
+    # DOI to contradict adopted whatever the provider returned. The review
+    # reproduced "Attention Is All You Need" taking a beekeeping journal's DOI
+    # and venue, applied, exit 0.
+    #
+    # Gated on the flag rather than a score cutoff, matching `capture_local_pdf`,
+    # which reports the same situation as "title search returned a different
+    # paper". `check_service` and `promote_service` score against the entry too;
+    # `update` was the only metadata-writing path that did not.
+    # Only when the candidate actually carries a title. `score_match` raises
+    # `title_mismatch` for an absent one too, and a provider that returned a
+    # venue and a year without a title has told us nothing about whether this is
+    # the same paper — filling those in is what `update` is for.
+    candidate_title = candidate.get("title") if isinstance(candidate, Mapping) else None
+    record_title = record.get("title")
+    same_title = (
+        isinstance(candidate_title, str)
+        and isinstance(record_title, str)
+        and normalize_title(candidate_title) == normalize_title(record_title)
+    )
+    # `score_match` raises `title_mismatch` for titles too short to judge, even
+    # when they are identical — `"T"` against `"T"` scores 0. Identical titles
+    # cannot be a different paper, so they are never grounds to refuse.
+    if isinstance(candidate_title, str) and candidate_title.strip() and not same_title:
+        match = score_match(record, cast(Mapping[str, object], candidate))
+        if "title_mismatch" in match["flags"]:
+            return (
+                f"skipped: candidate {candidate_title!r} is a different "
+                f"paper (match {match['score']}/100)"
             )
     score = score_metadata_candidate(selected, cast(Mapping[str, object], record))
     if score < min_score:

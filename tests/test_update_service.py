@@ -728,6 +728,121 @@ def test_update_bib_uses_best_translation_result_not_first(tmp_path: Path) -> No
     assert "doi=10.1234/right" in item["metadata_diagnostics"][0]
 
 
+def test_update_does_not_adopt_an_unrelated_paper(tmp_path: Path) -> None:
+    """A title search returns whatever the provider thinks is closest.
+
+    With no DOI to disagree with, the winner used to be chosen by
+    `score_metadata_candidate` — a *richness* score that never compares the
+    candidate's title or authors to the entry's — behind
+    `metadata_confidence_min_score`, which defaults to 0. So a rich but
+    unrelated record was adopted: the review reproduced "Attention Is All You
+    Need" taking `doi = {10.9999/bees}` and a beekeeping journal, applied,
+    exit 0.
+
+    `update` was the only one of the four metadata-writing paths without a
+    real match gate; `capture_local_pdf`, `check_service` and `promote_service`
+    all score the candidate against the entry.
+    """
+    bib_path = tmp_path / "ml.bib"
+    config_path = _write_config(tmp_path, bib_path)
+    add_record_to_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        record={
+            "citekey": "vaswani2017attention",
+            "title": "Attention Is All You Need",
+            "authors": ["Vaswani, Ashish", "Shazeer, Noam"],
+            "year": 2017,
+        },
+        bib_selector=None,
+        dry_run=False,
+    )
+
+    def _search(query: str, *, server_url: str) -> list[dict]:
+        # Nothing to do with the entry, but far richer than it.
+        return [
+            {
+                "record": {
+                    "title": "On the Foraging Behaviour of Apis mellifera",
+                    "authors": ["Bee, Barbara", "Hive, Henry"],
+                    "doi": "10.9999/bees",
+                    "venue": "Journal of Apiculture",
+                    "year": 1998,
+                    "abstract": "A long and detailed abstract about bees.",
+                    "pages": "1--40",
+                    "publisher": "Apiary Press",
+                }
+            },
+        ]
+
+    result = update_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        dry_run=False,
+        fetch_search=_search,
+    )
+
+    assert result["status"] == "ok"
+    item = result["items"][0]
+    assert item["applied"] is False, item
+    assert item.get("skipped") is True, item
+
+    # And nothing about bees reached the library.
+    written = bib_path.read_text()
+    assert "10.9999/bees" not in written, written
+    assert "Apiculture" not in written, written
+
+
+def test_update_still_applies_a_candidate_that_is_the_same_paper(
+    tmp_path: Path,
+) -> None:
+    """The gate must not stop `update` doing its job.
+
+    A candidate that agrees on title and authors is what the command exists to
+    apply, and refusing it would trade one silent failure for another.
+    """
+    bib_path = tmp_path / "ml.bib"
+    config_path = _write_config(tmp_path, bib_path)
+    add_record_to_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        record={
+            "citekey": "vaswani2017attention",
+            "title": "Attention Is All You Need",
+            "authors": ["Vaswani, Ashish", "Shazeer, Noam"],
+            "year": 2017,
+        },
+        bib_selector=None,
+        dry_run=False,
+    )
+
+    def _search(query: str, *, server_url: str) -> list[dict]:
+        return [
+            {
+                "record": {
+                    "title": "Attention Is All You Need",
+                    "authors": ["Vaswani, Ashish", "Shazeer, Noam"],
+                    "venue": "NeurIPS",
+                    "year": 2017,
+                    "doi": "10.5555/attention",
+                }
+            },
+        ]
+
+    result = update_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        dry_run=False,
+        fetch_search=_search,
+    )
+
+    item = result["items"][0]
+    assert item["applied"] is True, item
+    assert "NeurIPS" in bib_path.read_text()
+
+
 def test_update_bib_reports_low_confidence_metadata_warning(tmp_path: Path) -> None:
     bib_path = tmp_path / "ml.bib"
     config_path = _write_config(tmp_path, bib_path)

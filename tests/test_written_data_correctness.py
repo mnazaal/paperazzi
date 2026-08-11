@@ -199,9 +199,13 @@ def test_update_refuses_a_candidate_below_the_confidence_floor() -> None:
     # `metadata_confidence_min_score` defaults to 0, which rejects only
     # negative-scoring candidates; a configured floor rejects weak ones too.
     # Either way it is now a write gate rather than a warning.
+    # Same title, so the different-paper gate does not fire and the floor is
+    # what is under test. Its old candidate was a different paper outright,
+    # which is now refused earlier and more precisely — leaving this test
+    # asserting a message it no longer produced.
     rejection = _candidate_rejection(
         {"title": "A very specific title about graph parsers", "authors": ["A", "B", "C"]},
-        {"record": {"title": "Something else entirely"}},
+        {"record": {"title": "A very specific title about graph parsers"}},
         min_score=10,
     )
 
