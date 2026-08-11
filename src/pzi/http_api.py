@@ -108,6 +108,14 @@ def _guarded(
     The exception text is deliberately not sent to the client: it can name local
     paths and internals. The traceback still reaches stderr via `handle_error`.
     """
+    # NOTE: the handler serves HTTP/1.0 — `protocol_version` is never set, so
+    # `BaseHTTPRequestHandler`'s default stands and every connection closes
+    # after one response. The keep-alive reasoning below is therefore
+    # precautionary, not a description of what happens today. PLAN item 173 is
+    # the open decision: set `"HTTP/1.1"` and let this machinery run, or delete
+    # it. Stated here because two comments described states the server cannot
+    # currently enter as though it did.
+    #
     # Reset per request, not per connection: with keep-alive one handler
     # instance serves several requests, and a stale flag would suppress the 500
     # on every request after the first.
