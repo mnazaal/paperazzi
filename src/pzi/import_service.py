@@ -17,7 +17,10 @@ class ImportResult(TypedDict):
     source_path: str
     message: str
     errors: list[str]
-    warnings: list[str]
+    #: The writer's warnings — a near-duplicate insert above all. `NotRequired`
+    #: because the early failure returns have none to report; consumers read it
+    #: with `.get`.
+    warnings: NotRequired[list[str]]
     total_source: int
     imported: int
     skipped_duplicates: int

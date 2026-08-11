@@ -532,7 +532,7 @@ def fetch_record_for_input(
         # provider returned meant the diagnostic named a candidate dropped for
         # contradicting the requested DOI, and warned "metadata confidence low"
         # about a capture that was correct.
-        translation_results.extend(usable)
+        translation_results.extend(cast("list[dict]", usable))
         if usable:
             selected = select_best_metadata_result(usable, fallback)
             best = dict(merge_record_sources(fallback, selected["record"]))
@@ -590,7 +590,7 @@ def fetch_record_for_input(
                 errors=provider_errors,
             )
             usable_web = drop_contradicting_candidates(web_results or [], fallback)
-            translation_results.extend(usable_web)
+            translation_results.extend(cast("list[dict]", usable_web))
             if usable_web:
                 # Scored and item-type-carrying, like the DOI-search branch above
                 # and the URL branch below. Taking `[0]` meant this one fallback
