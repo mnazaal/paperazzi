@@ -214,10 +214,15 @@ def test_download_goto_pdf() -> None:
 def test_download_candidate_link_found() -> None:
     _html = make_pdf_response(body=b"%PDF-1.4 linked")  # not used directly
     s = FakeBrowserSession(
-        fetch_result=(-1, None, b""),
+        # The landing URL is not a PDF; the candidate link is. Both go through
+        # `fetch_direct` — navigating at a PDF makes Chromium download it, so
+        # the candidate sweep never saw a response at all.
+        fetch_results=[
+            (200, "text/html", b"<html>"),
+            (200, "application/pdf", b"%PDF-1.4 linked"),
+        ],
         goto_results=[
             type("F", (), {"headers": {"content-type": "text/html"}, "body": lambda: b"<html>"}),
-            type("F", (), {"headers": {"content-type": "application/pdf"}, "body": lambda: b"%PDF-1.4 linked"}),
         ],
         evaluate_results=[["https://journal.test/linked.pdf"]],
     )
@@ -228,13 +233,12 @@ def test_download_candidate_link_found() -> None:
 def test_download_candidate_non_string_skipped() -> None:
     html = type("F", (), {"headers": {"content-type": "text/html"}, "body": lambda: b"<html>"})
     s = FakeBrowserSession(
-        fetch_result=(-1, None, b""),
+        fetch_results=[
+            (200, "text/html", b"<html>"),
+            (200, "application/pdf", b"%PDF-1.4 found"),
+        ],
         goto_results=[html],
         evaluate_results=[[None, 123, "https://journal.test/paper.pdf"]],
-    )
-    # second goto for the valid candidate
-    s._gotos.append(
-        type("F", (), {"headers": {"content-type": "application/pdf"}, "body": lambda: b"%PDF-1.4 found"})
     )
     result = hook.download_pdf("https://example.com/paper.pdf", _session=s)
     assert result == b"%PDF-1.4 found"
@@ -398,15 +402,17 @@ def test_download_pdf_uses_direct_request_when_pdf() -> None:
 def test_download_pdf_follows_candidate_links_after_html_page() -> None:
     from tests.fake_session import FakeBrowserSession
     s = FakeBrowserSession(
-        fetch_result=(-1, None, b""),
+        # Landing page first, then the candidate link — both through
+        # `fetch_direct`, since navigating at a PDF makes Chromium download it
+        # and the sweep then saw no response at all.
+        fetch_results=[
+            (200, "text/html", b"<html>"),
+            (200, "application/pdf", b"%PDF-linked"),
+        ],
         goto_results=[
             type("F", (), {
                 "headers": {"content-type": "text/html"},
                 "body": lambda: b"<html>",
-            }),
-            type("F", (), {
-                "headers": {"content-type": "application/pdf"},
-                "body": lambda: b"%PDF-linked",
             }),
         ],
         evaluate_results=[["https://journal.test/linked.pdf"]],
@@ -426,20 +432,27 @@ class _CandidateSession:
     def __init__(self, candidates: list[str], *, navigate_seconds: float = 0.0) -> None:
         self._candidates = candidates
         self._navigate_seconds = navigate_seconds
+        #: Every URL the sweep reached for, by whichever mechanism. The cost is
+        #: recorded here rather than in `navigate` because the candidate loop
+        #: fetches directly now — Chromium turns a navigation to a PDF into a
+        #: download, so `navigate` never saw the candidates at all. Counting
+        #: navigations would have left both bounds below asserting nothing.
+        self.fetches: list[str] = []
         self.navigations: list[str] = []
         self.page = object()
 
-    def fetch_direct(self, _url):
+    def fetch_direct(self, url):
+        import time as _time
+
         from pzi.browser_session import FetchResult
 
+        self.fetches.append(url)
+        if self._navigate_seconds:
+            _time.sleep(self._navigate_seconds)
         return FetchResult(status=200, content_type="text/html", body=b"<html>")
 
     def navigate(self, url, **_kwargs):
-        import time as _time
-
         self.navigations.append(url)
-        if self._navigate_seconds:
-            _time.sleep(self._navigate_seconds)
         return None
 
     def wait_network_idle(self):
@@ -459,7 +472,8 @@ def test_a_hostile_page_cannot_drive_an_unbounded_candidate_loop() -> None:
 
     download_pdf("https://evil.test/paper", _session=session, _dismiss=lambda _p: None)
 
-    assert len(session.navigations) <= MAX_PDF_CANDIDATES + 1  # +1 for the page itself
+    # +1 for the direct attempt on the page URL itself, before any candidate.
+    assert len(session.fetches) <= MAX_PDF_CANDIDATES + 1
 
 
 def test_the_candidate_loop_stops_at_its_deadline() -> None:
@@ -477,4 +491,4 @@ def test_the_candidate_loop_stops_at_its_deadline() -> None:
     )
 
     # Far fewer than the 50 offered: the deadline stopped it.
-    assert len(session.navigations) < 20
+    assert len(session.fetches) < 20

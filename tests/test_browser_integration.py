@@ -95,12 +95,6 @@ def test_discover_pdf_direct_link(http_server):
     assert url.endswith("paper.pdf")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="click-based PDF discovery returns None even when the clicked button "
-    "navigates to a served .pdf — real break, hidden until the assertion was "
-    "made unconditional. PLAN.md Phase 2 item 123.",
-)
 def test_discover_pdf_after_click(http_server):
     with open_browser_session(browser="chromium", url_allowed=_allow_loopback) as s:
         # The button text "Download PDF" should be found by DOWNLOADISH_SELECTORS
@@ -139,13 +133,6 @@ def test_download_pdf_direct(http_server):
     assert body.startswith(b"%PDF-")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="candidate-link following returns None although the page carries "
-    "<a href='/paper.pdf'> and the fixture server sets application/pdf — real "
-    "break, hidden until the assertion was made unconditional. "
-    "PLAN.md Phase 2 item 124.",
-)
 def test_download_pdf_via_candidate(http_server):
     """download_pdf follows a PDF candidate link on an HTML page."""
     with open_browser_session(browser="chromium", url_allowed=_allow_loopback) as s:

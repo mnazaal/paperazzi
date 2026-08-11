@@ -10,12 +10,16 @@ class FakeBrowserSession:
         url: str = "https://journal.test/article",
         evaluate_results: list | None = None,
         fetch_result: tuple | None = None,
+        fetch_results: list | None = None,
         click_results: list | None = None,
         goto_results: list | None = None,
     ):
         self._url = url
         self._evaluate = evaluate_results or []
         self._fetch = fetch_result  # (status, content_type, body)
+        # Consumed in order, for flows that fetch more than once: `download_pdf`
+        # tries the URL directly, then each candidate link it finds.
+        self._fetches = list(fetch_results or [])
         self._clicks = click_results or [False]
         self._gotos = goto_results or []
         self._goto_idx = 0
@@ -38,6 +42,10 @@ class FakeBrowserSession:
         return []
 
     def fetch_direct(self, url):
+        if self._fetches:
+            from pzi.browser_session import FetchResult
+            status, content_type, body = self._fetches.pop(0)
+            return FetchResult(status=status, content_type=content_type, body=body)
         if self._fetch:
             from pzi.browser_session import FetchResult
             return FetchResult(

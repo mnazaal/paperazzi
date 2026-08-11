@@ -342,7 +342,10 @@ def discover_pdf_url(
         if resolved:
             return resolved[0]
 
-        if click_fn(session.page):
+        clicked, downloaded_url = _click_capturing_download(session.page, click_fn)
+        if downloaded_url and _is_pdf_url(downloaded_url):
+            return downloaded_url
+        if clicked:
             session.wait_network_idle()
             if _is_pdf_url(session.current_url()):
                 return session.current_url()
@@ -432,14 +435,16 @@ def download_pdf(
                 if not candidate.startswith(("http://", "https://")):
                     continue  # pragma: no cover — covered by integration/browser tests
                 tried += 1
+                # `fetch_direct`, not `navigate`: Chromium treats a navigation to
+                # `application/pdf` as a download, so `page.goto` raises
+                # "Download is starting" and the candidate was swallowed by the
+                # `except` below — every candidate link failed this way. Step 1
+                # above already uses this request path, which is why the direct
+                # download worked while following a link never did.
                 try:
-                    resp = session.navigate(candidate, wait_until="domcontentloaded", timeout=30000)
-                    if resp is not None:  # pragma: no branch — covered by integration/browser tests
-                        ct = resp.headers.get("content-type", "")
-                        if "application/pdf" in ct:  # pragma: no branch
-                            body = resp.body()
-                            if body and body.startswith(b"%PDF-"):  # pragma: no branch
-                                return body
+                    result = session.fetch_direct(candidate)
+                    if result.is_pdf():
+                        return result.body
                 except Exception:  # pragma: no cover — covered by integration/browser tests
                     continue
 
@@ -509,6 +514,40 @@ def _dismiss_cookie_banners(page: Any) -> None:
             return
         except Exception:
             continue
+
+
+#: How long to wait for a click to turn into a download before concluding it
+#: was an ordinary in-page click. The navigation is local in the cases this
+#: serves — the button already knows the URL — so this is short on purpose.
+_DOWNLOAD_EVENT_TIMEOUT_MS = 5000
+
+
+def _click_capturing_download(
+    page: Any, click_fn: Callable[[Any], bool]
+) -> tuple[bool, str | None]:
+    """Click, and catch the download that a PDF navigation turns into.
+
+    Chromium treats navigating to `application/pdf` as a download rather than a
+    navigation: `page.goto` raises "Download is starting" and `page.url` never
+    moves. So a click that successfully reached the PDF was indistinguishable
+    from a click that did nothing, and click-based discovery returned `None`
+    for every page whose button navigates — which is what such buttons do.
+
+    The download event carries the URL discovery was looking for.
+    """
+    expect_download = getattr(page, "expect_download", None)
+    if expect_download is None:
+        return click_fn(page), None
+    clicked = False
+    try:
+        with expect_download(timeout=_DOWNLOAD_EVENT_TIMEOUT_MS) as info:
+            clicked = click_fn(page)
+        return clicked, getattr(info.value, "url", None)
+    except Exception:
+        # No download started: an ordinary in-page click, which the caller
+        # handles by re-scanning the page. `clicked` is still what the click
+        # itself reported.
+        return clicked, None
 
 
 def _click_downloadish_links(page: Any) -> bool:
