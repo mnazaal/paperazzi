@@ -215,8 +215,36 @@ class BrowserSession:
                 pass
 
     def _check_open(self) -> None:
+        """Raise unless this session can still be used.
+
+        `_closed` alone was not enough: it is set only by `close()`, so a
+        browser killed underneath us — OOM, a crash, the user quitting it —
+        left the flag False and the dead session was handed back forever.
+        `BrowserSessionManager` treats the `RuntimeError` as "relaunch", which
+        its docstring already promised, so the only thing missing was noticing.
+        """
         if self._closed:
             raise RuntimeError("BrowserSession is closed")
+        if not self._browser_is_connected():
+            raise RuntimeError("BrowserSession's browser is no longer running")
+
+    def _browser_is_connected(self) -> bool:
+        """Whether Playwright still has a live connection to the browser.
+
+        A local boolean on the Playwright object, so it is cheap enough for the
+        per-operation check. Anything that cannot answer is treated as alive:
+        this is a liveness probe, not an excuse to refuse work.
+        """
+        browser = self.browser_ref
+        if isinstance(browser, tuple):
+            browser = browser[0]
+        is_connected = getattr(browser, "is_connected", None)
+        if not callable(is_connected):
+            return True
+        try:
+            return bool(is_connected())
+        except Exception:
+            return False
 
 
 @dataclass

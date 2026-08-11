@@ -230,3 +230,56 @@ def test_a_failed_launch_removes_the_cloned_chrome_profile(tmp_path, monkeypatch
 
     assert not clone.exists()
     playwright.stop.assert_called_once()
+
+
+def test_a_browser_killed_underneath_us_is_not_reused() -> None:
+    """`_closed` is set only by `close()`.
+
+    So a browser that died on its own — OOM, a crash, the user quitting it —
+    left the flag False, `_check_open` said the session was fine, and
+    `BrowserSessionManager` handed the corpse back on every later call.
+    `download_pdf`'s blanket except then returned None until the server was
+    restarted: three failed downloads for one launch.
+    """
+    from pzi.browser_session import BrowserSession
+
+    class _DeadBrowser:
+        def is_connected(self):
+            return False
+
+    session = BrowserSession.__new__(BrowserSession)
+    session._closed = False
+    session.browser_ref = _DeadBrowser()
+
+    with pytest.raises(RuntimeError, match="no longer running"):
+        session._check_open()
+
+
+def test_a_live_browser_still_passes_the_check() -> None:
+    """The probe must not refuse work on a healthy session."""
+    from pzi.browser_session import BrowserSession
+
+    class _LiveBrowser:
+        def is_connected(self):
+            return True
+
+    session = BrowserSession.__new__(BrowserSession)
+    session._closed = False
+    session.browser_ref = _LiveBrowser()
+
+    session._check_open()  # does not raise
+
+
+def test_a_browser_handle_that_cannot_answer_is_treated_as_alive() -> None:
+    """This is a liveness probe, not an excuse to refuse work — a handle
+    without `is_connected` (or one that raises) must not block the session."""
+    from pzi.browser_session import BrowserSession
+
+    class _Opaque:
+        pass
+
+    session = BrowserSession.__new__(BrowserSession)
+    session._closed = False
+    session.browser_ref = _Opaque()
+
+    session._check_open()  # does not raise
