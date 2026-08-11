@@ -6,7 +6,7 @@ import json
 import time
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
-from typing import Any
+from typing import Any, TextIO
 from urllib.parse import parse_qs, urlsplit
 
 from pzi.http_binary_routes import (
@@ -57,6 +57,42 @@ def server_exposure_error(host: str, security: HttpSecurityConfig) -> str | None
     )
 
 
+def _recording_send_response(
+    request: BaseHTTPRequestHandler, code: int, message: str | None = None
+) -> None:
+    """`send_response` that remembers the status it sent."""
+    request._pzi_status = code  # type: ignore[attr-defined]
+    BaseHTTPRequestHandler.send_response(request, code, message)
+
+
+def _log_request(
+    request: BaseHTTPRequestHandler, started_at: float, log_to: TextIO
+) -> None:
+    """One line per request: method, path, status, milliseconds.
+
+    Off unless `pzi server --log-requests` asked for it. The query string is
+    deliberately dropped rather than logged: it carries `bib=`, `citekey=` and
+    (historically) an attach token, and a URL naming what you read is exactly
+    the kind of thing that should not accumulate in a terminal scrollback or a
+    journald ring buffer by default.
+
+    `BaseHTTPRequestHandler` records the status in `_status` via
+    `send_response`; a request that died before responding has none, which is
+    itself worth seeing, so it logs as `-`.
+    """
+    elapsed_ms = (time.monotonic() - started_at) * 1000
+    try:
+        path = urlsplit(request.path).path or "/"
+    except ValueError:
+        path = "(unparseable)"
+    status = getattr(request, "_pzi_status", None)
+    print(
+        f"{request.command} {path} {status if status is not None else '-'} "
+        f"{elapsed_ms:.0f}ms",
+        file=log_to,
+    )
+
+
 def build_handler_class(
     *,
     config_path: str,
@@ -64,9 +100,27 @@ def build_handler_class(
     security: HttpSecurityConfig | None = None,
     browser_manager: object | None = None,
     attach_session_store: AttachSessionStore | None = None,
+    log_requests_to: TextIO | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     security_config = security or build_http_security_config()
     store = attach_session_store or AttachSessionStore()
+
+    def _timed(handler: Callable[[], None], request: BaseHTTPRequestHandler) -> None:
+        """Run a guarded handler, logging it afterwards when asked.
+
+        Wraps `_guarded` rather than replacing it: the 500 guard must still run
+        first, so a handler that raises is logged with the status the guard
+        sent rather than not logged at all.
+        """
+        if log_requests_to is None:
+            _guarded(handler, request, security_config)
+            return
+        started_at = time.monotonic()
+        try:
+            _guarded(handler, request, security_config)
+        finally:
+            _log_request(request, started_at, log_requests_to)
+
     return type(
         "PziHandler",
         (BaseHTTPRequestHandler,),
@@ -80,21 +134,19 @@ def build_handler_class(
             # unguarded exception closes the socket having sent zero bytes,
             # which a client cannot distinguish from the server being down)
             # applies to every handler or to none.
-            "do_OPTIONS": lambda request: _guarded(
-                lambda: _handle_options(request, security_config),
-                request,
-                security_config,
+            "do_OPTIONS": lambda request: _timed(
+                lambda: _handle_options(request, security_config), request
             ),
-            "do_GET": lambda request: _guarded(
-                lambda: _handle_get(request, config_path, home_dir, security_config),
-                request,
-                security_config,
+            "do_GET": lambda request: _timed(
+                lambda: _handle_get(request, config_path, home_dir, security_config), request
             ),
-            "do_POST": lambda request: _guarded(
-                lambda: _handle_post(request, config_path, home_dir, security_config),
-                request,
-                security_config,
+            "do_POST": lambda request: _timed(
+                lambda: _handle_post(request, config_path, home_dir, security_config), request
             ),
+            # Record the status for `_log_request`. Overriding the one method
+            # every response path already goes through beats stamping it at
+            # each `_respond` call site, which would silently miss any new one.
+            "send_response": _recording_send_response,
             "log_message": lambda request, format, *args: None,
         },
     )
@@ -443,6 +495,7 @@ def run_server(  # pragma: no cover — I/O entry point, covered by integration 
     idle_minutes: int | None = None,
     browser_profile_path: str | None = None,
     browser_engine: str = "chromium",
+    log_requests_to: TextIO | None = None,
 ) -> None:
     security_config = security or build_http_security_config(listen_host=host)
     exposure_error = server_exposure_error(host, security_config)
@@ -463,6 +516,7 @@ def run_server(  # pragma: no cover — I/O entry point, covered by integration 
         home_dir=home_dir,
         security=security_config,
         browser_manager=browser_manager,
+        log_requests_to=log_requests_to,
     )
     idle_state: dict[str, float] | None = None
     if idle_minutes is not None:

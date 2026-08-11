@@ -594,6 +594,11 @@ def build_parser() -> argparse.ArgumentParser:
             "(does not disable auth if a token exists)"
         ),
     )
+    server_parser.add_argument(
+        "--log-requests",
+        action="store_true",
+        help="log one line per HTTP request to stderr (method, path, status, ms)",
+    )
 
     # ── init ─────────────────────────────────────────────────────────────
     init_parser = subparsers.add_parser("init", help="Create or overwrite pzi configuration")

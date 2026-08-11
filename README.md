@@ -159,7 +159,7 @@ loginctl enable-linger "$USER"        # keep it up when you're logged out
 journalctl --user -u pzi -f           # follow logs (no terminal held open)
 ```
 
-The translation-server runs as a child of `pzi server`, so this one unit covers both. Don't add `--stop-after` here — the unit uses `Restart=on-failure`, and an idle-exit would just churn-restart.
+The translation-server runs as a child of `pzi server`, so this one unit covers both. Add `--log-requests` to the `ExecStart` line if you want one journald line per HTTP request (method, path, status, duration) — it is off by default, and the query string is never logged. Don't add `--stop-after` here — the unit uses `Restart=on-failure`, and an idle-exit would just churn-restart.
 
 Socket activation (a `pzi.socket` unit that starts the server on the first
 request and lets `--stop-after` reclaim the ~100–150 MB idle footprint) is
