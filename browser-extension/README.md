@@ -70,8 +70,11 @@ Quick summary:
   the browser lists them up front. Eleven publisher origins (IEEE Xplore, ACM
   DL, ScienceDirect and its CDN, Wiley, Taylor & Francis, SAGE, Oxford
   Academic, Nature, NCBI and PMC), plus `http://127.0.0.1/*` and
-  `http://localhost/*` for the local pzi server. They let the extension inject
-  its content script and fetch PDFs with your session on those sites.
+  `http://localhost/*` for the local pzi server — thirteen in total. On the
+  publisher origins they let the extension fetch PDFs with your session; the
+  two local ones are how it reaches your own pzi server. Content-script
+  injection is separate: that comes from the `scripting` permission and the
+  active tab, not from these.
 - **Optional host permission** — requested at capture time when a PDF candidate
   lives on an origin not in that list. Used for that one fetch and released
   afterwards, on every path including failure. Denying it still captures the
@@ -105,7 +108,7 @@ Europe PMC) receive only DOIs, titles and author names.
 
 - The capture endpoint defaults to `http://127.0.0.1:8765/capture`.
 - The popup fetches available bibs from `GET /bibs` and populates the bib dropdown automatically.
-- The extension requests only local pzi host access by default. Browser-session PDF attach is limited to same-origin PDF candidates from the active tab so authenticated cross-site responses are not fetched broadly.
+- Browser-session PDF attach is limited to same-origin PDF candidates from the active tab, so authenticated cross-site responses are not fetched broadly. (This bullet used to open with "the extension requests only local pzi host access by default", which contradicted both the permissions list above and `manifest.base.json`: thirteen host permissions are granted at install time.)
 - For cross-origin PDF candidates (for example an article on `publisher.com` with a PDF on `cdn.publisher.com`), the extension can ask for a narrow optional host permission after you click capture. paperazzi tries same-origin candidates first, then requests access only for the candidate PDF origin, fetches with browser cookies, uploads validated PDF bytes locally, and removes the temporary permission after the attempt.
 - Capture results expose `pdf_status`; `direct_blocked` means metadata was saved but the PDF needs browser capture or `browser_pdf_cmd`.
 - Advanced/devtools-only: to change the endpoint persistently, open the extension popup devtools and set a value:

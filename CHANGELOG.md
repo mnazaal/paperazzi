@@ -5,7 +5,50 @@ All notable changes to paperazzi (CLI command `pzi`) are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+**One line per entry.** `release.yml` extracts a version's section verbatim as
+the GitHub Release body, so a section is release notes, not a design record.
+`[0.1.0b5]` predates this rule and runs to 683 lines of root-cause narrative;
+it is left as it is rather than rewritten, since the history is real. New
+entries state what changed and, where it is not obvious, what the user will
+notice — the reasoning belongs in the commit message, which `git log` keeps
+next to the diff it explains.
+
 ## [Unreleased]
+
+### Fixed
+
+- `pzi update` no longer adopts an unrelated paper's metadata when a search
+  returns a different work.
+- Usage mistakes exit 2 instead of 5, and HTTP status no longer depends on how
+  you named a paper — every failure now carries a structured reason.
+- Repeated `--target a --target b` keeps both libraries; it used to keep only
+  the last, silently halving `search` results and updating one library of two.
+- `pzi check --report -` can be piped into `jq`; `--report`/`--jsonl` no longer
+  clobber an existing file without `--force`, and write atomically.
+- Bare arXiv IDs (`2301.07041`, `arXiv:2301.07041v2`) are accepted.
+- A text file named `.pdf` is refused instead of writing an empty placeholder.
+- Tags in non-Latin scripts work; they used to normalize to nothing and be
+  rejected as "no valid tags supplied".
+- `add --from-file` interrupted with Ctrl-C still writes its failures file and
+  prints its summary, and exits 130.
+- Many silent failures now report: skipped PDF stages, unreachable
+  server-browser, discovery providers that raised, tag writes that failed,
+  imports that updated an entry, and inbox tokens that were ignored.
+- FlareSolverr no longer forwards arbitrary URLs (it made the local headless
+  browser an open proxy); `--cookie-file` cookies stay on the origin they were
+  captured for; the attach token is header-only.
+- Abandoned clones of your Chrome profile are swept from `$TMPDIR`.
+- Firefox `strict_min_version` raised to 128, which is what the manifest needs;
+  109–127 installed cleanly and silently lost cross-origin PDF fetching.
+- `pzi init --force` writes a `.bak` before overwriting your config.
+
+### Changed
+
+- `add --from-file` exits 5, not 4, when *no* item succeeded (4 is documented as
+  "some items succeeded", and the JSON envelope already said `error`).
+- Node is resolved from the data home before any network call, and
+  `PZI_NODE_VERSION` pins the version.
+- The translation-server is no longer reinstalled on every pzi version bump.
 
 ## [0.1.0b5] - 2026-08-03
 
