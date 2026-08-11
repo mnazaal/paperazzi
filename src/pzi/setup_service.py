@@ -145,7 +145,12 @@ def render_config(
                 lines.append(
                     "# find your profile: ls ~/.mozilla/firefox/*.default-release"
                 )
-        lines.append(f'browser_pdf_cmd = "{cmd}"')
+        # Escaped, like `bib_name` and `bib_path` five lines down. A Firefox
+        # profile path containing a backslash (every Windows path, and any
+        # profile directory with one) produced a config.toml that TOML cannot
+        # parse — `pzi init --setup --browser firefox` exited 0 and every later
+        # command failed to load the config it had just written.
+        lines.append(f'browser_pdf_cmd = "{escape_toml_string(cmd)}"')
     lines.extend(
         [
             "",

@@ -21,15 +21,33 @@ from pzi.errors import REASON_CONFIG, REASON_USAGE
 # Tag normalization
 # ---------------------------------------------------------------------------
 
+#: Kept for callers that imported it. The normalizer no longer uses it: an
+#: ASCII-only character class is what erased every non-Latin tag.
 TAG_SEPARATOR_PATTERN = re.compile(r"[^a-z0-9]+")
 
 
 def normalize_tag(value: str) -> str | None:
-    """Normalize a user tag into a lowercase slug, or None if empty."""
-    ascii_value = _to_ascii(value)
-    lowered = ascii_value.lower().strip()
-    collapsed = TAG_SEPARATOR_PATTERN.sub("-", lowered).strip("-")
-    return collapsed or None
+    """Normalize a user tag into a lowercase slug, or None if it has no letters.
+
+    Unicode-aware. The old rule was NFKD → `encode("ascii", "ignore")` → split
+    on `[^a-z0-9]+`, which reduces a CJK, Cyrillic, Greek, Arabic or Hebrew tag
+    to the empty string — so a tag in the user's own language was refused as
+    "no valid tags supplied", with no hint that the alphabet was the problem.
+
+    Latin accents still fold (`Café` → `cafe`): the combining marks are dropped
+    after NFKD, which is what makes `cafe` and `café` the same tag rather than
+    two. Characters that are not alphanumeric in *any* script — punctuation,
+    emoji, symbols — remain separators, so an emoji-only tag still normalizes
+    to nothing. That is a real refusal rather than an alphabet judgement, and
+    `_mutate_entry_tags` now says which.
+    """
+    decomposed = unicodedata.normalize("NFKD", value)
+    without_marks = "".join(
+        char for char in decomposed if not unicodedata.combining(char)
+    )
+    folded = unicodedata.normalize("NFC", without_marks).casefold()
+    collapsed = "".join(char if char.isalnum() else "-" for char in folded)
+    return "-".join(part for part in collapsed.split("-") if part) or None
 
 
 def normalize_tags(values: list[str]) -> list[str]:
@@ -222,6 +240,7 @@ def _mutate_entry_tags(
 
     normalized_tags = normalize_tags(tags)
     if not normalized_tags:
+        rejected = ", ".join(repr(tag) for tag in tags) or "(none)"
         return {
             "status": "error",
             "bib_name": bib["name"],
@@ -229,9 +248,16 @@ def _mutate_entry_tags(
             "tags": [],
             "changed": False,
             "dry_run": dry_run,
-            "message": "no valid tags supplied",
+            "message": (
+                f"no valid tags supplied: {rejected} "
+                "(a tag needs at least one letter or digit; punctuation, "
+                "symbols and emoji are treated as separators)"
+            ),
             "reason": REASON_USAGE,
-            "errors": ["no valid tags supplied"],
+            "errors": [
+                f"no valid tags supplied: {rejected} "
+                "(a tag needs at least one letter or digit)"
+            ],
         }
 
     current_record = cast(NormalizedRecord, dict(read_result["records"][match_index]))

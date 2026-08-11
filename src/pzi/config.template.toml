@@ -69,12 +69,6 @@ api_listen_port = 8765
 # metadata_cache_ttl = 0             # cache metadata-API responses on disk for N seconds (0 = off)
 # pdf_discovery_parallel = false     # run the PDF discovery fallback chain in parallel
 
-[[bibs]]
-name = "main"
-path = "~/bibs/main.bib"
-default = true
-# papers_dir = "~/bibs/papers"  # defaults to <bib-dir>/papers/
-
 # Directories `POST /capture` may ingest a local PDF from. Empty (the default)
 # refuses local-file capture over HTTP entirely; the browser extension only ever
 # sends http(s) URLs, so leave this unset unless you script local ingests.
@@ -83,3 +77,10 @@ default = true
 # The only file `POST /inbox/drain` may read and rewrite. Unset (the default)
 # closes that route. Draining rewrites the file in place.
 # inbox_path = "~/pzi-inbox.txt"
+
+[[bibs]]
+name = "main"
+path = "~/bibs/main.bib"
+default = true
+# papers_dir = "~/bibs/papers"  # defaults to <bib-dir>/papers/
+

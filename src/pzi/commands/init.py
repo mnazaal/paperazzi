@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.resources
 import os
+import shutil
 from pathlib import Path
 from typing import TextIO
 
@@ -92,13 +93,25 @@ def run_init_command(
     # plaintext and *_cmd hooks that pzi executes, so it should never be briefly
     # group/world-readable. chmod after the write also tightens a pre-existing
     # file being overwritten with --force.
+    # Back up first when overwriting. `--force` opened `O_TRUNC` and printed
+    # only "created …", so a config declaring a bib named `mine` had zero
+    # occurrences of `mine` afterwards and nothing to recover it from — for a
+    # file that also carries `api_auth_token` and `*_cmd` hooks.
+    backup: str | None = None
+    if os.path.exists(dest):
+        backup = f"{dest}.bak"
+        shutil.copy2(dest, backup)
+        os.chmod(backup, 0o600)
     fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
         os.write(fd, content.encode("utf-8"))
     finally:
         os.close(fd)
     os.chmod(dest, 0o600)
-    print(f"created {dest} (mode 0600)", file=stdout)
+    if backup is not None:
+        print(f"overwrote {dest} (mode 0600); previous config saved to {backup}", file=stdout)
+    else:
+        print(f"created {dest} (mode 0600)", file=stdout)
 
     if token_created:
         print(

@@ -6,6 +6,8 @@ translation-server, manage subprocess lifecycle.  No container dependency.
 
 from __future__ import annotations
 
+import hashlib
+import inspect
 import os
 import re
 import shutil
@@ -79,11 +81,23 @@ def _sentinel_path(ts_dir: Path) -> Path:
     return ts_dir / _SENTINEL_FILENAME
 
 
-def _write_sentinel(ts_dir: Path) -> None:
-    """Write the sentinel file recording current pzi version and repo refs."""
-    from pzi import cli_version_text
+def _cookie_patch_fingerprint() -> str:
+    """A digest of the patch logic pzi applies to the upstream sources.
 
-    lines = [f"pzi_version = {cli_version_text()}"]
+    The sentinel used to record pzi's *version*, so every release — a CLI
+    wording change, a docs fix, anything — re-cloned three repositories and
+    re-ran `npm install`. The per-repo `ref` comparison already covers upstream
+    changes, so the version check existed only to re-apply the cookie patches
+    when *they* changed. This is that condition stated directly: it changes when
+    the patch code does and not when the version does.
+    """
+    source = inspect.getsource(_apply_cookie_patch)
+    return hashlib.sha256(source.encode("utf-8")).hexdigest()[:16]
+
+
+def _write_sentinel(ts_dir: Path) -> None:
+    """Write the sentinel file recording the patch fingerprint and repo refs."""
+    lines = [f"cookie_patch = {_cookie_patch_fingerprint()}"]
     for repo in _TS_REPOS:
         lines.append(f"{repo['name']}_ref = {repo['ref']}")
     _sentinel_path(ts_dir).write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -105,12 +119,10 @@ def _read_sentinel(ts_dir: Path) -> dict[str, str] | None:
 
 def _needs_reinstall(ts_dir: Path) -> bool:
     """Return True if translation-server dir is missing or out of date."""
-    from pzi import cli_version_text
-
     sentinel = _read_sentinel(ts_dir)
     if sentinel is None:
         return True
-    if sentinel.get("pzi_version") != cli_version_text():
+    if sentinel.get("cookie_patch") != _cookie_patch_fingerprint():
         return True
     # Check that all repos have matching refs
     for repo in _TS_REPOS:

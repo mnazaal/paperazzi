@@ -250,7 +250,13 @@ def add_input_to_bib(
     # Resolved before the input-kind branch below: every path that can hit a
     # metadata provider has to honor the flag, including local PDFs and the
     # fallback taken when the whole cascade raises.
-    effective_strict = metadata_strict or bool(config.get("metadata_strict", False))
+    # `--strict-metadata` only. There used to be a `config.get("metadata_strict")`
+    # half, reading a key `AppConfig` does not declare and the normalizer never
+    # emits — so the branch was unreachable while reading like a supported
+    # config option. Deleted rather than promoted to a real key: nothing asked
+    # for it, and a config-level default for a flag this severe deserves its own
+    # decision.
+    effective_strict = metadata_strict
 
     def _finalize(result: AddRecordResult) -> AddRecordResult:
         if metadata_diagnostics:

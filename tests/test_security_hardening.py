@@ -188,3 +188,85 @@ def test_the_firefox_minimum_matches_what_the_manifest_needs() -> None:
     # And the two features that set the floor are still the reason.
     assert manifest["background"]["type"] == "module"
     assert json.dumps(manifest)
+
+
+# --- config, packaging and CI ------------------------------------------------
+
+
+def test_the_template_scopes_both_keys_at_the_top_level() -> None:
+    """They sat after `[[bibs]]`, so uncommenting them where the template shows
+    them parses them as *per-bib* keys — no error, no warning, both ignored."""
+    import re as _re
+    import tomllib
+
+    text = Path("src/pzi/config.template.toml").read_text(encoding="utf-8")
+    uncommented = "\n".join(
+        (m.group(1) if (m := _re.match(r"^# ([a-z_]+ = .*)", line)) else line)
+        for line in text.splitlines()
+    )
+    parsed = tomllib.loads(uncommented)
+
+    assert "capture_source_dirs" in parsed
+    assert "inbox_path" in parsed
+    assert "capture_source_dirs" not in parsed["bibs"][0]
+    assert "inbox_path" not in parsed["bibs"][0]
+
+
+def test_a_browser_command_with_a_backslash_still_parses(tmp_path: Path) -> None:
+    """`browser_pdf_cmd` was the one string not escaped, five lines from two
+    that are — so a profile path with a backslash produced a config.toml that
+    TOML cannot parse, from a command that exited 0."""
+    import tomllib
+    from unittest.mock import patch
+
+    from pzi import setup_service
+
+    weird_profile = str(tmp_path) + chr(92) + "profile.default-release"
+    with patch.object(setup_service, "_find_firefox_profile", return_value=weird_profile):
+        rendered = setup_service.render_config(
+            bib_name="ml",
+            bib_path=str(tmp_path / "ml.bib"),
+            with_browser=True,
+            browser="firefox",
+            home_dir=str(tmp_path),
+        )
+
+    # The whole file has to parse, which is what a backslash used to break.
+    parsed = tomllib.loads(rendered)
+    assert "browser_pdf_cmd" in parsed
+    assert "\\" in parsed["browser_pdf_cmd"]
+
+
+def test_non_latin_tags_survive_normalization() -> None:
+    """NFKD → `encode("ascii", "ignore")` → `[^a-z0-9]+` erases them entirely,
+    so a tag in the user's own language was "no valid tags supplied"."""
+    from pzi.tag_service import normalize_tag
+
+    assert normalize_tag("機械学習") == "機械学習"
+    assert normalize_tag("Машинное обучение") == "машинное-обучение"
+    assert normalize_tag("μηχανική-μάθηση") is not None
+    # Latin accents still fold, so `cafe` and `café` stay one tag.
+    assert normalize_tag("Café") == "cafe"
+    assert normalize_tag("Machine Learning") == "machine-learning"
+    # A tag with no letters or digits at all is still refused.
+    assert normalize_tag("!!!") is None
+    assert normalize_tag("🎉") is None
+
+
+def test_a_refused_tag_says_why(tmp_path: Path, write_app_config) -> None:
+    """"no valid tags supplied" did not say what was wrong with them."""
+    from pzi.tag_service import add_tags
+
+    config_path = write_app_config(tmp_path)
+    (tmp_path / "ml.bib").write_text(
+        "@article{a2020,\n  title = {A},\n}\n", encoding="utf-8"
+    )
+
+    result = add_tags(
+        config_path=config_path, home_dir=str(tmp_path), bib_selector=None,
+        citekey="a2020", tags=["🎉"],
+    )
+
+    assert result["status"] == "error"
+    assert "🎉" in result["message"]
+    assert "letter or digit" in result["message"]

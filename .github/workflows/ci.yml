@@ -91,9 +91,12 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Install package with dev tools (includes playwright)
-        run: |
-          uv venv .venv
-          uv pip install -e ".[dev]"
+        # `uv sync --locked`, matching the other two jobs. This one resolved
+        # fresh on every run, which is exactly what the comment on the lint job
+        # explains is unacceptable — and this job gates the release, so an
+        # unlocked resolution here could keep the browser suite green against a
+        # dependency set the release will not use.
+        run: uv sync --locked --extra dev
 
       - name: Install Playwright browsers
         run: .venv/bin/playwright install chromium firefox

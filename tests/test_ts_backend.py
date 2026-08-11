@@ -48,18 +48,30 @@ def test_needs_reinstall_returns_false_when_sentinel_matches(tmp_path: Path) -> 
         assert ts_backend._needs_reinstall(ts_dir) is False
 
 
-def test_needs_reinstall_returns_true_when_version_mismatch(tmp_path: Path) -> None:
+def test_a_pzi_version_bump_alone_does_not_force_a_reinstall(tmp_path: Path) -> None:
+    """It used to: three git clones and an `npm install` on every release.
+
+    The sentinel compared `cli_version_text()`, so a CLI wording change
+    re-fetched the whole translation-server tree. The per-repo `ref` comparison
+    already covers upstream changes; the version check existed only to re-apply
+    the cookie patches when *those* changed.
+    """
     ts_dir = tmp_path / "ts"
     ts_dir.mkdir()
-    with patch(
-        "pzi.cli_version_text",
-        return_value="0.1.0",
-    ):
+    with patch("pzi.cli_version_text", return_value="0.1.0"):
         ts_backend._write_sentinel(ts_dir)
-    with patch(
-        "pzi.cli_version_text",
-        return_value="0.2.0",
-    ):
+    with patch("pzi.cli_version_text", return_value="0.2.0"):
+        assert ts_backend._needs_reinstall(ts_dir) is False
+
+
+def test_a_changed_cookie_patch_does_force_a_reinstall(tmp_path: Path) -> None:
+    """Which is the condition the version check was standing in for."""
+    ts_dir = tmp_path / "ts"
+    ts_dir.mkdir()
+    ts_backend._write_sentinel(ts_dir)
+    assert ts_backend._needs_reinstall(ts_dir) is False
+
+    with patch.object(ts_backend, "_cookie_patch_fingerprint", return_value="different"):
         assert ts_backend._needs_reinstall(ts_dir) is True
 
 
