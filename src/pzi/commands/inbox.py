@@ -69,7 +69,7 @@ def run_inbox_command(
             print_dry_run_banner(total, stderr)
 
         for seq, item in enumerate(result["items"]):
-            _stream_item(seq, total, item, stderr)
+            _stream_item(seq, total, item, stderr, dry_run=dry_run)
 
         print_capture_summary(result["counts"], dry_run=dry_run, stdout=stdout)
         # PARTIAL, not FINDINGS — see the matching note in `commands/add.py`.
@@ -89,7 +89,11 @@ def run_inbox_command(
 
         with backend_session(
             config, home_dir,
-            interactive=True, stdout=stdout, stderr=stderr,
+            # Bootstrap progress ("cloning translation-server …") goes to
+            # stderr, as `add` already does: it used to interleave with this
+            # command's own stdout data line, which is the one thing a caller
+            # parses.
+            interactive=True, stdout=stderr, stderr=stderr,
         ) as backend:
             if not backend["ready"]:
                 print(
@@ -103,8 +107,11 @@ def run_inbox_command(
     return _work()
 
 
-def _stream_item(seq: int, total: int, item: DrainItem, stderr: TextIO) -> None:
+def _stream_item(
+    seq: int, total: int, item: DrainItem, stderr: TextIO, *, dry_run: bool = False
+) -> None:
     print_capture_stream_line(
+        dry_run=dry_run,
         index=seq,
         total=total,
         value=item["value"],

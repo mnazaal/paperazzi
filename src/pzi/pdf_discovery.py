@@ -115,9 +115,34 @@ def apply_pdf_discovery(
             break
         try:
             record = _validated_discovery(step(record, context), context)
-        except Exception:
+        except Exception as exc:
+            record_discovery_failure(context, step, exc)
             continue
     return record
+
+
+def record_discovery_failure(
+    context: PdfDiscoveryContext, step: PdfDiscoveryStep, exc: BaseException
+) -> None:
+    """Note which discovery step failed and why, without stopping the fan-out.
+
+    Both entry points swallow a raising step as "no result", which is right — a
+    single failing source must not abort the whole add. But nothing recorded
+    *which* step failed, so a permanently broken provider (an expired Unpaywall
+    email, a changed API shape) was indistinguishable from "this paper has no
+    open-access copy" for as long as it stayed broken. The context is a plain
+    dict the caller already holds, so the diagnostics come back with it.
+    """
+    name = getattr(step, "__name__", None) or repr(step)
+    context.setdefault("discovery_diagnostics", []).append(f"{name}: {exc!r}")
+
+
+def discovery_diagnostics(context: PdfDiscoveryContext | None) -> list[str]:
+    """Discovery steps that raised during this record's fan-out, in order."""
+    if not isinstance(context, dict):
+        return []
+    entries = context.get("discovery_diagnostics")
+    return [str(item) for item in entries] if isinstance(entries, list) else []
 
 
 def excluded_pdf_urls(context: PdfDiscoveryContext | None) -> frozenset[str]:
@@ -202,7 +227,8 @@ def apply_pdf_discovery_parallel(
             for step, future in futures.items():
                 try:
                     results[step] = _validated_discovery(future.result(), context)
-                except Exception:
+                except Exception as exc:
+                    record_discovery_failure(context, step, exc)
                     # A single discovery source failing (network, parse, provider
                     # error) must not abort the whole fan-out: treat it as "no
                     # result" so lower-priority sources still get their turn.

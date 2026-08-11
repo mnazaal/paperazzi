@@ -49,12 +49,20 @@ def discover_pdf_url_with_browser(
             text=True,
             timeout=120,
         )
-    except (OSError, ValueError, subprocess.SubprocessError):
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
         # `ValueError` too: `_validate_browser_command` raises it for an empty
         # command, and `shlex.split` for an unbalanced quote. A config typo must
-        # read as "this hook found nothing", like every other failure here.
+        # read as "this hook found nothing", like every other failure here —
+        # but it must still *say so*. `download_pdf_with_browser` prints the
+        # child's stderr on all six of its failure branches; this function read
+        # `result.stderr` nowhere, so "install the playwright extra" reached the
+        # user down one path and vanished down the other.
+        print(f"browser hook could not run: {exc}", file=sys.stderr)
         return None
     if result.returncode != 0:
+        child_stderr = getattr(result, "stderr", "")
+        if child_stderr:
+            print(_safe_stderr(child_stderr), end="", file=sys.stderr)
         return None
     stdout = result.stdout.strip()
     if not stdout:

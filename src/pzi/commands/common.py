@@ -154,6 +154,7 @@ def print_capture_stream_line(
     citekey: object,
     reason: str | None,
     warnings: Sequence[str] = (),
+    dry_run: bool = False,
     stderr: TextIO,
 ) -> None:
     """Print one bulk-capture progress line, plus any warnings it carried.
@@ -162,9 +163,16 @@ def print_capture_stream_line(
     duplicate" notice here, and bulk capture — the likeliest place to add the
     same paper twice — printed nothing, because both renderers plumbed warnings
     into their results and then never showed them in text mode.
+
+    *dry_run* changes the verb. A preview streamed "✓ added" for every item
+    while its own banner and closing summary — both correct — said "would". The
+    per-item lines are what scrolls past and what the user reads.
     """
     counter = f"[{index + 1:>{len(str(total))}}/{total}]"
-    label = f"{_CAPTURE_LABELS[bucket]:<6}"
+    verb = _CAPTURE_LABELS[bucket]
+    if dry_run and bucket != "failed":
+        verb = f"would {verb}"
+    label = f"{verb:<12}" if dry_run else f"{verb:<6}"
     if bucket == "failed":
         detail = f"{shorten(value)} — {reason or 'capture failed'}"
     else:

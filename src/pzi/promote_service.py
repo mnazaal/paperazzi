@@ -341,13 +341,14 @@ def promote_bib(
             )
 
     if mark_resolved and not dry_run and resolved_preprints:
-        _tag_resolved(
+        tagged, tag_failures = _tag_resolved(
             config_path=config_path,
             home_dir=home_dir,
             bib_selector=bib_selector,
             citekeys=resolved_preprints,
         )
-        summary["marked_resolved"] = len(resolved_preprints)
+        summary["marked_resolved"] = tagged
+        errors.extend(tag_failures)
 
     return {
         "status": "ok",
@@ -378,16 +379,33 @@ def _empty_summary() -> dict[str, Any]:
 
 def _tag_resolved(
     *, config_path: str, home_dir: str, bib_selector: str | None, citekeys: list[str]
-) -> None:
-    """Tag each promoted preprint with the resolved marker (best-effort)."""
+) -> tuple[int, list[str]]:
+    """Tag each promoted preprint with the resolved marker.
+
+    Returns how many were actually tagged and what failed. Every result used to
+    be discarded as "best-effort" while the caller set
+    `marked_resolved = len(citekeys)` unconditionally — so a failed tag write
+    reported success, the marker was absent, and the next run promoted the same
+    preprint again. Best-effort is the right policy; claiming it worked is not.
+    """
+    tagged = 0
+    failures: list[str] = []
     for citekey in citekeys:
-        add_tags(
+        result = add_tags(
             config_path=config_path,
             home_dir=home_dir,
             bib_selector=bib_selector,
             citekey=citekey,
             tags=[_RESOLVED_TAG],
         )
+        if result.get("status") == "ok":
+            tagged += 1
+        else:
+            failures.append(
+                f"{citekey}: could not mark resolved "
+                f"({result.get('message') or 'tag write failed'})"
+            )
+    return tagged, failures
 
 
 # ---------------------------------------------------------------------------

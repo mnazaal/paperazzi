@@ -6,7 +6,7 @@ from pathlib import Path
 
 from pzi import cli_json, exit_codes
 from pzi.cli_render import _error_lines, _render_doctor_result
-from pzi.commands.common import print_lines
+from pzi.commands.common import emit_usage_error, print_lines
 from pzi.config import load_config_file
 from pzi.doctor_service import doctor_check
 
@@ -17,13 +17,15 @@ def run_doctor_command(args, *, home_dir, config_path, stdout, stderr) -> int:
             # `--config-only` is documented as the offline check. Running a
             # network reinstall under it — which is what used to happen, since
             # this branch was tested first — is the opposite of what was asked.
-            print(
-                "error: --config-only and --reinstall-server are mutually "
-                "exclusive (--config-only is offline; --reinstall-server "
-                "clones and installs over the network)",
-                file=stderr,
+            return emit_usage_error(
+                args,
+                "--config-only and --reinstall-server are mutually exclusive "
+                "(--config-only is offline; --reinstall-server clones and "
+                "installs over the network)",
+                command_path=("doctor",),
+                stdout=stdout,
+                stderr=stderr,
             )
-            return exit_codes.USAGE
         return _reinstall_server(config_path=config_path, home_dir=home_dir,
                                  stdout=stdout, stderr=stderr, args=args)
 

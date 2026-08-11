@@ -20,6 +20,7 @@ import http.client
 import socket
 import ssl
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable, Sequence
 from typing import Any
@@ -186,5 +187,13 @@ def safe_urlopen(
     ``allow_host`` permits a single explicitly-trusted host on a private IP
     (configured EZProxy); without it the cached strict opener is used.
     """
+    # Reject the scheme before opening. `OpenerDirector.open` returns `None`
+    # for a scheme it has no handler for, and the callers all use the result as
+    # a context manager — so a `pzi-pdf-url` of `ftp://…` or `file://…` became
+    # `with None as ...` → `TypeError`, caught nowhere: a traceback, no JSON,
+    # and exit 1, which is `FINDINGS`. A script reads that as a clean run.
+    scheme = urllib.parse.urlsplit(request.full_url).scheme.lower()
+    if scheme not in ("http", "https"):
+        raise SsrfBlocked(f"unsupported URL scheme {scheme or '(none)'!r}: {request.full_url}")
     opener = _SAFE_OPENER if not allow_host else build_safe_opener(allow_host=allow_host)
     return opener.open(request, timeout=timeout)

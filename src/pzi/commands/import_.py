@@ -61,6 +61,8 @@ def run_import_command(
 
     prefix = "DRY RUN: " if getattr(args, "dry_run", False) else ""
     print(f"{prefix}imported {result['imported']}/{result['total_source']} entries", file=stdout)
+    if result.get("updated"):
+        print(f"{prefix}updated {result.get('updated', 0)} existing entries", file=stdout)
     if result["skipped_duplicates"]:
         print(f"{prefix}skipped {result['skipped_duplicates']} duplicates", file=stdout)
     if result["skipped_errors"]:

@@ -84,6 +84,15 @@ def run_merge_command(args, *, home_dir, config_path, stdout, stderr, bib_select
             f"{result['citekey_a']}: {', '.join(overwritten)}",
             file=stdout,
         )
+    orphaned = result.get("orphaned_pdf")
+    if orphaned:
+        # The dropped entry's PDF, which the merge does not keep. It stays on
+        # disk with nothing pointing at it until a later `fix clean --fix`
+        # quarantines it, and the dry run is where the user decides.
+        print(
+            f"  PDF orphaned (kept by neither entry): {orphaned}",
+            file=stdout,
+        )
     backup = result.get("backup_path")
     if backup:
         print(f"  backup: {backup}", file=stdout)

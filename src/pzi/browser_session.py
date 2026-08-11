@@ -298,6 +298,7 @@ def install_request_guard(
     with contextlib.suppress(Exception):
         page.route("**/*", _guard)
 
+
 def _launch_browser(
     browser: str,
     profile_path: str | None,
@@ -357,17 +358,27 @@ def _launch_browser(
         session._temp_profile = temp_profile
         return session
 
-    # Headless — no persistent profile
-    if browser == "firefox":
-        browser_instance = playwright.firefox.launch(**options)
-        context = browser_instance.new_context()
-    elif browser == "chrome":
-        browser_instance = playwright.chromium.launch(channel="chrome", **options)
-        context = browser_instance.new_context()
-    else:
-        browser_instance = playwright.chromium.launch(**options)
-        context = browser_instance.new_context()
-    page = context.new_page()
+    # Headless — no persistent profile. Wrapped for the same reason the
+    # `profile_path` branch above is: `sync_playwright().start()` has already
+    # spawned the driver process, and a launch that raises here left it running
+    # with nothing holding a reference. In server mode `ensure_session`
+    # re-launches per request, so a browser that cannot start leaked one driver
+    # per attempt until the machine ran out.
+    try:
+        if browser == "firefox":
+            browser_instance = playwright.firefox.launch(**options)
+            context = browser_instance.new_context()
+        elif browser == "chrome":
+            browser_instance = playwright.chromium.launch(channel="chrome", **options)
+            context = browser_instance.new_context()
+        else:
+            browser_instance = playwright.chromium.launch(**options)
+            context = browser_instance.new_context()
+        page = context.new_page()
+    except BaseException:
+        with contextlib.suppress(Exception):
+            playwright.stop()
+        raise
     install_request_guard(page, url_allowed)
     return BrowserSession(
         playwright=playwright,

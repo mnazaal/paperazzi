@@ -303,6 +303,22 @@ def add_input_to_bib(
             metadata_fetch_text=metadata_fetch_text,
         )
         provider_errors.extend(_fetched_provider_errors)
+        # Lifted off the record, not left on it: these are diagnostics about how
+        # the record was obtained, and anything still attached at write time
+        # risks being projected into the library. Popping is what keeps
+        # `metadata_provider` and the discovery failures out of the `.bib`.
+        if isinstance(fetched_record, dict):
+            provider = fetched_record.pop("metadata_provider", None)
+            if isinstance(provider, str):
+                # `--verbose` used to print nothing whenever the translation
+                # server returned at most one candidate — that is, for every DOI
+                # Crossref resolves, which is the common case.
+                metadata_diagnostics.append(f"metadata from {provider}")
+            discovery_failures = fetched_record.pop("pdf_discovery_diagnostics", None)
+            if isinstance(discovery_failures, list):
+                metadata_diagnostics.extend(
+                    f"pdf discovery failed: {line}" for line in discovery_failures
+                )
         # Diagnostics are computed here, where the results are consumed, rather
         # than inside a wrapper around the injected fetcher seam.
         if translation_results:
@@ -336,6 +352,10 @@ def add_input_to_bib(
         # the user had supplied enough metadata by hand — succeeded silently via
         # the fallback below, which is the "falling back silently" the flag
         # exists to prevent.
+        # The cascade's own accumulated errors, which used to die with it: only
+        # the success path returned them, so a total failure reported one
+        # sentence and no evidence.
+        provider_errors.extend(getattr(exc, "provider_errors", []))
         provider_errors.append(str(exc))
         if effective_strict:
             return _error_result(

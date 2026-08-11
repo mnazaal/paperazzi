@@ -54,7 +54,11 @@ def test_fallback_settings_are_injectable_without_touching_the_environment() -> 
         citekey="smith2024",
         settings=settings,
     )
-    assert (path, error) == (None, None)
+    assert path is None
+    # It says it was skipped rather than returning a bare `None, None`: the
+    # caller appends the second value as a stage error, so "no PDF appeared"
+    # told a user who had switched the stage off that it had been tried.
+    assert error == "skipped (PZI_DISABLE_DESKTOP_BROWSER_FALLBACK is set)"
 
 
 def test_env_flag_treats_zero_and_false_as_off() -> None:

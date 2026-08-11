@@ -50,8 +50,17 @@ def download_via_server_api(
     *,
     auth_token: str | None = None,
     timeout: int = 180,
+    errors: list[str] | None = None,
 ) -> bytes | None:
-    """Download PDF bytes via the server's /browser/download endpoint."""
+    """Download PDF bytes via the server's /browser/download endpoint.
+
+    *errors* collects why this stage produced nothing. Without it every outcome
+    was `None`, and the caller reported all of them as "server browser: no PDF
+    returned" — which asserts a server answered. `pdf_service` synthesizes an
+    `api_url` from the listen host/port whenever config has none, so this stage
+    runs on every machine whether or not `pzi server` is up, and the commonest
+    reason for `None` is that nothing was listening on that port at all.
+    """
     body = json.dumps({"pdf_url": pdf_url}).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     if auth_token:
@@ -67,6 +76,15 @@ def download_via_server_api(
                 pdf_bytes = base64.b64decode(b64, validate=True)
                 if pdf_bytes.startswith(b"%PDF-"):
                     return pdf_bytes
+        if errors is not None:
+            errors.append(f"{api_url}: response carried no PDF")
         return None
-    except (OSError, HTTPError, URLError, json.JSONDecodeError, ValueError, TypeError):
+    except (HTTPError, json.JSONDecodeError, ValueError, TypeError) as exc:
+        if errors is not None:
+            errors.append(f"{api_url}: bad response ({exc})")
+        return None
+    except (URLError, OSError) as exc:
+        if errors is not None:
+            reason = getattr(exc, "reason", None) or exc
+            errors.append(f"{api_url}: not reachable ({reason})")
         return None

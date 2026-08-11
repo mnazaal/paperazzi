@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 
 from pzi import cli_json, exit_codes
-from pzi.cli_render import _error_lines, _render_reindex_result
+from pzi.cli_render import _error_lines, _render_reindex_result, reindex_error_lines
 from pzi.commands.common import (
     emit_usage_error,
     print_lines,
@@ -110,6 +110,7 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
 
     print_read_warnings(result, stderr)
     print_lines(_render_reindex_result(result, dry_run=not apply), stdout)
+    print_lines(reindex_error_lines(result), stderr)
     backup = result.get("backup_path")
     if isinstance(backup, str):
         print(f"backup saved to {backup}", file=stderr)

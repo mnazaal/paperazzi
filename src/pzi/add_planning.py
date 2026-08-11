@@ -34,6 +34,7 @@ from pzi.pdf_discovery import (
     DEFAULT_DISCOVERY_STEPS,
     PdfDiscoveryContext,
     apply_pdf_discovery,
+    discovery_diagnostics,
 )
 from pzi.protocols import (
     HtmlFetcher,
@@ -429,6 +430,24 @@ def _carry_item_type(record: dict[str, Any], selected: Mapping[str, Any]) -> Non
     record.setdefault("item_type", item_type.strip())
 
 
+class MetadataExhausted(ValueError):
+    """Every metadata source was tried and none produced a record.
+
+    Carries the errors accumulated on the way. They used to be discarded: this
+    function returns `provider_errors` only on the *success* path, so a total
+    failure — the case where knowing which providers failed and how matters most
+    — surfaced as one sentence with no evidence. `--strict-metadata` then had
+    nothing to be strict about, and a caller could not tell "this DOI does not
+    exist" from "all five providers were rate-limited".
+
+    Subclasses `ValueError` so the existing handlers keep catching it.
+    """
+
+    def __init__(self, message: str, provider_errors: list[str] | None = None) -> None:
+        super().__init__(message)
+        self.provider_errors = list(provider_errors or [])
+
+
 def fetch_record_for_input(
     *,
     raw_value: str,
@@ -504,18 +523,25 @@ def fetch_record_for_input(
             base_record = cast(NormalizedRecord, dict(base_record))
             base_record.pop("pdf_url", None)
 
+        context = _discovery_context(translation_attachments=translation_attachments)
         if pdf_discovery_parallel:
             from pzi.pdf_discovery import apply_pdf_discovery_parallel as _parallel
-            return _parallel(
-                base_record,
-                DEFAULT_DISCOVERY_STEPS,
-                _discovery_context(translation_attachments=translation_attachments),
-            )
-        return apply_pdf_discovery(
-            base_record,
-            DEFAULT_DISCOVERY_STEPS,
-            _discovery_context(translation_attachments=translation_attachments),
-        )
+            found = _parallel(base_record, DEFAULT_DISCOVERY_STEPS, context)
+        else:
+            found = apply_pdf_discovery(base_record, DEFAULT_DISCOVERY_STEPS, context)
+        # A step that raised is treated as "no result" so the fan-out continues,
+        # which is right — but with nothing found and nothing said, a
+        # permanently broken provider looks exactly like a paper with no
+        # open-access copy. Carried on the record so `--verbose` and `--json`
+        # can show it; only when there is no PDF, since a successful discovery
+        # does not owe the user a report on the sources it did not need.
+        if not found.get("pdf_url"):
+            failures = discovery_diagnostics(context)
+            if failures:
+                enriched = dict(found)
+                enriched["pdf_discovery_diagnostics"] = failures
+                found = cast(NormalizedRecord, enriched)
+        return found
 
     if kind == "doi" and normalized is not None:
         results = safe_api_call(
@@ -546,38 +572,54 @@ def fetch_record_for_input(
                 translation_results,
             )
 
-        meta = _call_metadata_fetcher(
-            fetch_crossref or fetch_crossref_record,
-            normalized,
-            contact_email=contact_email,
-            errors=provider_errors,
-            fetch_text=metadata_fetch_text,
-        )
-        if meta is None:
-            meta = _call_metadata_fetcher(
+        # The cascade, in priority order, with the winner recorded. Nothing
+        # anywhere used to say which provider answered, so `--verbose` on the
+        # commonest invocation of all — a DOI that Crossref resolves on the
+        # first try — printed nothing at all.
+        meta = None
+        winner: str | None = None
+        for provider, call in (
+            ("crossref", lambda: _call_metadata_fetcher(
+                fetch_crossref or fetch_crossref_record,
+                normalized,
+                contact_email=contact_email,
+                errors=provider_errors,
+                fetch_text=metadata_fetch_text,
+            )),
+            ("openalex", lambda: _call_metadata_fetcher(
                 fetch_openalex or fetch_openalex_record,
                 normalized,
                 contact_email=contact_email,
                 errors=provider_errors,
                 fetch_text=metadata_fetch_text,
-            )
-        if meta is None:
-            if fetch_s2 is not None:
-                meta = fetch_s2(normalized)
-            else:
-                meta = fetch_semantic_scholar_record(
-                    normalized,
-                    api_key=s2_api_key,
-                    errors=provider_errors,
-                    fetch_text=metadata_fetch_text,
-                )
+            )),
+            # `fetch_s2` is `S2RecordFetcher`, a one-argument callable, so it
+            # cannot go through `_call_metadata_fetcher` the way the other two
+            # do without breaking its own declared contract. It gets the same
+            # *error handling* instead: called bare, an injected fetcher raising
+            # `HTTPError` aborted the whole cascade, and its failures never
+            # reached `provider_errors`, so `--strict-metadata` could not see
+            # them either.
+            ("semantic_scholar", lambda: _fetch_s2_guarded(
+                fetch_s2,
+                normalized,
+                s2_api_key=s2_api_key,
+                errors=provider_errors,
+                fetch_text=metadata_fetch_text,
+            )),
+        ):
+            meta = call()
+            if meta is not None:
+                winner = provider
+                break
         if meta is not None:
             best = dict(merge_record_sources(fallback, meta))
-            return (
-                _with_pdf_discovery(cast(NormalizedRecord, best)),
-                provider_errors,
-                translation_results,
-            )
+            record = _with_pdf_discovery(cast(NormalizedRecord, best))
+            if winner:
+                enriched = dict(record)
+                enriched["metadata_provider"] = winner
+                record = cast(NormalizedRecord, enriched)
+            return record, provider_errors, translation_results
 
         raw_as_url = (
             raw_value if urlsplit(raw_value).scheme in {"http", "https"} else None
@@ -628,7 +670,9 @@ def fetch_record_for_input(
             if raw_as_url and flaresolverr_url is None
             else ""
         )
-        raise ValueError(f"no metadata found for DOI: {normalized}{suffix}")
+        raise MetadataExhausted(
+            f"no metadata found for DOI: {normalized}{suffix}", provider_errors
+        )
 
     if kind in {"url", "pdf_url"} and normalized is not None:
         results = safe_api_call(
@@ -662,7 +706,10 @@ def fetch_record_for_input(
                 translation_results,
             )
 
-        raise ValueError(f"translation server returned no results for URL: {normalized}")
+        raise MetadataExhausted(
+            f"translation server returned no results for URL: {normalized}",
+            provider_errors,
+        )
 
     # Unreachable in normal flow: `unknown` input is rejected upstream by
     # describe_invalid_add_input before reaching here.  Guard defensively so a
@@ -863,6 +910,35 @@ def _metadata_diagnostic_line(
     if isinstance(year, int):
         parts.append(f"year={year}")
     return "; ".join(parts)
+
+
+def _fetch_s2_guarded(
+    fetch_s2,
+    doi: str,
+    *,
+    s2_api_key: str | None,
+    errors: list[str],
+    fetch_text,
+):
+    """Call the Semantic Scholar seam with the cascade's error contract.
+
+    The default fetcher already reports into *errors* and returns None. An
+    injected one is a plain one-argument callable that may raise, and it was
+    called bare — so a rate-limited or unreachable S2 aborted the whole DOI
+    cascade before the URL and FlareSolverr branches below ever ran.
+    """
+    if fetch_s2 is None:
+        return fetch_semantic_scholar_record(
+            doi, api_key=s2_api_key, errors=errors, fetch_text=fetch_text
+        )
+    try:
+        return fetch_s2(doi)
+    except urllib.error.HTTPError as exc:
+        errors.append(f"HTTP {exc.code}")
+        return None
+    except (OSError, TimeoutError) as exc:
+        errors.append(str(exc))
+        return None
 
 
 def _call_metadata_fetcher(

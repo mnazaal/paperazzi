@@ -204,7 +204,16 @@ def _render_clean_result(result: Mapping[str, Any], dry_run: bool) -> list[str]:
                 lines.append(f"  failed: {typ}: {action['error']}")
                 continue
             done = "done" if action.get("done") else "would do"
-            lines.append(f"  {prefix}{done}: {typ}")
+            # Naming the file is the whole point of the preview: "would do:
+            # move_orphan" describes a command that moves files without saying
+            # which one, while `--json` carried `source` and `destination` all
+            # along.
+            source = action.get("source")
+            destination = action.get("destination")
+            detail = f": {source}" if source else ""
+            if source and destination:
+                detail = f": {source} -> {destination}"
+            lines.append(f"  {prefix}{done}: {typ}{detail}")
 
     return lines
 
@@ -241,9 +250,17 @@ def _render_reindex_result(result: Mapping[str, Any], dry_run: bool) -> list[str
                 lines.append(f"    PDF: {ch['old_pdf']} → {ch['new_pdf']}")
     else:
         lines.append("no citekey changes needed")
-    for err in result.get("errors", []):
-        lines.append(f"error: {err}")
     return lines
+
+
+def reindex_error_lines(result: Mapping[str, Any]) -> list[str]:
+    """`fix reindex`'s per-PDF rename errors, for stderr.
+
+    They used to be appended to the rendered table and printed to stdout, alone
+    among the runners — so `pzi fix reindex > report.txt` put the errors in the
+    report and left the terminal clean, the opposite of every other command.
+    """
+    return [f"error: {err}" for err in result.get("errors", [])]
 
 
 def _render_delete_success(result: Mapping[str, Any]) -> str:

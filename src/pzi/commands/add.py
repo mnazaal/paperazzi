@@ -19,11 +19,11 @@ from pzi.cli_parser import (
     describe_invalid_metadata_json,
     load_text_arg,
     parse_batch_values,
-    usage_error_lines,
 )
 from pzi.cli_render import _error_lines, _render_add_success
 from pzi.commands.common import (
     command_label,
+    emit_usage_error,
     first_error,
     print_capture_stream_line,
     print_capture_summary,
@@ -65,16 +65,16 @@ def run_add_command(
     from_file = getattr(args, "from_file", None)
     invalid = _validate_add_args(args, from_file=from_file)
     if invalid is not None:
-        print_lines(usage_error_lines(("add",), invalid), stderr)
-        return exit_codes.USAGE
+        return emit_usage_error(args, invalid, command_path=("add",),
+                                stdout=stdout, stderr=stderr)
 
     # Reject unrecognized input (e.g. `pzi add l`) before starting the
     # translation-server or touching the bib — fail fast with no side effects.
     if not from_file and args.value:
         bad_value = describe_invalid_add_input(args.value)
         if bad_value is not None:
-            print_lines(usage_error_lines(("add",), bad_value), stderr)
-            return exit_codes.USAGE
+            return emit_usage_error(args, bad_value, command_path=("add",),
+                                    stdout=stdout, stderr=stderr)
 
     # Same rule for the metadata file. It used to be parsed at capture time,
     # which runs *inside* the backend session below — so a JSON typo cost a full
@@ -84,8 +84,8 @@ def run_add_command(
     if metadata_json and metadata_json != "-":
         bad_metadata = describe_invalid_metadata_json(metadata_json)
         if bad_metadata is not None:
-            print_lines(usage_error_lines(("add",), bad_metadata), stderr)
-            return exit_codes.USAGE
+            return emit_usage_error(args, bad_metadata, command_path=("add",),
+                                    stdout=stdout, stderr=stderr)
 
     cfg = load_config_file(config_path, home_dir=home_dir)
     config = cfg["config"]
@@ -116,6 +116,18 @@ def run_add_command(
             config, home_dir,
             interactive=True, stdout=stderr, stderr=stderr,
         ) as backend:
+            if backend.get("auto_start_skipped"):
+                # `ready` is True here because PZI_SKIP_AUTO_START says "I manage
+                # the server", not because anything checked. Without this note a
+                # server that is simply not running produced "translation server
+                # returned no results" — the wording for a paper that does not
+                # exist — and the accurate diagnostic below never ran.
+                print(
+                    "note: PZI_SKIP_AUTO_START is set, so the translation server "
+                    "was not started or checked; a capture failure here may mean "
+                    "it is not running",
+                    file=stderr,
+                )
             if not backend["ready"]:
                 message = (
                     "translation server is not running — cannot add paper. "
@@ -271,9 +283,20 @@ def _run_batch(
     if args.dry_run:
         print_dry_run_banner(total, stderr)
 
+    interrupted = False
     for index, value in enumerate(values):
         if index > 0 and delay > 0:
-            time.sleep(delay + random.uniform(0, delay * 0.25))
+            try:
+                time.sleep(delay + random.uniform(0, delay * 0.25))
+            except KeyboardInterrupt:
+                # The per-item guard below is `except Exception`, which does not
+                # catch this — and `_write_failures` runs after the loop. So the
+                # commonest way a long polite-delay batch ends was the one case
+                # that wrote no failures file and printed no summary: everything
+                # already captured was in the bib, and the user had no record of
+                # where to resume. Stop the loop, then report as usual.
+                interrupted = True
+                break
         try:
             result = capture_to_bib(
                 CaptureInput(
@@ -289,6 +312,17 @@ def _run_batch(
                 home_dir=home_dir,
                 service_kwargs=service_kwargs,
             )
+        except KeyboardInterrupt:
+            # Mid-capture. Same reasoning as the delay above: report what has
+            # already happened rather than unwinding through it.
+            interrupted = True
+            result = {
+                "status": "error",
+                "citekey": None,
+                "message": "interrupted",
+                "errors": ["interrupted"],
+                "warnings": [],
+            }
         except Exception as exc:  # one bad item must not lose the batch
             # `inbox drain` already guards its loop this way. Without it, an
             # exception on item K discarded the K-1 results already captured,
@@ -306,7 +340,10 @@ def _run_batch(
         counts[bucket] += 1
         if bucket == "failed":
             failures.append(value)
-        _stream_line(index, total, value, result, bucket, stderr)
+        _stream_line(
+            index, total, value, result, bucket, stderr,
+            dry_run=getattr(args, "dry_run", False),
+        )
         if getattr(args, "verbose", False) and not getattr(args, "json", False):
             # `--verbose` was parsed here and never read, so the one mode where
             # per-item provider choices are hardest to follow was the mode that
@@ -314,14 +351,25 @@ def _run_batch(
             # carries exactly one document.
             print_metadata_diagnostics(result, stdout)
         items.append({"value": value, "status": result["status"], "result": result})
+        if interrupted:
+            break
 
     # `--dry-run` announces "nothing will be written" above, and the failures
     # file is written content like any other.
-    failures_path = (
-        _write_failures(failures, args, from_file)
-        if failures and not args.dry_run
-        else None
-    )
+    failures_path = None
+    if failures and not args.dry_run:
+        try:
+            failures_path = _write_failures(failures, args, from_file)
+        except OSError as exc:
+            # An unwritable `--failures-out` used to turn a completed batch into
+            # exit 5 with no summary at all: the entries were already in the
+            # library while the calling script saw total failure. The list is a
+            # convenience for resuming; losing it does not undo the captures.
+            print(
+                f"warning: could not write the failures file "
+                f"({exc.strerror or exc}); the failed inputs are listed above",
+                file=stderr,
+            )
 
     if getattr(args, "json", False):
         # Was hand-rolled with `json.dumps`, so it carried `items` by luck and
@@ -365,6 +413,11 @@ def _run_batch(
     # A batch where some items failed is PARTIAL, not FINDINGS: `1` is reserved
     # for "ran fine and has something to report", so a script branching on it
     # must not see a half-failed capture as a clean run with findings.
+    if interrupted:
+        # 130, the documented interrupted code, and only *after* the summary,
+        # envelope and failures file are out. The user gets what the run
+        # achieved and a list to resume from; the shell gets the right signal.
+        return exit_codes.INTERRUPTED
     return exit_codes.PARTIAL if counts["failed"] else exit_codes.OK
 
 
@@ -377,7 +430,8 @@ def _classify(result: Mapping[str, Any]) -> str:
 
 
 def _stream_line(
-    index: int, total: int, value: str, result: Mapping[str, Any], bucket: str, stderr: TextIO
+    index: int, total: int, value: str, result: Mapping[str, Any], bucket: str,
+    stderr: TextIO, *, dry_run: bool = False,
 ) -> None:
     raw_warnings = result.get("warnings")
     print_capture_stream_line(
@@ -390,6 +444,7 @@ def _stream_line(
         warnings=[w for w in raw_warnings if isinstance(w, str)]
         if isinstance(raw_warnings, list)
         else (),
+        dry_run=dry_run,
         stderr=stderr,
     )
 

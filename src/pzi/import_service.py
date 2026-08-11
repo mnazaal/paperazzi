@@ -30,6 +30,8 @@ class ImportResult(TypedDict):
     warnings: NotRequired[list[str]]
     total_source: int
     imported: int
+    #: Existing entries an incoming record was merged into.
+    updated: NotRequired[int]
     skipped_duplicates: int
     skipped_errors: int
     results: list[dict[str, Any]]
@@ -41,6 +43,8 @@ class ImportResult(TypedDict):
     #: Structured failure reason (`pzi.errors.REASON_*`) — present only on
     #: failure. Both the exit-code and HTTP-status mappers read it.
     reason: NotRequired[str]
+
+
 def import_from_bibtex(
     *,
     config_path: str,
@@ -142,6 +146,7 @@ def import_from_bibtex(
 
     results: list[dict[str, Any]] = []
     imported = 0
+    updated = 0
     skipped_dupes = 0
     # A block the parser could not read is a source entry that did not make it
     # in, which is what `skipped_errors` counts — and what makes the command
@@ -230,11 +235,29 @@ def import_from_bibtex(
                     "action": action,
                     "message": result.get("message", ""),
                 })
-            elif action == "update":
+            elif action == "update" and not result.get("changed_fields"):
+                # Merged into an existing entry and changed nothing about it —
+                # a re-import of a record the library already has.
                 skipped_dupes += 1
                 results.append({
                     "citekey": citekey,
                     "status": "duplicate",
+                    "message": result.get("message", ""),
+                })
+            elif action == "update":
+                # `update` means the incoming record was merged into an existing
+                # entry; `changed_fields` says whether that merge changed
+                # anything. Both were reported as a skipped duplicate, so a run
+                # that had just given an entry an abstract said "imported 0/1,
+                # skipped 1 duplicate" — nothing happened, according to the
+                # summary, while the library disagreed. A re-import of the same
+                # record changes nothing and is still a duplicate.
+                updated += 1
+                results.append({
+                    "citekey": citekey,
+                    "status": "updated",
+                    "action": action,
+                    "changed_fields": list(result.get("changed_fields") or []),
                     "message": result.get("message", ""),
                 })
             else:
@@ -260,9 +283,11 @@ def import_from_bibtex(
         "warnings": warnings,
         "source_path": source_path,
         "bib_name": bib["name"],
-            "dry_run": dry_run,
+        "dry_run": dry_run,
         "message": (
-            f"{prefix}imported {imported}, skipped {skipped_dupes} duplicates"
+            f"{prefix}imported {imported}"
+            f"{', updated ' + str(updated) if updated else ''}"
+            f", skipped {skipped_dupes} duplicates"
             f"{', ' + str(skipped_errors) + ' errors' if skipped_errors else ''}"
         ),
         "errors": errors,
@@ -271,6 +296,9 @@ def import_from_bibtex(
         "total_source": len(source_entries) + len(dropped_blocks),
         "skipped_in_source": skipped_in_source,
         "imported": imported,
+        # Entries an incoming record was merged *into*. Counted separately from
+        # `skipped_duplicates`, which means "this record changed nothing".
+        "updated": updated,
         "skipped_duplicates": skipped_dupes,
         "skipped_errors": skipped_errors,
         "results": results,

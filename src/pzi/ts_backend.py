@@ -617,6 +617,15 @@ def is_ts_reachable(url: str, *, timeout: float = 2.0) -> bool:
         return False
 
 
+#: The file the translation-server child's stderr is written to, under the
+#: data home. Named here rather than inline because two failure messages used to
+#: say "check logs at the data-home directory" and "check `pzi doctor`" without
+#: it — the filename appeared nowhere a user could find, and one of those
+#: messages fires from *inside* `pzi server`, so "run `pzi server`" was advice
+#: to do what they were already doing.
+TS_STDERR_LOG_NAME = "ts-stderr.log"
+
+
 def wait_for_ts(
     url: str,
     *,
@@ -625,6 +634,7 @@ def wait_for_ts(
     stderr: TextIO,
     proc: subprocess.Popen[bytes] | None = None,
     should_abort: Callable[[], bool] | None = None,
+    stderr_log: Path | None = None,
 ) -> bool:
     """Poll translation-server until reachable or timeout. Returns True if ready.
 
@@ -645,9 +655,14 @@ def wait_for_ts(
         # Fail fast if the subprocess died
         if proc is not None and proc.poll() is not None:
             returncode = proc.returncode
+            where = (
+                f" — its output is in {stderr_log}"
+                if stderr_log is not None
+                else f" — its output is in <data-home>/{TS_STDERR_LOG_NAME}"
+            )
             print(
                 f"translation-server exited with code {returncode} "
-                f"(PID {proc.pid}) — check logs at the data-home directory",
+                f"(PID {proc.pid}){where}",
                 file=stderr,
             )
             return False
@@ -663,9 +678,12 @@ def wait_for_ts(
         except (URLError, OSError, ValueError):
             pass
         time.sleep(2)
+    where = (
+        str(stderr_log) if stderr_log is not None else f"<data-home>/{TS_STDERR_LOG_NAME}"
+    )
     print(
         f"translation-server did not become ready within {timeout:.0f}s — "
-        "check `pzi doctor`, or run `pzi server` to start it",
+        f"its output is in {where}",
         file=stderr,
     )
     return False
@@ -706,6 +724,11 @@ class BackendHandle(TypedDict):
     ready: bool
     owned: bool
     proc: subprocess.Popen[bytes] | None
+    #: True when ``PZI_SKIP_AUTO_START`` short-circuited the session. ``ready``
+    #: then means "proceed" rather than "reachable" — nothing was probed, which
+    #: is the flag's whole point — so a caller that reports a capture failure
+    #: has to say it does not know whether the server is up.
+    auto_start_skipped: NotRequired[bool]
     node_bin: NotRequired[str]
     ts_dir: NotRequired[Path]
     port: NotRequired[int]
@@ -735,9 +758,27 @@ def backend_session(
     """
     ts_url = _ts_url_from_config(config)
 
-    # No URL configured, or auto-start disabled: nothing for us to manage.
-    if ts_url is None or env_flag(os.environ.get("PZI_SKIP_AUTO_START")):
+    # No URL configured: nothing to manage or probe.
+    if ts_url is None:
         yield {"url": ts_url, "ready": True, "owned": False, "proc": None}
+        return
+
+    # Auto-start disabled. The flag means "I manage the server myself, do not
+    # touch it", so this deliberately does not probe — but it stops claiming to
+    # know the server is up. `ready: True` here means "proceed", not "reachable"
+    # (the whole test suite runs under this flag), and `commands/add.py` read it
+    # as the latter: it skipped its accurate "translation server is not running"
+    # diagnostic, so a refused connection surfaced as "translation server
+    # returned no results" — a paper that does not exist rather than a server
+    # that is not there. `auto_start_skipped` is what lets the caller say so.
+    if env_flag(os.environ.get("PZI_SKIP_AUTO_START")):
+        yield {
+            "url": ts_url,
+            "ready": True,
+            "owned": False,
+            "proc": None,
+            "auto_start_skipped": True,
+        }
         return
 
     if is_ts_reachable(ts_url):
@@ -767,10 +808,12 @@ def backend_session(
     port = _port_from_ts_url(ts_url)
     print(f"starting translation-server on port {port} …", file=stdout)
     stdout.flush()
-    stderr_log = data_home / "ts-stderr.log"
+    stderr_log = data_home / TS_STDERR_LOG_NAME
     proc = start_ts(node, ts_dir, port=port, stderr_log=stderr_log)
     try:
-        ready = wait_for_ts(ts_url, stdout=stdout, stderr=stderr, proc=proc)
+        ready = wait_for_ts(
+            ts_url, stdout=stdout, stderr=stderr, proc=proc, stderr_log=stderr_log
+        )
         yield {
             "url": ts_url, "ready": ready, "owned": True, "proc": proc,
             "node_bin": node, "ts_dir": ts_dir, "port": port, "stderr_log": stderr_log,

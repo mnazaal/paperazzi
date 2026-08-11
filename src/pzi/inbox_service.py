@@ -28,6 +28,9 @@ class InboxLine:
     value: str
     tags: list[str] = field(default_factory=list)
     target: str | None = None
+    #: Tokens on the line the format has no meaning for, reported as a per-item
+    #: warning rather than discarded.
+    unrecognized: list[str] = field(default_factory=list)
 
 
 class DrainItem(TypedDict):
@@ -70,7 +73,22 @@ def parse_inbox_line(raw: str) -> InboxLine | None:
     target = next(
         (t[1:] for t in tokens[1:] if t.startswith("@") and len(t) > 1), None
     )
-    return InboxLine(value=value, tags=tags, target=target)
+    # Anything else on the line is dropped, and used to be dropped silently:
+    # `10.1000/x #ml #Deep Learning` loses `Learning`, and so does a second URL
+    # or a typo'd `# tag`. The line still parses — refusing it would be worse —
+    # but the drain now says what it ignored.
+    seen_target = False
+    unrecognized: list[str] = []
+    for token in tokens[1:]:
+        if token.startswith("#") and len(token) > 1:
+            continue
+        if token.startswith("@") and len(token) > 1 and not seen_target:
+            seen_target = True
+            continue
+        unrecognized.append(token)
+    return InboxLine(
+        value=value, tags=tags, target=target, unrecognized=unrecognized
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +141,12 @@ def _appended_since(inbox_path: Path, snapshot_text: str) -> list[str] | None:
     try:
         current_text = inbox_path.read_text(encoding="utf-8")
     except OSError:
-        return []
+        # `None`, not `[]`. `[]` means "nothing was appended", which sends the
+        # caller on to rewrite the file — from a snapshot it has just failed to
+        # confirm is still current. The rewritten-underneath path right below
+        # is handled carefully for exactly this reason; an unreadable file is
+        # the same "cannot reconcile" answer.
+        return None
     if not current_text.startswith(snapshot_text):
         return None
     return current_text[len(snapshot_text):].splitlines()
@@ -256,6 +279,12 @@ def drain_inbox(
             "errors": list(result.get("errors") or []),
         }
         warnings = list(result.get("warnings") or [])
+        if line.unrecognized:
+            warnings.insert(
+                0,
+                "ignored unrecognized token(s): " + " ".join(line.unrecognized)
+                + " (tags are #tag, target is @bib-name; neither may contain spaces)",
+            )
         if warnings:
             item["warnings"] = warnings
         items.append(item)

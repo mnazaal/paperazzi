@@ -55,6 +55,9 @@ class MergeResult(TypedDict):
     #: which is why the dry run used to be unable to preview the loss.
     carried_fields: NotRequired[list[str]]
     dropped_fields: NotRequired[list[str]]
+    #: The dropped entry's PDF when the merge does not keep it — left on disk
+    #: with nothing referring to it, for a later `fix clean --fix` to quarantine.
+    orphaned_pdf: NotRequired[str]
     #: Fields the survivor *loses*: present in both entries with different
     #: values, and resolved in the dropped entry's favour (title, venue and
     #: abstract prefer the longer string). Reported as "kept from the survivor"
@@ -305,8 +308,19 @@ def merge_duplicates(
         and key in overwritten_raw_keys
     )
 
+    # The dropped entry's PDF, when the merge does not keep it. The file stays
+    # on disk with nothing referring to it, and a later `fix clean --fix`
+    # quarantines it — a second command undoing what this one caused. The dry
+    # run is where the user decides whether to accept that, and it reported
+    # carried and dropped *fields* while never mentioning the file.
+    pdf_a = record_a.get("local_pdf_path")
+    kept_pdf = merged_record.get("local_pdf_path")
+    orphaned_pdf = (
+        str(pdf_a) if isinstance(pdf_a, str) and pdf_a and pdf_a != kept_pdf else None
+    )
+
     if dry_run:
-        return {
+        preview: MergeResult = {
             "status": "ok",
             "citekey_a": citekey_a, "citekey_b": citekey_b,
             "merged_title": str(merged_title),
@@ -322,6 +336,9 @@ def merge_duplicates(
                 k: v for k, v in merged_record.items() if k != "citekey"
             },
         }
+        if orphaned_pdf:
+            preview["orphaned_pdf"] = orphaned_pdf
+        return preview
 
     # Execute: merge A into B atomically under one lock, preserving comments,
     # @string/@preamble macros, and every other entry's source. The `.bak` is
@@ -343,7 +360,7 @@ def merge_duplicates(
             "errors": ["entry disappeared between reads"],
         }
 
-    return {
+    applied: MergeResult = {
         "status": "ok",
         "citekey_a": citekey_a, "citekey_b": citekey_b,
         "merged_title": str(merged_title),
@@ -356,3 +373,6 @@ def merge_duplicates(
         "dropped_fields": merge_result.get("dropped_fields", conflicting_fields),
         "backup_path": str(backup_path),
     }
+    if orphaned_pdf:
+        applied["orphaned_pdf"] = orphaned_pdf
+    return applied

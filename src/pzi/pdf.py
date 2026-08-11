@@ -82,7 +82,11 @@ def fetch_pdf_via_desktop_browser_download(
     """Open URL in user's browser and import newly downloaded matching PDF."""
     settings = settings or PdfFallbackSettings.from_environment()
     if settings.disable_desktop_browser:
-        return None, None
+        # A *skipped* stage, not one that ran and found nothing. Returning a
+        # bare `None, None` made the caller append "desktop browser download:
+        # no PDF appeared", so a user who had switched the stage off was told
+        # it had been tried.
+        return None, "skipped (PZI_DISABLE_DESKTOP_BROWSER_FALLBACK is set)"
 
     # `webbrowser.open` hands the string straight to the OS scheme handler, and
     # this URL came from a metadata provider or a captured page — so a `file:`,
@@ -107,7 +111,9 @@ def fetch_pdf_via_desktop_browser_download(
     opened = webbrowser.open(url)
     if not opened:
         print("Could not open desktop browser for PDF fallback.", file=sys.stderr)
-        return None, None
+        # Same distinction: the browser never opened, so nothing was watched
+        # for. "No PDF appeared" describes a wait that did not happen.
+        return None, "could not open a desktop browser"
 
     deadline = _time.monotonic() + timeout
     seen: set[Path] = set()
@@ -241,11 +247,14 @@ def fetch_and_store_pdf_with_fallbacks(
     if api_url and browser_hook and not extension_capture:
         from pzi.server_browser import download_via_server_api
 
+        server_errors: list[str] = []
         pdf_bytes = download_via_server_api(
-            api_url, url, auth_token=api_auth_token,
+            api_url, url, auth_token=api_auth_token, errors=server_errors,
         )
         if not pdf_bytes:
-            stage_errors.append("server browser: no PDF returned")
+            stage_errors.append(
+                "server browser: " + (server_errors[0] if server_errors else "no PDF returned")
+            )
         elif not is_pdf_bytes(pdf_bytes):
             # Unreachable today: `download_via_server_api` returns bytes only
             # when they start with `%PDF-`, and the `browser_pdf_cmd` and
