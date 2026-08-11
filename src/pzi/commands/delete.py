@@ -49,7 +49,7 @@ def run_delete_command(args, *, home_dir, config_path, stdout, stderr, bib_selec
                 cli_json.emit_result(
                     {"status": "ok", "citekey": args.citekey, "deleted": False,
                      "message": "cancelled"},
-                    stdout, command="delete", items=[],
+                    stdout, command="delete", items=[], bib_name=target["name"],
                 )
             else:
                 print("cancelled", file=stderr)
@@ -62,7 +62,9 @@ def run_delete_command(args, *, home_dir, config_path, stdout, stderr, bib_selec
     )
     if result["status"] == "ok":
         if as_json:
-            cli_json.emit_result(result, stdout, command="delete", items=[])
+            cli_json.emit_result(
+                result, stdout, command="delete", items=[], bib_name=target["name"]
+            )
         else:
             print(_render_delete_success(result), file=stdout)
         backup = result.get("backup_path")
@@ -71,6 +73,8 @@ def run_delete_command(args, *, home_dir, config_path, stdout, stderr, bib_selec
         return exit_codes.OK
     code = exit_code_for_error(result)
     if as_json:
-        cli_json.emit_result(result, stdout, command="delete", items=[])
+        cli_json.emit_result(
+                result, stdout, command="delete", items=[], bib_name=target["name"]
+            )
         return code
     return _render_errors(result["message"], result["errors"], stderr, code)

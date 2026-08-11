@@ -612,3 +612,196 @@ def test_fix_merge_of_a_missing_citekey_is_not_found(tmp_path: Path) -> None:
 
     assert code == exit_codes.NOT_FOUND
     assert bib.read_text(encoding="utf-8") == _TWO_ENTRIES
+
+
+def test_export_force_without_an_output_path_is_refused(tmp_path: Path) -> None:
+    """`--force` means "overwrite the file at -o", and there is no file."""
+    config_path, _bib = _library(tmp_path, "@article{a1,\n  title = {A},\n}\n")
+    code, _out, err = _run(["export", "--config", str(config_path), "--force"], tmp_path)
+    assert code == exit_codes.USAGE
+    assert "--force applies to -o PATH" in err
+
+
+def test_export_to_a_directory_says_it_is_a_directory(tmp_path: Path) -> None:
+    """`Path.exists()` is true for a directory, so this said "file already exists".
+
+    Which invites `--force` — and with `--force` it proceeded and died as a raw
+    OSError naming the *temp* file, a path the user never typed.
+    """
+    config_path, _bib = _library(tmp_path, "@article{a1,\n  title = {A},\n}\n")
+    target_dir = tmp_path / "outdir"
+    target_dir.mkdir()
+
+    code, _out, err = _run(
+        ["export", "--config", str(config_path), "-o", str(target_dir)], tmp_path
+    )
+    assert code == exit_codes.USAGE
+    assert "is a directory" in err
+    assert "already exists" not in err
+
+    forced, _out2, err2 = _run(
+        ["export", "--config", str(config_path), "-o", str(target_dir), "--force"], tmp_path
+    )
+    assert forced == exit_codes.USAGE
+    assert ".tmp" not in err2
+
+
+def test_reindex_force_and_dry_run_without_rename_are_refused(tmp_path: Path) -> None:
+    """Both are accepted and do nothing: the run is already a read-only audit."""
+    config_path, _bib = _library(tmp_path, "@article{a1,\n  title = {A},\n}\n")
+    for flag in ("--force", "--dry-run"):
+        code, _out, err = _run(
+            ["fix", "reindex", "--config", str(config_path), flag], tmp_path
+        )
+        assert code == exit_codes.USAGE, flag
+        assert "already a read-only audit" in err, flag
+
+
+def test_clean_dry_run_without_fix_is_refused(tmp_path: Path) -> None:
+    """`--dry-run` reads as "I have made this safe" when it changed nothing."""
+    config_path, _bib = _library(tmp_path, "@article{a1,\n  title = {A},\n}\n")
+    code, _out, err = _run(
+        ["fix", "clean", "--config", str(config_path), "--dry-run"], tmp_path
+    )
+    assert code == exit_codes.USAGE
+    assert "--dry-run previews --fix" in err
+
+
+def test_repeated_target_keeps_every_library(tmp_path: Path) -> None:
+    """`nargs="+"` with the default `store` action kept only the last one.
+
+    On `search` that quietly halved the results. On `update`, which writes, the
+    user asked for two libraries and got one.
+    """
+    import json
+
+    first = tmp_path / "one.bib"
+    first.write_text("@article{one2020,\n  title = {Findable One},\n}\n", encoding="utf-8")
+    second = tmp_path / "two.bib"
+    second.write_text("@article{two2020,\n  title = {Findable Two},\n}\n", encoding="utf-8")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'[[bibs]]\nname = "one"\npath = "{first}"\ndefault = true\n\n'
+        f'[[bibs]]\nname = "two"\npath = "{second}"\n',
+        encoding="utf-8",
+    )
+
+    code, out, _err = _run(
+        ["search", "--config", str(config_path), "--query", "Findable",
+         "--target", "one", "--target", "two", "--json"],
+        tmp_path,
+    )
+    assert code == exit_codes.OK
+    citekeys = {item["citekey"] for item in json.loads(out)["items"]}
+    assert citekeys == {"one2020", "two2020"}
+
+
+def test_reindex_json_says_whether_it_applied_anything(tmp_path: Path) -> None:
+    """A populated `changed[]` beside `backup_path: null` reads as "these happened"."""
+    import json
+
+    config_path, _bib = _library(tmp_path, "@article{a1,\n  title = {A},\n  year = {2020},\n}\n")
+    code, out, _err = _run(["fix", "reindex", "--config", str(config_path), "--json"], tmp_path)
+    assert code in (exit_codes.OK, exit_codes.FINDINGS)
+    envelope = json.loads(out)
+    assert envelope["applied"] is False
+    assert envelope["bib_name"] == "ml"
+
+
+def test_the_six_envelopes_that_never_named_their_library(tmp_path: Path) -> None:
+    """`bib_name` was permanently null in six of eleven `--json` documents.
+
+    README documents it as a real value, and the five other commands populate
+    it, so a consumer keying on it silently got `None` for exactly these.
+    """
+    import json
+
+    config_path, bib_path = _library(
+        tmp_path, "@article{a1,\n  title = {A},\n  year = {2020},\n}\n"
+    )
+    source = tmp_path / "src.bib"
+    source.write_text("@article{b2,\n  title = {B},\n  year = {2021},\n}\n", encoding="utf-8")
+
+    invocations = [
+        ["fix", "dedupe", "--config", str(config_path), "--json"],
+        ["fix", "clean", "--config", str(config_path), "--json"],
+        ["fix", "reindex", "--config", str(config_path), "--json"],
+        ["fix", "merge", "a1", "a1", "--config", str(config_path), "--json"],
+        ["delete", "nosuch", "--config", str(config_path), "--json", "--force"],
+        ["import", str(source), "--config", str(config_path), "--json", "--dry-run"],
+    ]
+    for argv in invocations:
+        _code, out, _err = _run(argv, tmp_path)
+        envelope = json.loads(out)
+        assert envelope["bib_name"] == "ml", argv
+
+
+def test_an_unresolved_target_says_which_of_the_three_ways_it_failed(tmp_path: Path) -> None:
+    """One string covered an unknown name, a missing .bib path, and no default.
+
+    Those need three different actions from the user, and the config is loaded
+    and in hand — so it can also name the libraries that would have worked.
+    """
+    config_path, _bib = _library(tmp_path, "@article{a1,\n  title = {A},\n}\n")
+
+    _code, _out, unknown = _run(
+        ["entries", "--config", str(config_path), "--target", "nosuchlib"], tmp_path
+    )
+    assert "not a configured library" in unknown
+    assert "configured: ml" in unknown
+
+    _code2, _out2, missing_path = _run(
+        ["entries", "--config", str(config_path), "--target", str(tmp_path / "gone.bib")],
+        tmp_path,
+    )
+    assert "does not exist" in missing_path
+    assert "configured libraries: ml" in missing_path
+
+    no_default = tmp_path / "nodefault.toml"
+    no_default.write_text(
+        f'[[bibs]]\nname = "one"\npath = "{tmp_path / "one.bib"}"\n\n'
+        f'[[bibs]]\nname = "two"\npath = "{tmp_path / "two.bib"}"\n',
+        encoding="utf-8",
+    )
+    _code3, _out3, ambiguous = _run(["entries", "--config", str(no_default)], tmp_path)
+    assert "no default library" in ambiguous
+    assert "configured: one, two" in ambiguous
+
+
+def test_check_report_dash_is_not_corrupted_by_the_human_table(tmp_path: Path) -> None:
+    """`--jsonl -` was guarded against the table and `--report -` was not.
+
+    Piping it into `jq` is the only reason `--report -` exists, and the
+    appended plain-text table meant stdout was not JSON.
+    """
+    import json
+
+    config_path, _bib = _library(tmp_path, "")
+    code, out, _err = _run(["check", "--config", str(config_path), "--report", "-"], tmp_path)
+    assert code in (exit_codes.OK, exit_codes.FINDINGS)
+    assert json.loads(out)["status"] == "ok"
+
+
+def test_check_will_not_clobber_an_existing_report_without_force(tmp_path: Path) -> None:
+    """`export -o` refuses; these two truncated whatever was there.
+
+    Worst on the long network-bound command: a bare `open(..., "w")` truncates
+    up front, so an interrupted `check` destroyed the previous report and wrote
+    nothing in its place.
+    """
+    config_path, _bib = _library(tmp_path, "")
+    report = tmp_path / "audit.json"
+    report.write_text('{"previous": "audit"}', encoding="utf-8")
+
+    code, _out, err = _run(
+        ["check", "--config", str(config_path), "--report", str(report)], tmp_path
+    )
+    assert code == exit_codes.USAGE
+    assert "already exists" in err
+    assert report.read_text(encoding="utf-8") == '{"previous": "audit"}'
+
+    forced, _out2, _err2 = _run(
+        ["check", "--config", str(config_path), "--report", str(report), "--force"], tmp_path
+    )
+    assert forced in (exit_codes.OK, exit_codes.FINDINGS)
+    assert "previous" not in report.read_text(encoding="utf-8")

@@ -272,7 +272,7 @@ def test_bibtex_export_preserves_preamble_strings_and_concatenation(
 def test_export_to_an_existing_file_is_all_or_nothing(
     tmp_path: Path, monkeypatch
 ) -> None:
-    from pzi.commands import export as export_command
+    from pzi.commands import common as common_module
 
     destination = tmp_path / "out.bib"
     destination.write_text("PREVIOUS GOOD BACKUP\n", encoding="utf-8")
@@ -280,11 +280,11 @@ def test_export_to_an_existing_file_is_all_or_nothing(
     def _boom(*_args, **_kwargs):
         raise OSError(28, "No space left on device")
 
-    monkeypatch.setattr(export_command.os, "replace", _boom)
+    monkeypatch.setattr(common_module.os, "replace", _boom)
     # `try/except OSError: pass` also passes when the call raises nothing at
     # all, or raises a *different* OSError than the one injected.
     with pytest.raises(OSError) as excinfo:
-        export_command._write_atomic(destination, "new content")
+        common_module._write_atomic(destination, "new content")
     assert excinfo.value.errno == 28
 
     assert destination.read_text(encoding="utf-8") == "PREVIOUS GOOD BACKUP\n"

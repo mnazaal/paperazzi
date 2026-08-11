@@ -966,6 +966,37 @@ def load_bib_target(
     if bib is None:
         return BibResolutionFailure(
             "target_unresolved",
-            ["no matching library target found or selection is ambiguous"],
+            [_unresolved_target_error(config["bibs"], bib_selector, home_dir=home_dir)],
         )
     return config, bib
+
+
+def _unresolved_target_error(
+    bibs: list[BibConfig], selector: str | None, *, home_dir: str
+) -> str:
+    """Say which of the three ways the target failed to resolve, and name the rest.
+
+    One string — "no matching library target found or selection is ambiguous" —
+    covered an unknown name, a `.bib` path that does not exist, and an ambiguous
+    selection with no default. Those need three different actions from the user,
+    and the config is loaded and in hand, so it can also list what *would* have
+    worked instead of making them go read the file.
+    """
+    names = [bib["name"] for bib in bibs]
+    configured = ", ".join(names) if names else "none"
+
+    if selector is None:
+        if not bibs:
+            return "config declares no libraries; add a [[bibs]] table to config.toml"
+        return (
+            f"no default library and no --target given "
+            f"(configured: {configured}; mark one `default = true`)"
+        )
+
+    normalized = selector.strip()
+    if normalized.endswith(".bib"):
+        return (
+            f"--target {selector!r} is a .bib path that does not exist "
+            f"(a direct path must already exist; configured libraries: {configured})"
+        )
+    return f"--target {selector!r} is not a configured library (configured: {configured})"

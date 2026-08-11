@@ -7,7 +7,7 @@ import os
 from pzi import cli_json, exit_codes
 from pzi.clean_service import clean_library, validate_library
 from pzi.cli_render import _error_lines, _render_clean_result
-from pzi.commands.common import print_lines, print_read_warnings, resolve_target
+from pzi.commands.common import emit_usage_error, print_lines, print_read_warnings, resolve_target
 
 
 def _siblings_sharing_papers_dir(config, target) -> list[str]:
@@ -31,6 +31,17 @@ def run_clean_command(args, *, home_dir, config_path, stdout, stderr, bib_select
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector,
     )
 
+    if getattr(args, "dry_run", False) and not args.fix:
+        # `--dry-run` previews what `--fix` would do. Without `--fix` the
+        # command is already read-only, so the flag was accepted and ignored.
+        return emit_usage_error(
+            args,
+            "--dry-run previews --fix; without it the run is already read-only",
+            command_path=("fix", "clean"),
+            stdout=stdout,
+            stderr=stderr,
+        )
+
     siblings = _siblings_sharing_papers_dir(_config, target)
     if args.fix:
         result = clean_library(
@@ -44,7 +55,7 @@ def run_clean_command(args, *, home_dir, config_path, stdout, stderr, bib_select
         )
 
     if getattr(args, "json", False):
-        cli_json.emit_result(result, stdout, command="fix clean")
+        cli_json.emit_result(result, stdout, command="fix clean", bib_name=target["name"])
         if result["status"] != "ok":
             return exit_codes.ENVIRONMENT
         return exit_codes.OK if not result.get("issues") else exit_codes.FINDINGS

@@ -26,14 +26,14 @@ def run_dedupe_command(args, *, home_dir, config_path, stdout, stderr, bib_selec
     # near-duplicate still owes the caller exit 1.
     findings = result.get("total_clusters", 0) + len(result.get("fuzzy_candidates", []))
     if getattr(args, "json", False):
-        cli_json.emit_result(result, stdout, command="fix dedupe")
-        return 0 if findings == 0 else 1
+        cli_json.emit_result(result, stdout, command="fix dedupe", bib_name=target["name"])
+        return exit_codes.OK if findings == 0 else exit_codes.FINDINGS
     print_lines(_render_dedupe_result(result), stdout)
     # A duplicate citekey never reaches the identity index -- the parser keeps
     # only the first block -- so without this the command built to find
     # duplicates reports "0 clusters" for a file that plainly has one.
     print_read_warnings(result, stderr)
-    return 0 if findings == 0 else 1
+    return exit_codes.OK if findings == 0 else exit_codes.FINDINGS
 
 
 def run_merge_command(args, *, home_dir, config_path, stdout, stderr, bib_selector) -> int:
@@ -51,7 +51,9 @@ def run_merge_command(args, *, home_dir, config_path, stdout, stderr, bib_select
         file_path_style=config.get("pdf_file_path_style", "absolute"),
     )
     if getattr(args, "json", False):
-        cli_json.emit_result(result, stdout, command="fix merge", items=[])
+        cli_json.emit_result(
+            result, stdout, command="fix merge", items=[], bib_name=target["name"]
+        )
         return exit_codes.OK if result["status"] == "ok" else exit_code_for_error(result)
     if result["status"] != "ok":
         print_lines(_error_lines(result["message"], []), stderr)

@@ -275,6 +275,14 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument(
             "--target",
             nargs="+",
+            # `extend`, not the default `store`: with `store`, a repeated
+            # `--target a --target b` kept only `b`. On `search` that quietly
+            # halved the results; on `update`, which writes, it meant the user
+            # asked for two libraries to be updated and one of them was.
+            # Default stays `None` rather than `[]`, so "no --target given" keeps
+            # the shape every caller already tests for; `extend` treats a `None`
+            # default as empty.
+            action="extend",
             help="one or more configured library names/paths or direct .bib paths",
         )
 
@@ -492,6 +500,11 @@ def build_parser() -> argparse.ArgumentParser:
     check_parser.add_argument(
         "--jsonl", metavar="PATH",
         help="write one JSON object per entry to PATH ('-' for stdout)",
+    )
+    check_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="overwrite an existing --report / --jsonl file",
     )
     add_config(check_parser)
     add_single_target(check_parser)

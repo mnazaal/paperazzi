@@ -33,11 +33,19 @@ def build_envelope(
     *,
     command: str,
     items: Sequence[Any] | None = None,
+    bib_name: str | None = None,
 ) -> dict[str, Any]:
     """Normalize a service result into the standard envelope.
 
     Pure.  Pass *items* when the command's list does not live under one of the
     usual keys (e.g. a single record rendered as a one-item list).
+
+    Pass *bib_name* when the service does not report one. Six commands — `fix
+    dedupe|clean|reindex|merge`, `delete`, `import` — take a `bib_path` rather
+    than a selector, so their envelopes carried `"bib_name": null` permanently
+    while the other five populated it, against a README that documents it as a
+    real value. The runners resolved the target to call the service at all, so
+    they can say which library it was.
     """
     found_items: Sequence[Any] | None = items
     consumed: set[str] = set()
@@ -64,7 +72,7 @@ def build_envelope(
     envelope: dict[str, Any] = {
         "command": command,
         "status": status,
-        "bib_name": result.get("bib_name"),
+        "bib_name": result.get("bib_name") or bib_name,
         "items": list(found_items) if found_items is not None else [],
         "errors": errors,
     }
@@ -92,9 +100,10 @@ def emit_result(
     *,
     command: str,
     items: Sequence[Any] | None = None,
+    bib_name: str | None = None,
 ) -> None:
     """Write a service result to *stdout* as the standard envelope."""
-    _emit(build_envelope(result, command=command, items=items), stdout)
+    _emit(build_envelope(result, command=command, items=items, bib_name=bib_name), stdout)
 
 
 def emit_error(message: str, errors: Sequence[str], stdout: TextIO, *, command: str) -> None:

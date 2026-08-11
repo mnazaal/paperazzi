@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
+import os
+import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, TextIO
@@ -169,6 +172,30 @@ def print_capture_stream_line(
     print(f"{counter} {_CAPTURE_SYMBOLS[bucket]} {label} {detail}", file=stderr)
     for warning in warnings:
         print(f"      warning: {warning}", file=stderr)
+
+
+def _write_atomic(output_path: Path, content: str) -> None:
+    """Write *content* to *output_path* all-or-nothing.
+
+    Shared because two runners write user-named files. `export -o` was atomic
+    and `check --report/--jsonl` were bare `open(..., "w")`, which truncates
+    first — so an interrupted `check` (the long, network-bound command) left the
+    previous report destroyed and the new one incomplete.
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(
+        dir=str(output_path.parent), prefix=f".{output_path.name}-", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, output_path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
 
 
 #: Exit code per structured failure reason. Anything absent from this table —

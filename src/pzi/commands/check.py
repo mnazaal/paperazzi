@@ -5,12 +5,18 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Callable
+from pathlib import Path
 from typing import TextIO
 
 from pzi import cli_json, exit_codes
 from pzi.check_service import CheckResult, check_bib
 from pzi.cli_render import _error_lines, _render_check_items
-from pzi.commands.common import emit_usage_error, print_lines, print_read_warnings
+from pzi.commands.common import (
+    _write_atomic,
+    emit_usage_error,
+    print_lines,
+    print_read_warnings,
+)
 
 
 def _describe_unwritable(path: str) -> str | None:
@@ -87,6 +93,18 @@ def run_check_command(
     for flag, path in (("--report", report_path), ("--jsonl", jsonl_path)):
         if not path or path == "-":
             continue
+        if os.path.exists(path) and not getattr(args, "force", False):
+            # `export -o` refuses to overwrite without `--force`; these two
+            # silently replaced whatever was there. Refused up front for the
+            # same reason the writability probe is up front: `check` is the long
+            # network-bound command, and finding out at the end wastes the run.
+            return emit_usage_error(
+                args,
+                f"{flag} {path} already exists (use --force to overwrite)",
+                command_path=("check",),
+                stdout=stdout,
+                stderr=stderr,
+            )
         unwritable = _describe_unwritable(path)
         if unwritable is not None:
             return emit_usage_error(
@@ -144,8 +162,11 @@ def run_check_command(
         json.dump(result, stdout, indent=2, default=str)
         print(file=stdout)
     elif report_path:
-        with open(report_path, "w", encoding="utf-8") as f:
-            json.dump(result, f, indent=2, default=str)
+        # Atomic and gated on `--force`, the same as `pzi export -o`: a bare
+        # `open(..., "w")` truncated an existing report before the audit had
+        # produced a replacement, so an interrupted run destroyed the previous
+        # one. The gate is applied up front, beside the writability probe.
+        _write_atomic(Path(report_path), json.dumps(result, indent=2, default=str))
 
     if jsonl_path:
         lines = [json.dumps(item, default=str) for item in result["items"]]
@@ -155,15 +176,15 @@ def run_check_command(
             for line in lines:
                 print(line, file=stdout)
         else:
-            with open(jsonl_path, "w", encoding="utf-8") as f:
-                for line in lines:
-                    f.write(line + "\n")
+            _write_atomic(Path(jsonl_path), "".join(line + "\n" for line in lines))
 
     if getattr(args, "json", False):
         cli_json.emit_result(result, stdout, command="check")
-    elif jsonl_path != "-":
-        # Streaming NDJSON to stdout already occupied it; adding the human
-        # table would corrupt the stream.
+    elif jsonl_path != "-" and report_path != "-":
+        # Streaming to stdout already occupied it; adding the human table would
+        # corrupt the stream. `--jsonl -` was guarded and `--report -` was not,
+        # so `pzi check --report - | jq .` — the only reason `--report -` exists
+        # — got the report with a plain-text table appended to it.
         print_lines(_render_check_items(result), stdout)
 
     # An audit that reached no source at all audited nothing. Exiting 0 there

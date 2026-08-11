@@ -16,6 +16,12 @@ from pzi.fileio import read_text_utf8
 class ImportResult(TypedDict):
     status: str
     source_path: str
+    #: The library imported into. `NotRequired` because the failures before
+    #: target resolution do not know it yet. The runner cannot supply it —
+    #: unlike the other five commands, `import` passes a selector straight
+    #: through and never resolves a target of its own — so the service reports
+    #: it, and `import --json` stops saying `"bib_name": null` forever.
+    bib_name: NotRequired[str]
     message: str
     errors: list[str]
     #: The writer's warnings — a near-duplicate insert above all. `NotRequired`
@@ -186,6 +192,7 @@ def import_from_bibtex(
         return {
             "status": "error",
             "source_path": source_path,
+            "bib_name": bib["name"],
             "dry_run": dry_run,
             "message": "failed to write imported records",
             "errors": [str(exc)],
@@ -252,6 +259,7 @@ def import_from_bibtex(
         "status": "ok",
         "warnings": warnings,
         "source_path": source_path,
+        "bib_name": bib["name"],
             "dry_run": dry_run,
         "message": (
             f"{prefix}imported {imported}, skipped {skipped_dupes} duplicates"

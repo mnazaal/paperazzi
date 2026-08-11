@@ -32,7 +32,7 @@ def _run(
     json_output: bool = False,
 ) -> tuple[int, str]:
     monkeypatch.setattr(
-        dedupe_command, "resolve_target", lambda **_kw: ({}, {"path": "/tmp/lib.bib"})
+        dedupe_command, "resolve_target", lambda **_kw: ({}, {"name": "ml", "path": "/tmp/lib.bib"})
     )
     monkeypatch.setattr(dedupe_command, "find_duplicates", lambda **_kw: result)
     stdout, stderr = StringIO(), StringIO()

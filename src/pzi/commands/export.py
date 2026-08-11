@@ -2,39 +2,35 @@
 
 from __future__ import annotations
 
-import contextlib
-import os
-import tempfile
 from pathlib import Path
 from typing import TextIO
 
 from pzi import exit_codes
 from pzi.cli_render import _error_lines
-from pzi.commands.common import print_lines, resolve_target
+from pzi.commands.common import (
+    _write_atomic,
+    emit_usage_error,
+    print_lines,
+    resolve_target,
+)
 from pzi.export_service import export_bibtex, export_csv, export_json, export_ris
-
-
-def _write_atomic(output_path: Path, content: str) -> None:
-    """Write *content* to *output_path* all-or-nothing."""
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(
-        dir=str(output_path.parent), prefix=f".{output_path.name}-", suffix=".tmp"
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp, output_path)
-    except BaseException:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp)
-        raise
 
 
 def run_export_command(
     args, *, home_dir, config_path, stdout: TextIO, stderr: TextIO, bib_selector
 ) -> int:
+    if getattr(args, "force", False) and args.output in (None, "-"):
+        # `--force` only means "overwrite the file at -o". Accepting it without
+        # a destination is the project's own rule broken (it is enforced in five
+        # other places): a flag that is silently ignored reads as applied, and
+        # the user finds out only if it mattered.
+        return emit_usage_error(
+            args,
+            "--force applies to -o PATH and has no effect without it",
+            command_path=("export",),
+            stdout=stdout,
+            stderr=stderr,
+        )
     _config, target = resolve_target(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector,
     )
@@ -59,6 +55,13 @@ def run_export_command(
         return exit_codes.OK
     if args.output:
         output_path = Path(args.output)
+        if output_path.is_dir():
+            # `.exists()` is true for a directory, so `pzi export -o /` said
+            # "output file already exists ... use --force" — and with --force it
+            # proceeded, then died as a raw OSError naming the *temp* file,
+            # which the user never asked for and cannot act on.
+            print(f"error: output path is a directory: {args.output}", file=stderr)
+            return exit_codes.USAGE
         if output_path.exists() and not getattr(args, "force", False):
             print(
                 f"error: output file already exists: {args.output} (use --force to overwrite)",

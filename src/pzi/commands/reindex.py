@@ -22,6 +22,23 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
 
     as_json = getattr(args, "json", False)
     rename = getattr(args, "rename_citekeys", False)
+    for flag, given in (
+        ("--force", getattr(args, "force", False)),
+        ("--dry-run", getattr(args, "dry_run", False)),
+    ):
+        if given and not rename:
+            # Without `--rename-citekeys` the run is already a read-only audit,
+            # so both flags are accepted and do nothing — and `--dry-run`
+            # especially reads as "I have made this safe" when it changed
+            # nothing about what the command was going to do anyway.
+            return emit_usage_error(
+                args,
+                f"{flag} applies to --rename-citekeys; without it the run is "
+                f"already a read-only audit",
+                command_path=("fix", "reindex"),
+                stdout=stdout,
+                stderr=stderr,
+            )
     # Default is a read-only audit: keep citekeys stable unless explicitly asked.
     apply = rename and not args.dry_run
     if apply:
@@ -52,7 +69,7 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
             if as_json:
                 cli_json.emit_result(
                     {"status": "ok", "bib_path": target["path"], "message": "cancelled"},
-                    stdout, command="fix reindex", items=[],
+                    stdout, command="fix reindex", items=[], bib_name=target["name"],
                 )
             else:
                 print("cancelled", file=stderr)
@@ -76,8 +93,12 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
     findings = bool(result.get("errors")) or (not apply and bool(result.get("changed")))
 
     if as_json:
+        # `applied` distinguishes the two runs that otherwise look identical: an
+        # audit reported a populated `changed[]` next to `backup_path: null`,
+        # which reads as "these renames happened, and nothing was backed up".
         cli_json.emit_result(
-            result, stdout, command="fix reindex", items=result.get("changed") or [],
+            {**result, "applied": apply}, stdout, command="fix reindex",
+            items=result.get("changed") or [], bib_name=target["name"],
         )
         if result["status"] != "ok":
             return exit_codes.ENVIRONMENT
