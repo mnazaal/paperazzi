@@ -219,7 +219,7 @@ Note that `1` never means "the command failed" — a failure to run is always `5
 so `pzi search ... || echo broken` does not fire on an empty result set.
 
 **`--json`.** Every command that reports a result accepts `--json` — except
-`inbox`, `export`, `server` and `init` — and emits exactly **one** JSON document
+`export`, `server` and `init` — and emits exactly **one** JSON document
 on stdout — including when it fails, so a script
 never has to scrape stderr to classify an error. The shape is the same
 everywhere:
@@ -248,7 +248,7 @@ moves entries between libraries.
 pzi init [--force] [--rotate-token] [--setup --bib PATH] [--papers-dir PATH] [--name NAME] [--browser chromium|firefox]
 pzi add <doi|url|pdf> [--tags t1,t2] [--dry-run] [--citekey KEY] [--force-new] [--verbose] [--strict-metadata]
 pzi add --from-file <file|-> [--tags t1,t2] [--delay S] [--failures-out PATH]  # bulk
-pzi inbox <file> [--dry-run] [--tags t1,t2] [--delay S]   # drain a file of DOIs/URLs
+pzi inbox <file> [--dry-run] [--tags t1,t2] [--delay S] [--json]  # drain a file of DOIs/URLs
 pzi pdf retry [<citekey>] [--failed-only]     # --failed-only retries every PDF-less entry; not combinable with a citekey
 pzi pdf attach <citekey> <url-or-path>
 pzi tag add|remove <citekey> <tag...> [--dry-run]
@@ -290,7 +290,7 @@ Configured libraries live in your config file (`[[bibs]]` blocks). Choose the de
 
 Without `--target`, commands operate on the configured default library. `--target` may be a configured library name, configured bib path, or direct `.bib` path. A direct `.bib` path must **already exist** — pzi will not create one, so `pzi export --target a | pzi import - --target new.bib` needs `new.bib` to be there first (`: > new.bib`), or declared in `config.toml`, where a not-yet-created file does resolve. Direct `.bib` targets use `<bib-dir>/papers/` for PDFs. Multiple targets are supported only for `search` and `update` (including `update --promote`) with a single flag: `--target a.bib b.bib`.
 
-`--json` is accepted by the commands that report a result — including the mutating ones (`add`, `update`, `update --promote`, `tag`, `delete`, `import`, `pdf`, `fix clean|dedupe|merge|reindex`) — and always emits one envelope. Four commands do not accept it: `inbox` (a batch command with per-item outcomes — it is the one real gap), `export` (whose output *is* the document), `server`, and `init` (see the CLI reference above). For `search` and `update`, which accept several `--target` values at once, the run still produces a single document: each item carries the `bib_name` it came from rather than the output splitting per library.
+`--json` is accepted by the commands that report a result — including the mutating ones (`add`, `update`, `update --promote`, `tag`, `delete`, `import`, `inbox`, `pdf`, `fix clean|dedupe|merge|reindex`) — and always emits one envelope. Three commands do not accept it: `export` (whose output *is* the document), `server`, and `init` (see the CLI reference above). For `search` and `update`, which accept several `--target` values at once, the run still produces a single document: each item carries the `bib_name` it came from rather than the output splitting per library.
 
 **Shell completion:** `argcomplete` is a base dependency, so tab-completion works once registered for your shell:
 

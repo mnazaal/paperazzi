@@ -11,6 +11,7 @@ was never invoked by any test at all, only asserted to exist.
 from __future__ import annotations
 
 import json
+from argparse import Namespace
 from io import StringIO
 from pathlib import Path
 
@@ -156,3 +157,79 @@ def test_fix_merge_emits_the_envelope(library, tmp_path: Path) -> None:
     )
     _assert_envelope(envelope, command="fix merge")
     assert envelope["bib_name"] == "ml"
+
+
+def test_inbox_emits_the_envelope(tmp_path: Path, library) -> None:
+    """The last runner without `--json`, and the one most likely to be in cron.
+
+    README called it "the one real gap" — the other three exclusions are
+    justified (`export`'s output *is* the document; `server` and `init` do not
+    report a result).
+    """
+    from pzi.commands.inbox import run_inbox_command
+
+    config_path, _bib = library
+    inbox = tmp_path / "inbox.txt"
+    inbox.write_text("10.1000/one\n10.1000/two\n", encoding="utf-8")
+
+    def _fake_drain(**_kwargs):
+        return {
+            "status": "ok",
+            "inbox_file": str(inbox),
+            "dry_run": False,
+            "total": 2,
+            "counts": {"added": 1, "exists": 0, "failed": 1},
+            "items": [
+                {"value": "10.1000/one", "status": "added", "citekey": "a2020", "errors": []},
+                {
+                    "value": "10.1000/two",
+                    "status": "failed",
+                    "citekey": None,
+                    "errors": ["no metadata found"],
+                },
+            ],
+            "errors": [],
+        }
+
+    stdout, stderr = StringIO(), StringIO()
+    code = run_inbox_command(
+        Namespace(file=str(inbox), dry_run=False, tags=None, delay=0.0, json=True),
+        home_dir=str(tmp_path),
+        config_path=config_path,
+        stdout=stdout,
+        stderr=stderr,
+        drain_inbox_fn=_fake_drain,
+    )
+
+    envelope = json.loads(stdout.getvalue())
+    _assert_envelope(envelope, command="inbox")
+    assert code == 4  # PARTIAL: one item failed
+    assert envelope["counts"] == {"added": 1, "exists": 0, "failed": 1}
+    # The per-item failure reaches the documented `errors[]` channel, not just
+    # `items[]`, as `add --from-file` already does.
+    assert any("10.1000/two" in e for e in envelope["errors"])
+    # Progress stayed on stderr so stdout is exactly one document. (Successful
+    # items stream by citekey, failures by value — `print_capture_stream_line`.)
+    progress = stderr.getvalue()
+    assert "a2020" in progress
+    assert "10.1000/two" in progress
+
+
+def test_inbox_json_on_an_empty_file_is_still_a_document(tmp_path: Path, library) -> None:
+    from pzi.commands.inbox import run_inbox_command
+
+    config_path, _bib = library
+    inbox = tmp_path / "inbox.txt"
+    inbox.write_text("# just a comment\n\n", encoding="utf-8")
+
+    stdout, stderr = StringIO(), StringIO()
+    code = run_inbox_command(
+        Namespace(file=str(inbox), dry_run=False, tags=None, delay=0.0, json=True),
+        home_dir=str(tmp_path),
+        config_path=config_path,
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+    assert code == 0
+    _assert_envelope(json.loads(stdout.getvalue()), command="inbox")

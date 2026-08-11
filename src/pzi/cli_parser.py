@@ -403,6 +403,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--delay", type=_non_negative_float, default=1.0, metavar="SECONDS",
         help="pause between items, with jitter (default: 1.0)",
     )
+    inbox_parser.add_argument(
+        "--json", action="store_true", help="output the result as JSON"
+    )
     add_config(inbox_parser)
 
     # ── pdf ──────────────────────────────────────────────────────────────

@@ -7,7 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TextIO
 
-from pzi import exit_codes
+from pzi import cli_json, exit_codes
 from pzi.commands.common import (
     first_error,
     print_capture_stream_line,
@@ -46,8 +46,25 @@ def run_inbox_command(
         print(f"cannot read inbox file: {exc}", file=stderr)
         return exit_codes.ENVIRONMENT
 
+    as_json: bool = getattr(args, "json", False)
+
     if not any(parse_inbox_line(line) for line in raw_text.splitlines()):
-        print(f"inbox is empty: {inbox_path}", file=stdout)
+        if as_json:
+            cli_json.emit_result(
+                {
+                    "status": "ok",
+                    "inbox_file": str(inbox_path),
+                    "dry_run": dry_run,
+                    "total": 0,
+                    "counts": {"added": 0, "exists": 0, "failed": 0},
+                    "items": [],
+                    "errors": [],
+                },
+                stdout,
+                command="inbox",
+            )
+        else:
+            print(f"inbox is empty: {inbox_path}", file=stdout)
         return exit_codes.OK
 
     def _work() -> int:
@@ -60,18 +77,38 @@ def run_inbox_command(
             delay=delay,
         )
         if result["status"] == "error":
-            for line in result["errors"]:
-                print(f"error: {line}", file=stderr)
+            if as_json:
+                cli_json.emit_result(result, stdout, command="inbox")
+            else:
+                for line in result["errors"]:
+                    print(f"error: {line}", file=stderr)
             return exit_codes.ENVIRONMENT
 
         total = result["total"]
         if dry_run:
             print_dry_run_banner(total, stderr)
 
+        # Per-item progress goes to stderr in both modes: under `--json` stdout
+        # carries exactly one document, and the stream is progress, not result.
         for seq, item in enumerate(result["items"]):
             _stream_item(seq, total, item, stderr, dry_run=dry_run)
 
-        print_capture_summary(result["counts"], dry_run=dry_run, stdout=stdout)
+        if as_json:
+            # The per-item reasons are inside `items[]`; lift the failures into
+            # the documented `errors[]` channel too, as `add --from-file` does,
+            # so a consumer branching on the channel sees them.
+            failures = [
+                f"{item['value']}: {first_error(item.get('errors')) or 'capture failed'}"
+                for item in result["items"]
+                if item["status"] == "failed"
+            ]
+            cli_json.emit_result(
+                {**result, "errors": [*result.get("errors", []), *failures]},
+                stdout,
+                command="inbox",
+            )
+        else:
+            print_capture_summary(result["counts"], dry_run=dry_run, stdout=stdout)
         # PARTIAL, not FINDINGS — see the matching note in `commands/add.py`.
         return (
             exit_codes.PARTIAL if result["counts"]["failed"] else exit_codes.OK
