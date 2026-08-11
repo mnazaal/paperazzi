@@ -140,3 +140,34 @@ def test_json_routes_still_answer_json_with_logging_on(served) -> None:
         server.shutdown()
         server.server_close()
     assert isinstance(payload, dict)
+
+
+def test_a_malformed_target_is_logged_rather_than_crashing_the_logger() -> None:
+    """`GET http://[evil/health` is a legal absolute-form target that makes
+    `urlsplit` raise — a case this server has met before (see `_handle_get`'s
+    own guard). The logger must not be the thing that turns it into a 500."""
+    from pzi.http_api import _log_request
+
+    class _Malformed:
+        command = "GET"
+        path = "http://[evil/health"
+
+    sink = StringIO()
+    _log_request(_Malformed(), 0.0, sink)  # type: ignore[arg-type]
+
+    logged = sink.getvalue()
+    assert "GET" in logged
+    assert "(unparseable)" in logged
+
+
+def test_a_request_that_never_responded_logs_a_dash() -> None:
+    """Worth seeing rather than hiding: no status means nothing was sent."""
+    from pzi.http_api import _log_request
+
+    class _Silent:
+        command = "POST"
+        path = "/capture"
+
+    sink = StringIO()
+    _log_request(_Silent(), 0.0, sink)  # type: ignore[arg-type]
+    assert "/capture -" in sink.getvalue()

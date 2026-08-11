@@ -6,9 +6,12 @@ a write the real run does not perform.
 
 from __future__ import annotations
 
+import sys
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 from pzi import exit_codes
 from pzi.cli import run_cli
@@ -861,3 +864,30 @@ def test_a_bare_subcommand_group_prints_its_own_help(tmp_path: Path) -> None:
         for sub in subcommands:
             assert sub in err, f"{group}: {sub} not offered"
         assert f"{group}_command" not in err, f"{group} still names the internal dest"
+
+
+def test_the_reindex_prompt_names_the_scheme_it_would_use(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The interactive path — the one a person actually answers.
+
+    The non-tty refusal is covered above; this drives the prompt itself, which
+    is where someone decides whether to rewrite every citekey in their library.
+    """
+    import io
+
+    config_path, _bib = _library(tmp_path, "@article{Smith_2024,\n  title = {A},\n}\n")
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True, raising=False)
+    monkeypatch.setattr(sys, "stdin", io.StringIO("n\n"), raising=False)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True, raising=False)
+
+    code, _out, err = _run(
+        ["fix", "reindex", "--rename-citekeys", "--config", str(config_path)], tmp_path
+    )
+
+    assert code == exit_codes.OK  # answered "n"
+    assert "Rewrite every citekey" in err
+    assert "using the built-in scheme" in err
+    assert "no citekey_format is configured" in err
+    assert "cancelled" in err
