@@ -12,7 +12,6 @@ import os
 from pathlib import Path
 
 from pzi.add_service import add_input_to_bib
-from pzi.config import dump_app_config
 from tests.test_paywall_helpers import (
     make_fetch_binary_403,
     make_fetch_binary_returns_pdf,
@@ -139,7 +138,7 @@ def test_dry_run_does_not_write_files(tmp_path: Path, write_app_config) -> None:
 
 
 def test_capture_targets_specific_bib_when_multiple_configured(
-    tmp_path: Path, dead_port
+    tmp_path: Path, dead_port, dump_app_config
 ) -> None:
     """Two bibs in config; capture to named bib via bib_selector."""
     td = str(tmp_path)

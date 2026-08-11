@@ -10,8 +10,12 @@ from pathlib import Path
 import pytest
 
 from pzi import url_safety
+from pzi.config import (
+    DEFAULT_DESKTOP_FALLBACK_HOSTS,
+    AppConfig,
+    escape_toml_string,
+)
 from pzi.config import DEFAULT_TRANSLATION_SERVER_URL as _REAL_TRANSLATION_SERVER_URL
-from pzi.config import dump_app_config
 from pzi.safe_http import SsrfBlocked
 from tests.browser_probe import default_browsers_path
 
@@ -20,6 +24,115 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 def _is_live_test(request) -> bool:
     return "tests/live" in str(getattr(request.node, "path", ""))
+
+
+# ---------------------------------------------------------------------------
+# Test-only config writer
+#
+# Moved out of `pzi.config` (where it was 93 lines of production code with no
+# production caller — its docstring claimed a `pzi init` caller that does not
+# exist; init copies the template or uses `setup_service.render_config`).
+# It stays partial by design: enough keys for a fixture, not a faithful
+# round-trip, which is exactly why it does not belong beside the real loader.
+# ---------------------------------------------------------------------------
+
+
+def _optional_string(key: str, value: str | None) -> list[str]:
+    """Return a single TOML key = value line if value is not None."""
+    if value is not None:
+        return [f'{key} = "{escape_toml_string(value)}"']
+    return []
+
+
+def _optional_int(key: str, value: int | None) -> list[str]:
+    """Return a single TOML key = value line if value is not None."""
+    if value is not None:
+        return [f"{key} = {value}"]
+    return []
+
+
+def _optional_string_list(key: str, value: tuple[str, ...] | None) -> list[str]:
+    """Return a TOML key = [...] line if value is not None and non-empty."""
+    if value:
+        items = ", ".join(f'"{escape_toml_string(item)}"' for item in value)
+        return [f"{key} = [{items}]"]
+    return []
+
+
+def _dump_app_config(config: AppConfig) -> str:
+    """Serialize an AppConfig to TOML text. **Partial, by design.**
+
+    Emits 23 of ``AppConfig``'s 36 keys. It exists for test fixtures and for
+    ``pzi init``-style scaffolding, where a minimal readable file is wanted —
+    not as a faithful round-trip of an arbitrary config. Feeding it a config
+    that sets any of the keys below and re-reading the result silently drops
+    them:
+
+    ``capture_source_dirs``, ``inbox_path``, ``pdf_file_path_style``,
+    ``page_metadata_cmd``, ``page_metadata_timeout_seconds``,
+    ``metadata_confidence_min_score``, ``promote_confidence_threshold``,
+    ``metadata_cache_ttl``, ``browser_hook``, ``pzi_data_home``, ``node_path``,
+    ``pdf_discovery_parallel``, ``ezproxy_host``.
+
+    Do not use it to rewrite a user's config file. Adding a key to ``AppConfig``
+    does not automatically add it here.
+    """
+    lines: list[str] = [
+        f'translation_server_url = "{escape_toml_string(config["translation_server_url"])}"',
+        f'api_listen_host = "{escape_toml_string(config["api_listen_host"])}"',
+        f'api_listen_port = {config["api_listen_port"]}',
+    ]
+
+    lines.extend(_optional_string("api_auth_token", config.get("api_auth_token")))
+    lines.extend(_optional_string("api_auth_token_cmd", config.get("api_auth_token_cmd")))
+    lines.extend(_optional_string_list("api_allowed_origins", config.get("api_allowed_origins")))
+    lines.extend(_optional_int("api_max_body_bytes", config.get("api_max_body_bytes")))
+    lines.extend(_optional_string("contact_email", config.get("contact_email")))
+    lines.extend(_optional_string("contact_email_cmd", config.get("contact_email_cmd")))
+    lines.extend(_optional_string("unpaywall_email", config.get("unpaywall_email")))
+    lines.extend(_optional_string("unpaywall_email_cmd", config.get("unpaywall_email_cmd")))
+    lines.extend(
+        _optional_string("semantic_scholar_api_key", config.get("semantic_scholar_api_key"))
+    )
+    lines.extend(
+        _optional_string(
+            "semantic_scholar_api_key_cmd",
+            config.get("semantic_scholar_api_key_cmd"),
+        )
+    )
+    lines.extend(_optional_string("flaresolverr_url", config.get("flaresolverr_url")))
+    lines.extend(_optional_string("browser_pdf_cmd", config.get("browser_pdf_cmd")))
+    lines.extend(_optional_string("citekey_format", config.get("citekey_format")))
+    lines.extend(_optional_string("pdf_filename_format", config.get("pdf_filename_format")))
+    lines.extend(_optional_string("api_url", config.get("api_url")))
+    lines.extend(_optional_string("browser_profile_path", config.get("browser_profile_path")))
+    browser_engine = config.get("browser_engine")
+    if browser_engine and browser_engine != "chromium":
+        lines.append(f'browser_engine = "{escape_toml_string(browser_engine)}"')
+
+    rate_limit_rpm = config.get("rate_limit_rpm", 60)
+    if rate_limit_rpm != 60:
+        lines.append(f"rate_limit_rpm = {rate_limit_rpm}")
+
+    desktop_hosts = config.get("desktop_fallback_hosts", [])
+    # `!=` alone, not `desktop_hosts and ...`: an explicit empty list is a
+    # meaningful setting ("no host needs the desktop fallback") and truthiness
+    # would drop it, so a round-trip silently restored the defaults.
+    if desktop_hosts != DEFAULT_DESKTOP_FALLBACK_HOSTS:
+        dq = '"'
+        lines.append(
+            f"desktop_fallback_hosts = [{', '.join(dq + escape_toml_string(h) + dq for h in desktop_hosts)}]"
+        )
+
+    for bib in config["bibs"]:
+        lines.append("")
+        lines.append("[[bibs]]")
+        lines.append(f'name = "{escape_toml_string(bib["name"])}"')
+        lines.append(f'path = "{escape_toml_string(bib["path"])}"')
+        lines.append(f'papers_dir = "{escape_toml_string(bib["papers_dir"])}"')
+        lines.append(f"default = {'true' if bib['default'] else 'false'}")
+
+    return "\n".join(lines) + "\n"
 
 
 @pytest.fixture(autouse=True)
@@ -226,6 +339,17 @@ def dead_port() -> int:
 
 
 @pytest.fixture
+def dump_app_config():
+    """The test-only config writer, as a fixture.
+
+    A fixture rather than a bare import: `tests/live/` has its own
+    `conftest.py`, so `from conftest import ...` resolves to whichever pytest
+    inserted first, which is not a thing to rely on.
+    """
+    return _dump_app_config
+
+
+@pytest.fixture
 def write_app_config(dead_port):
     """Write a minimal ``config.toml`` under a temp home dir; return its path.
 
@@ -259,7 +383,7 @@ def write_app_config(dead_port):
             "api_listen_port": 8765,
             **extra,
         }
-        Path(config_path).write_text(dump_app_config(config))
+        Path(config_path).write_text(_dump_app_config(config))
         return config_path
 
     return _write

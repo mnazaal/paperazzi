@@ -869,9 +869,15 @@ def _handle_attach_pdf_raw_post(
     return status, result
 
 
-def _handle_tags_add_post(
-    body: Any, config_path: str, home_dir: str,
+def _handle_tags_post(
+    body: Any, config_path: str, home_dir: str, *, mutate: Callable[..., Any],
 ) -> tuple[int, dict[str, Any]]:
+    """Validate a tag mutation body and run *mutate*.
+
+    The add and remove handlers were byte-identical apart from the service
+    called, which is the kind of duplication where a validation fix lands in
+    one of them.
+    """
     if not isinstance(body, dict):
         return 400, {"error": "tags body must be a JSON object"}
     citekey = body.get("citekey")
@@ -880,7 +886,7 @@ def _handle_tags_add_post(
         return 400, {"error": "citekey required"}
     if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
         return 400, {"error": "tags must be a list of strings"}
-    result = add_tags(
+    result = mutate(
         config_path=config_path,
         home_dir=home_dir,
         bib_selector=body.get("bib") if isinstance(body.get("bib"), str) else None,
@@ -888,31 +894,19 @@ def _handle_tags_add_post(
         tags=tags,
         dry_run=body_flag(body, "dry_run", default=False),
     )
-    status = status_for_service_result(result)
-    return status, tag_change_payload(result)
+    return status_for_service_result(result), tag_change_payload(result)
+
+
+def _handle_tags_add_post(
+    body: Any, config_path: str, home_dir: str,
+) -> tuple[int, dict[str, Any]]:
+    return _handle_tags_post(body, config_path, home_dir, mutate=add_tags)
 
 
 def _handle_tags_remove_post(
     body: Any, config_path: str, home_dir: str,
 ) -> tuple[int, dict[str, Any]]:
-    if not isinstance(body, dict):
-        return 400, {"error": "tags body must be a JSON object"}
-    citekey = body.get("citekey")
-    tags = body.get("tags")
-    if not isinstance(citekey, str) or not citekey.strip():
-        return 400, {"error": "citekey required"}
-    if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
-        return 400, {"error": "tags must be a list of strings"}
-    result = remove_tags(
-        config_path=config_path,
-        home_dir=home_dir,
-        bib_selector=body.get("bib") if isinstance(body.get("bib"), str) else None,
-        citekey=citekey,
-        tags=tags,
-        dry_run=body_flag(body, "dry_run", default=False),
-    )
-    status = status_for_service_result(result)
-    return status, tag_change_payload(result)
+    return _handle_tags_post(body, config_path, home_dir, mutate=remove_tags)
 
 
 def _handle_update_post(

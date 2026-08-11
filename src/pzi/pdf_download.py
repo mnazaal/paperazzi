@@ -117,8 +117,13 @@ def fetch_and_store_pdf(
             )
         return None, f"downloaded content from {url} is not a PDF"
 
-    if not is_pdf_bytes(data):  # pragma: no cover — covered by integration/browser tests
-        return None, f"downloaded content from {url} is not a PDF"  # pragma: no cover
+    if not is_pdf_bytes(data):
+        # No `pragma: no cover` here. It carried one claiming integration/browser
+        # coverage, which was false — a plain unit call reaches this line — and
+        # `pyproject.toml` excludes pragmas from the coverage gate, so the one
+        # check that stops an HTML paywall page being stored as a paper's PDF
+        # was exempt from the gate that would have noticed if it stopped working.
+        return None, f"downloaded content from {url} is not a PDF"
 
 
     return write_pdf_bytes(

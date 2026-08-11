@@ -139,3 +139,43 @@ def test_the_missing_title_message_does_not_blame_the_extension() -> None:
     lines = minimum_metadata_diagnostics({"doi": "10.1/x"})
     assert lines
     assert "browser extension" not in lines[0]
+
+
+def test_non_pdf_bytes_are_never_stored_as_a_paper(tmp_path: Path) -> None:
+    """The check that stops an HTML paywall page becoming a paper's PDF.
+
+    It carried `# pragma: no cover — covered by integration/browser tests`,
+    which was false (this call reaches it), and `pyproject.toml` excludes
+    pragmas from the coverage gate — so the one guard against storing a login
+    page as a PDF was exempt from the gate that would notice it breaking.
+    """
+    from pzi.pdf_download import fetch_and_store_pdf
+
+    papers = tmp_path / "papers"
+    papers.mkdir()
+
+    path, error = fetch_and_store_pdf(
+        url="https://example.com/paper.pdf",
+        papers_dir=str(papers),
+        citekey="smith2024",
+        fetch_binary=lambda _url: (b"<!DOCTYPE html><html><body>Sign in</body></html>", "text/html"),
+    )
+
+    assert path is None
+    assert "not a PDF" in (error or "")
+    assert list(papers.iterdir()) == []
+
+    # And with `application/pdf` claimed, which is the case that reaches the
+    # pragma'd line: the content-type guard above it passes, so only the magic
+    # bytes stand between a paywall page and the papers directory.
+    lying_path, lying_error = fetch_and_store_pdf(
+        url="https://example.com/paper.pdf",
+        papers_dir=str(papers),
+        citekey="smith2024",
+        fetch_binary=lambda _url: (
+            b"<!DOCTYPE html><html><body>Sign in</body></html>", "application/pdf"
+        ),
+    )
+    assert lying_path is None
+    assert "not a PDF" in (lying_error or "")
+    assert list(papers.iterdir()) == []

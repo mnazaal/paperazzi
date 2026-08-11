@@ -1,9 +1,9 @@
 import tomllib
 
-from pzi.config import dump_app_config, validate_app_config
+from pzi.config import validate_app_config
 
 
-def test_dump_app_config_roundtrips_through_tomllib() -> None:
+def test_dump_app_config_roundtrips_through_tomllib(dump_app_config) -> None:
     config = {
         "translation_server_url": "http://127.0.0.1:1969",
         "api_listen_host": "127.0.0.1",
@@ -35,7 +35,7 @@ def test_dump_app_config_roundtrips_through_tomllib() -> None:
     assert validated["browser_pdf_cmd"] == "python /tmp/browser_hook.py"
 
 
-def test_dump_app_config_escapes_double_quotes_and_backslashes() -> None:
+def test_dump_app_config_escapes_double_quotes_and_backslashes(dump_app_config) -> None:
     config = {
         "translation_server_url": "http://127.0.0.1:1969",
         "api_listen_host": "127.0.0.1",
@@ -56,7 +56,7 @@ def test_dump_app_config_escapes_double_quotes_and_backslashes() -> None:
     assert parsed["bibs"][0]["path"] == "/tmp/with\\back.bib"
 
 
-def test_dump_app_config_roundtrips_an_explicit_empty_desktop_fallback_hosts() -> None:
+def test_dump_app_config_roundtrips_an_explicit_empty_desktop_fallback_hosts(dump_app_config) -> None:
     """`desktop_fallback_hosts = []` means "no host needs the desktop fallback".
 
     The writer used to emit the key only when it was truthy *and* differed from
@@ -83,7 +83,7 @@ def test_dump_app_config_roundtrips_an_explicit_empty_desktop_fallback_hosts() -
     assert validated["desktop_fallback_hosts"] == []
 
 
-def test_dump_app_config_omits_desktop_fallback_hosts_when_left_at_the_default() -> None:
+def test_dump_app_config_omits_desktop_fallback_hosts_when_left_at_the_default(dump_app_config) -> None:
     """The defaults stay implicit, so the file does not pin them."""
     from pzi.config import DEFAULT_DESKTOP_FALLBACK_HOSTS
 
