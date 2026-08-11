@@ -420,7 +420,12 @@ def build_parser() -> argparse.ArgumentParser:
             "pzi pdf attach smith2020graph ~/Downloads/paper.pdf",
         )),
     )
-    pdf_sub = pdf_parser.add_subparsers(dest="pdf_command", required=True, parser_class=_PziParser)
+    pdf_sub = pdf_parser.add_subparsers(
+        # Not `required=True`: argparse's message for a missing one names
+        # the internal dest (`pdf_command`), which appears in no
+        # documentation. `pzi.cli` prints this group's help instead.
+        dest="pdf_command", required=False, parser_class=_PziParser,
+    )
     pdf_retry = pdf_sub.add_parser("retry", help="Retry PDF download for an entry")
     pdf_retry.add_argument("citekey", nargs="?", help="citekey of the entry to retry")
     add_config(pdf_retry)
@@ -443,7 +448,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     # ── tag ──────────────────────────────────────────────────────────────
     tag_parser = subparsers.add_parser("tag", help="Manage tags on BibTeX entries")
-    tag_sub = tag_parser.add_subparsers(dest="tag_command", required=True, parser_class=_PziParser)
+    tag_sub = tag_parser.add_subparsers(
+        # Not `required=True`: argparse's message for a missing one names
+        # the internal dest (`tag_command`), which appears in no
+        # documentation. `pzi.cli` prints this group's help instead.
+        dest="tag_command", required=False, parser_class=_PziParser,
+    )
     tag_add_p = tag_sub.add_parser("add", help="Add tags to an entry")
     tag_add_p.add_argument("citekey", help="citekey of the entry")
     tag_add_p.add_argument("tags", nargs="+", help="one or more tags to add")
@@ -707,7 +717,12 @@ def build_parser() -> argparse.ArgumentParser:
             "pzi fix reindex --rename-citekeys --dry-run",
         )),
     )
-    fix_sub = fix_parser.add_subparsers(dest="fix_command", required=True, parser_class=_PziParser)
+    fix_sub = fix_parser.add_subparsers(
+        # Not `required=True`: argparse's message for a missing one names
+        # the internal dest (`fix_command`), which appears in no
+        # documentation. `pzi.cli` prints this group's help instead.
+        dest="fix_command", required=False, parser_class=_PziParser,
+    )
 
     clean_parser = fix_sub.add_parser(
         "clean", help="Check and clean a BibTeX library for integrity issues"
@@ -798,6 +813,15 @@ def build_parser() -> argparse.ArgumentParser:
     import_parser.add_argument(
         "--json", action="store_true", help="emit the result as a JSON envelope",
     )
+    # The three group parsers, so a bare `pzi fix` / `pzi tag` / `pzi pdf` can be
+    # answered with that group's own help rather than an argparse message naming
+    # an internal dest. Reaching them through `parser._subparsers` would mean
+    # depending on argparse internals; handing them over explicitly does not.
+    parser.pzi_group_parsers = {  # type: ignore[attr-defined]
+        "fix": fix_parser,
+        "tag": tag_parser,
+        "pdf": pdf_parser,
+    }
     return parser
 
 

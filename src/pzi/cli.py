@@ -178,6 +178,21 @@ def run_cli(
         parser.print_help(file=out)
         return 0
 
+    # A bare group — `pzi fix`, `pzi tag`, `pzi pdf`. argparse's own message for
+    # this named the internal dest (`error: the following arguments are
+    # required: fix_command`), a string that appears in no documentation and
+    # tells the user nothing about what the group contains. Print that group's
+    # help, which lists the subcommands they were reaching for.
+    #
+    # To stderr and exit 2, not stdout and 0: a bare group is an incomplete
+    # invocation. `pzi fix && deploy` must not run `deploy` having done nothing.
+    group_parsers = getattr(parser, "pzi_group_parsers", {})
+    if args.command in group_parsers:
+        group = group_parsers[args.command]
+        if getattr(args, f"{args.command}_command", None) is None:
+            group.print_help(file=err)
+            return exit_codes.USAGE
+
     _cfg: _CommonRunKwargs = {"home_dir": effective_home, "config_path": config_path}
     _bib_selector: BibSelector = getattr(args, "target", None)
 

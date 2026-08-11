@@ -835,3 +835,29 @@ def test_reindex_says_which_scheme_it_would_use(tmp_path: Path) -> None:
     )
     assert code == exit_codes.USAGE
     assert "no citekey_format is configured" in err
+
+
+def test_a_bare_subcommand_group_prints_its_own_help(tmp_path: Path) -> None:
+    """`pzi fix` said `error: the following arguments are required: fix_command`.
+
+    That names an internal argparse dest, appears in no documentation, and
+    tells the user nothing about what the group contains. The group's help
+    lists exactly the subcommands they were reaching for.
+
+    Still exit 2 and still stderr: a bare group is an incomplete invocation, so
+    `pzi fix && deploy` must not run `deploy` having done nothing, and stdout
+    stays clean for whatever is being piped.
+    """
+    expected = {
+        "fix": ("clean", "dedupe", "merge", "reindex"),
+        "tag": ("add", "remove", "list"),
+        "pdf": ("retry", "attach"),
+    }
+    for group, subcommands in expected.items():
+        code, out, err = _run([group], tmp_path)
+        assert code == exit_codes.USAGE, group
+        assert out == "", f"{group} wrote to stdout"
+        assert f"usage: pzi {group}" in err, group
+        for sub in subcommands:
+            assert sub in err, f"{group}: {sub} not offered"
+        assert f"{group}_command" not in err, f"{group} still names the internal dest"
