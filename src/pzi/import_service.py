@@ -9,6 +9,7 @@ from pzi.add_service import add_records_to_bib_batch
 from pzi.bib_serialize import parse_bibtex_for_import
 from pzi.bibtex import bibtex_entry_to_record
 from pzi.config import BibResolutionFailure, load_bib_target
+from pzi.errors import REASON_CONFIG, REASON_USAGE
 from pzi.fileio import read_text_utf8
 
 
@@ -31,8 +32,9 @@ class ImportResult(TypedDict):
     #: a dry run's `"imported": 0` was indistinguishable from a real run that
     #: imported nothing.
     dry_run: bool
-
-
+    #: Structured failure reason (`pzi.errors.REASON_*`) — present only on
+    #: failure. Both the exit-code and HTTP-status mappers read it.
+    reason: NotRequired[str]
 def import_from_bibtex(
     *,
     config_path: str,
@@ -58,6 +60,7 @@ def import_from_bibtex(
             "source_path": source_path,
             "dry_run": dry_run,
             "message": "source file not found",
+            "reason": REASON_USAGE,
             "errors": [f"file not found: {source_path}"],
             "total_source": 0,
             "imported": 0,
@@ -80,6 +83,7 @@ def import_from_bibtex(
             "source_path": source_path,
             "dry_run": dry_run,
             "message": "failed to parse source BibTeX",
+            "reason": REASON_USAGE,
             "errors": dropped_blocks,
             "total_source": 0,
             "imported": 0,
@@ -152,6 +156,7 @@ def import_from_bibtex(
             "source_path": source_path,
             "dry_run": dry_run,
             "message": "failed to resolve target library",
+            "reason": REASON_CONFIG,
             "errors": resolved.errors,
             "total_source": len(source_entries) + len(dropped_blocks),
             "imported": 0,

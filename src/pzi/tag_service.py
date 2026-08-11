@@ -14,6 +14,7 @@ from pzi.bib_repository import (
 )
 from pzi.bibtex import NormalizedRecord, apply_record_to_entry
 from pzi.config import BibResolutionFailure, load_bib_target
+from pzi.errors import REASON_CONFIG, REASON_USAGE
 
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
@@ -90,6 +91,7 @@ def list_tags(
     if isinstance(resolved, BibResolutionFailure):
         return {  # pragma: no cover — covered by integration/browser tests
             "status": "error",
+            "reason": REASON_CONFIG,
             "bib_name": None,
             "citekey": citekey,
             "tags": [],
@@ -191,6 +193,7 @@ def _mutate_entry_tags(
     if isinstance(resolved, BibResolutionFailure):
         return {
             "status": "error",
+            "reason": REASON_CONFIG,
             "bib_name": None,
             "citekey": citekey,
             "tags": [],
@@ -227,6 +230,7 @@ def _mutate_entry_tags(
             "changed": False,
             "dry_run": dry_run,
             "message": "no valid tags supplied",
+            "reason": REASON_USAGE,
             "errors": ["no valid tags supplied"],
         }
 

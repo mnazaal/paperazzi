@@ -10,7 +10,7 @@ from urllib.request import Request, urlopen
 
 from pzi.capture_context import resolve_optional_value
 from pzi.config import load_config_file
-from pzi.errors import PziError
+from pzi.errors import REASON_CONFIG, PziError
 from pzi.metadata_sources import probe_s2_api
 
 
@@ -41,8 +41,9 @@ class DoctorResult(TypedDict):
     credentials: dict[str, str]
     semantic_scholar: dict[str, Any]
     config_permissions_warning: str | None
-
-
+    #: Structured failure reason (`pzi.errors.REASON_*`) — present only on
+    #: failure. Both the exit-code and HTTP-status mappers read it.
+    reason: NotRequired[str]
 def doctor_health_problems(result: DoctorResult) -> list[str]:
     """Every reason this library is not healthy; empty means it is.
 
@@ -108,6 +109,7 @@ def doctor_check(
         return {
             "status": "error",
             "errors": list(config_result["errors"]),
+            "reason": REASON_CONFIG,
             "config_path": config_result["path"],
             "config_ok": False,
             "config_errors": config_result["errors"],

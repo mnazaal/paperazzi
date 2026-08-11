@@ -35,6 +35,7 @@ from pzi.bibtex import (
 from pzi.bibtex import changed_fields as changed_fields_between
 from pzi.capture_context import resolve_contact_email, resolve_optional_value
 from pzi.config import BibResolutionFailure, load_bib_target
+from pzi.errors import REASON_CONFIG
 from pzi.fetch_helpers import build_metadata_fetch_text
 from pzi.format_templates import format_citekey
 from pzi.identifiers import has_preprint_identity, is_preprint_doi, is_preprint_url
@@ -89,9 +90,9 @@ class PromoteResult(TypedDict):
     items: list[PromoteItem]
     errors: list[str]
     summary: NotRequired[dict[str, Any]]
-
-
-
+    #: Structured failure reason (`pzi.errors.REASON_*`) — present only on
+    #: failure. Both the exit-code and HTTP-status mappers read it.
+    reason: NotRequired[str]
 # Tag written to a preprint by `--mark-resolved` so re-runs can skip it.
 _RESOLVED_TAG = "promoted"
 
@@ -124,6 +125,7 @@ def promote_bib(
     if isinstance(resolved, BibResolutionFailure):
         return {
             "status": "error",
+            "reason": REASON_CONFIG,
             "bib_name": None,
             "dry_run": dry_run,
             "keep_preprint": keep_preprint,

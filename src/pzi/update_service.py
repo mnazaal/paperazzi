@@ -27,6 +27,7 @@ from pzi.bibtex import (
     changed_fields,
 )
 from pzi.config import BibResolutionFailure, load_bib_target
+from pzi.errors import REASON_CONFIG
 from pzi.identifiers import has_preprint_identity
 from pzi.protocols import SearchTranslationFetcher
 from pzi.resolution_match import score_match
@@ -59,9 +60,9 @@ class UpdateBibResult(TypedDict):
     dry_run: bool
     items: list[UpdatePlanItem]
     errors: list[str]
-
-
-
+    #: Structured failure reason (`pzi.errors.REASON_*`) — present only on
+    #: failure. Both the exit-code and HTTP-status mappers read it.
+    reason: NotRequired[str]
 #: Alias kept so this module's call site reads unchanged; the set itself is
 #: shared with `promote` so the two commands cannot disagree about what
 #: belongs to the user.
@@ -84,6 +85,7 @@ def update_bib(
     if isinstance(resolved, BibResolutionFailure):
         return {
             "status": "error",
+            "reason": REASON_CONFIG,
             "bib_name": None,
             "dry_run": dry_run,
             "items": [],

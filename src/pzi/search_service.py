@@ -7,6 +7,7 @@ from typing import NotRequired, TypedDict, cast
 from pzi.bib_repository import read_bib_file_with_notices
 from pzi.bibtex import normalize_authors
 from pzi.config import BibResolutionFailure, load_bib_target
+from pzi.errors import REASON_CONFIG, REASON_USAGE
 from pzi.tag_service import normalize_tags
 
 
@@ -28,9 +29,9 @@ class SearchResult(TypedDict):
     #: command succeeded and is reporting what it could read. Absent on the
     #: error paths, which never got as far as parsing.
     warnings: NotRequired[list[str]]
-
-
-
+    #: Structured failure reason (`pzi.errors.REASON_*`) — present only on
+    #: failure. Both the exit-code and HTTP-status mappers read it.
+    reason: NotRequired[str]
 def search_bib(
     *,
     config_path: str,
@@ -51,6 +52,7 @@ def search_bib(
             "bib_name": None,
             "matches": [],
             "errors": ["provide at least one of --query, --author, --year, --tag"],
+            "reason": REASON_USAGE,
         }
 
     resolved = load_bib_target(
@@ -62,6 +64,7 @@ def search_bib(
             "bib_name": None,
             "matches": [],
             "errors": resolved.errors,
+            "reason": REASON_CONFIG,
         }
     _config, bib = resolved
 
@@ -77,6 +80,7 @@ def search_bib(
                 "bib_name": bib["name"],
                 "matches": [],
                 "errors": [f"tag {tag!r} contains no searchable characters"],
+                "reason": REASON_USAGE,
             }
         normalized_tag = tag_norm[0]
 

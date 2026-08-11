@@ -17,6 +17,7 @@ from pzi.bib_repository import (
     with_bib_lock,
 )
 from pzi.config import BibResolutionFailure, load_bib_target, load_config_file
+from pzi.errors import REASON_CONFIG
 from pzi.identifiers import is_preprint
 from pzi.pdf_planning import pdf_file_present
 
@@ -27,12 +28,18 @@ class BibListResult(TypedDict):
     status: str
     bibs: list[BibInfo]
     errors: list[str]
-
-
+    #: Structured failure reason (`pzi.errors.REASON_*`) — present only on
+    #: failure. Both the exit-code and HTTP-status mappers read it.
+    reason: NotRequired[str]
 def list_bibs(*, config_path: str, home_dir: str) -> BibListResult:
     config_result = load_config_file(config_path, home_dir=home_dir)
     if config_result["config"] is None:
-        return {"status": "error", "bibs": [], "errors": config_result["errors"]}
+        return {
+            "status": "error",
+            "bibs": [],
+            "errors": config_result["errors"],
+            "reason": REASON_CONFIG,
+        }
     config = config_result["config"]
     return {
         "status": "ok",
@@ -144,6 +151,7 @@ def list_entries(
         return {
             "status": "error",
             "message": "failed to resolve bib",
+            "reason": REASON_CONFIG,
             "errors": resolved.errors,
         }
     _config, bib = resolved
@@ -244,6 +252,7 @@ def entry_detail(
         return {
             "status": "error",
             "message": "failed to resolve bib",
+            "reason": REASON_CONFIG,
             "errors": resolved.errors,
             "citekey": citekey,
         }

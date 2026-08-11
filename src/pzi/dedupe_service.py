@@ -13,6 +13,7 @@ from pzi.bib_repository import (
     read_bib_file_with_notices,
 )
 from pzi.bibtex import NormalizedRecord
+from pzi.errors import REASON_USAGE
 from pzi.similarity import (
     best_fuzzy_matches,
     build_identity_index,
@@ -234,6 +235,7 @@ def merge_duplicates(
             "citekey_a": citekey_a,
             "citekey_b": citekey_b,
             "message": "cannot merge an entry with itself",
+            "reason": REASON_USAGE,
             "dry_run": dry_run,
             "errors": ["cannot merge an entry with itself"],
         }

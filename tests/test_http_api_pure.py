@@ -135,14 +135,19 @@ def test_post_route_table_covers_declared_json_routes() -> None:
 def test_http_status_maps_service_results_by_contract() -> None:
     assert http_status.status_for_service_result({"status": "ok"}) == 200
     assert http_status.status_for_service_result(
-        {"status": "error", "errors": ["config file not found"]}
+        {"status": "error", "reason": "config", "errors": ["config file not found"]}
     ) == 400
     assert http_status.status_for_service_result(
-        {"status": "error", "message": "citekey not found: x"}
+        {"status": "error", "reason": "not_found", "message": "citekey not found: x"}
     ) == 404
     assert http_status.status_for_service_result(
-        {"status": "error", "errors": ["browser session not available"]}
+        {"status": "error", "reason": "unavailable", "errors": ["browser session not available"]}
     ) == 503
+    # Unclassified takes the default. These three messages used to be read for
+    # keywords, which is what made a citekey able to pick the status code.
+    assert http_status.status_for_service_result(
+        {"status": "error", "message": "citekey not found: x"}
+    ) == 400
     assert http_status.status_for_service_result(
         {"status": "error", "errors": ["boom"]}, default_error_status=500
     ) == 500

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Any
 
 from pzi import errors
@@ -29,13 +29,19 @@ def status_for_service_result(
     Services return small dicts with ``status``, ``message``, and/or ``errors``.
     Keep mapping here so route modules do not each invent their own policy.
 
-    A structured ``reason`` wins when present. The text heuristic below is the
-    fallback for services that do not classify yet, and it is a fallback rather
-    than the policy because it was demonstrably wrong: it tested ``"config"``
-    before ``"not found"``, and citekeys are echoed into these messages, so
-    `POST /tags/add` on a missing entry returned 404 for ``nosuch2020`` and 400
-    for ``myconfig2020`` — the same failure, two statuses, decided by how the
-    user happened to name a paper.
+    The structured ``reason`` is the whole policy. Message text used to be
+    consulted as a fallback and it was wrong by construction: it tested
+    ``"config" in text`` before ``"not found" in text``, and citekeys are echoed
+    into these messages, so `POST /tags/add` on a missing entry answered 404 for
+    ``nosuch2020`` and 400 for ``myconfig2020`` — the same failure, two
+    statuses, decided by how the user happened to name a paper. No amount of
+    reordering fixes that; the message is the user's data, not a classification.
+
+    So an unclassified failure takes *default_error_status* rather than a guess.
+    That is a real cost — a service that forgets to classify answers 400 where
+    404 was right — and it is the intended one: a missing reason is a bug in
+    that service with one obvious fix, while a heuristic silently returns a
+    plausible wrong answer forever.
     """
     if result.get("status") == "ok":
         return 200
@@ -44,28 +50,7 @@ def status_for_service_result(
     if isinstance(reason, str) and reason in _STATUS_BY_REASON:
         return _STATUS_BY_REASON[reason]
 
-    text = _result_text(result).lower()
-    if "config" in text or "bib not found" in text or "library" in text:
-        return 400
-    if "not found" in text or "no such" in text:
-        return 404
-    if "not available" in text or "unavailable" in text:
-        return 503
     return default_error_status
-
-
-def _result_text(result: Mapping[str, Any]) -> str:
-    parts: list[str] = []
-    message = result.get("message")
-    if isinstance(message, str):
-        parts.append(message)
-    error = result.get("error")
-    if isinstance(error, str):
-        parts.append(error)
-    errors = result.get("errors")
-    if isinstance(errors, Sequence) and not isinstance(errors, (str, bytes)):
-        parts.extend(str(item) for item in errors)
-    return "\n".join(parts)
 
 
 def reject_unconfigured_bib_selector(

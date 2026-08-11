@@ -98,6 +98,8 @@ def test_fix_merge_unknown_citekey_is_not_found(tmp_path: Path) -> None:
 
 def test_fix_merge_self_merge_is_not_tagged_not_found(tmp_path: Path) -> None:
     """"Cannot merge an entry with itself" is a usage mistake, not a missing entry."""
+    from pzi import exit_codes
+    from pzi.commands.common import exit_code_for_error
     from pzi.dedupe_service import merge_duplicates
 
     bib_path = tmp_path / "ml.bib"
@@ -108,7 +110,11 @@ def test_fix_merge_self_merge_is_not_tagged_not_found(tmp_path: Path) -> None:
     )
 
     assert result["status"] == "error"
-    assert "reason" not in result
+    assert result["reason"] == "usage"
+    # And therefore exit 2, not 5. `exit_code_for_error` sent every failure
+    # without `reason == "not_found"` to ENVIRONMENT, so retyping a mistake the
+    # user made was reported as "this machine cannot run the command".
+    assert exit_code_for_error(result) == exit_codes.USAGE
 
 
 def test_fix_merge_names_the_survivor_fields_it_overwrites(tmp_path: Path) -> None:

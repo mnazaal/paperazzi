@@ -183,14 +183,14 @@ def test_http_status_maps_every_reason_in_the_vocabulary() -> None:
     assert status_for_service_result({"status": "error", "reason": errors.REASON_CONFLICT}) == 409
 
 
-def test_http_status_reason_beats_the_text_heuristic() -> None:
-    """A citekey must not be able to change the status code.
+def test_a_citekey_cannot_change_the_status_code() -> None:
+    """The status must not depend on how the user named a paper.
 
-    The heuristic tests `"config" in text` before `"not found" in text`, and
-    citekeys are echoed into these messages — so `POST /tags/add` on a missing
-    entry returned 404 for `nosuch2020` and 400 for `myconfig2020`: the same
-    failure, two statuses, decided by how the user named a paper. A structured
-    reason overrides that.
+    Message text was read for keywords, testing `"config" in text` before
+    `"not found" in text` — and citekeys are echoed into these messages, so
+    `POST /tags/add` on a missing entry answered 404 for `nosuch2020` and 400
+    for `myconfig2020`: the same failure, two statuses. The heuristic is gone
+    rather than reordered, because the message is the user's data.
     """
     for citekey in ("nosuch2020", "myconfig2020", "library2020"):
         classified = {
@@ -200,11 +200,45 @@ def test_http_status_reason_beats_the_text_heuristic() -> None:
         }
         assert status_for_service_result(classified) == 404
 
-    # Unclassified, the old heuristic still applies — and still disagrees with
-    # itself. Pinned so the fallback's behaviour is visible rather than assumed.
-    assert status_for_service_result({"status": "error", "error": "not found: nosuch2020"}) == 404
-    assert status_for_service_result({"status": "error", "error": "not found: myconfig2020"}) == 400
+    # Unclassified, every one of them takes the same default — including the
+    # three the heuristic disagreed on. A service that forgets to classify is
+    # now uniformly wrong in one direction rather than sometimes right.
+    for citekey in ("nosuch2020", "myconfig2020", "library2020"):
+        unclassified = {"status": "error", "error": f"not found: {citekey}"}
+        assert status_for_service_result(unclassified) == 400
 
 
 def test_http_status_ok_result_is_200_regardless_of_reason() -> None:
     assert status_for_service_result({"status": "ok", "reason": errors.REASON_NOT_FOUND}) == 200
+
+
+def test_the_three_usage_refusals_exit_2_not_5(tmp_path: Path, write_app_config) -> None:
+    """A mistake the user must retype is not "this machine cannot run it".
+
+    `exit_code_for_error` mapped every failure without `reason == "not_found"`
+    to ENVIRONMENT, and no service produced any other reason — four of the five
+    `REASON_*` constants had no producer at all, so the vocabulary both mappers
+    were written against existed only on paper. These are the three refusals
+    that are unambiguously the invocation's fault.
+    """
+    from pzi import exit_codes
+    from pzi.commands.common import exit_code_for_error
+    from pzi.dedupe_service import merge_duplicates
+    from pzi.search_service import search_bib
+    from pzi.tag_service import add_tags
+
+    config_path = write_app_config(tmp_path)
+    (tmp_path / "ml.bib").write_text("@article{real2024, title = {Real}}\n")
+    located = {"config_path": config_path, "home_dir": str(tmp_path), "bib_selector": None}
+
+    self_merge = merge_duplicates(
+        bib_path=str(tmp_path / "ml.bib"), citekey_a="real2024", citekey_b="real2024"
+    )
+    no_valid_tags = add_tags(**located, citekey="real2024", tags=["!!"])
+    unsearchable = search_bib(**located, tag="!!")
+
+    for result in (self_merge, no_valid_tags, unsearchable):
+        assert result["status"] == "error"
+        assert result["reason"] == errors.REASON_USAGE
+        assert exit_code_for_error(result) == exit_codes.USAGE
+        assert status_for_service_result(result) == 400

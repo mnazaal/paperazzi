@@ -18,6 +18,7 @@ from pzi.bibtex import (
 )
 from pzi.capture_context import resolve_api_auth_token
 from pzi.config import AppConfig, BibResolutionFailure, load_bib_target
+from pzi.errors import REASON_CONFIG, REASON_USAGE
 from pzi.pdf import (
     fetch_and_store_pdf_trying_sources,
     fetch_and_store_pdf_with_fallbacks,
@@ -126,6 +127,7 @@ def retry_pdf(
             "citekey": citekey,
             "local_pdf_path": None,
             "message": "could not resolve target bib",
+            "reason": REASON_CONFIG,
             "warnings": [],
             "errors": resolved.errors,
         }
@@ -254,6 +256,7 @@ def retry_failed_pdfs(
             "status": "error",
             "bib_name": None,
             "message": "could not resolve target bib",
+            "reason": REASON_CONFIG,
             "errors": resolved.errors,
         }
     config, bib = resolved
@@ -385,6 +388,7 @@ def attach_pdf(
             "local_pdf_path": None,
             "source": source,
             "message": "could not resolve target bib",
+            "reason": REASON_CONFIG,
             "warnings": [],
             "errors": resolved.errors,
         }
@@ -498,6 +502,7 @@ def attach_pdf_bytes(
             "local_pdf_path": None,
             "source_url": source_url,
             "message": "could not resolve target bib",
+            "reason": REASON_CONFIG,
             "warnings": [],
             "errors": resolved.errors,
         }
@@ -513,6 +518,7 @@ def attach_pdf_bytes(
             "local_pdf_path": None,
             "source_url": source_url,
             "message": "invalid PDF payload",
+            "reason": REASON_USAGE,
             "warnings": [],
             "errors": ["pdf_base64 must be valid base64"],
         }
@@ -524,6 +530,7 @@ def attach_pdf_bytes(
             "local_pdf_path": None,
             "source_url": source_url,
             "message": "invalid PDF payload",
+            "reason": REASON_USAGE,
             "warnings": [],
             "errors": ["decoded payload is not a PDF"],
         }
@@ -560,6 +567,7 @@ def attach_pdf_raw_bytes(
             "local_pdf_path": None,
             "source_url": source_url,
             "message": "could not resolve target bib",
+            "reason": REASON_CONFIG,
             "warnings": [],
             "errors": resolved.errors,
         }
@@ -573,6 +581,7 @@ def attach_pdf_raw_bytes(
             "local_pdf_path": None,
             "source_url": source_url,
             "message": "invalid PDF payload",
+            "reason": REASON_USAGE,
             "warnings": [],
             "errors": ["pdf_bytes must start with %PDF-"],
         }
