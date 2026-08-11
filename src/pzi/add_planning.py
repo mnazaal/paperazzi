@@ -522,12 +522,17 @@ def fetch_record_for_input(
             lambda: fetch_search(normalized, server_url=server_url),
             errors=provider_errors,
         )
-        translation_results.extend(results or [])
         # A candidate claiming a different DOI is a different paper, whatever it
         # scores. Dropping it here rather than at selection lets the cascade fall
         # through to Crossref/OpenAlex, which is what a caller asking for a
         # specific DOI wants next.
         usable = drop_contradicting_candidates(results or [], fallback)
+        # The *usable* hits, not the raw ones. `--verbose` reads this list to
+        # name the candidate a capture came from, so recording everything the
+        # provider returned meant the diagnostic named a candidate dropped for
+        # contradicting the requested DOI, and warned "metadata confidence low"
+        # about a capture that was correct.
+        translation_results.extend(usable)
         if usable:
             selected = select_best_metadata_result(usable, fallback)
             best = dict(merge_record_sources(fallback, selected["record"]))
@@ -584,8 +589,8 @@ def fetch_record_for_input(
                 else fetch_web(raw_as_url, server_url=server_url, cookies=cookies),
                 errors=provider_errors,
             )
-            translation_results.extend(web_results or [])
             usable_web = drop_contradicting_candidates(web_results or [], fallback)
+            translation_results.extend(usable_web)
             if usable_web:
                 # Scored and item-type-carrying, like the DOI-search branch above
                 # and the URL branch below. Taking `[0]` meant this one fallback

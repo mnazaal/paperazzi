@@ -1710,9 +1710,13 @@ default = true
                 "attachments": [],
             },
             {
+                # No DOI, so it is not dropped for contradicting the requested
+                # one — genuinely ambiguous, which is what "several candidates"
+                # is about. Its old DOI contradicted the query, so it is now
+                # discarded before selection and there is only one candidate to
+                # report.
                 "item_type": "journalArticle",
-                "record": {"title": "Something Else Entirely", "doi": "10.1145/9999999.8888888",
-                           "year": 1999},
+                "record": {"title": "Graph Parsers (extended abstract)", "year": 2023},
                 "attachments": [],
             },
         ]
@@ -1733,6 +1737,74 @@ default = true
 
     assert result["status"] == "ok"
     assert result["metadata_diagnostics"], "several candidates must be reported"
+
+
+def test_verbose_does_not_name_a_candidate_that_was_thrown_away(
+    tmp_path: Path, dead_port
+) -> None:
+    """`--verbose` reads the recorded candidate list to say where a capture
+    came from.
+
+    That list was extended with every raw hit *before* the ones contradicting
+    the requested DOI were dropped, so the diagnostic named a candidate that
+    played no part — and warned "metadata confidence low" about a capture that
+    was correct.
+    """
+    config_path = tmp_path / "config.toml"
+    bib_path = tmp_path / "library.bib"
+    config_path.write_text(
+        f"""
+translation_server_url = "http://127.0.0.1:{dead_port}"
+
+[[bibs]]
+name = "ml"
+path = "{bib_path}"
+default = true
+""".strip()
+    )
+
+    def one_good_one_contradicting(query, *, server_url):
+        return [
+            {
+                "item_type": "journalArticle",
+                "record": {
+                    "title": "Graph Parsers",
+                    "doi": "10.1145/3368089.3409741",
+                    "year": 2024,
+                },
+                "attachments": [],
+            },
+            {
+                "item_type": "journalArticle",
+                "record": {
+                    "title": "An Entirely Different Paper",
+                    "doi": "10.1145/9999999.8888888",
+                    "year": 1999,
+                },
+                "attachments": [],
+            },
+        ]
+
+    result = add_input_to_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        value="10.1145/3368089.3409741",
+        record_overrides={},
+        bib_selector=None,
+        dry_run=True,
+        fetch_search=one_good_one_contradicting,
+        fetch_web=lambda url, *, server_url: [],
+        fetch_crossref=lambda doi, **_: None,
+        fetch_openalex=lambda doi, **_: None,
+        fetch_s2=lambda doi: None,
+    )
+
+    assert result["status"] == "ok"
+    reported = " ".join(result.get("metadata_diagnostics") or []) + " ".join(
+        result.get("warnings") or []
+    )
+    assert "An Entirely Different Paper" not in reported, reported
+    assert "10.1145/9999999.8888888" not in reported, reported
 
 
 def test_near_duplicate_insert_warns_and_notes_the_existing_entry(tmp_path: Path) -> None:
