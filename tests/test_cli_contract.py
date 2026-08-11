@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 from pzi import exit_codes
 from pzi.cli import run_cli
@@ -420,19 +421,33 @@ def test_doctor_reinstall_server_json_emits_an_envelope(tmp_path: Path) -> None:
     ts_dir.mkdir(parents=True)
     (ts_dir / "someone-elses-work.txt").write_text("x", encoding="utf-8")
 
-    original = ts_backend.ensure_translation_server
-    try:
+    # The save/restore this used to do was a no-op — nothing reassigned the
+    # attribute — so the test ran the *real* `ensure_translation_server`, which
+    # clones three repositories. Patch it for real, and assert on the result
+    # rather than on `status in {"ok", "error"}` and `code in {OK, ENVIRONMENT}`,
+    # which together pin only "stdout parses as JSON".
+    calls: list[object] = []
+
+    def _refuse_to_install(*_args, **_kwargs):
+        calls.append(_args)
+        return None
+
+    with patch.object(ts_backend, "ensure_translation_server", _refuse_to_install):
         code, stdout, _stderr = _run(
             ["doctor", "--reinstall-server", "--json", "--config", str(config_path)],
             tmp_path,
         )
-    finally:
-        ts_backend.ensure_translation_server = original
 
+    assert calls, "the runner never reached ensure_translation_server"
     envelope = json.loads(stdout)
-    assert envelope["command"].startswith("doctor")
-    assert envelope["status"] in {"ok", "error"}
-    assert code in {exit_codes.OK, exit_codes.ENVIRONMENT}
+    assert envelope["command"] == "doctor --reinstall-server"
+    # The install was refused, so this is a failure and must say so on both
+    # channels — the envelope and the exit code.
+    assert envelope["status"] == "error"
+    assert envelope["errors"]
+    assert code == exit_codes.ENVIRONMENT
+    # And it must not have touched what was already there.
+    assert (ts_dir / "someone-elses-work.txt").exists()
 
 
 def test_check_report_to_stdout_conflicts_with_json(tmp_path: Path) -> None:
