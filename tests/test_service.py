@@ -1648,10 +1648,16 @@ def test_add_input_to_bib_provider_error_appears_as_warning(
     )
 
 
-def test_add_input_to_bib_strict_metadata_makes_provider_error_fatal(
+def test_strict_metadata_accepts_a_capture_a_later_provider_rescued(
     tmp_path: Path, dead_port
 ) -> None:
-    """With metadata_strict=True a provider error returns an error result."""
+    """A recovered provider error is a warning, not a failure.
+
+    `--strict-metadata` used to fail whenever *any* provider errored, even when
+    a later one produced a complete record — so a routine 429 from the
+    translation server failed an add that Crossref then completed perfectly.
+    That is the flag refusing a capture it has no complaint about.
+    """
     import urllib.error
 
     config_path, _bib_path = _make_add_input_config(tmp_path, dead_port)
@@ -1674,8 +1680,66 @@ def test_add_input_to_bib_strict_metadata_makes_provider_error_fatal(
         metadata_strict=True,
     )
 
-    assert result["status"] == "error"
+    assert result["status"] == "ok", result
+    # Reported, not hidden: the 429 still reaches the user as a warning.
+    assert any("429" in w for w in result.get("warnings", [])), result.get("warnings")
+
+
+def test_strict_metadata_refuses_a_record_that_identifies_no_paper(
+    tmp_path: Path, dead_port
+) -> None:
+    """The thing strict mode never checked.
+
+    Nothing tested completeness on the success path, so strict mode accepted
+    `@article{unknownxxxxuntitled, doi = {…}}` — no title, no author, no year —
+    while rejecting complete records over a transient 429.
+    `has_minimum_metadata` already existed and was applied only on the
+    translation-server-crash fallback.
+    """
+    config_path, _bib_path = _make_add_input_config(tmp_path, dead_port)
+
+    def no_results(query: str, *, server_url: str) -> list[dict[str, object]]:
+        return []
+
+    def bare_crossref(doi: str, **_: object) -> dict[str, object]:
+        return {"doi": doi}
+
+    result = add_input_to_bib(
+        config_path=config_path,
+        home_dir=str(tmp_path),
+        value="10.1234/bare.2024",
+        record_overrides={},
+        bib_selector=None,
+        dry_run=True,
+        fetch_search=no_results,
+        fetch_crossref=bare_crossref,
+        metadata_strict=True,
+    )
+
+    assert result["status"] == "error", result
     assert "strict-metadata" in result.get("message", "")
+    assert result["errors"]
+
+
+def test_without_strict_an_incomplete_record_is_still_captured(
+    tmp_path: Path, dead_port
+) -> None:
+    """The completeness gate belongs to the flag, not to every add."""
+    config_path, _bib_path = _make_add_input_config(tmp_path, dead_port)
+
+    result = add_input_to_bib(
+        config_path=config_path,
+        home_dir=str(tmp_path),
+        value="10.1234/bare.2024",
+        record_overrides={},
+        bib_selector=None,
+        dry_run=True,
+        fetch_search=lambda query, *, server_url: [],
+        fetch_crossref=lambda doi, **_: {"doi": doi},
+        metadata_strict=False,
+    )
+
+    assert result["status"] == "ok", result
 
 
 def test_add_reports_metadata_diagnostics_when_several_candidates_returned(

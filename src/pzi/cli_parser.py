@@ -312,7 +312,11 @@ def build_parser() -> argparse.ArgumentParser:
     add_parser.add_argument("--json", action="store_true", help="write result as JSON")
     add_parser.add_argument(
         "--strict-metadata", action="store_true",
-        help="fail if any metadata provider returns an error instead of falling back silently",
+        help=(
+            "refuse to capture a paper the metadata does not identify "
+            "(needs a title plus a DOI, author or year), and fail rather than "
+            "fall back when no provider answered at all"
+        ),
     )
     # The capture path has always read `force_new`, and the HTTP API and the
     # browser extension both expose it — but it was registered only on

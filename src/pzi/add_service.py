@@ -355,13 +355,33 @@ def add_input_to_bib(
                     cast(list[Mapping[str, Any]], translation_results),
                     fallback_for_diagnostics,
                 )
-        if effective_strict and provider_errors:
-            return _error_result(
-                message="metadata provider error (--strict-metadata)",
-                errors=list(provider_errors),
-                dry_run=dry_run,
-                warnings=[],
+        if effective_strict:
+            # The cascade *succeeded* — a record came back. Failing here because
+            # an earlier provider errored made a routine Crossref 429 fail an
+            # add that OpenAlex then completed perfectly, which is the flag
+            # refusing a capture it has no complaint about. A recovered error is
+            # a warning, and `provider_errors` already becomes one below.
+            #
+            # What strict mode should check on this path is the thing it never
+            # checked: whether the record identifies a paper. It accepted
+            # `@article{unknownxxxxuntitled, doi = {…}}` — no title, no author,
+            # no year — while rejecting complete records over a transient 429.
+            # `has_minimum_metadata` is the same predicate the crash fallback
+            # has always applied; it just was not applied here.
+            merged_for_check = _merge_fetched_record_with_overrides(
+                fetched_record, record_overrides
             )
+            if not has_minimum_metadata(merged_for_check):
+                return _error_result(
+                    message="metadata is too incomplete to identify a paper "
+                            "(--strict-metadata)",
+                    errors=[
+                        *minimum_metadata_diagnostics(merged_for_check),
+                        *provider_errors,
+                    ],
+                    dry_run=dry_run,
+                    warnings=[],
+                )
     except (urllib.error.URLError, OSError, ValueError) as exc:
         # Narrowly scoped to what the translation-server / metadata-provider
         # fetchers actually raise for network and malformed-response

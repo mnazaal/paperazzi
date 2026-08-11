@@ -270,6 +270,12 @@ pzi import <source.bib> [--dry-run] [--force-new]
 pzi doctor [--config-only] [--reinstall-server]  # health check; --reinstall-server reinstalls the translation-server
 pzi server [--host H --port P] [--stop-after N] [--no-auth]
 ```
+`--strict-metadata` refuses a capture whose metadata does not identify a paper —
+a title plus at least one of DOI, author or year — and fails when no provider
+answered at all. A provider error that a later provider recovered from is a
+warning, not a failure: a Crossref 429 does not fail an add that OpenAlex
+completed.
+
 `--dry-run` previews the entry without writing anything: no `.bib` change, no
 PDF downloaded. The metadata cascade still runs (so the preview reflects what
 providers actually return), and the previewed entry names the `file =` path a
