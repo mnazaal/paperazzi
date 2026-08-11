@@ -1073,3 +1073,110 @@ def test_retry_failed_pdfs_some_retried(
     assert result["skipped_no_url"] == 0
     assert len(result["failures"]) == 1
     assert result["failures"][0]["citekey"] == "jones2024"
+
+
+def test_attach_pdf_surfaces_the_acquisition_warning(monkeypatch, tmp_path) -> None:
+    """`retry` shows it; `attach` dropped it.
+
+    `_store_pdf_source` returns `error or warning`, so on success that value is
+    the acquisition warning — notably FlareSolverr's "may violate publisher
+    terms of service" notice. `attach_pdf` hardcoded `"warnings": []`, so the
+    same acquisition reported differently depending on which command ran it.
+    """
+    papers_dir = tmp_path / "papers"
+    papers_dir.mkdir()
+    monkeypatch.setattr(
+        pdf_service, "load_bib_target",
+        lambda **kw: (
+            _app_config(),
+            {"name": "ml", "path": str(tmp_path / "ml.bib"), "papers_dir": str(papers_dir)},
+        ),
+    )
+    monkeypatch.setattr(
+        pdf_service, "read_bib_file",
+        lambda path: {
+            "entries": [{"citekey": "smith2024", "fields": {}}],
+            "records": [{"citekey": "smith2024"}],
+        },
+    )
+    monkeypatch.setattr(
+        pdf_service, "_store_pdf_source",
+        lambda **kw: ("/papers/smith2024.pdf", "PDF downloaded via FlareSolverr"),
+    )
+    monkeypatch.setattr(
+        pdf_service, "update_bib_entry",
+        lambda path, citekey, updater, **kwargs: {
+            "found": True,
+            "entries": [],
+            "entry": {"entry_type": "article", "citekey": "smith2024", "fields": {}},
+            "record": {"citekey": "smith2024"},
+        },
+    )
+
+    result = pdf_service.attach_pdf(
+        config_path="/f",
+        home_dir="/h",
+        bib_selector=None,
+        citekey="smith2024",
+        source="https://example.com/paper.pdf",
+    )
+
+    assert result["status"] == "ok"
+    assert any("FlareSolverr" in w for w in result["warnings"]), result
+
+
+def test_reattaching_says_the_previous_pdf_was_left_behind(monkeypatch, tmp_path) -> None:
+    """`resolve_pdf_destination` never overwrites — it suffixes `-1`, `-2`.
+
+    That is right, but nothing said so, so re-attaching left the old file on
+    disk with no entry pointing at it while reporting only that a PDF was
+    attached. Reported rather than deleted: the old file may be the better
+    scan, and removing a user's PDF silently is worse than leaving one.
+    """
+    papers_dir = tmp_path / "papers"
+    papers_dir.mkdir()
+    old_pdf = papers_dir / "smith2024.pdf"
+    old_pdf.write_bytes(b"%PDF-1.4 the older scan")
+    new_pdf = papers_dir / "smith2024-1.pdf"
+    new_pdf.write_bytes(b"%PDF-1.4 the new one")
+
+    monkeypatch.setattr(
+        pdf_service, "load_bib_target",
+        lambda **kw: (
+            _app_config(),
+            {"name": "ml", "path": str(tmp_path / "ml.bib"), "papers_dir": str(papers_dir)},
+        ),
+    )
+    monkeypatch.setattr(
+        pdf_service, "read_bib_file",
+        lambda path: {
+            "entries": [{"citekey": "smith2024", "fields": {}}],
+            "records": [{"citekey": "smith2024", "local_pdf_path": str(old_pdf)}],
+        },
+    )
+    monkeypatch.setattr(
+        pdf_service, "_store_pdf_source", lambda **kw: (str(new_pdf), None)
+    )
+    monkeypatch.setattr(
+        pdf_service, "update_bib_entry",
+        lambda path, citekey, updater, **kwargs: {
+            "found": True,
+            "entries": [],
+            "entry": {"entry_type": "article", "citekey": "smith2024", "fields": {}},
+            "record": {"citekey": "smith2024"},
+        },
+    )
+
+    result = pdf_service.attach_pdf(
+        config_path="/f",
+        home_dir="/h",
+        bib_selector=None,
+        citekey="smith2024",
+        source="https://example.com/paper.pdf",
+    )
+
+    assert result["status"] == "ok"
+    assert any("superseded" in w for w in result["warnings"]), result
+    assert any(str(old_pdf) in w for w in result["warnings"]), result
+    # And it is still there — this reports, it does not delete.
+    assert old_pdf.exists()

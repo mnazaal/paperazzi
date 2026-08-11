@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import base64
+import os
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, TypeAlias, cast
 
@@ -26,6 +28,32 @@ from pzi.pdf import snapshot_pdf_paths as _snapshot_pdf_paths
 from pzi.pdf_download import copy_pdf_to_papers_dir
 from pzi.pdf_planning import pdf_file_present
 from pzi.protocols import BinaryFetcher
+
+
+def _superseded_pdf_warning(
+    record: Mapping[str, Any] | None, new_path: str | None
+) -> str | None:
+    """Warn when a re-attach leaves the previous PDF orphaned.
+
+    `resolve_pdf_destination` never overwrites — it suffixes `-1`, `-2` — which
+    is right, but nothing said so. Re-attaching left the old file on disk with
+    no entry pointing at it, and the user was told only that a PDF was
+    attached. Reported rather than deleted: the old file may be the better
+    scan, and silently removing a user's PDF is worse than leaving one behind.
+    """
+    if not isinstance(record, Mapping) or not new_path:
+        return None
+    previous = record.get("local_pdf_path")
+    if not isinstance(previous, str) or not previous.strip():
+        return None
+    if os.path.abspath(previous) == os.path.abspath(new_path):
+        return None
+    if not os.path.exists(previous):
+        return None
+    return (
+        f"previous PDF superseded and left on disk: {previous} "
+        f"(the entry now points at {new_path})"
+    )
 
 
 def _fallback_kwargs(config: AppConfig) -> dict[str, Any]:
@@ -196,7 +224,14 @@ def retry_pdf(
         # terms of service" notice. `pzi add` surfaces it; hardcoding `[]` here
         # meant the same acquisition reported differently depending on which
         # command performed it.
-        "warnings": [warning] if warning else [],
+        "warnings": [
+            note
+            for note in (
+                warning,
+                _superseded_pdf_warning(_record_at(read_result, index), local_pdf_path),
+            )
+            if note
+        ],
         "errors": [],
     }
 
@@ -373,7 +408,12 @@ def attach_pdf(
 
     filename_format = config.get("pdf_filename_format")
     existing_pdf_paths = _snapshot_pdf_paths(bib["papers_dir"])
-    local_pdf_path, error = _store_pdf_source(
+    # `_store_pdf_source` returns `error or warning`, so on success this second
+    # value *is* the acquisition warning — notably FlareSolverr's "may violate
+    # publisher terms of service" notice. `retry_pdf` surfaces it; `attach_pdf`
+    # hardcoded `"warnings": []` and dropped it, so the same acquisition
+    # reported differently depending on which command performed it.
+    local_pdf_path, acquisition_note = _store_pdf_source(
         source=source,
         papers_dir=bib["papers_dir"],
         citekey=citekey,
@@ -391,7 +431,7 @@ def attach_pdf(
             "source": source,
             "message": "failed to attach PDF",
             "warnings": [],
-            "errors": _pdf_failure_errors(error, "failed to attach PDF"),
+            "errors": _pdf_failure_errors(acquisition_note, "failed to attach PDF"),
         }
 
     update_result = update_bib_entry(
@@ -426,7 +466,14 @@ def attach_pdf(
         "local_pdf_path": local_pdf_path,
         "source": source,
         "message": "attached PDF",
-        "warnings": [],
+        "warnings": [
+            note
+            for note in (
+                acquisition_note,
+                _superseded_pdf_warning(_record_at(read_result, index), local_pdf_path),
+            )
+            if note
+        ],
         "errors": [],
     }
 
