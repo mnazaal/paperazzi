@@ -187,6 +187,59 @@ def test_local_pdf_base_record_reports_provider_failures(tmp_path: Path) -> None
     assert any("connection refused" in e for e in errors)
 
 
+def test_an_unresolvable_doi_does_not_discard_what_the_pdf_said(
+    tmp_path: Path,
+) -> None:
+    """The DOI branch returned from inside its own `except`.
+
+    So a PDF that yielded both a DOI and a title wrote a titleless, authorless
+    DOI-only record the moment the DOI lookup failed — throwing away metadata
+    already extracted from the file, with no warning. The DOI is still worth
+    keeping; it just is not everything known about the paper.
+    """
+    from pzi.capture_local_pdf import local_pdf_base_record
+
+    def failing_fetch(**_kwargs):
+        raise OSError("crossref unreachable")
+
+    def _search(_title, *, server_url):
+        return []
+
+    errors: list[str] = []
+    record = local_pdf_base_record(
+        raw_value=str(tmp_path / "paper.pdf"),
+        extracted={
+            "doi": "10.5555/attention",
+            "title": "Attention Is All You Need",
+            "authors": ["Vaswani, Ashish"],
+        },
+        server_url="http://127.0.0.1:1",
+        fetch_record=failing_fetch,
+        fetch_search=_search,
+        errors=errors,
+    )
+
+    assert record["title"] == "Attention Is All You Need", record
+    assert record["authors"] == ["Vaswani, Ashish"], record
+    assert record["doi"] == "10.5555/attention", record
+    assert any("crossref unreachable" in e for e in errors)
+
+
+def test_a_local_file_path_is_not_recorded_as_a_source_url(tmp_path: Path) -> None:
+    """`source_url` is a URL field; a path on this machine is not one, and it
+    means nothing to anyone the library is shared with."""
+    from pzi.capture_local_pdf import local_pdf_base_record
+
+    record = local_pdf_base_record(
+        raw_value=str(tmp_path / "paper.pdf"),
+        extracted={"title": "Graph Parsers"},
+        server_url="http://127.0.0.1:1",
+        fetch_search=lambda _t, *, server_url: [],
+    )
+
+    assert "source_url" not in record, record
+
+
 def test_add_local_pdf_honors_strict_metadata_and_writes_nothing(
     tmp_path: Path, monkeypatch
 ) -> None:

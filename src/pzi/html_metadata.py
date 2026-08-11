@@ -68,7 +68,65 @@ def extract_metadata_from_html(html: str) -> NormalizedRecord | None:
 
     if not record.get("title") and not record.get("doi"):
         return None
+    # An anti-bot interstitial has a title, so it satisfied everything above and
+    # was captured as the paper — `title = {Just a moment...}` — which happens
+    # precisely when FlareSolverr failed and the HTML is the challenge page.
+    if _looks_like_interstitial(record.get("title")) and not record.get("doi"):
+        return None
     return record
+
+
+#: `@type` values that denote a scholarly work. Matched exactly: JSON-LD allows
+#: a list, so each entry is compared in full rather than by substring.
+_SCHOLARLY_JSON_LD_TYPES = frozenset(
+    {"ScholarlyArticle", "Article", "Report", "Thesis", "Chapter", "Book"}
+)
+
+#: Titles served by anti-bot and error interstitials. These pages are *not* the
+#: paper, and they arrive on exactly the captures that most need to fail loudly:
+#: the ones where the challenge was not solved.
+_INTERSTITIAL_TITLES = frozenset(
+    {
+        "just a moment",
+        "just a moment...",
+        "attention required! | cloudflare",
+        "please wait",
+        "please wait...",
+        "one moment, please",
+        "checking your browser",
+        "checking your browser before accessing",
+        "are you a robot?",
+        "access denied",
+        "access to this page has been denied",
+        "security check",
+        "verify you are human",
+        "bot verification",
+        "403 forbidden",
+        "429 too many requests",
+    }
+)
+
+
+def _is_scholarly_type(raw_type: object) -> bool:
+    values = raw_type if isinstance(raw_type, list) else [raw_type]
+    return any(
+        isinstance(value, str) and value.strip() in _SCHOLARLY_JSON_LD_TYPES
+        for value in values
+    )
+
+
+def _looks_like_interstitial(title: object) -> bool:
+    if not isinstance(title, str):
+        return False
+    normalized = " ".join(title.split()).strip().lower().rstrip(".")
+    if not normalized:
+        return False
+    candidates = {normalized, normalized + "..."}
+    return any(
+        candidate in _INTERSTITIAL_TITLES
+        or candidate.rstrip(".") in {t.rstrip(".") for t in _INTERSTITIAL_TITLES}
+        for candidate in candidates
+    )
 
 
 def _from_citation_meta(meta: dict[str, list[str]]) -> NormalizedRecord:
@@ -132,8 +190,10 @@ def _from_json_ld(json_ld: list[object]) -> NormalizedRecord:
     for item in json_ld:
         if not isinstance(item, dict):
             continue
-        type_ = item.get("@type") or ""
-        if not any(t in str(type_) for t in ("ScholarlyArticle", "Article")):
+        # Exact types, not substrings. `"NewsArticle" in "Article"`-style
+        # matching accepted every `@type` ending in `Article` — a news page, a
+        # blog post, a Cloudflare interstitial's own markup — as a paper.
+        if not _is_scholarly_type(item.get("@type")):
             continue
 
         title = item.get("name") or item.get("headline")

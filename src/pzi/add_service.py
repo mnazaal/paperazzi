@@ -412,6 +412,36 @@ def add_input_to_bib(
         )
 
     merged_record = _merge_fetched_record_with_overrides(fetched_record, record_overrides)
+    # A record with no title is not a capture. Both resolution branches returned
+    # whatever the providers gave them with no acceptance gate at all, so a
+    # lookup that found nothing was written as `unknownxxxxuntitled` with
+    # `warnings: []` and exit 0 — the library gained an entry naming no paper
+    # and the user was told it worked. `has_minimum_metadata` already existed
+    # and was applied only on the crash fallback below.
+    #
+    # Deliberately narrower than `has_minimum_metadata`, which wants a title
+    # *and* one of DOI/authors/year. Whether a thin-but-identified record should
+    # be refused is decision 3, still open — and a user who supplies authors by
+    # hand with `--metadata-json` has told us what this is. What needs no
+    # decision is a record that identifies nothing whatsoever.
+    def _has_value(key: str) -> bool:
+        value = merged_record.get(key)
+        if isinstance(value, str):
+            return bool(value.strip())
+        if isinstance(value, list):
+            return bool(value)
+        return value is not None
+
+    if not any(_has_value(key) for key in ("title", "doi", "authors", "year")):
+        return _finalize(
+            _error_result(
+                message="no metadata found for this input",
+                errors=minimum_metadata_diagnostics(merged_record),
+                dry_run=dry_run,
+                warnings=[],
+                bib=bib,
+            )
+        )
     return _finalize(_add(merged_record))
 
 

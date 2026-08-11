@@ -151,3 +151,70 @@ def test_json_ld_author_list_of_objects_still_works():
     assert extract_metadata_from_html(html)["authors"] == [
         "Ada Lovelace", "Grace Hopper",
     ]
+
+
+def test_a_cloudflare_interstitial_is_not_captured_as_the_paper() -> None:
+    """The challenge page has a title, so it satisfied every check.
+
+    It arrives on exactly the captures that most need to fail loudly — the ones
+    where FlareSolverr did not solve the challenge — and was written as
+    `title = {Just a moment...}`.
+    """
+    for title in (
+        "Just a moment...",
+        "Attention Required! | Cloudflare",
+        "Checking your browser before accessing",
+        "Access denied",
+    ):
+        html = f"<html><head><title>{title}</title>" \
+               f'<meta property="og:title" content="{title}"></head><body></body></html>'
+        assert extract_metadata_from_html(html) is None, title
+
+
+def test_an_interstitial_title_with_a_doi_is_still_kept() -> None:
+    """A page carrying a real DOI is not a challenge page, whatever its title —
+    refusing on the title alone would discard a real capture."""
+    html = (
+        '<html><head><meta name="citation_doi" content="10.1234/real">'
+        '<meta property="og:title" content="Just a moment..."></head></html>'
+    )
+    record = extract_metadata_from_html(html)
+    assert record is not None
+    assert record["doi"] == "10.1234/real"
+
+
+def test_a_news_article_is_not_a_scholarly_article() -> None:
+    """`"NewsArticle"` contains `"Article"`, and the type test was a substring
+    match — so a news page's JSON-LD was read as a paper's."""
+    html = """
+    <html><head><script type="application/ld+json">
+    {"@type": "NewsArticle", "headline": "Scientists Astonished By Thing",
+     "author": {"name": "A Journalist"}, "datePublished": "2024-01-01"}
+    </script></head></html>
+    """
+    assert extract_metadata_from_html(html) is None
+
+
+def test_a_scholarly_article_is_still_read() -> None:
+    """The tightening must not stop the type it exists to accept."""
+    html = """
+    <html><head><script type="application/ld+json">
+    {"@type": "ScholarlyArticle", "name": "Attention Is All You Need",
+     "author": {"name": "Vaswani, Ashish"}, "datePublished": "2017-06-12"}
+    </script></head></html>
+    """
+    record = extract_metadata_from_html(html)
+    assert record is not None
+    assert record["title"] == "Attention Is All You Need"
+
+
+def test_a_json_ld_type_list_still_matches() -> None:
+    """JSON-LD allows `@type` to be a list; exact matching must handle it."""
+    html = """
+    <html><head><script type="application/ld+json">
+    {"@type": ["CreativeWork", "ScholarlyArticle"], "name": "A Real Paper"}
+    </script></head></html>
+    """
+    record = extract_metadata_from_html(html)
+    assert record is not None
+    assert record["title"] == "A Real Paper"

@@ -260,3 +260,41 @@ def test_pdf_retry_falls_back_to_oa_when_the_stored_url_is_blocked(
     assert local_pdf_path, "retry gave up instead of trying another source"
     with open(str(local_pdf_path), "rb") as f:
         assert f.read() == b"%PDF-1.4 from-OA-mirror\n"
+
+
+# ── Scenario 6: nothing was found ──────────────────────────────────────────
+
+
+def test_a_capture_that_identifies_nothing_is_not_reported_as_success(
+    tmp_path: Path, write_app_config
+) -> None:
+    """Neither resolution branch had an acceptance gate.
+
+    A lookup that came back with nothing was written anyway — the review
+    reproduced `unknownxxxxuntitled`, `warnings: []`, exit 0 — so the library
+    gained an entry naming no paper and the user was told it worked.
+    `has_minimum_metadata` already existed and ran only on the crash fallback.
+    """
+    config_path = write_app_config(tmp_path)
+    bib_path = tmp_path / "ml.bib"
+
+    def _nothing_found(query, *, server_url=None, **kw):
+        return [{"item_type": "journalArticle", "record": {}, "attachments": []}]
+
+    result = add_input_to_bib(
+        config_path=config_path,
+        home_dir=str(tmp_path),
+        value="https://publisher.test/mystery",
+        record_overrides={},
+        bib_selector=None,
+        dry_run=False,
+        fetch_web=_nothing_found,
+        fetch_search=_nothing_found,
+        fetch_binary=lambda url: make_fetch_binary_403(url),
+        browser_pdf_cmd=None,
+    )
+
+    assert result["status"] == "error", result
+    assert result["errors"], result
+    # And nothing was written.
+    assert not bib_path.exists() or "untitled" not in bib_path.read_text().lower()

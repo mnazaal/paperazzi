@@ -99,7 +99,16 @@ def local_pdf_base_record(
         except (OSError, ValueError) as exc:
             if errors is not None:
                 errors.append(str(exc))
-            return {"doi": doi, "source_url": raw_value}
+            # Fall through rather than return. The PDF has already given us a
+            # title and authors; returning here wrote a titleless DOI-only
+            # record and threw them away, silently, because the DOI lookup
+            # failed. The DOI is still worth keeping — it just is not all we
+            # know.
+            unresolved_doi = doi
+        else:
+            unresolved_doi = None
+    else:
+        unresolved_doi = None
 
     title = extracted.get("title")
     if isinstance(title, str) and title.strip():
@@ -109,12 +118,19 @@ def local_pdf_base_record(
             if errors is not None:
                 errors.append(str(exc))
             results = []
-        fallback: NormalizedRecord = {"title": title.strip(), "source_url": raw_value}
+        fallback: NormalizedRecord = {"title": title.strip()}
+        if unresolved_doi is not None:
+            fallback["doi"] = unresolved_doi
+        authors = extracted.get("authors")
+        if isinstance(authors, list) and authors:
+            fallback["authors"] = authors
         if results:
             return _adopt_title_search_hit(results, fallback, errors=errors)
         return fallback
 
-    return {"source_url": raw_value}
+    if unresolved_doi is not None:
+        return {"doi": unresolved_doi}
+    return {}
 
 
 def _adopt_title_search_hit(
