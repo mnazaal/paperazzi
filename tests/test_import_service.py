@@ -108,7 +108,10 @@ def test_import_dry_run() -> None:
         )
         assert result["status"] == "ok"
         assert result["total_source"] == 1
-        assert result["imported"] == 0  # dry run
+        # What the real run would import. Reporting 0 here is what made
+        # `import --dry-run` print `imported 0/3` for a run that does 2 — a
+        # preview whose only job is that number.
+        assert result["imported"] == 1
         # One result with dry_run status
         assert len(result["results"]) == 1
 
@@ -473,3 +476,31 @@ def test_import_invalid_bibtex() -> None:
         )
         # bibtexparser v2 is lenient — invalid text yields 0 entries
         assert result["total_source"] == 0
+
+
+def test_reimporting_a_file_reports_that_it_doubled_the_library() -> None:
+    """The writer reports a near-duplicate as a *warning*, and this module
+    never read them — the string `warnings` did not occur in it.
+
+    So importing the same file twice inserted `good1-2` beside `good1` and said
+    nothing. Silently doubling the library is the one thing `import` must not
+    do quietly.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        cp, bp, pd = _setup_config(td)
+        src = os.path.join(td, "source.bib")
+        Path(src).write_text(SIMPLE_BIB)
+
+        first = import_from_bibtex(
+            config_path=cp, home_dir=td, source_path=src, dry_run=False
+        )
+        assert first["status"] == "ok"
+
+        second = import_from_bibtex(
+            config_path=cp, home_dir=td, source_path=src, dry_run=False
+        )
+
+    # Either it was recognised as a duplicate, or it was inserted again and
+    # said so. What it must not do is insert and stay silent.
+    inserted_again = second["imported"] > 0
+    assert (not inserted_again) or second["warnings"], second

@@ -17,6 +17,7 @@ class ImportResult(TypedDict):
     source_path: str
     message: str
     errors: list[str]
+    warnings: list[str]
     total_source: int
     imported: int
     skipped_duplicates: int
@@ -134,6 +135,7 @@ def import_from_bibtex(
     # exit PARTIAL rather than claiming a clean import.
     skipped_errors = len(dropped_blocks)
     errors: list[str] = list(dropped_blocks)
+    warnings: list[str] = []
 
     if isinstance(resolved, BibResolutionFailure):
         # Nothing ran: an unloadable config or an unknown `--target` is not a
@@ -189,6 +191,12 @@ def import_from_bibtex(
     for record, result in zip(records, batch_results):
         citekey = result.get("citekey", record.get("citekey", "?"))
         status = result.get("status", "unknown")
+        # The writer reports a near-duplicate as a warning, not an error, and
+        # this module never read them — the string `warnings` did not occur in
+        # it. So re-importing a file inserted `good1-2` beside `good1` and said
+        # nothing, and the library quietly doubled.
+        for warning in result.get("warnings") or []:
+            warnings.append(f"{citekey}: {warning}")
 
         if status == "ok":
             # A dedup hit against the target library comes back as an "update"
@@ -197,6 +205,10 @@ def import_from_bibtex(
             # substring-matching the human message.
             action = result.get("action", "insert")
             if result.get("dry_run", False) or dry_run:
+                # Counted, because the caller prints `imported N/total` for a
+                # dry run too — and printing 0 for a run that would import 2 is
+                # the one number a preview exists to get right.
+                imported += 1
                 results.append({
                     "citekey": citekey,
                     "status": "would_import",
@@ -230,6 +242,7 @@ def import_from_bibtex(
     prefix = "DRY RUN: " if dry_run else ""
     return {
         "status": "ok",
+        "warnings": warnings,
         "source_path": source_path,
             "dry_run": dry_run,
         "message": (

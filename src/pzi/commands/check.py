@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable
 from typing import TextIO
 
@@ -10,6 +11,30 @@ from pzi import cli_json, exit_codes
 from pzi.check_service import CheckResult, check_bib
 from pzi.cli_render import _error_lines, _render_check_items
 from pzi.commands.common import emit_usage_error, print_lines, print_read_warnings
+
+
+def _describe_unwritable(path: str) -> str | None:
+    """Why *path* cannot be written, or None when it can.
+
+    Probed by opening and closing it, which is the only answer that counts —
+    permissions, a missing parent directory and a path that is a directory all
+    surface the same way the real write would.
+    """
+    existed = os.path.exists(path)
+    try:
+        with open(path, "a", encoding="utf-8"):
+            pass
+    except OSError as exc:
+        return f"cannot be written: {exc.strerror or exc}"
+    if not existed:
+        # The probe created it. Leaving an empty file behind for a run that may
+        # yet fail is a side effect the caller did not ask for; the real write
+        # recreates it a moment later.
+        try:
+            os.unlink(path)
+        except OSError:  # pragma: no cover — it exists, we just made it
+            pass
+    return None
 
 
 def run_check_command(
@@ -54,6 +79,24 @@ def run_check_command(
             stdout=stdout,
             stderr=stderr,
         )
+    # Both output paths are checked *before* the audit, not after it. `check`
+    # is the long, network-bound command — a whole run against every entry — and
+    # opening the destination at the end meant an unwritable path threw the
+    # finished audit away. `add.py` fail-fasts `--metadata-json` for this exact
+    # reason.
+    for flag, path in (("--report", report_path), ("--jsonl", jsonl_path)):
+        if not path or path == "-":
+            continue
+        unwritable = _describe_unwritable(path)
+        if unwritable is not None:
+            return emit_usage_error(
+                args,
+                f"{flag} {unwritable}",
+                command_path=("check",),
+                stdout=stdout,
+                stderr=stderr,
+            )
+
     strict: bool = getattr(args, "strict", False)
     result = check_bib_fn(
         config_path=config_path,

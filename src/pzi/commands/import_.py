@@ -74,6 +74,11 @@ def run_import_command(
         for err in result["errors"]:
             print(f"  ! {err}", file=stderr)
 
+    # The writer's warnings — a near-duplicate insert is the one that matters,
+    # since silently doubling the library is what `import` must never do.
+    for warning in result.get("warnings") or []:
+        print(f"  ! {warning}", file=stderr)
+
     # Some entries imported and some failed is a partial result, distinct from
     # the whole command failing.
     return exit_codes.OK if result["skipped_errors"] == 0 else exit_codes.PARTIAL

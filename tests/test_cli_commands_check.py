@@ -189,3 +189,48 @@ def test_check_reports_findings_not_failure_when_some_source_answered(tmp_path):
     assert "metadata sources unavailable" in stderr
     assert code == exit_codes.FINDINGS
 
+
+
+def test_check_refuses_an_unwritable_report_path_before_auditing(tmp_path) -> None:
+    """`check` is the long, network-bound command.
+
+    The report was opened only after the whole audit had run, so an unwritable
+    path threw away work that could take minutes. `add` fail-fasts
+    `--metadata-json` for this exact reason.
+    """
+    from io import StringIO
+
+    from pzi.commands.check import run_check_command
+
+    config_path = tmp_path / "config.toml"
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text("@article{a2024,\n  title = {A},\n}\n")
+    config_path.write_text(
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\ndefault = true\n'
+    )
+
+    audited = []
+
+    def _never_runs(**kwargs):
+        audited.append(kwargs)
+        raise AssertionError("the audit ran before the report path was checked")
+
+    args = type("A", (), {
+        "report": str(tmp_path / "no-such-dir" / "report.json"),
+        "jsonl": None, "json": False, "strict": False, "target": None,
+    })()
+
+    stdout, stderr = StringIO(), StringIO()
+    code = run_check_command(
+        args,
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        stdout=stdout,
+        stderr=stderr,
+        check_bib_fn=_never_runs,
+    )
+
+    assert audited == [], "the audit should not have started"
+    assert code != 0
+    assert "--report" in stderr.getvalue()
