@@ -276,10 +276,12 @@ answered at all. A provider error that a later provider recovered from is a
 warning, not a failure: a Crossref 429 does not fail an add that OpenAlex
 completed.
 
-`--dry-run` previews the entry without writing anything: no `.bib` change, no
-PDF downloaded. The metadata cascade still runs (so the preview reflects what
-providers actually return), and the previewed entry names the `file =` path a
-real run would write, without creating it.
+`--dry-run` previews the entry without writing to your library: no `.bib`
+change, no PDF downloaded. It is not an offline mode — the metadata cascade
+still runs, so the preview reflects what providers actually return, and if
+`metadata_cache_ttl` is set those responses are cached (which makes the real
+run that follows faster). The previewed entry names the `file =` path a real
+run would write, without creating it.
 
 
 `pzi add` also accepts `--metadata-json PATH|-`, `--cookie-file PATH|-`, `--pdf-candidate URL` (repeatable), and `--page-html PATH|-` — these exist mainly for the browser extension's own capture flow, not typical CLI use. See `pzi add --help` for the full set.

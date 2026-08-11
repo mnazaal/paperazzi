@@ -306,7 +306,11 @@ def build_parser() -> argparse.ArgumentParser:
     add_config(add_parser)
     add_single_target(add_parser)
     add_parser.add_argument(
-        "--dry-run", action="store_true", help="preview the result without writing"
+        "--dry-run", action="store_true",
+        help=(
+            "preview the result without writing to the library "
+            "(still queries providers, and warms the metadata cache if enabled)"
+        ),
     )
     add_parser.add_argument("--verbose", action="store_true", help="show metadata diagnostics")
     add_parser.add_argument("--json", action="store_true", help="write result as JSON")

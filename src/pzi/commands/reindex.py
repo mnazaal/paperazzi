@@ -41,12 +41,24 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
             )
     # Default is a read-only audit: keep citekeys stable unless explicitly asked.
     apply = rename and not args.dry_run
+    # No configured format means the *built-in* scheme (author+year+title) will
+    # be used. For a library imported from Zotero or Mendeley that rewrites
+    # every key to something the user never chose — worth saying before they
+    # answer the prompt, not after.
+    no_format = not config.get("citekey_format")
     if apply:
         print(
             "warning: rewriting citekeys will break any \\cite{} references that use "
             "the old keys (in LaTeX documents, notes, etc.).",
             file=stderr,
         )
+        if no_format:
+            print(
+                "warning: no citekey_format is configured, so pzi's built-in "
+                "scheme (author + year + title) will be used. Set citekey_format "
+                "in config.toml first if you want a different one.",
+                file=stderr,
+            )
     if apply and not getattr(args, "force", False):
         # Same gate as `delete`: this rewrites every citekey in the library and
         # the damage lands outside pzi, in whatever cites them. Never prompt
@@ -57,13 +69,22 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
             return emit_usage_error(
                 args,
                 "refusing to prompt for confirmation with stdin not a terminal; "
-                "pass --force to rewrite citekeys or --dry-run to preview",
+                "pass --force to rewrite citekeys or --dry-run to preview"
+                + (
+                    " (note: no citekey_format is configured, so the built-in "
+                    "author+year+title scheme would be used)"
+                    if no_format
+                    else ""
+                ),
                 command_path=("fix", "reindex"),
                 stdout=stdout,
                 stderr=stderr,
             )
+        scheme = "the built-in scheme" if no_format else "citekey_format"
         print(
-            f"Rewrite every citekey in {target['path']}? [y/N] ", end="", file=stderr
+            f"Rewrite every citekey in {target['path']} using {scheme}? [y/N] ",
+            end="",
+            file=stderr,
         )
         if sys.stdin.readline().strip().lower() not in ("y", "yes"):
             if as_json:

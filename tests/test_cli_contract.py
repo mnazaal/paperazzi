@@ -820,3 +820,18 @@ def test_check_will_not_clobber_an_existing_report_without_force(tmp_path: Path)
     )
     assert forced in (exit_codes.OK, exit_codes.FINDINGS)
     assert "previous" not in report.read_text(encoding="utf-8")
+
+
+def test_reindex_says_which_scheme_it_would_use(tmp_path: Path) -> None:
+    """With no `citekey_format`, `--rename-citekeys` rewrites every key to
+    pzi's built-in scheme. For a library imported from Zotero that is every key
+    the user's .tex files cite, and the prompt did not mention it."""
+    config_path, _bib = _library(tmp_path, "@article{Smith_2024_Deep,\n  title = {A},\n}\n")
+
+    # stdin is not a tty under pytest, so this takes the refusal path — which is
+    # the one that cannot prompt, and therefore most needs to say it.
+    code, _out, err = _run(
+        ["fix", "reindex", "--rename-citekeys", "--config", str(config_path)], tmp_path
+    )
+    assert code == exit_codes.USAGE
+    assert "no citekey_format is configured" in err
