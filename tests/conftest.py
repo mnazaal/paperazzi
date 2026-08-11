@@ -110,9 +110,6 @@ def _dump_app_config(config: AppConfig) -> str:
     if browser_engine and browser_engine != "chromium":
         lines.append(f'browser_engine = "{escape_toml_string(browser_engine)}"')
 
-    rate_limit_rpm = config.get("rate_limit_rpm", 60)
-    if rate_limit_rpm != 60:
-        lines.append(f"rate_limit_rpm = {rate_limit_rpm}")
 
     desktop_hosts = config.get("desktop_fallback_hosts", [])
     # `!=` alone, not `desktop_hosts and ...`: an explicit empty list is a

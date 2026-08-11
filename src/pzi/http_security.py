@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import ipaddress
-import threading
-import time
 from typing import TypedDict
 from urllib.parse import urlsplit
 
@@ -26,55 +24,7 @@ class HttpSecurityConfig(TypedDict):
     auth_token: str | None
     allowed_origins: tuple[str, ...]
     max_body_bytes: int
-    rate_limit_rpm: int
     listen_host: str
-
-
-class RateLimiter:
-    """In-memory token-bucket rate limiter keyed by client identifier.
-
-    Buckets are cleaned up lazily during ``check()`` calls to prevent
-    unbounded growth under sustained traffic.
-    """
-
-    _CLEANUP_INTERVAL = 200  # sweep expired entries every N check() calls
-
-    def __init__(self, max_requests: int = 60, window_seconds: int = 60) -> None:
-        self._max = max_requests
-        self._window = window_seconds
-        self._buckets: dict[str, tuple[float, int]] = {}
-        self._lock = threading.Lock()
-        self._call_count = 0
-
-    def check(self, client_id: str) -> tuple[bool, int, int]:
-        """Return (allowed, remaining, reset_seconds)."""
-        with self._lock:
-            self._call_count += 1
-            if self._call_count % self._CLEANUP_INTERVAL == 0:
-                self._sweep_expired()
-
-            now = time.time()
-            window_start, count = self._buckets.get(client_id, (0.0, 0))
-            if now - window_start >= self._window:
-                window_start = now
-                count = 0
-            if count >= self._max:
-                reset = int(window_start + self._window - now) + 1
-                return False, 0, reset
-            count += 1
-            self._buckets[client_id] = (window_start, count)
-            return True, self._max - count, int(window_start + self._window - now)
-
-    def _sweep_expired(self) -> None:
-        """Remove bucket entries whose window has fully expired."""
-        now = time.time()
-        expired = [
-            cid
-            for cid, (ws, _count) in self._buckets.items()
-            if now - ws >= self._window
-        ]
-        for cid in expired:
-            del self._buckets[cid]
 
 
 def build_http_security_config(
@@ -82,7 +32,6 @@ def build_http_security_config(
     auth_token: str | None = None,
     allowed_origins: tuple[str, ...] | list[str] | None = None,
     max_body_bytes: int = DEFAULT_MAX_BODY_BYTES,
-    rate_limit_rpm: int = 60,
     listen_host: str = "127.0.0.1",
 ) -> HttpSecurityConfig:
     """Normalize HTTP security knobs without touching request state."""
@@ -104,7 +53,6 @@ def build_http_security_config(
         "auth_token": normalized_token,
         "allowed_origins": origins,
         "max_body_bytes": max(0, int(max_body_bytes)),
-        "rate_limit_rpm": max(1, int(rate_limit_rpm)),
         "listen_host": listen_host.strip() or "127.0.0.1",
     }
 

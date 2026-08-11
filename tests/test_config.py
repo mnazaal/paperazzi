@@ -165,7 +165,6 @@ def test_validate_app_config_applies_defaults() -> None:
         "api_url": "http://127.0.0.1:8765",
         "browser_profile_path": None,
         "browser_engine": "chromium",
-        "rate_limit_rpm": 60,
         "pdf_discovery_parallel": False,
             "desktop_fallback_hosts": ["biorxiv.org", "medrxiv.org", "researchsquare.com", "ssrn.com", "authorea.com"],
             "ezproxy_host": None,
@@ -604,3 +603,30 @@ def test_an_absolute_or_home_relative_bib_path_is_unaffected(tmp_path, monkeypat
 
     assert bibs[0]["path"] == str(tmp_path / "a.bib")
     assert bibs[1]["path"] == str(tmp_path / "h.bib")
+
+
+def test_a_retired_config_key_still_loads_and_says_why(tmp_path) -> None:
+    """`rate_limit_rpm` no longer exists, and an existing config must not break.
+
+    It falls through the unknown-key path, which is a *warning* — so the config
+    loads — but "unknown config key" reads as a typo when the real answer is
+    that the inbound rate limiter was removed.
+    """
+    from pzi.config import load_config_file
+
+    bib = tmp_path / "ml.bib"
+    bib.write_text("", encoding="utf-8")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'rate_limit_rpm = 120\n\n[[bibs]]\nname = "ml"\npath = "{bib}"\ndefault = true\n',
+        encoding="utf-8",
+    )
+
+    result = load_config_file(str(config_path), home_dir=str(tmp_path))
+
+    assert result["config"] is not None, result["errors"]
+    assert not result["errors"]
+    warning = "\n".join(result.get("warnings") or [])
+    assert "rate_limit_rpm" in warning
+    assert "retired" in warning
+    assert "unknown config key" not in warning

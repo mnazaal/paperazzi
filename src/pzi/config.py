@@ -74,7 +74,6 @@ class AppConfig(TypedDict):
     api_url: str
     browser_profile_path: str | None
     browser_engine: str
-    rate_limit_rpm: int
     pdf_discovery_parallel: bool
     desktop_fallback_hosts: list[str]
     ezproxy_host: str | None
@@ -248,7 +247,6 @@ def _normalize_app_config(
     raw_browser_hook = raw.get("browser_hook", True)
     raw_pzi_data_home = raw.get("pzi_data_home")
     raw_browser_engine = raw.get("browser_engine", "chromium")
-    raw_rate_limit_rpm = raw.get("rate_limit_rpm", 60)
     raw_pdf_discovery_parallel = raw.get("pdf_discovery_parallel", False)
     raw_pdf_file_path_style = raw.get("pdf_file_path_style", "absolute")
     raw_page_metadata_timeout_seconds = raw.get("page_metadata_timeout_seconds", 5)
@@ -303,7 +301,6 @@ def _normalize_app_config(
         "api_url": api_url,
         "browser_profile_path": opt("browser_profile_path"),
         "browser_engine": str(raw_browser_engine).strip() or "chromium",
-        "rate_limit_rpm": max(1, _safe_int(raw_rate_limit_rpm, 60)),
         "pdf_discovery_parallel": _safe_bool(raw_pdf_discovery_parallel, False),
         "desktop_fallback_hosts": (
             _normalize_host_list(raw_desktop_fallback_hosts)
@@ -510,14 +507,6 @@ def validate_app_config(
     raw_browser_hook = raw.get("browser_hook", True)
     if not isinstance(raw_browser_hook, bool):
         errors.append("browser_hook must be a boolean")
-
-    raw_rate_limit_rpm = raw.get("rate_limit_rpm", 60)
-    if (
-        not isinstance(raw_rate_limit_rpm, int)
-        or isinstance(raw_rate_limit_rpm, bool)
-        or raw_rate_limit_rpm < 1
-    ):
-        errors.append("rate_limit_rpm must be a positive integer")
 
     raw_pdf_discovery_parallel = raw.get("pdf_discovery_parallel", False)
     if not isinstance(raw_pdf_discovery_parallel, bool):
@@ -746,6 +735,19 @@ def default_config_path(home_dir: str) -> str:
     return os.path.join(xdg_config_home(home_dir), "pzi", "config.toml")
 
 
+#: Keys pzi used to accept, and why they went. A config carrying one still
+#: loads — it is a warning, not an error — but "unknown config key" would
+#: suggest a typo when the real answer is that the feature was removed.
+RETIRED_CONFIG_KEYS: dict[str, str] = {
+    "rate_limit_rpm": (
+        "config key 'rate_limit_rpm' is retired and ignored: the inbound HTTP "
+        "rate limiter was removed. It was keyed on the peer address, so every "
+        "local process shared one bucket on loopback, and it ran after the auth "
+        "gate, so it never metered a failed token. The API token is the control."
+    ),
+}
+
+
 def unknown_config_keys(raw: Mapping[str, object]) -> list[str]:
     """Warn about top-level keys pzi does not know.
 
@@ -756,7 +758,7 @@ def unknown_config_keys(raw: Mapping[str, object]) -> list[str]:
     """
     known = set(AppConfig.__annotations__) | {"bibs"}
     return [
-        f"unknown config key {key!r} (ignored)"
+        RETIRED_CONFIG_KEYS.get(key) or f"unknown config key {key!r} (ignored)"
         for key in sorted(raw)
         if key not in known
     ]

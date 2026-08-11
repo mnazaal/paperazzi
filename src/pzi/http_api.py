@@ -20,7 +20,6 @@ from pzi.http_post_routes import process_post_request
 from pzi.http_security import (
     AUTH_HEADER,
     HttpSecurityConfig,
-    RateLimiter,
     build_http_security_config,
     loopback_bind_host,
     origin_allowed,
@@ -74,7 +73,6 @@ def build_handler_class(
         {
             "server_version": "pzi/0.1",
             "timeout": CONNECTION_READ_TIMEOUT_SECONDS,
-            "_rate_limiter": RateLimiter(max_requests=security_config["rate_limit_rpm"]),
             "_browser_session_manager": browser_manager,
             "_attach_session_store": store,
             # Guarded like the other three. Latent — `_handle_options` could
@@ -160,9 +158,6 @@ def _serve_pdf(
     citekey: str,
     bib_selector: str | None,
     security: HttpSecurityConfig,
-    *,
-    rate_remaining: int | None = None,
-    rate_reset: int | None = None,
 ) -> None:
     """Serve a PDF file for a citekey."""
     # The empty-citekey case is already handled by `build_pdf_file_response`,
@@ -179,7 +174,6 @@ def _serve_pdf(
         # cross-origin caller could not even read why. Mirrors `_serve_export_raw`.
         _respond(
             request, status, response, security,
-            rate_remaining=rate_remaining, rate_reset=rate_reset,
         )
         return
 
@@ -188,7 +182,6 @@ def _serve_pdf(
     except OSError:
         _respond(
             request, 500, {"error": "PDF could not be read"}, security,
-            rate_remaining=rate_remaining, rate_reset=rate_reset,
         )
         return
 
@@ -202,10 +195,6 @@ def _serve_pdf(
         f'inline; filename="{response.filename}"',
     )
     _send_cors_headers(request, security)
-    if rate_remaining is not None:
-        request.send_header("X-RateLimit-Remaining", str(rate_remaining))
-    if rate_reset is not None:
-        request.send_header("X-RateLimit-Reset", str(rate_reset))
     request.end_headers()
     try:
         with response.path.open("rb") as fh:
@@ -222,9 +211,6 @@ def _serve_export_raw(
     fmt: str,
     bib_selector: str | None,
     security: HttpSecurityConfig,
-    *,
-    rate_remaining: int | None = None,
-    rate_reset: int | None = None,
 ) -> None:
     status, response = build_export_bytes_response(
         config_path=config_path,
@@ -238,8 +224,6 @@ def _serve_export_raw(
             status,
             response,
             security,
-            rate_remaining=rate_remaining,
-            rate_reset=rate_reset,
         )
         return
 
@@ -253,10 +237,6 @@ def _serve_export_raw(
         f'inline; filename="{response.filename}"',
     )
     _send_cors_headers(request, security)
-    if rate_remaining is not None:
-        request.send_header("X-RateLimit-Remaining", str(rate_remaining))
-    if rate_reset is not None:
-        request.send_header("X-RateLimit-Reset", str(rate_reset))
     request.end_headers()
     try:
         request.wfile.write(response.content)
@@ -280,12 +260,6 @@ def _handle_get(
         # server has no intention of serving.
         _respond(request, error[0], {"error": error[1]}, security,
                  close_connection=True)
-        return
-    client_id = request.client_address[0] if request.client_address else "unknown"
-    allowed, remaining, reset = request._rate_limiter.check(client_id)  # type: ignore[attr-defined]
-    if not allowed:
-        _respond(request, 429, {"error": "rate limit exceeded"}, security,
-                 rate_remaining=0, rate_reset=reset, close_connection=True)
         return
     idle_state = getattr(request, "_idle_state", None)
     if idle_state is not None:
@@ -311,8 +285,6 @@ def _handle_get(
             citekey,
             bib,
             security,
-            rate_remaining=remaining,
-            rate_reset=reset,
         )
         return
     if p == "/export/raw":
@@ -326,14 +298,11 @@ def _handle_get(
             fmt,
             bib,
             security,
-            rate_remaining=remaining,
-            rate_reset=reset,
         )
         return
 
     status, body = process_get_request(request.path, config_path, home_dir)
-    _respond(request, status, body, security,
-             rate_remaining=remaining, rate_reset=reset)
+    _respond(request, status, body, security)
 
 
 def _handle_post(
@@ -348,12 +317,6 @@ def _handle_post(
     if error is not None:  # pragma: no cover — covered by integration
         _respond(request, error[0], {"error": error[1]}, security,
                  close_connection=True)
-        return
-    client_id = request.client_address[0] if request.client_address else "unknown"
-    allowed, post_remaining, post_reset = request._rate_limiter.check(client_id)  # type: ignore[attr-defined]
-    if not allowed:
-        _respond(request, 429, {"error": "rate limit exceeded"}, security,
-                 rate_remaining=0, rate_reset=post_reset, close_connection=True)
         return
     # Only count an accepted request against the idle-stop timer (mirrors GET),
     # so a rejected POST can't keep the auto-stop server alive.
@@ -414,8 +377,7 @@ def _handle_post(
             home_dir,
             attach_session_store=getattr(request, "_attach_session_store", None),
         )
-        _respond(request, status, response_body, security,
-                 rate_remaining=post_remaining, rate_reset=post_reset)
+        _respond(request, status, response_body, security)
         return
     try:
         body: Any = json.loads(raw.decode("utf-8")) if raw else {}
@@ -434,8 +396,7 @@ def _handle_post(
         browser_manager=getattr(request, "_browser_session_manager", None),
         attach_session_store=getattr(request, "_attach_session_store", None),
     )
-    _respond(request, status, response_body, security,
-             rate_remaining=post_remaining, rate_reset=post_reset)
+    _respond(request, status, response_body, security)
 
 
 def _send_cors_headers(request: BaseHTTPRequestHandler, security: HttpSecurityConfig) -> None:
@@ -452,7 +413,6 @@ def _send_cors_headers(request: BaseHTTPRequestHandler, security: HttpSecurityCo
 
 def _respond(
     request: BaseHTTPRequestHandler, status: int, data: Any, security: HttpSecurityConfig,
-    rate_remaining: int | None = None, rate_reset: int | None = None,
     close_connection: bool = False,
 ) -> None:
     body = json.dumps(data, sort_keys=True, default=str).encode("utf-8")
@@ -464,12 +424,6 @@ def _respond(
         request.send_header("Connection", "close")
         request.close_connection = True
     request.send_header("X-Content-Type-Options", "nosniff")
-    if rate_remaining is not None:
-        request.send_header("X-RateLimit-Remaining", str(rate_remaining))
-    if rate_reset is not None:
-        request.send_header("X-RateLimit-Reset", str(rate_reset))
-    if status == 429:
-        request.send_header("Retry-After", str(rate_reset or 60))
     _send_cors_headers(request, security)
     request.end_headers()
     try:

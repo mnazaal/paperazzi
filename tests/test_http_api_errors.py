@@ -14,7 +14,6 @@ from pzi.http_api import run_server, server_exposure_error
 from pzi.http_post_routes import process_post_request
 from pzi.http_security import (
     AUTH_HEADER,
-    RateLimiter,
     build_http_security_config,
     request_security_error,
     validated_content_length,
@@ -200,33 +199,3 @@ def test_content_length_valid() -> None:
     assert result == 5000
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Rate limiter
-# ══════════════════════════════════════════════════════════════════════════════
-
-
-def test_rate_limiter_allows_first_request() -> None:
-    rl = RateLimiter(max_requests=5, window_seconds=60)
-    allowed, remaining, _ = rl.check("client-1")
-    assert allowed is True
-    assert remaining == 4
-
-
-def test_rate_limiter_blocks_after_exhaustion() -> None:
-    rl = RateLimiter(max_requests=3, window_seconds=60)
-    for _ in range(3):
-        allowed, _, _ = rl.check("client-1")
-        assert allowed is True
-    allowed, remaining, _ = rl.check("client-1")
-    assert allowed is False
-    assert remaining == 0
-
-
-def test_rate_limiter_separate_clients() -> None:
-    rl = RateLimiter(max_requests=2, window_seconds=60)
-    rl.check("client-1")
-    rl.check("client-1")
-    blocked, _, _ = rl.check("client-1")
-    assert blocked is False
-    allowed, _, _ = rl.check("client-2")
-    assert allowed is True

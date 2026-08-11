@@ -8,7 +8,6 @@ from pzi.capture_models import AuthHints, CaptureInput, CaptureOptions, PageArti
 from pzi.http_get_routes import process_get_request
 from pzi.http_security import (
     AUTH_HEADER,
-    RateLimiter,
     build_http_security_config,
     host_header_allowed,
     origin_allowed,
@@ -646,14 +645,12 @@ def test_build_http_security_config_strips_token_and_origins() -> None:
         auth_token="  secret  ",
         allowed_origins=[" http://localhost/ ", "", "  "],
         max_body_bytes=-1,
-        rate_limit_rpm=0,
     )
 
     assert security == {
         "auth_token": "secret",
         "allowed_origins": ("http://localhost/",),
         "max_body_bytes": 0,
-        "rate_limit_rpm": 1,
         "listen_host": "127.0.0.1",
     }
 
@@ -794,12 +791,6 @@ def test_attach_session_max_bytes_does_not_exceed_http_body_limit() -> None:
     assert http_post_routes.MAX_BROWSER_PDF_BYTES <= security["max_body_bytes"]
 
 
-def test_rate_limiter_tracks_remaining_and_reset() -> None:
-    limiter = RateLimiter(max_requests=2, window_seconds=60)
-
-    assert limiter.check("client")[:2] == (True, 1)
-    assert limiter.check("client")[:2] == (True, 0)
-    assert limiter.check("client")[:2] == (False, 0)
 
 
 def test_post_capture_emits_pdf_request_and_stores_attach_session(monkeypatch) -> None:

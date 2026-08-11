@@ -137,7 +137,7 @@ to nowhere else — not to any other publisher, and not to any metadata API.
 | Origin check | Allows `chrome-extension://`, `moz-extension://`, `http://localhost`, `http://127.0.0.1` | Restrict via the `api_allowed_origins` config list. An explicit empty list now means *no* cross-origin request is allowed; omit the key to keep the defaults. |
 | Host check (DNS rebinding) | Loopback bind accepts only a loopback `Host` header; an explicit non-loopback `api_listen_host` accepts only that host | Kept — derived from `api_listen_host`, no separate config key. Blocks a page that points its own domain's DNS at 127.0.0.1 and sends a plain GET (no Origin header) with `Host: <attacker-domain>`. |
 | Body size cap | 64 MiB (`api_max_body_bytes`) | Lower if you only capture papers (most PDFs are <20 MiB). |
-| Rate limiting | 60 req/min per client IP | Adjust `rate_limit_rpm` in config. |
+| Rate limiting | **None** | Removed. It was keyed on the peer address — so on loopback every local process shared one bucket — and ran *after* the auth gate, so it never metered a failed token. It slowed your own tools down and did not slow an attacker. The API token is the control. |
 | Attach session tokens | Random 32-byte URL-safe token, TTL 10 minutes, one-shot consume | Tokens generated per capture request, validated on raw PDF upload. |
 | Content-Length validation | Bodies over `api_max_body_bytes` rejected before reading | Kept. |
 | Recursive DNS safety | `safe_public_http_url` resolves hostnames with 250ms budget, rejects private/local IPs | Kept. One scoped exception: a configured `ezproxy_host` (see below). |
