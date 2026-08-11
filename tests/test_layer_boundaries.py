@@ -49,6 +49,7 @@ CORE: frozenset[str] = frozenset(
         # Core data / serialization / algorithm
         "bibtex",
         "similarity",
+        "token_compare",
         "url_safety",
         "capture_models",
         "pdf_planning",

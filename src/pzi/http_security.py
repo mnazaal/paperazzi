@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import hmac
 import ipaddress
 import threading
 import time
 from typing import TypedDict
 from urllib.parse import urlsplit
 
+from pzi.token_compare import tokens_match
 from pzi.url_safety import safe_public_http_url as _shared_safe_public_http_url
 
 DEFAULT_ALLOWED_ORIGINS = (
@@ -213,10 +213,17 @@ def request_security_error(
     *, method: str, headers: dict[str, str], security: HttpSecurityConfig
 ) -> tuple[int, str] | None:
     """Pure request gate: host + origin + optional bearer/header token."""
-    host = headers.get("Host") or headers.get("host")
+    # Case-folded once, here, rather than guessing spellings per lookup. HTTP
+    # header names are case-insensitive, and the route dispatchers flatten the
+    # case-insensitive header object with `dict(headers.items())` — so whatever
+    # the client sent is what arrives. Trying two spellings meant `HOST:` read
+    # as absent, and absent means allowed; under `--no-auth` these gates are
+    # the only controls there are.
+    headers = {name.lower(): value for name, value in headers.items()}
+    host = headers.get("host")
     if not host_header_allowed(host, security["listen_host"]):
         return 403, "host not allowed"
-    origin = headers.get("Origin") or headers.get("origin")
+    origin = headers.get("origin")
     if not origin_allowed(origin, security["allowed_origins"]):
         return 403, "origin not allowed"
     if method.upper() == "OPTIONS":
@@ -224,24 +231,13 @@ def request_security_error(
     token = security["auth_token"]
     if token is None:
         return None
-    supplied = headers.get(AUTH_HEADER) or headers.get(AUTH_HEADER.lower())
-    auth = headers.get("Authorization") or headers.get("authorization")
+    supplied = headers.get(AUTH_HEADER.lower())
+    auth = headers.get("authorization")
     if auth and auth.startswith("Bearer "):
         supplied = auth.removeprefix("Bearer ")
-    if supplied is None or not _tokens_match(supplied, token):
+    if supplied is None or not tokens_match(supplied, token):
         return 401, "invalid API token"
     return None
-
-
-def _tokens_match(supplied: str, token: str) -> bool:
-    """Constant-time comparison that a non-ASCII candidate cannot crash.
-
-    ``hmac.compare_digest`` raises ``TypeError`` on a str containing non-ASCII,
-    so one header value turned an unauthenticated request into a 500. Comparing
-    the UTF-8 bytes keeps the timing property and answers what was always the
-    right answer: a token that is not the token is invalid, not an error.
-    """
-    return hmac.compare_digest(supplied.encode("utf-8"), token.encode("utf-8"))
 
 
 def validated_content_length(

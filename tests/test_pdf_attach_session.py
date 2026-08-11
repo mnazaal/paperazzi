@@ -146,6 +146,38 @@ def test_an_unplanned_origin_candidate_is_still_refused() -> None:
     ) == "source URL not allowed for attach session"
 
 
+def test_a_non_ascii_attach_token_is_refused_not_crashed_on() -> None:
+    """`hmac.compare_digest` raises `TypeError` on a str containing non-ASCII.
+
+    So a token with one accented character was a 500 rather than a 403 — and
+    the route had already `claim()`ed the session, so the exception skipped
+    the `restore()` and destroyed a session the caller could otherwise retry.
+    `http_security.tokens_match` was hardened for exactly this and encodes to
+    UTF-8 first; this is the second caller, which never used it.
+    """
+    session = build_attach_session(
+        request_id="req-1",
+        token="tok-1",
+        citekey="smith2024",
+        bib=None,
+        created_at=100.0,
+        ttl_seconds=600,
+        max_bytes=64,
+        allowed_source_urls=[],
+    )
+
+    assert validate_attach_request(
+        session,
+        request_id="req-1",
+        token="tök-1",
+        citekey="smith2024",
+        bib=None,
+        pdf_bytes=b"%PDF-1.7 test",
+        source_url=None,
+        now=200.0,
+    ) == "invalid attach token"
+
+
 def test_validate_attach_request_rejects_wrong_token() -> None:
     session = build_attach_session(
         request_id="req-1",

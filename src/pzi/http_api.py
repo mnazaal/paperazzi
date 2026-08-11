@@ -274,7 +274,15 @@ def _handle_get(
     if idle_state is not None:
         idle_state["_last_request"] = time.monotonic()
 
-    p = urlsplit(request.path).path
+    # `GET http://[evil/health` is a legal HTTP/1.1 absolute-form target and
+    # `urlsplit` raises `ValueError` on it. `_host_only` guards this already;
+    # the route dispatchers did not, so a malformed target was a 500 with a
+    # traceback rather than a 400.
+    try:
+        p = urlsplit(request.path).path
+    except ValueError:
+        _respond(request, 400, {"error": "invalid request target"}, security)
+        return
     if p.startswith("/pdf/"):
         citekey = decode_path_segment(p[len("/pdf/"):])
         qs_raw = parse_qs(urlsplit(request.path).query)
@@ -349,8 +357,20 @@ def _handle_post(
                  close_connection=True)
         return
     length = length_result
-    raw = request.rfile.read(length) if length > 0 else b""
-    parsed_path = urlsplit(request.path)
+    # A truncated body leaves this read blocking until the socket times out,
+    # and `TimeoutError` then fell through to the generic handler as a 500
+    # after 30 seconds. 408 is what a request the client did not finish is.
+    try:
+        raw = request.rfile.read(length) if length > 0 else b""
+    except TimeoutError:
+        _respond(request, 408, {"error": "request body incomplete"}, security,
+                 close_connection=True)
+        return
+    try:
+        parsed_path = urlsplit(request.path)
+    except ValueError:
+        _respond(request, 400, {"error": "invalid request target"}, security)
+        return
     if parsed_path.path == "/attach-pdf-raw":
         query = parse_qs(parsed_path.query)
         body = {

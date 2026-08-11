@@ -322,3 +322,65 @@ def test_doctor_reports_a_config_key_it_does_not_recognize() -> None:
 
     text = "\n".join(lines)
     assert "inbox_paths" in text
+
+
+def test_health_does_not_reach_out_to_semantic_scholar(tmp_path) -> None:
+    """`GET /health` is a liveness check for the local server.
+
+    It probed Semantic Scholar on every call and returned none of the result —
+    the payload carries neither `reachable` nor `key_effective`. Measured at
+    93 s when S2 stalls, on the endpoint the browser extension's "Test
+    connection" calls with no timeout of its own.
+    """
+    from pzi.http_get_routes import _health_payload
+
+    probes: list[object] = []
+
+    def _exploding_probe(*, api_key=None):
+        probes.append(api_key)
+        raise AssertionError("/health must not make an outbound request")
+
+    import pzi.doctor_service as doctor
+
+    # A real config: a missing one short-circuits `doctor_check` before the
+    # probe, so pointing at one made this test pass against the unfixed code.
+    config = tmp_path / "config.toml"
+    config.write_text(
+        f'[[bibs]]\nname = "ml"\npath = "{tmp_path}/ml.bib"\ndefault = true\n'
+    )
+
+    original = doctor.probe_s2_api
+    doctor.probe_s2_api = _exploding_probe
+    try:
+        payload = _health_payload(str(config), str(tmp_path))
+    finally:
+        doctor.probe_s2_api = original
+
+    assert probes == [], "an outbound probe was attempted"
+    assert "status" in payload
+
+
+def test_doctor_itself_still_probes(tmp_path) -> None:
+    """The switch must not silently disarm `pzi doctor`, where the user asked
+    about their credentials."""
+    from pzi.doctor_service import doctor_check
+
+    calls: list[object] = []
+
+    def _probe(*, api_key=None):
+        calls.append(api_key)
+        return True
+
+    doctor_check(
+        config_path=str(tmp_path / "missing.toml"),
+        home_dir=str(tmp_path),
+        s2_probe=_probe,
+    )
+    # A missing config short-circuits before the probe, so use a real one.
+    config = tmp_path / "config.toml"
+    config.write_text(
+        f'[[bibs]]\nname = "ml"\npath = "{tmp_path}/ml.bib"\ndefault = true\n'
+    )
+    doctor_check(config_path=str(config), home_dir=str(tmp_path), s2_probe=_probe)
+
+    assert calls, "doctor stopped probing Semantic Scholar"

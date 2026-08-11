@@ -101,6 +101,7 @@ def doctor_check(
     home_dir: str,
     translation_probe=None,
     s2_probe=None,
+    probe_network: bool = True,
 ) -> DoctorResult:
     config_result = load_config_file(config_path, home_dir=home_dir)
     if config_result["config"] is None:
@@ -165,17 +166,24 @@ def doctor_check(
     s2_reachable = False
     s2_key_effective: bool | None = None
     s2_probe_error: str | None = None
-    probe_s2 = s2_probe or probe_s2_api
-    try:
-        s2_reachable = bool(probe_s2(api_key=s2_key))
-        if s2_reachable:
-            s2_key_effective = True
-        elif s2_key:
-            s2_key_effective = False
-        else:
-            s2_key_effective = None
-    except OSError as exc:
-        s2_probe_error = str(exc)
+    # `GET /health` sets `probe_network=False`. It is a liveness check for the
+    # local server, it never surfaced this result — the payload carries neither
+    # `reachable` nor `key_effective` — and the outbound call was measured at
+    # 93 s when Semantic Scholar stalls, on an endpoint the extension's "Test
+    # connection" calls with no timeout of its own. `pzi doctor` still probes:
+    # there the user asked about their credentials.
+    probe_s2 = s2_probe or (probe_s2_api if probe_network else None)
+    if probe_s2 is not None:
+        try:
+            s2_reachable = bool(probe_s2(api_key=s2_key))
+            if s2_reachable:
+                s2_key_effective = True
+            elif s2_key:
+                s2_key_effective = False
+            else:
+                s2_key_effective = None
+        except OSError as exc:
+            s2_probe_error = str(exc)
 
     result: DoctorResult = {
         "status": "ok",

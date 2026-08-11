@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from hmac import compare_digest
 from urllib.parse import urlsplit
+
+from pzi.token_compare import tokens_match
 
 
 @dataclass(frozen=True)
@@ -74,7 +75,11 @@ def validate_attach_request(
         return "attach session expired"
     if request_id != session.request_id:
         return "attach request_id mismatch"
-    if not compare_digest(token, session.token):
+    # `tokens_match`, not `compare_digest` directly: the latter raises
+    # `TypeError` on a str containing non-ASCII, and the route has already
+    # `claim()`ed the session by this point — so one accented character was a
+    # 500 that skipped the `restore()` and destroyed a retryable session.
+    if not tokens_match(token, session.token):
         return "invalid attach token"
     if citekey != session.citekey:
         return "attach citekey mismatch"

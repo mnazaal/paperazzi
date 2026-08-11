@@ -698,6 +698,53 @@ def test_request_security_error_rejects_dns_rebinding_host() -> None:
     ) is None
 
 
+def test_the_host_gate_reads_a_header_in_any_case() -> None:
+    """HTTP header names are case-insensitive; this gate was not.
+
+    The route dispatchers build their dict with `dict(request.headers.items())`,
+    which flattens the case-insensitive header object into whatever spelling
+    the client sent. `request_security_error` then tried exactly two — `Host`
+    and `host` — so `HOST:` read as absent, and absent means allowed. Under
+    `--no-auth` the host and origin checks are the only controls there are.
+    """
+    security = build_http_security_config(auth_token=None, listen_host="127.0.0.1")
+
+    for spelling in ("Host", "host", "HOST", "hOsT"):
+        assert request_security_error(
+            method="GET",
+            headers={spelling: "attacker.com"},
+            security=security,
+        ) == (403, "host not allowed"), spelling
+
+
+def test_the_origin_gate_reads_a_header_in_any_case() -> None:
+    """Same flattening, same consequence, on the other gate."""
+    security = build_http_security_config(
+        auth_token=None, listen_host="127.0.0.1", allowed_origins=("http://localhost",)
+    )
+
+    for spelling in ("Origin", "origin", "ORIGIN"):
+        assert request_security_error(
+            method="GET",
+            headers={"Host": "127.0.0.1", spelling: "http://evil.example"},
+            security=security,
+        ) == (403, "origin not allowed"), spelling
+
+
+def test_the_auth_header_is_read_in_any_case_too() -> None:
+    """This one already failed closed — a valid token under `AUTHORIZATION:`
+    was rejected — so it is a usability bug rather than a hole. Fixing the
+    dispatchers without this would turn it into one."""
+    security = build_http_security_config(auth_token="s3cret", listen_host="127.0.0.1")
+
+    for spelling in ("Authorization", "authorization", "AUTHORIZATION"):
+        assert request_security_error(
+            method="GET",
+            headers={"Host": "127.0.0.1", spelling: "Bearer s3cret"},
+            security=security,
+        ) is None, spelling
+
+
 def test_origin_allowed_accepts_extension_prefixes() -> None:
     assert origin_allowed("chrome-extension://abc123", ("chrome-extension://",))
     assert origin_allowed("moz-extension://abc123", ("moz-extension:",))

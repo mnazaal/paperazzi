@@ -240,7 +240,13 @@ def _parse_int(raw: str | None, default: int) -> int:
 
 
 def _health_payload(config_path: str, home_dir: str) -> dict[str, Any]:
-    result = doctor_check(config_path=config_path, home_dir=home_dir)
+    # `probe_network=False`: this is a liveness check for the local server and
+    # it returns none of the Semantic Scholar fields, so the outbound probe was
+    # pure cost — measured at 93 s when S2 stalls, on the endpoint the
+    # extension's "Test connection" calls without a timeout of its own.
+    result = doctor_check(
+        config_path=config_path, home_dir=home_dir, probe_network=False
+    )
     return {
         "status": result["status"],
         "config_ok": result["config_ok"],
