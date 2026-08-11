@@ -79,6 +79,73 @@ def test_validate_attach_request_accepts_same_origin_observed_pdf_url() -> None:
     ) is None
 
 
+def test_a_pdf_found_at_a_cdn_origin_can_be_attached() -> None:
+    """Discovery reaches URLs the plan never named, and usually on another host.
+
+    The publisher's article page is the planned candidate; the PDF it navigates
+    to lives on a CDN. `allowed_source_urls` is pinned to the plan, so the
+    attach was refused and the capture kept its metadata and silently lost the
+    PDF — the case the navigate-monitor and discover-from-page paths exist for.
+
+    Authorised on the planned candidate the fetch started from; the observed
+    URL is recorded as provenance rather than as the credential.
+    """
+    session = build_attach_session(
+        request_id="req-1",
+        token="tok-1",
+        citekey="smith2024",
+        bib=None,
+        created_at=100.0,
+        ttl_seconds=600,
+        max_bytes=64,
+        allowed_source_urls=["https://ieeexplore.ieee.org/document/9840963"],
+    )
+
+    assert validate_attach_request(
+        session,
+        request_id="req-1",
+        token="tok-1",
+        citekey="smith2024",
+        bib=None,
+        pdf_bytes=b"%PDF-1.7 test",
+        source_url="https://cdn.ieee.example/pdfs/9840963.pdf",
+        origin_candidate="https://ieeexplore.ieee.org/document/9840963",
+        now=200.0,
+    ) is None
+
+
+def test_an_unplanned_origin_candidate_is_still_refused() -> None:
+    """The claim has to name something the plan actually contained.
+
+    Otherwise this stops being a check and becomes a field the caller fills in
+    to be allowed. It is defence in depth either way — a caller holding the
+    attach token knows the planned candidates — but "some planned URL" is the
+    line it draws, and it has to draw it.
+    """
+    session = build_attach_session(
+        request_id="req-1",
+        token="tok-1",
+        citekey="smith2024",
+        bib=None,
+        created_at=100.0,
+        ttl_seconds=600,
+        max_bytes=64,
+        allowed_source_urls=["https://ieeexplore.ieee.org/document/9840963"],
+    )
+
+    assert validate_attach_request(
+        session,
+        request_id="req-1",
+        token="tok-1",
+        citekey="smith2024",
+        bib=None,
+        pdf_bytes=b"%PDF-1.7 test",
+        source_url="https://cdn.evil.example/anything.pdf",
+        origin_candidate="https://elsewhere.example/not-in-the-plan",
+        now=200.0,
+    ) == "source URL not allowed for attach session"
+
+
 def test_validate_attach_request_rejects_wrong_token() -> None:
     session = build_attach_session(
         request_id="req-1",

@@ -2552,6 +2552,126 @@ console.log(JSON.stringify({
     assert result["registrations"] == [], result["registrations"]
 
 
+def test_a_meta_refresh_resolves_to_the_whole_url(tmp_path: Path) -> None:
+    """The capture group was non-greedy and followed by `[^>]*`.
+
+    So the engine satisfied it with one character, and every meta refresh
+    resolved to the URL's first letter — `https://host/paper.pdf` became
+    `https://host/h`. IEEE's `stamp.jsp` gateway and its kin serve exactly this
+    kind of redirect, which is what the fallback exists for, so it had never
+    worked for anyone.
+    """
+    result = _run_background_module(
+        r'''
+const pdfBytes = new Uint8Array([37, 80, 68, 70, 45, 49]).buffer;
+globalThis.fetched = [];
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} } },
+  storage: { local: { get: async () => ({ endpoint: "http://127.0.0.1:8765/capture" }) } },
+  tabs: { query: async () => [] },
+  webRequest: { onHeadersReceived: { addListener: () => {}, removeListener: () => {} } },
+  permissions: { contains: async () => true, request: async () => true, remove: async () => true },
+};
+globalThis.btoa = (v) => Buffer.from(v, "binary").toString("base64");
+const HTML = '<html><head><meta http-equiv="refresh" content="0;URL=https://cdn.example/full/paper.pdf"></head></html>';
+globalThis.fetch = async (url, options = {}) => {
+  if ((options.method || "GET") === "GET") globalThis.fetched.push(url);
+  if (url.includes("/attach-pdf")) {
+    return { ok: true, status: 200, headers: { get: () => "application/json" }, json: async () => ({ status: "ok" }) };
+  }
+  if (url.includes("cdn.example")) {
+    return { ok: true, status: 200, headers: { get: () => "application/pdf" }, arrayBuffer: async () => pdfBytes };
+  }
+  return {
+    ok: true, status: 200,
+    headers: { get: (n) => (n.toLowerCase() === "content-type" ? "text/html" : null) },
+    arrayBuffer: async () => new TextEncoder().encode(HTML).buffer,
+    text: async () => HTML,
+  };
+};
+const { maybeStreamPdfBytes } = await import("./background/pdf_fetch.mjs");
+await maybeStreamPdfBytes({
+  endpoint: "http://127.0.0.1:8765/capture",
+  citekey: "smith2024paper",
+  bib: "main",
+  pdfUrlCandidates: [{ url: "https://publisher.test/article.pdf" }],
+  pageUrl: "https://publisher.test/article",
+});
+console.log(JSON.stringify({ fetched: globalThis.fetched }));
+''',
+        tmp_path,
+    )
+
+    assert "https://cdn.example/full/paper.pdf" in result["fetched"], result["fetched"]
+    # The truncated form the old capture produced.
+    assert not any(url.endswith("/h") for url in result["fetched"]), result["fetched"]
+
+
+def test_a_pdf_from_a_publisher_redirect_names_the_candidate_it_came_from(
+    tmp_path: Path,
+) -> None:
+    """The attach session pins `allowed_source_urls` to the plan's candidates.
+
+    Discovery routinely leaves the plan — the publisher's article page
+    redirects to a PDF on a CDN — so the observed URL is on another host and
+    the attach was refused, losing the PDF while the capture reported success.
+    The attach now names the planned candidate it began from, and reports the
+    observed URL as provenance rather than as the credential.
+    """
+    result = _run_background_module(
+        r'''
+const pdfBytes = new Uint8Array([37, 80, 68, 70, 45, 49]).buffer;  // "%PDF-1"
+globalThis.posts = [];
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} } },
+  storage: { local: { get: async () => ({ endpoint: "http://127.0.0.1:8765/capture" }) } },
+  tabs: { query: async () => [] },
+  webRequest: { onHeadersReceived: { addListener: () => {}, removeListener: () => {} } },
+  permissions: { contains: async () => true, request: async () => true, remove: async () => true },
+};
+globalThis.btoa = (value) => Buffer.from(value, "binary").toString("base64");
+globalThis.fetch = async (url, options = {}) => {
+  if (options.method === "POST") globalThis.posts.push({ url, body: options.body });
+  if (url.includes("/attach-pdf-raw")) {
+    return { ok: true, status: 200, headers: { get: () => "application/json" }, json: async () => ({ status: "ok" }) };
+  }
+  // The planned candidate serves a meta refresh to a CDN; the CDN serves the PDF.
+  if (url.includes("cdn.example")) {
+    return { ok: true, status: 200, headers: { get: () => "application/pdf" }, arrayBuffer: async () => pdfBytes };
+  }
+  return {
+    ok: true, status: 200,
+    headers: { get: (n) => (n.toLowerCase() === "content-type" ? "text/html" : null) },
+    arrayBuffer: async () => new TextEncoder().encode(
+      '<html><head><meta http-equiv="refresh" content="0;URL=https://cdn.example/paper.pdf"></head></html>'
+    ).buffer,
+    text: async () => '<html><head><meta http-equiv="refresh" content="0;URL=https://cdn.example/paper.pdf"></head></html>',
+  };
+};
+const { maybeStreamPdfBytes } = await import("./background/pdf_fetch.mjs");
+await maybeStreamPdfBytes({
+  endpoint: "http://127.0.0.1:8765/capture",
+  citekey: "smith2024paper",
+  bib: "main",
+  pdfUrlCandidates: [{ url: "https://publisher.test/article.pdf" }],
+  pageUrl: "https://publisher.test/article",
+  pdfRequest: { request_id: "req-1", attach: { token: "attach-tok" } },
+});
+const attach = globalThis.posts.find((p) => p.url.includes("/attach-pdf-raw"));
+console.log(JSON.stringify({ attachUrl: attach ? attach.url : null }));
+''',
+        tmp_path,
+    )
+
+    attach_url = result["attachUrl"]
+    assert attach_url, "no attach was attempted"
+    # Provenance: where the bytes really came from.
+    assert "cdn.example%2Fpaper.pdf" in attach_url.replace("%3A", ":"), attach_url
+    # Authorisation: the planned candidate the fetch began from.
+    assert "origin_candidate=" in attach_url, attach_url
+    assert "publisher.test" in attach_url, attach_url
+
+
 def test_the_ieee_mapping_that_actually_runs_is_the_one_tested(tmp_path: Path) -> None:
     """The extractor runs *in the page*, so it cannot call module helpers.
 

@@ -759,6 +759,7 @@ def _handle_attach_pdf_post(
             bib=body.get("bib") if isinstance(body.get("bib"), str) else None,
             pdf_bytes=pdf_bytes,
             source_url=source_url,
+            origin_candidate=_origin_candidate(body),
             now=now(),
         )
         if validation_error is not None:
@@ -790,6 +791,20 @@ def _handle_attach_pdf_post(
     if status != 200 and session is not None and attach_session_store is not None:
         attach_session_store.restore(session)
     return status, result
+
+
+def _origin_candidate(body: Any) -> str | None:
+    """The planned candidate the caller began from, if it named one.
+
+    Acquisition legitimately leaves the plan — a publisher redirect to a CDN is
+    the normal case — so the observed `source_url` is often on another host.
+    The plan still authorises; this says which planned candidate the fetch
+    started from, and `source_url` records where the bytes came from.
+    """
+    if not isinstance(body, dict):
+        return None
+    value = body.get("origin_candidate")
+    return value.strip() if isinstance(value, str) and value.strip() else None
 
 
 def _handle_attach_pdf_raw_post(
@@ -834,6 +849,7 @@ def _handle_attach_pdf_raw_post(
         bib=body.get("bib") if isinstance(body.get("bib"), str) else None,
         pdf_bytes=pdf_bytes,
         source_url=source_url,
+        origin_candidate=_origin_candidate(body),
         now=now(),
     )
     if validation_error is not None:

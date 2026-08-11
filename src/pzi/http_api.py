@@ -360,6 +360,10 @@ def _handle_post(
             "citekey": query.get("citekey", [None])[0],
             "bib": query.get("bib", [None])[0],
             "source_url": query.get("source_url", [None])[0],
+            # Which planned candidate the fetch began from, when the bytes ended
+            # up elsewhere — a publisher redirecting to a CDN is the normal
+            # case, and the plan is still what authorises the attach.
+            "origin_candidate": query.get("origin_candidate", [None])[0],
             "pdf_bytes": raw,
         }
         status, response_body = process_post_request(

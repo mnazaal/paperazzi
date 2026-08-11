@@ -369,7 +369,7 @@ async function tryPdfCandidates({ endpoint, citekey, bib, candidates, permission
     try {
       const fetched = await fetchPdfCandidate(url, { pageUrl, attempts });
       if (!fetched) continue;
-      const attachResult = await attachPdfToServer({ endpoint, citekey, bib, sourceUrl: url, bytes: fetched.bytes, pdfRequest });
+      const attachResult = await attachPdfToServer({ endpoint, citekey, bib, sourceUrl: fetched.sourceUrl || url, bytes: fetched.bytes, pdfRequest, originCandidate: url });
       if (attachResult && attachResult.status === "ok") {
         markLastAttemptSaved(attempts, url);
         if (permission) attachResult.pdf_attach_permission = permission;
@@ -402,7 +402,10 @@ async function fetchPdfViaNavigateMonitor({ candidate, endpoint, citekey, bib, p
     referrer: candidate.referrer || pageUrl || undefined,
   }, "navigate_monitor_fetch", attempts);
   if (!fetched) return null;
-  const attachResult = await attachPdfToServer({ endpoint, citekey, bib, sourceUrl: observedUrl, bytes: fetched.bytes, pdfRequest });
+  // `originCandidate`: the observed URL is wherever the publisher redirected
+  // to — routinely another host, and never named by the plan. The planned
+  // candidate authorises; the observed URL is the provenance.
+  const attachResult = await attachPdfToServer({ endpoint, citekey, bib, sourceUrl: observedUrl, bytes: fetched.bytes, pdfRequest, originCandidate: url });
   if (attachResult && attachResult.status === "ok") {
     markLastAttemptSaved(attempts, observedUrl);
     return attachResult;
@@ -479,7 +482,7 @@ async function fetchPdfViaDiscoverFromPage({ candidate, endpoint, citekey, bib, 
       referrer: candidate.referrer || pageUrl || undefined,
     }, "discover_from_page_fetch", attempts);
     if (!fetched) continue;
-    const attachResult = await attachPdfToServer({ endpoint, citekey, bib, sourceUrl: observedUrl, bytes: fetched.bytes, pdfRequest });
+    const attachResult = await attachPdfToServer({ endpoint, citekey, bib, sourceUrl: observedUrl, bytes: fetched.bytes, pdfRequest, originCandidate: url });
     if (attachResult && attachResult.status === "ok") {
       markLastAttemptSaved(attempts, observedUrl);
       return attachResult;
@@ -540,7 +543,7 @@ function waitForTabLoad(tabId, timeoutMs) {
   });
 }
 
-async function attachPdfToServer({ endpoint, citekey, bib, sourceUrl, bytes, pdfRequest = null }) {
+async function attachPdfToServer({ endpoint, citekey, bib, sourceUrl, bytes, pdfRequest = null, originCandidate = null }) {
   // The raw route requires a `request_id` naming an attach session, and refuses
   // without one — deliberately, since the session carries the TTL, byte-limit,
   // source-URL and citekey checks, and a control the caller can decline is no
@@ -550,7 +553,7 @@ async function attachPdfToServer({ endpoint, citekey, bib, sourceUrl, bytes, pdf
   // a rejected security check in the server log for every such capture.
   const hasAttachSession = Boolean(pdfRequest?.request_id);
   if (hasAttachSession) {
-    const rawResponse = await fetch(rawAttachUrl(endpoint, { citekey, bib, sourceUrl, pdfRequest }), {
+    const rawResponse = await fetch(rawAttachUrl(endpoint, { citekey, bib, sourceUrl, pdfRequest, originCandidate }), {
       method: "POST",
       headers: { "Content-Type": "application/pdf", ...attachTokenHeader(pdfRequest), ...(await getAuthHeaders()) },
       body: bytes,
@@ -573,6 +576,9 @@ async function attachPdfToServer({ endpoint, citekey, bib, sourceUrl, bytes, pdf
       citekey,
       ...(effectiveBib ? { bib: effectiveBib } : {}),
       source_url: sourceUrl,
+      ...(originCandidate && originCandidate !== sourceUrl
+        ? { origin_candidate: originCandidate }
+        : {}),
       pdf_base64: base64,
       ...attachSessionPayload(pdfRequest),
     }),
@@ -580,7 +586,7 @@ async function attachPdfToServer({ endpoint, citekey, bib, sourceUrl, bytes, pdf
   return await jsonOrNull(attachResponse);
 }
 
-function rawAttachUrl(endpoint, { citekey, bib, sourceUrl, pdfRequest = null }) {
+function rawAttachUrl(endpoint, { citekey, bib, sourceUrl, pdfRequest = null, originCandidate = null }) {
   // The planned URL comes from the server, which derives it from the
   // user-editable `api_url` config key. `new URL(absolute, base)` discards the
   // base, so an absolute value here sent the API token and the PDF bytes to
@@ -593,6 +599,11 @@ function rawAttachUrl(endpoint, { citekey, bib, sourceUrl, pdfRequest = null }) 
   if (!url.searchParams.get("citekey")) url.searchParams.set("citekey", citekey);
   if (bib && !url.searchParams.get("bib")) url.searchParams.set("bib", bib);
   url.searchParams.set("source_url", sourceUrl);
+  // Which planned candidate this fetch began from, when the bytes ended up
+  // elsewhere. The plan still authorises; `source_url` is provenance.
+  if (originCandidate && originCandidate !== sourceUrl) {
+    url.searchParams.set("origin_candidate", originCandidate);
+  }
   return url.toString();
 }
 
@@ -793,7 +804,10 @@ async function fetchCandidateBytes(candidate, options, mode, attempts) {
     return null;
   }
   attempts.push({ url, mode, status: "fetched", http_status: response.status || null, content_type: contentType, byte_count: bytes.byteLength });
-  return { bytes };
+  // The URL these bytes came from, which is not always the candidate the
+  // caller passed: the meta-refresh and bot-bypass paths fetch elsewhere and
+  // used to attribute the result to the planned URL.
+  return { bytes, sourceUrl: url };
 }
 
 /**
@@ -812,7 +826,11 @@ async function extractMetaRedirectUrl(candidate, options) {
     if (!response.ok) return null;
     const text = await response.text();
     // Match meta refresh patterns with flexible spacing/case/quoting
-    const re = /<meta\s[^>]*http-equiv\s*=\s*["']?refresh["']?[^>]*content\s*=\s*["']?(\d+)\s*;\s*(?:url\s*=\s*)?(\S+?)["']?[^>]*\/?>/i;
+    // `([^"'>\s]+)`, not `(\S+?)`. The old capture was non-greedy and followed
+    // by `[^>]*`, so the engine satisfied it with a single character: every
+    // meta refresh resolved to the URL's first letter — `https://host/paper.pdf`
+    // came back as `https://host/h`. The fallback had never worked.
+    const re = /<meta\s[^>]*http-equiv\s*=\s*["']?refresh["']?[^>]*content\s*=\s*["']?(\d+)\s*;\s*(?:url\s*=\s*)?([^"'>\s]+)/i;
     const match = re.exec(text);
     if (!match) return null;
     const redirectUrl = match[2].replace(/['"\s]/g, "");

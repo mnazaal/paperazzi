@@ -52,8 +52,24 @@ def validate_attach_request(
     pdf_bytes: bytes,
     source_url: str | None,
     now: float,
+    origin_candidate: str | None = None,
 ) -> str | None:
-    """Return validation error string, or None when request is allowed."""
+    """Return validation error string, or None when request is allowed.
+
+    ``origin_candidate`` is the planned candidate the caller began from, when
+    the bytes ended up somewhere else. Acquisition legitimately leaves the
+    plan: a navigate-monitor or discover-from-page run follows the publisher's
+    own redirect to a CDN, and the observed URL is on another host by design.
+    Authorising on the observed URL alone refused those attaches, so a capture
+    kept its metadata and silently lost the PDF.
+
+    The plan is still what authorises — the claim must name a URL the plan
+    contained — while ``source_url`` records where the bytes actually came
+    from. This is defence in depth rather than a boundary: a caller holding the
+    attach token knows the planned candidates. The gates that matter are the
+    token, the request id, the citekey and bib match, the byte limit and the
+    ``%PDF-`` magic; this one keeps out bytes from somewhere nobody planned.
+    """
     if now > session.expires_at:
         return "attach session expired"
     if request_id != session.request_id:
@@ -68,7 +84,12 @@ def validate_attach_request(
         return "PDF payload too large"
     if not pdf_bytes.startswith(b"%PDF-"):
         return "PDF payload must start with %PDF-"
-    if not _source_allowed(source_url, session.allowed_source_urls):
+    # The observed URL authorises when it is itself planned; otherwise the
+    # caller must name the planned candidate it started from. Checking the
+    # observed URL first keeps every existing caller's behaviour unchanged.
+    if not _source_allowed(source_url, session.allowed_source_urls) and not _source_allowed(
+        origin_candidate, session.allowed_source_urls
+    ):
         return "source URL not allowed for attach session"
     return None
 
