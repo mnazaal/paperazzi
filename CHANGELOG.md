@@ -15,6 +15,40 @@ next to the diff it explains.
 
 ## [Unreleased]
 
+### Removed
+
+- **Breaking:** the inbound HTTP rate limiter, and its `rate_limit_rpm` config
+  key. It was keyed on the peer address — so on loopback every local process
+  shared one bucket — and ran after the auth gate, so it never metered a failed
+  token: it throttled your own tools and not an attacker. A config still
+  carrying `rate_limit_rpm` loads, with a warning saying the key is retired.
+  (The *outbound* limiter that spaces provider requests is unaffected.)
+
+### Added
+
+- `pzi server --log-requests` — one line per HTTP request on stderr (method,
+  path, status, ms). Off by default; the query string is never logged.
+- `pzi inbox --json`, the last runner without it.
+
+### Changed
+
+- `--strict-metadata` now refuses a capture whose metadata does not identify a
+  paper, and no longer fails on a provider error that a later provider
+  recovered from. Previously a Crossref 429 failed an add OpenAlex completed,
+  while `@article{unknownxxxxuntitled}` with no title, author or year was
+  accepted.
+- `pzi fix`, `pzi tag` and `pzi pdf` with no subcommand print that group's help
+  instead of `error: the following arguments are required: fix_command`. Still
+  exit 2.
+- `fix reindex --rename-citekeys` says when no `citekey_format` is configured
+  and the built-in author+year+title scheme would be used — in the prompt, the
+  warning above it, and the non-interactive refusal.
+- `add --from-file` exits 5, not 4, when *no* item succeeded (4 is documented as
+  "some items succeeded", and the JSON envelope already said `error`).
+- Node is resolved from the data home before any network call, and
+  `PZI_NODE_VERSION` pins the version.
+- The translation-server is no longer reinstalled on every pzi version bump.
+
 ### Fixed
 
 - `pzi update` no longer adopts an unrelated paper's metadata when a search
@@ -41,14 +75,6 @@ next to the diff it explains.
 - Firefox `strict_min_version` raised to 128, which is what the manifest needs;
   109–127 installed cleanly and silently lost cross-origin PDF fetching.
 - `pzi init --force` writes a `.bak` before overwriting your config.
-
-### Changed
-
-- `add --from-file` exits 5, not 4, when *no* item succeeded (4 is documented as
-  "some items succeeded", and the JSON envelope already said `error`).
-- Node is resolved from the data home before any network call, and
-  `PZI_NODE_VERSION` pins the version.
-- The translation-server is no longer reinstalled on every pzi version bump.
 
 ## [0.1.0b5] - 2026-08-03
 
