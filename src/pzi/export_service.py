@@ -19,6 +19,7 @@ from pzi.bib_serialize import (
     _library_entry_to_bibtex_entry,
     _serialize_library,
     describe_failed_blocks,
+    detect_bib_layout,
 )
 
 
@@ -136,7 +137,11 @@ def export_bibtex(bib_path: str) -> ExportResult:
             _library_entry_to_bibtex_entry(entry) for entry in library.entries
         ]
         dropped = [*_missing_bib_errors(bib_path), *describe_failed_blocks(library)]
-        bibtex_str = _serialize_library(library)
+        # Sniffed from the library being exported, for the reason above: a
+        # BibTeX export is billed as a backup, and a backup that comes back
+        # re-indented with its trailing commas stripped is a diff against the
+        # thing it was meant to reproduce.
+        bibtex_str = _serialize_library(library, layout=detect_bib_layout(source))
     return {
         "status": _export_status(dropped),
         "bib_path": bib_path,

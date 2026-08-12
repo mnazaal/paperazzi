@@ -459,6 +459,145 @@ def test_a_composite_file_field_survives_an_unrelated_write(
         assert "ml" in written
 
 
+#: Zotero / Better BibTeX export style: tab indent, trailing comma on every
+#: field, one blank line between entries.
+_TAB_STYLE_BIB = (
+    "@article{key0,\n"
+    "\ttitle = {Paper Zero},\n"
+    "\tauthor = {Author, A.},\n"
+    "\tyear = {2020},\n"
+    "}\n"
+    "\n"
+    "@article{key1,\n"
+    "\ttitle = {Paper One},\n"
+    "\tauthor = {Other, B.},\n"
+    "\tyear = {2021},\n"
+    "}\n"
+)
+
+#: Two-space indent, no trailing comma, no blank line between entries — the
+#: other convention in the wild, and the one this project's own library uses.
+_COMPACT_STYLE_BIB = (
+    "@article{key0,\n"
+    "  title = {Paper Zero},\n"
+    "  author = {Author, A.},\n"
+    "  year = {2020}\n"
+    "}\n"
+    "@article{key1,\n"
+    "  title = {Paper One},\n"
+    "  author = {Other, B.},\n"
+    "  year = {2021}\n"
+    "}\n"
+)
+
+_UNTOUCHED_TAB_ENTRY = (
+    "@article{key1,\n"
+    "\ttitle = {Paper One},\n"
+    "\tauthor = {Other, B.},\n"
+    "\tyear = {2021},\n"
+    "}\n"
+)
+
+_UNTOUCHED_COMPACT_ENTRY = (
+    "@article{key1,\n"
+    "  title = {Paper One},\n"
+    "  author = {Other, B.},\n"
+    "  year = {2021}\n"
+    "}\n"
+)
+
+
+def _line_delta(before: str, after: str) -> tuple[list[str], list[str]]:
+    """Lines removed from *before* and added to reach *after*."""
+    import difflib
+
+    diff = list(difflib.ndiff(before.splitlines(), after.splitlines()))
+    removed = [line[2:] for line in diff if line.startswith("- ")]
+    added = [line[2:] for line in diff if line.startswith("+ ")]
+    return removed, added
+
+
+def test_tag_add_changes_only_the_edited_entry_byte_for_byte() -> None:
+    """A one-entry edit must be a one-entry diff, compared as bytes.
+
+    Every other test in this module asserts substrings, and a whole-file
+    reformat passes all of them: ``"@article{key1," in text`` stays true after
+    the file has been re-indented, its trailing commas stripped and a blank line
+    inserted between every entry. That is what happened — one ``tag add``
+    against a 200-entry Zotero export changed 1800 lines — and it survived four
+    reviews precisely because nothing compared bytes.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        cp, bib, _ = _config(td)
+        Path(bib).write_text(_TAB_STYLE_BIB)
+
+        result = add_tags(
+            config_path=cp, home_dir=td, bib_selector=None,
+            citekey="key0", tags=["ml"],
+        )
+
+        assert result["status"] == "ok" and result["changed"]
+        after = Path(bib).read_text()
+        removed, added = _line_delta(_TAB_STYLE_BIB, after)
+        assert removed == [], f"untouched lines were rewritten: {removed}"
+        # The new field carries the file's own indent and trailing comma.
+        assert added == ["\tkeywords = {ml},"], added
+        assert _UNTOUCHED_TAB_ENTRY in after
+
+
+def test_tag_add_does_not_insert_blank_lines_between_entries() -> None:
+    """``block_separator`` defaults to a blank line, which no file has to want.
+
+    On a compact library this is the whole blast radius: content lines are
+    untouched and every entry boundary gains a line, which is why one first
+    write against a 22k-entry library produced a 59.5k-line diff with zero
+    content changes.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        cp, bib, _ = _config(td)
+        Path(bib).write_text(_COMPACT_STYLE_BIB)
+
+        result = add_tags(
+            config_path=cp, home_dir=td, bib_selector=None,
+            citekey="key0", tags=["ml"],
+        )
+
+        assert result["status"] == "ok" and result["changed"]
+        after = Path(bib).read_text()
+        assert "}\n\n@article{key1," not in after, "a blank line was inserted"
+        assert _UNTOUCHED_COMPACT_ENTRY in after
+        removed, added = _line_delta(_COMPACT_STYLE_BIB, after)
+        # `year` was the last field and gains a comma; nothing else may change.
+        assert removed == ["  year = {2020}"], removed
+        assert added == ["  year = {2020},", "  keywords = {ml}"], added
+
+
+def test_insert_preserves_the_layout_of_every_untouched_entry() -> None:
+    """The insert path is a different writer from the update path.
+
+    Both build their own ``BibtexFormat``; a fix wired into one of them is this
+    codebase's dominant defect shape, so the guarantee is asserted through both.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "lib.bib")
+        papers = os.path.join(td, "papers")
+        os.makedirs(papers, exist_ok=True)
+        Path(bib).write_text(_TAB_STYLE_BIB)
+
+        result = add_record_with_bib(
+            bib={"name": "main", "path": bib, "papers_dir": papers, "default": True},  # type: ignore[arg-type]
+            record={"citekey": "new2025", "title": "Fresh Work",
+                    "authors": ["New, N"], "year": 2025, "doi": "10.1000/new"},
+            dry_run=False,
+        )
+
+        assert result["status"] == "ok" and result["action"] == "insert"
+        after = Path(bib).read_text()
+        removed, _added = _line_delta(_TAB_STYLE_BIB, after)
+        assert removed == [], f"an existing entry was rewritten: {removed}"
+        assert _UNTOUCHED_TAB_ENTRY in after
+
+
 @pytest.mark.parametrize("path_style", ["absolute", "relative"])
 def test_a_composite_file_field_resolves_to_its_pdf(path_style: str) -> None:
     """The point of parsing: the entry must know it has a PDF."""

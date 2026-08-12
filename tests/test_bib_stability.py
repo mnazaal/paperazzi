@@ -25,7 +25,7 @@ from pzi.bib_repository import (
     preview_write_plan,
     update_bib_entry,
 )
-from pzi.bib_serialize import describe_failed_blocks, serialize_bibtex
+from pzi.bib_serialize import describe_failed_blocks, detect_bib_layout, serialize_bibtex
 from pzi.errors import PziError
 
 # ── Fixtures ──────────────────────────────────────────────────────────
@@ -60,7 +60,7 @@ BIB_WITH_EXTRAS = r"""@string{ jmlr = {Journal of Machine Learning Research} }
 def test_parse_library_serialize_roundtrip_preserves_extras() -> None:
     """Parse with comments/strings/preamble → serialize → all content survives."""
     library = _parse_bib_library(BIB_WITH_EXTRAS)
-    result = _serialize_library(library)
+    result = _serialize_library(library, layout=detect_bib_layout(BIB_WITH_EXTRAS))
 
     # Comments preserved (content, not exact whitespace)
     assert "% A comment between entries" in result
@@ -85,11 +85,16 @@ def test_parse_library_serialize_roundtrip_preserves_extras() -> None:
 
 
 def test_parse_library_serialize_roundtrip_stable() -> None:
-    """Serialize → parse → serialize is idempotent."""
+    """Serialize → parse → serialize is idempotent.
+
+    Each pass sniffs its own input, which is the stronger property: a layout
+    read off the serializer's own output has to describe that output, or a
+    second write would drift again.
+    """
     library = _parse_bib_library(BIB_WITH_EXTRAS)
-    pass1 = _serialize_library(library)
+    pass1 = _serialize_library(library, layout=detect_bib_layout(BIB_WITH_EXTRAS))
     library2 = _parse_bib_library(pass1)
-    pass2 = _serialize_library(library2)
+    pass2 = _serialize_library(library2, layout=detect_bib_layout(pass1))
     assert pass1 == pass2
 
 

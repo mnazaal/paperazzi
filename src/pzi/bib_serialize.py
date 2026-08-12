@@ -16,7 +16,9 @@ those stay in :mod:`pzi.bib_repository`, which re-exports the names here.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from bibtexparser.entrypoint import parse_string, write_string
@@ -80,10 +82,94 @@ def serialize_bibtex(entries: list[BibtexEntry]) -> str:
 
 
 def _write_library_text(library: Library) -> str:
-    """Write *library* in the deterministic style shared by every full rewrite."""
+    """Write *library* in a deterministic style, for validation round-trips.
+
+    Deliberately **not** layout-aware: its two callers are
+    :func:`serialize_bibtex` and :func:`_validate_bibtex_roundtrip`, and neither
+    output is ever written to a user's file — the second is reparsed and thrown
+    away. Real writes go through :func:`_serialize_library`, which takes a
+    :class:`BibLayout` sniffed from the file being rewritten. Do not "fix" this
+    one to match; a validation gate wants one canonical form.
+    """
     fmt = BibtexFormat()
     fmt.indent = "  "
     return write_string(library, bibtex_format=fmt)
+
+
+@dataclass(frozen=True)
+class BibLayout:
+    """How a ``.bib`` file lays its entries out, so a rewrite can reproduce it.
+
+    bibtexparser's writer defaults are one house style among several, and pzi
+    used to impose them on every write: two-space indent, no trailing comma, one
+    blank line between entries. Rewriting one entry therefore rewrote the whole
+    file — a Zotero or Better BibTeX export (tab indent, trailing commas) came
+    back re-indented with its commas stripped, and a compact library gained a
+    blank line per entry. On a 22k-entry library that is a 59.5k-line diff from
+    adding one tag, which is indistinguishable from corruption at review time.
+
+    ``block_separator`` is appended *after* a block that already ends in a
+    newline (see bibtexparser's ``writer.write``), so ``"\\n"`` means one blank
+    line between entries and ``""`` means none. bibtexparser's own default,
+    ``"\\n\\n"``, therefore means *two* blank lines — which is nobody's
+    convention, and is why every pzi write used to add a line per entry.
+    """
+
+    #: One blank line between entries: the conventional BibTeX look, and what a
+    #: file with nothing to sniff (new, or a single entry) is written as.
+    block_separator: str = "\n"
+    indent: str = "  "
+    trailing_comma: bool = False
+
+
+#: A field line: leading whitespace, a key, then ``=``. Anchored per line so a
+#: braced value spanning lines cannot be mistaken for one.
+_FIELD_LINE_RE = re.compile(r"^([ \t]+)[A-Za-z][^\s=]*\s*=", re.MULTILINE)
+
+#: The end of an entry: the last field's line ending, then the closing brace.
+_ENTRY_END_RE = re.compile(r"(,?)[ \t]*\n[ \t]*\}[ \t]*(?:\n|$)")
+
+#: The gap *between* two blocks: a closing brace on its own line, any blank
+#: lines, then the next block. Only matches between blocks, so the file's final
+#: entry cannot be mistaken for evidence about separation.
+_BLOCK_GAP_RE = re.compile(r"^\}[ \t]*\n(\n*)(?=[ \t]*@)", re.MULTILINE)
+
+
+def detect_bib_layout(source: str) -> BibLayout:
+    """Sniff *source*'s layout conventions, falling back to the writer defaults.
+
+    Dominant style wins, the same rule ``_detect_text_shape`` uses for newlines:
+    one hand-edited entry in a 22k-entry file must not flip the whole rewrite.
+    A file with nothing to sniff — empty, or a single entry with no fields —
+    keeps the defaults.
+
+    Pure, and cheap enough to run on every write: three regex passes over text
+    already in memory.
+    """
+    if not source.strip():
+        return BibLayout()
+
+    indents = [match.group(1) for match in _FIELD_LINE_RE.finditer(source)]
+    indent = Counter(indents).most_common(1)[0][0] if indents else BibLayout.indent
+
+    ends = [match.group(1) for match in _ENTRY_END_RE.finditer(source)]
+    with_comma = sum(1 for end in ends if end == ",")
+    trailing_comma = bool(ends) and with_comma * 2 >= len(ends)
+
+    # A file with fewer than two blocks says nothing about how blocks are
+    # separated, so it keeps the default rather than inventing evidence: one
+    # entry ends in `}` too, and counting that would read "compact" off every
+    # single-entry library.
+    gaps = [match.group(1) for match in _BLOCK_GAP_RE.finditer(source)]
+    blank_separated = sum(1 for gap in gaps if gap)
+    if not gaps:
+        block_separator = BibLayout.block_separator
+    else:
+        block_separator = "\n" if blank_separated * 2 >= len(gaps) else ""
+
+    return BibLayout(
+        block_separator=block_separator, indent=indent, trailing_comma=trailing_comma
+    )
 
 
 def _resolve_file_field(record: NormalizedRecord, entry: BibtexEntry, bib_path: str) -> None:
@@ -403,8 +489,8 @@ def _library_to_entries_records(
     return entries, records
 
 
-def _serialize_library(library: Library) -> str:
-    """Serialize a v2 Library to BibTeX text, preserving original enclosings.
+def _serialize_library(library: Library, *, layout: BibLayout | None) -> str:
+    """Serialize a v2 Library to BibTeX text, preserving enclosings and layout.
 
     ``_parse_bib_library`` strips enclosings with ``RemoveEnclosingMiddleware``,
     which records what it removed (including ``no-enclosing`` for a bare
@@ -424,9 +510,19 @@ def _serialize_library(library: Library) -> str:
     A rebuilt entry keeps the source text of the fields a write did not change,
     via :func:`merge_preserving_unchanged_source`, so its own untouched macro
     references survive too.
+
+    *layout* carries the file's own indent, trailing-comma and block-separator
+    conventions (:func:`detect_bib_layout`). It is a **required keyword** with no
+    default, and ``None`` is the explicit "there is no source file to match"
+    answer: passing it must be a decision at every call site, because getting it
+    wrong is the difference between a one-entry diff and a whole-file reformat,
+    and the previous version of this bug was invisible for four reviews.
     """
+    layout = layout or BibLayout()
     fmt = BibtexFormat()
-    fmt.indent = "  "
+    fmt.indent = layout.indent
+    fmt.trailing_comma = layout.trailing_comma
+    fmt.block_separator = layout.block_separator
     return write_string(
         library,
         unparse_stack=[

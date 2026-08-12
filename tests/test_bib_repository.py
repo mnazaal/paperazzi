@@ -199,7 +199,10 @@ def test_execute_write_plan_updates_file_contents(tmp_path: Path) -> None:
             "fields": {"title": "New Title"},
         }
     ]
-    assert path.read_text() == "@article{smith2024graph,\n  title = {New Title}\n}\n"
+    # The source's trailing comma survives the write. This assertion used to
+    # read `{New Title}\n}` — pinning the comma being stripped, which is the
+    # whole-file reformat this fixture is one entry of.
+    assert path.read_text() == "@article{smith2024graph,\n  title = {New Title},\n}\n"
 
 
 def test_update_bib_entry_updates_matching_entry_under_lock(tmp_path: Path) -> None:
@@ -229,7 +232,9 @@ def test_update_bib_entry_updates_matching_entry_under_lock(tmp_path: Path) -> N
         "fields": {"title": "New Title"},
     }
     assert result["record"]["title"] == "New Title"
-    assert path.read_text() == "@article{smith2024graph,\n  title = {New Title}\n}\n"
+    # Trailing comma preserved from the source; see the note in
+    # `test_execute_write_plan_updates_file_contents`.
+    assert path.read_text() == "@article{smith2024graph,\n  title = {New Title},\n}\n"
 
 
 def test_update_bib_entry_returns_not_found_when_missing(tmp_path: Path) -> None:

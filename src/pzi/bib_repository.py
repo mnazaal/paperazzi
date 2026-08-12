@@ -32,6 +32,7 @@ from pzi.bib_serialize import (
     _validate_bibtex_roundtrip,
     _validate_library_parseable,
     build_library,
+    detect_bib_layout,
     merge_preserving_unchanged_source,
     parse_bibtex_with_failures,
 )
@@ -519,9 +520,14 @@ def _render_updated_library(
     path: str,
     *,
     updated_index: int | None,
+    source: str,
     file_path_style: str = "absolute",
 ) -> str:
     """Serialize *library* with *updated_entries* applied to it.
+
+    *source* is the text being rewritten, and is read only to sniff the file's
+    layout conventions (:func:`detect_bib_layout`) so the rewrite reproduces
+    them.
 
     Takes what the caller already computed rather than recomputing it. The
     previous `_render_write_plan` re-read the same in-memory source, re-parsed
@@ -541,7 +547,7 @@ def _render_updated_library(
         file_path_style=file_path_style,
         touched_indices=set() if updated_index is None else {updated_index},
     )
-    return _serialize_library(updated_library)
+    return _serialize_library(updated_library, layout=detect_bib_layout(source))
 
 
 def execute_write_plan(
@@ -593,6 +599,7 @@ def execute_write_plan(
             updated_entries,
             path,
             updated_index=_touched_index(plan),
+            source=source,
             file_path_style=file_path_style,
         )
         if new_source != source:
@@ -758,7 +765,7 @@ def batch_write_session(
             file_path_style=file_path_style,
             touched_indices=session.touched,
         )
-        new_source = _serialize_library(new_library)
+        new_source = _serialize_library(new_library, layout=detect_bib_layout(source))
         if new_source != source:
             _write_bib_text_atomic(path, new_source)
 
@@ -801,6 +808,7 @@ def preview_write_plan(
             updated_entries,
             path,
             updated_index=_touched_index(plan),
+            source=source,
             file_path_style=file_path_style,
         )
         return {
@@ -850,7 +858,7 @@ def preview_batch_write(
             file_path_style=file_path_style,
             touched_indices=session.touched,
         )
-        new_source = _serialize_library(new_library)
+        new_source = _serialize_library(new_library, layout=detect_bib_layout(source))
         return {
             "changed": new_source != source,
             "diff": _source_diff(source, new_source, path),
@@ -1079,6 +1087,7 @@ def update_bib_entry(
                 entries,
                 path,
                 updated_index=index,
+                source=source,
                 file_path_style=file_path_style,
             )
             if new_source != source:
@@ -1145,7 +1154,7 @@ def delete_bib_entry(
         # can commit one that was already unrepresentable — which is exactly how
         # a wedged library used to survive a `delete` unnoticed.
         _validate_bibtex_roundtrip(remaining)
-        new_source = _serialize_library(new_library)
+        new_source = _serialize_library(new_library, layout=detect_bib_layout(source))
         if new_source != source:
             if backup_path is not None:
                 # Under the lock and immediately before the write, so the backup
@@ -1251,7 +1260,7 @@ def merge_bib_entries(
             new_blocks.append(block)
 
         new_library = build_library(new_blocks)
-        new_source = _serialize_library(new_library)
+        new_source = _serialize_library(new_library, layout=detect_bib_layout(source))
         if new_source != source:
             if backup_path is not None:
                 backup_path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
@@ -1344,7 +1353,7 @@ def rewrite_entries_in_order_locked(
     new_library = _update_library_blocks(
         library, entries, path, file_path_style=file_path_style
     )
-    new_source = _serialize_library(new_library)
+    new_source = _serialize_library(new_library, layout=detect_bib_layout(source))
     if new_source != source:
         _write_bib_text_atomic(path, new_source)
     return entries

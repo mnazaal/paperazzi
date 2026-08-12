@@ -55,6 +55,19 @@ next to the diff it explains.
 
 ### Fixed
 
+- **A write no longer reformats the whole library.** Every write built its own
+  formatter and set only the indent, so bibtexparser's remaining defaults were
+  imposed on the file: tabs became two spaces, every trailing comma was
+  stripped, and a blank line was added between entries. Adding one tag to one
+  entry of a 200-entry Zotero export changed 1800 lines; on a 22k-entry library
+  the first write was a 59.5k-line diff that touched no content at all. The
+  indent, trailing-comma and entry-separation conventions are now read off the
+  file being rewritten — as its line endings and BOM already were — so a
+  one-entry edit is a one-entry diff. A `.bib` with no conventions to read
+  (new, or a single entry) gets one blank line between entries, which is also
+  what an entry-separator default of "two blank lines" used to mean. `pzi
+  export --format bibtex` preserves the source layout too, since an export is
+  billed as a backup.
 - **Breaking:** `citekey_format` can now reproduce a Better BibTeX key. Quoted
   literals may contribute `-`, `_`, `:` and `.`, which the final sanitizer used
   to delete — so `auth.lower + "-" + shorttitle(1,0).lower + "-" + year` gave
