@@ -70,6 +70,11 @@ class NormalizedRecord(TypedDict, total=False):
 
     # --- Deduplication hint from fuzzy similarity ---
     similarity_hint: str | None
+    # The entry this record is an *exact* identity match for, recorded only when
+    # `--force-new` inserted it beside that entry anyway. Distinct from
+    # `similarity_hint`, which is a fuzzy maybe: this one is a certainty, and
+    # the warning for it says so.
+    duplicate_of: str | None
 
 
 class BibtexEntry(TypedDict):

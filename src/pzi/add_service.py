@@ -682,7 +682,9 @@ def add_record_with_bib(
         rec = reuse_orphan_pdf_for_planned_path(
             rec, papers_dir=bib["papers_dir"], pdf_filename_format=pdf_filename_format,
         )
-        rec = _add_planning.attach_similarity_hint(rec, existing_records, index=index)
+        rec = _add_planning.attach_similarity_hint(
+            rec, existing_records, index=index, force_new=force_new,
+        )
         return rec, plan_bib_write(
             rec, existing_records, force_new=force_new, index=index,
             existing_entries=existing_entries,
@@ -849,7 +851,7 @@ def add_records_to_bib_batch(
                     pdf_path = typed.get("local_pdf_path")
                     record_pdf = pdf_path if isinstance(pdf_path, str) else None
                     typed = _add_planning.attach_similarity_hint(
-                        typed, existing_records, index=index,
+                        typed, existing_records, index=index, force_new=force_new,
                     )
                     plan = plan_bib_write(
                         typed, existing_records, force_new=force_new, index=index,

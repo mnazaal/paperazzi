@@ -145,11 +145,45 @@ def test_error_result_shapes_consistent_failure_payload() -> None:
 
 
 def test_attach_similarity_hint_leaves_exact_match_unchanged() -> None:
+    """Without --force-new the match is *handled*: the write becomes an update."""
     record = {"citekey": "smith2024", "title": "Same", "year": 2024}
 
     result = attach_similarity_hint(record, [record])
 
     assert result is record
+
+
+def test_force_new_names_the_entry_it_duplicates() -> None:
+    """The exact-match early return skipped the one case that must speak.
+
+    `--force-new` exists to bypass the exact match, so returning early for it
+    meant `import --force-new` doubled a library with `warnings: []` — the
+    silent duplication `import_service` already claimed to have fixed, on the
+    fuzzy branch only.
+    """
+    existing = {"citekey": "smith2024", "title": "Same", "year": 2024,
+                "doi": "10.1000/same"}
+    incoming = dict(existing, citekey="smith2024-2")
+
+    result = attach_similarity_hint(incoming, [existing], force_new=True)
+
+    assert result["duplicate_of"] == "smith2024"
+    warnings = similarity_hint_warnings(result)
+    assert len(warnings) == 1
+    assert "smith2024" in warnings[0] and "--force-new" in warnings[0]
+    # A certainty, not the fuzzy path's maybe.
+    assert "possibly" not in warnings[0].lower()
+
+
+def test_force_new_does_not_annotate_the_entry_itself() -> None:
+    """The duplicate is structural state, not something to write into the .bib."""
+    existing = {"citekey": "smith2024", "title": "Same", "doi": "10.1000/same"}
+
+    result = attach_similarity_hint(
+        dict(existing, citekey="smith2024-2"), [existing], force_new=True
+    )
+
+    assert "note" not in result
 
 
 # --- Near-duplicate hint: note text, structured field, and the warning -------

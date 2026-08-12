@@ -264,9 +264,29 @@ def attach_similarity_hint(
     exact_match_fn=find_exact_match,
     similarity_hint_fn=compute_similarity_hint,
     index: dict | None = None,
+    force_new: bool = False,
 ) -> NormalizedRecord:
-    if exact_match_fn(record, existing_records, index=index) is not None:
-        return record
+    # `find_exact_match` returns a *position*, not a record.
+    exact_index = exact_match_fn(record, existing_records, index=index)
+    if exact_index is not None:
+        # An exact match is normally *handled* — the write becomes an update of
+        # the matched entry — so hinting "possibly similar" about it would be
+        # noise. Under `--force-new` it is not handled: a second entry for the
+        # same paper is inserted deliberately, which is the one case that most
+        # needs saying out loud. Returning early for both is why
+        # `import --force-new` doubled a library with `warnings: []`.
+        if not force_new:
+            return record
+        try:
+            matched = existing_records[exact_index]
+        except (IndexError, TypeError):  # pragma: no cover - defensive
+            return record
+        matched_citekey = matched.get("citekey")
+        if not isinstance(matched_citekey, str) or not matched_citekey.strip():
+            return record
+        duplicated = dict(record)
+        duplicated["duplicate_of"] = matched_citekey
+        return cast(NormalizedRecord, duplicated)
 
     incoming_citekey = record.get("citekey")
     candidates = [
@@ -302,7 +322,17 @@ def similarity_hint_warnings(record: Mapping[str, object]) -> list[str]:
     ``note`` field, so a near-duplicate was discoverable solely by reading the
     ``.bib`` afterwards or running ``pzi fix dedupe`` — a capture that quietly
     doubled an entry looked identical to a clean one.
+
+    An exact identity match under ``--force-new`` gets its own, stronger line:
+    it is not a maybe, and the user has just been handed a second entry for a
+    paper the library already had.
     """
+    duplicate = record.get("duplicate_of")
+    if isinstance(duplicate, str) and duplicate.strip():
+        return [
+            f"inserted a second entry for a paper already in the library as "
+            f"{duplicate} (--force-new); merge them with `pzi fix merge`"
+        ]
     hint = record.get("similarity_hint")
     if not isinstance(hint, str) or not hint.strip():
         return []

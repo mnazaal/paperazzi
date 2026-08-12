@@ -170,6 +170,11 @@ def test_import_force_new_inserts_duplicate_with_suffixed_citekey() -> None:
         target_text = Path(bp).read_text()
         assert "@article{smith2024," in target_text
         assert "@article{smith2024-2," in target_text
+        # And it says so. This test asserted the doubling and never looked at
+        # `warnings`, so `import --force-new` doubling a library with
+        # `warnings: []` passed it — for the whole release in which
+        # `import_service` claimed the silent-duplication fix had landed.
+        assert any("smith2024" in w for w in result["warnings"]), result["warnings"]
 
 
 def test_import_multiple_entries() -> None:

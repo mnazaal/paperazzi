@@ -49,6 +49,10 @@ next to the diff it explains.
   the gate that was added for the URL branch.
 - `--strict-metadata` no longer fails on a provider error that a later provider
   recovered from: a Crossref 429 used to fail an add OpenAlex completed.
+- `--force-new` says what it duplicated: "inserted a second entry for a paper
+  already in the library as `<citekey>`". The near-duplicate hint returned
+  early on an *exact* match — the one case `--force-new` is defined to bypass —
+  so `pzi import --force-new` doubled a library and reported `warnings: []`.
 - A failed `pzi add` prints its warnings. They were rendered on the success
   path only, so a service explaining how to get past a refusal explained it to
   nobody. Provider errors during a local-PDF capture are now among them, rather
