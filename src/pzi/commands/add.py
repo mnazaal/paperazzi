@@ -204,6 +204,12 @@ def _capture_and_render(
             cli_json.emit_result(result, stdout, command="add")
         else:
             print_lines(_error_lines(result["message"], result["errors"]), stderr)
+        # A failed capture has as much to say as a successful one — often more,
+        # since the way out of the refusal is a warning. These were rendered on
+        # the success path only, so a service that explained how to proceed
+        # explained it to nobody.
+        for warning in result.get("warnings") or []:
+            print(f"warning: {warning}", file=stderr)
         return exit_codes.ENVIRONMENT
 
     if getattr(args, "json", False):

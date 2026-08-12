@@ -21,6 +21,7 @@ from pzi.add_planning import (
     build_discovery_context,
     fetch_record_for_input,
     has_minimum_metadata,
+    identifies_a_paper,
     merge_record_sources,
     metadata_result_confidence_warnings,
     metadata_result_diagnostics,
@@ -269,7 +270,11 @@ def add_input_to_bib(
         return result
 
     if classified["kind"] == "local_pdf":
-        return add_local_pdf(
+        # Through `_finalize` like every other branch. Nothing populates the
+        # diagnostics lists this early today, so it is a no-op — but returning
+        # around the shared tail is what let this branch drift from the other one
+        # in the first place.
+        return _finalize(add_local_pdf(
             bib=bib,
             raw_value=value,
             record_overrides=record_overrides,
@@ -298,7 +303,7 @@ def add_input_to_bib(
             strict_metadata=effective_strict,
             force_new=force_new,
             file_path_style=config.get("pdf_file_path_style", "absolute"),
-        )
+        ))
 
     try:
         fetched_record, _fetched_provider_errors, translation_results = fetch_record_for_input(
@@ -475,27 +480,11 @@ def add_input_to_bib(
         )
 
     merged_record = _merge_fetched_record_with_overrides(fetched_record, record_overrides)
-    # A record with no title is not a capture. Both resolution branches returned
-    # whatever the providers gave them with no acceptance gate at all, so a
-    # lookup that found nothing was written as `unknownxxxxuntitled` with
-    # `warnings: []` and exit 0 — the library gained an entry naming no paper
-    # and the user was told it worked. `has_minimum_metadata` already existed
-    # and was applied only on the crash fallback below.
-    #
-    # Deliberately narrower than `has_minimum_metadata`, which wants a title
-    # *and* one of DOI/authors/year. Whether a thin-but-identified record should
-    # be refused is decision 3, still open — and a user who supplies authors by
-    # hand with `--metadata-json` has told us what this is. What needs no
-    # decision is a record that identifies nothing whatsoever.
-    def _has_value(key: str) -> bool:
-        value = merged_record.get(key)
-        if isinstance(value, str):
-            return bool(value.strip())
-        if isinstance(value, list):
-            return bool(value)
-        return value is not None
-
-    if not any(_has_value(key) for key in ("title", "doi", "authors", "year")):
+    # The acceptance gate, shared with the local-PDF branch above — see
+    # `identifies_a_paper`. It lived inline here, which is exactly why the other
+    # branch went on writing `@article{unknownxxxxuntitled}` for a release after
+    # this one stopped.
+    if not identifies_a_paper(merged_record):
         return _finalize(
             _error_result(
                 message="no metadata found for this input",

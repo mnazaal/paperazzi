@@ -171,6 +171,36 @@ def has_minimum_metadata(record: Mapping[str, object]) -> bool:
     return False
 
 
+def identifies_a_paper(record: Mapping[str, object]) -> bool:
+    """Whether *record* says which paper it is, by any means at all.
+
+    The acceptance gate in front of every capture. A record with none of title,
+    DOI, authors or year is not a capture: it used to be written as
+    ``@article{unknownxxxxuntitled}`` with ``warnings: []`` and exit 0, so the
+    library gained an entry naming no paper and the user was told it worked.
+
+    Deliberately weaker than :func:`has_minimum_metadata`, which wants a title
+    *and* one of DOI/authors/year. Whether a thin-but-identified record should be
+    refused is decision 3, still open; a user who supplied authors by hand with
+    ``--metadata-json`` has told us what this is. What needs no decision is a
+    record that identifies nothing whatsoever.
+
+    Shared by the URL/DOI branch and the local-PDF branch. It lived inline in
+    the first of those, which is why the second wrote unidentifiable entries for
+    a release after the gate was said to exist.
+    """
+
+    def _has_value(key: str) -> bool:
+        value = record.get(key)
+        if isinstance(value, str):
+            return bool(value.strip())
+        if isinstance(value, list):
+            return bool(value)
+        return value is not None
+
+    return any(_has_value(key) for key in ("title", "doi", "authors", "year"))
+
+
 def minimum_metadata_diagnostics(record: Mapping[str, object]) -> list[str]:
     """Return human-readable lines explaining why metadata is insufficient."""
     lines: list[str] = []

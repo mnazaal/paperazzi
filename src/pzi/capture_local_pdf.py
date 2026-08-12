@@ -285,6 +285,29 @@ def add_local_pdf(
             warnings=[],
         )
     merged = merge_record_sources(base_record, record_overrides)
+    # A provider error on this path used to be dropped on the floor unless
+    # `--strict-metadata` was set, so a capture degraded by a Crossref 429 was
+    # reported exactly like a clean one. Carried as warnings from here on, the
+    # same wording `add_input_to_bib._finalize` uses for the other branch.
+    provider_warnings = [f"provider error ({error})" for error in metadata_errors]
+    # The acceptance gate. This branch returns before the one in
+    # `add_service.add_input_to_bib`, so for a release that gate did not exist
+    # here: `pzi add empty.pdf` wrote `@article{unknownxxxxuntitled}` carrying
+    # nothing but a `file` field, at exit 0, and `--strict-metadata` — whose help
+    # promises to "refuse to capture a paper the metadata does not identify" —
+    # changed nothing. Refusing in both modes is the decision; the flag was never
+    # the right place for it.
+    if not _add_planning.identifies_a_paper(merged):
+        return _add_planning.error_result(
+            message="no metadata identifies this PDF",
+            errors=_add_planning.minimum_metadata_diagnostics(merged),
+            dry_run=dry_run,
+            warnings=[
+                *provider_warnings,
+                "nothing was written: supply at least a title with "
+                "--metadata-json FILE (or - for stdin) to add this PDF anyway",
+            ],
+        )
     record_with_ck = ensure_citekey(
         merged,
         existing_records,
@@ -317,7 +340,7 @@ def add_local_pdf(
     except Exception:
         remove_new_pdf(copied_local_path, existing_pdf_paths)
         raise
-    result["warnings"] = [*warnings, *result["warnings"]]
+    result["warnings"] = [*provider_warnings, *warnings, *result["warnings"]]
     return result
 
 

@@ -17,6 +17,8 @@ import base64
 import os
 from pathlib import Path
 
+import pytest
+
 from pzi import pdf_service
 from pzi.add_service import add_input_to_bib
 from pzi.bib_repository import read_bib_file
@@ -268,7 +270,14 @@ def test_pdf_retry_falls_back_to_oa_when_the_stored_url_is_blocked(
 def test_a_capture_that_identifies_nothing_is_not_reported_as_success(
     tmp_path: Path, write_app_config
 ) -> None:
-    """Neither resolution branch had an acceptance gate.
+    """The URL branch's half of the acceptance gate.
+
+    See ``test_a_local_pdf_that_identifies_nothing_is_refused`` for the other
+    branch: this test asserted "neither resolution branch had a gate" while
+    exercising one of them, so it passed for a release in which the local-PDF
+    branch had no gate at all.
+
+    Original finding: neither resolution branch had an acceptance gate.
 
     A lookup that came back with nothing was written anyway — the review
     reproduced `unknownxxxxuntitled`, `warnings: []`, exit 0 — so the library
@@ -298,3 +307,72 @@ def test_a_capture_that_identifies_nothing_is_not_reported_as_success(
     assert result["errors"], result
     # And nothing was written.
     assert not bib_path.exists() or "untitled" not in bib_path.read_text().lower()
+
+
+@pytest.mark.parametrize("strict", [False, True])
+def test_a_local_pdf_that_identifies_nothing_is_refused(
+    tmp_path: Path, write_app_config, strict: bool
+) -> None:
+    """The other resolution branch, which returned before the gate.
+
+    `pzi add empty.pdf` wrote `@article{unknownxxxxuntitled}` carrying nothing
+    but a `file` field, at exit 0 and with no warning — and `--strict-metadata`,
+    whose help promises to "refuse to capture a paper the metadata does not
+    identify", produced byte-identical output. Both modes now refuse, and the
+    refusal says how to proceed.
+    """
+    config_path = write_app_config(tmp_path)
+    bib_path = tmp_path / "ml.bib"
+    pdf = tmp_path / "scan.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n%%EOF\n")
+
+    def _nothing_found(query, *, server_url=None, **kw):
+        return []
+
+    result = add_input_to_bib(
+        config_path=config_path,
+        home_dir=str(tmp_path),
+        value=str(pdf),
+        record_overrides={},
+        bib_selector=None,
+        dry_run=False,
+        metadata_strict=strict,
+        fetch_web=_nothing_found,
+        fetch_search=_nothing_found,
+        browser_pdf_cmd=None,
+    )
+
+    assert result["status"] == "error", result
+    assert "identifies this PDF" in result["message"], result
+    assert any("--metadata-json" in w for w in result["warnings"]), result
+    # Neither the entry nor a copy of the PDF was written.
+    assert not bib_path.exists() or "untitled" not in bib_path.read_text().lower()
+    assert list((tmp_path / "papers").glob("*.pdf")) == []
+
+
+def test_a_local_pdf_with_supplied_metadata_is_still_captured(
+    tmp_path: Path, write_app_config
+) -> None:
+    """The refusal has to leave a way through, or it is just a broken command."""
+    config_path = write_app_config(tmp_path)
+    pdf = tmp_path / "scan.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n%%EOF\n")
+
+    def _nothing_found(query, *, server_url=None, **kw):
+        return []
+
+    result = add_input_to_bib(
+        config_path=config_path,
+        home_dir=str(tmp_path),
+        value=str(pdf),
+        record_overrides={"title": "A Scanned Thesis", "year": 1998},
+        bib_selector=None,
+        dry_run=False,
+        fetch_web=_nothing_found,
+        fetch_search=_nothing_found,
+        browser_pdf_cmd=None,
+    )
+
+    assert result["status"] == "ok", result
+    assert (tmp_path / "ml.bib").exists()
+    assert list((tmp_path / "papers").glob("*.pdf"))

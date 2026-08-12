@@ -36,11 +36,23 @@ next to the diff it explains.
 
 ### Changed
 
-- `--strict-metadata` now refuses a capture whose metadata does not identify a
-  paper, and no longer fails on a provider error that a later provider
-  recovered from. Previously a Crossref 429 failed an add OpenAlex completed,
-  while `@article{unknownxxxxuntitled}` with no title, author or year was
-  accepted.
+- **Breaking:** a capture whose metadata identifies no paper is refused, and
+  the refusal says how to proceed. This is no longer tied to
+  `--strict-metadata`: a `.bib` entry naming nothing is not something a flag
+  should have to opt out of. `pzi add scan.pdf` on a PDF nothing can identify
+  now exits 5 having written neither the entry nor a copy of the PDF, and
+  suggests `--metadata-json`; supplying a title that way captures it as before.
+  Previously such an add wrote `@article{unknownxxxxuntitled}` carrying only a
+  `file` field, at exit 0 with no warning — and `--strict-metadata`, whose help
+  promises to "refuse to capture a paper the metadata does not identify",
+  produced byte-identical output, because the local-PDF branch returned before
+  the gate that was added for the URL branch.
+- `--strict-metadata` no longer fails on a provider error that a later provider
+  recovered from: a Crossref 429 used to fail an add OpenAlex completed.
+- A failed `pzi add` prints its warnings. They were rendered on the success
+  path only, so a service explaining how to get past a refusal explained it to
+  nobody. Provider errors during a local-PDF capture are now among them, rather
+  than being dropped unless `--strict-metadata` was set.
 - `pzi fix`, `pzi tag` and `pzi pdf` with no subcommand print that group's help
   instead of `error: the following arguments are required: fix_command`. Still
   exit 2.
