@@ -157,6 +157,12 @@ def test_read_bib_file_returns_entries_and_records(tmp_path: Path) -> None:
             "note": None,
             "local_pdf_path": None,
             "abstract": None,
+            "volume": None,
+            "number": None,
+            "pages": None,
+            "publisher": None,
+            "issn": None,
+            "isbn": None,
         }
     ]
 

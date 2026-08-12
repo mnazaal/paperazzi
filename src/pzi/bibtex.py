@@ -36,6 +36,15 @@ class NormalizedRecord(TypedDict, total=False):
     tags: list[str]
     note: str | None
     item_type: str | None
+
+    # --- Bibliographic detail a journal style needs to render a citation ---
+    # Modelled but *not* record-owned: see `_RECORD_FILLABLE_FIELDS`.
+    volume: str | None
+    number: str | None
+    pages: str | None
+    publisher: str | None
+    issn: str | None
+    isbn: str | None
     # BibTeX entry type stated by the source the record came from (an imported
     # .bib says `@inproceedings` outright).  Set only by callers that have such
     # a source; records parsed out of the library deliberately do not carry it,
@@ -53,7 +62,7 @@ class NormalizedRecord(TypedDict, total=False):
     fallback_venue: str | None
     fallback_abstract: str | None
     fallback_volume: str
-    fallback_issue: str
+    fallback_number: str
     fallback_pages: str
     fallback_issn: str
     fallback_isbn: str
@@ -158,6 +167,17 @@ def record_to_bibtex_entry(
         fields["eprint"] = arxiv_id
         fields["archiveprefix"] = "arXiv"
 
+    for detail_key in _RECORD_FILLABLE_FIELDS:
+        detail = _empty_to_none(record.get(detail_key))
+        if detail is None:
+            continue
+        # Normalized here rather than per source, so the en-dash holds for the
+        # browser extension's scraped `107-113` too — it reaches the record
+        # without passing through any provider normalizer.
+        fields[detail_key] = (
+            normalize_page_range(detail) or detail if detail_key == "pages" else detail
+        )
+
     return {
         "entry_type": entry_type,
         "citekey": citekey.strip(),
@@ -182,6 +202,72 @@ _RECORD_OWNED_FIELDS = (
     "pzi-pdf-url",
     "pzi-abstract-url",
 )
+
+# Fields a record may *fill* but never owns. `record_to_bibtex_entry` emits
+# these, so a fresh capture finally carries the volume/issue/page range most
+# journal styles need — but they stay out of `_RECORD_OWNED_FIELDS` on purpose.
+# An owned key absent from a projection is *deleted* (see `merge_projected_entry`),
+# and metadata providers disagree wildly about which of these they report: one
+# `update` against a source that happens to omit `pages` would erase a page
+# range the user, or their publisher, put there by hand. Filling a gap is always
+# safe; overwriting is not, because the entry on disk is the better source
+# whenever it already has an answer.
+_RECORD_FILLABLE_FIELDS = (
+    "volume",
+    "number",
+    "pages",
+    "publisher",
+    "issn",
+    "isbn",
+)
+
+
+def normalize_page_range(value: object) -> str | None:
+    """Render a page range with BibTeX's en-dash.
+
+    Sources report `107-113` with a single hyphen, which TeX typesets as a
+    hyphen rather than the en-dash a page range calls for.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if "--" in text:
+        return text
+    return re.sub(r"\s*-\s*", "--", text)
+
+
+def page_range_from_parts(first: object, last: object) -> str | None:
+    """Join a first/last page pair, as OpenAlex reports them.
+
+    A single-page item (`e0234`, or a last page equal to the first) is a page,
+    not a range, and must not become `e0234--e0234`.
+    """
+    start = str(first).strip() if isinstance(first, str | int) and str(first).strip() else None
+    end = str(last).strip() if isinstance(last, str | int) and str(last).strip() else None
+    if start is None:
+        return end
+    if end is None or end == start:
+        return start
+    return f"{start}--{end}"
+
+
+def set_detail_fields(record: NormalizedRecord, **values: object) -> None:
+    """Attach the fillable bibliographic detail fields a source reported.
+
+    Only non-empty values are set, so a source that stays silent about `pages`
+    leaves the key absent rather than writing an empty one — `merge_projected_
+    entry` fills gaps from what is present and must not be told a gap is filled.
+    """
+    for key, value in values.items():
+        # ISSN/ISBN arrive as arrays; the first is the one styles print.
+        if isinstance(value, list):
+            value = value[0] if value else None
+        if key == "pages":
+            value = normalize_page_range(value)
+        elif isinstance(value, int):
+            value = str(value)
+        if isinstance(value, str) and value.strip():
+            record[key] = value.strip()  # type: ignore[literal-required]
 
 
 def apply_record_to_entry(entry: BibtexEntry, record: NormalizedRecord) -> BibtexEntry:
@@ -227,6 +313,10 @@ def merge_projected_entry(entry: BibtexEntry, projected_entry: BibtexEntry) -> B
             fields[key] = projected[key]
         else:
             fields.pop(key, None)
+
+    for key in _RECORD_FILLABLE_FIELDS:
+        if key in projected and not (existing.get(key) or "").strip():
+            fields[key] = projected[key]
 
     # One record key (`venue`), two possible homes. Write back to whichever the
     # entry already used: rewriting a proceedings entry's `booktitle` as
@@ -301,6 +391,14 @@ def bibtex_entry_to_record(entry: BibtexEntry) -> NormalizedRecord:
         # `local_pdf_path` treats it as a filesystem path.
         "local_pdf_path": primary_pdf_path(fields.get("file")),
         "abstract": _empty_to_none(fields.get("abstract")),
+        # Read back so a record that already has an answer looks non-empty to
+        # `_conservative_enrich`, which fills only keys that are None/"".
+        "volume": _empty_to_none(fields.get("volume")),
+        "number": _empty_to_none(fields.get("number")),
+        "pages": _empty_to_none(fields.get("pages")),
+        "publisher": _empty_to_none(fields.get("publisher")),
+        "issn": _empty_to_none(fields.get("issn")),
+        "isbn": _empty_to_none(fields.get("isbn")),
     }
 
 

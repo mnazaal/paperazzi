@@ -9,7 +9,7 @@ from typing import Any, TypeAlias, cast
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
-from pzi.bibtex import NormalizedRecord, repair_split_initials
+from pzi.bibtex import NormalizedRecord, repair_split_initials, set_detail_fields
 from pzi.fetch_helpers import DEFAULT_MAX_RESPONSE_BYTES, _read_limited
 from pzi.identifiers import (
     _extract_year_from_str,
@@ -56,6 +56,16 @@ def normalize_translation_item(
         "abstract_url": normalized_item_url,
         "abstract": _mapping_string(item, "abstractNote"),
     }
+
+    set_detail_fields(
+        record,
+        volume=item.get("volume"),
+        number=item.get("issue"),
+        pages=item.get("pages"),
+        publisher=item.get("publisher"),
+        issn=item.get("ISSN"),
+        isbn=item.get("ISBN"),
+    )
 
     return {
         "item_type": _mapping_string(item, "itemType"),

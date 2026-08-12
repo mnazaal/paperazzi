@@ -161,3 +161,41 @@ def test_an_arxiv_id_from_the_translator_is_stored_without_its_prefix() -> None:
     assert _extract_arxiv_id({"archiveID": "2301.12345v3"}) == "2301.12345"
     assert _extract_arxiv_id({"extra": "arXiv: arXiv:2301.12345"}) == "2301.12345"
     assert _extract_arxiv_id({"archiveID": "not-an-arxiv-id"}) is None
+
+
+def test_translation_item_carries_volume_issue_and_pages() -> None:
+    """The translation-server is the *primary* capture path.
+
+    Zotero translators report these for any journal article, so a capture that
+    went through a translator — the common case — was still losing the volume,
+    issue and page range that the Crossref fallback also dropped.
+    """
+    result = normalize_translation_item(
+        {
+            "itemType": "journalArticle",
+            "title": "MapReduce",
+            "publicationTitle": "Communications of the ACM",
+            "volume": "51",
+            "issue": "1",
+            "pages": "107-113",
+            "publisher": "ACM",
+            "ISSN": "0001-0782",
+            "ISBN": "978-1-4503-0000-0",
+        }
+    )
+
+    record = result["record"]
+    assert record["volume"] == "51"
+    assert record["number"] == "1"
+    assert record["pages"] == "107--113"
+    assert record["publisher"] == "ACM"
+    assert record["issn"] == "0001-0782"
+    assert record["isbn"] == "978-1-4503-0000-0"
+
+
+def test_translation_item_omits_detail_keys_it_was_not_given() -> None:
+    """An absent key is a gap to fill later, not an empty value to write."""
+    result = normalize_translation_item({"itemType": "journalArticle", "title": "T"})
+
+    for key in ("volume", "number", "pages", "publisher", "issn", "isbn"):
+        assert key not in result["record"], key

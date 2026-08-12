@@ -242,3 +242,73 @@ def test_the_deposit_date_is_still_the_last_resort() -> None:
     })
 
     assert result["year"] == 2015
+
+
+#: What api.crossref.org actually returns for this DOI, verified live. Note that
+#: `title` and `subtitle` arrive as *separate* arrays — the fixture above joins
+#: them by hand, which is exactly why dropping `subtitle` went unnoticed: the
+#: real record's title is the bare word "MapReduce".
+_MAPREDUCE_LIVE_SHAPE = {
+    "message": {
+        "DOI": "10.1145/1327452.1327492",
+        "title": ["MapReduce"],
+        "subtitle": ["simplified data processing on large clusters"],
+        "author": [{"given": "Jeffrey", "family": "Dean"}],
+        "published-print": {"date-parts": [[2008, 1, 1]]},
+        "container-title": ["Communications of the ACM"],
+        "volume": "51",
+        "issue": "1",
+        "page": "107-113",
+        "publisher": "Association for Computing Machinery (ACM)",
+        "ISSN": ["0001-0782", "1557-7317"],
+    }
+}
+
+
+def test_crossref_subtitle_is_joined_into_the_title() -> None:
+    """Dropping it stored `title = {MapReduce}` — a citation naming no subject."""
+    result = fetch_crossref_record(
+        "10.1145/1327452.1327492",
+        fetch_text=lambda _: json.dumps(_MAPREDUCE_LIVE_SHAPE),
+    )
+
+    assert result is not None
+    assert result["title"] == "MapReduce: simplified data processing on large clusters"
+
+
+def test_crossref_carries_volume_issue_and_pages() -> None:
+    """Crossref reports all of these; the normalizer read none of them."""
+    result = fetch_crossref_record(
+        "10.1145/1327452.1327492",
+        fetch_text=lambda _: json.dumps(_MAPREDUCE_LIVE_SHAPE),
+    )
+
+    assert result is not None
+    assert result["volume"] == "51"
+    assert result["number"] == "1"
+    assert result["pages"] == "107--113"
+    assert result["publisher"] == "Association for Computing Machinery (ACM)"
+    assert result["issn"] == "0001-0782"
+
+
+def test_crossref_title_survives_an_absent_or_empty_subtitle() -> None:
+    for subtitle in ({}, {"subtitle": []}, {"subtitle": [""]}, {"subtitle": ["  "]}):
+        payload = {"message": {**_MAPREDUCE_LIVE_SHAPE["message"], **subtitle}}
+        payload["message"].pop("subtitle", None) if not subtitle else None
+        result = fetch_crossref_record("10.1145/x", fetch_text=lambda _: json.dumps(payload))
+        assert result is not None
+        assert result["title"] == "MapReduce", subtitle
+
+
+def test_crossref_does_not_double_append_a_subtitle_already_in_the_title() -> None:
+    """Some deposits repeat the subtitle inside `title`."""
+    payload = {
+        "message": {
+            **_MAPREDUCE_LIVE_SHAPE["message"],
+            "title": ["MapReduce: simplified data processing on large clusters"],
+        }
+    }
+    result = fetch_crossref_record("10.1145/x", fetch_text=lambda _: json.dumps(payload))
+
+    assert result is not None
+    assert result["title"] == "MapReduce: simplified data processing on large clusters"

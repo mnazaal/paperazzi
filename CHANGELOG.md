@@ -26,6 +26,10 @@ next to the diff it explains.
 
 ### Added
 
+- Captured entries now carry `volume`, `number`, `pages`, `publisher`, `issn`
+  and `isbn` when the source reports them — no capture path had ever written
+  them, so `@article` entries lacked the fields most journal styles require.
+  Existing values are never overwritten and never deleted, only gaps filled.
 - `pzi server --log-requests` — one line per HTTP request on stderr (method,
   path, status, ms). Off by default; the query string is never logged.
 - `pzi inbox --json`, the last runner without it.
@@ -51,6 +55,15 @@ next to the diff it explains.
 
 ### Fixed
 
+- A Crossref subtitle is folded into the title, so the MapReduce paper stores
+  `MapReduce: simplified data processing on large clusters` rather than
+  `MapReduce`. Crossref deposits the two as separate fields.
+- Semantic Scholar lookups now request the `journal` field they read, so volume
+  and pages actually come back.
+- `pzi init --bib` without `--setup` says "requires", not "require".
+- `doctor` explains that a keyless `semantic scholar: ok` means the shared
+  anonymous quota, so it no longer appears to contradict `check` reporting S2
+  unreachable.
 - `pzi update` no longer adopts an unrelated paper's metadata when a search
   returns a different work.
 - Usage mistakes exit 2 instead of 5, and HTTP status no longer depends on how

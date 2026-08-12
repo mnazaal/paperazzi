@@ -304,7 +304,18 @@ def _render_doctor_result(result: Mapping[str, Any]) -> list[str]:
         # otherwise the header reads "ok" directly above the error explaining
         # that the configured key could not be obtained.
         state = ok if s2.get("reachable") and not s2.get("key_error") else bad
-        lines.append(f"semantic scholar: {state} (key: {s2.get('configured', 'unknown')})")
+        configured = s2.get("configured", "unknown")
+        lines.append(f"semantic scholar: {state} (key: {configured})")
+        if s2.get("reachable") and configured == "not configured":
+            # `doctor` probes the DOI-lookup endpoint; `check` uses title
+            # search, and S2 rate-limits an anonymous caller per endpoint. Both
+            # tools were honest and the pair read as a contradiction — say which
+            # question this "ok" answered.
+            lines.append(
+                "  - reachable without a key, on the shared anonymous quota: "
+                "other commands may still hit its rate-limit (HTTP 429). "
+                "Set semantic_scholar_api_key for a quota of your own."
+            )
         if s2.get("key_error"):
             lines.append(f"  - semantic_scholar_api_key_cmd failed: {s2['key_error']}")
         if s2.get("probe_error"):

@@ -53,8 +53,9 @@ def run_init_command(
         # to put one — the plain path copies the shipped template verbatim. They
         # used to be accepted and dropped, and `pzi init --bib ...` is exactly
         # what the docs recommend.
+        verb = "require" if len(setup_only_flags) > 1 else "requires"
         print(
-            f"error: {', '.join(setup_only_flags)} require --setup "
+            f"error: {', '.join(setup_only_flags)} {verb} --setup "
             "(plain `pzi init` writes the commented template unchanged)",
             file=stderr,
         )

@@ -100,3 +100,30 @@ def test_fetch_openalex_record_handles_malformed_json() -> None:
         return "not json"
 
     assert fetch_openalex_record("10.1234/foo", fetch_text=bad_json) is None
+
+
+def test_openalex_carries_volume_issue_and_pages_from_biblio() -> None:
+    """OpenAlex puts them under `biblio`, split into first/last page."""
+    payload = {
+        **_OPENALEX_RESPONSE,
+        "biblio": {
+            "volume": "51",
+            "issue": "1",
+            "first_page": "107",
+            "last_page": "113",
+        },
+    }
+    result = fetch_openalex_record("10.1145/1327452.1327492", fetch_text=lambda _: json.dumps(payload))
+
+    assert result is not None
+    assert result["volume"] == "51"
+    assert result["number"] == "1"
+    assert result["pages"] == "107--113"
+
+
+def test_openalex_single_page_article_has_no_range() -> None:
+    payload = {**_OPENALEX_RESPONSE, "biblio": {"first_page": "e0234", "last_page": None}}
+    result = fetch_openalex_record("10.1145/x", fetch_text=lambda _: json.dumps(payload))
+
+    assert result is not None
+    assert result["pages"] == "e0234"

@@ -163,6 +163,12 @@ def test_bibtex_entry_to_record_maps_fields_back() -> None:
         "note": "Possibly similar to smith2023graph | PDF: not-a-real-url",
         "local_pdf_path": "papers/smith2024graph.pdf",
         "abstract": None,
+        "volume": None,
+        "number": None,
+        "pages": None,
+        "publisher": None,
+        "issn": None,
+        "isbn": None,
     }
 
 
@@ -533,3 +539,85 @@ def test_a_pdf_path_with_separators_round_trips_through_the_file_field() -> None
         entry = record_to_bibtex_entry({"citekey": "k", "local_pdf_path": path})
 
         assert parse_file_field(entry["fields"]["file"]) == [path], path
+
+
+def test_bibliographic_detail_fields_reach_the_bib_file() -> None:
+    """`volume`/`number`/`pages` were modelled nowhere and silently dropped.
+
+    Every capture path fed the writer a record and the writer emitted only
+    title/author/year/venue/doi, so a captured @article rendered as
+    "Dean & Ghemawat. MapReduce. CACM 2008" — no volume, issue or page range,
+    which most journal styles require. The browser extension was already
+    scraping all five (`embedded_volume` … `embedded_isbn`) and shipping them;
+    they died here.
+    """
+    entry = record_to_bibtex_entry(
+        {
+            "citekey": "dean2008mapreduce",
+            "title": "MapReduce",
+            "volume": "51",
+            "number": "1",
+            "pages": "107--113",
+            "publisher": "ACM",
+            "issn": "0001-0782",
+            "isbn": "978-1-4503-0000-0",
+        }
+    )
+
+    assert entry["fields"]["volume"] == "51"
+    assert entry["fields"]["number"] == "1"
+    assert entry["fields"]["pages"] == "107--113"
+    assert entry["fields"]["publisher"] == "ACM"
+    assert entry["fields"]["issn"] == "0001-0782"
+    assert entry["fields"]["isbn"] == "978-1-4503-0000-0"
+
+
+def test_detail_fields_round_trip_back_out_of_an_entry() -> None:
+    """Reading them back is what stops an update from re-filling a full field."""
+    record = bibtex_entry_to_record(
+        {
+            "entry_type": "article",
+            "citekey": "dean2008mapreduce",
+            "fields": {
+                "title": "MapReduce",
+                "volume": "51",
+                "number": "1",
+                "pages": "107--113",
+                "publisher": "ACM",
+                "issn": "0001-0782",
+            },
+        }
+    )
+
+    assert record["volume"] == "51"
+    assert record["number"] == "1"
+    assert record["pages"] == "107--113"
+    assert record["publisher"] == "ACM"
+    assert record["issn"] == "0001-0782"
+
+
+def test_a_projection_fills_a_missing_detail_field_but_never_clobbers_one() -> None:
+    """Fill-only, because these are not the record's to own.
+
+    Making them record-owned would route them through the `fields.pop(key)`
+    branch, so any source that happens not to report `pages` would *delete* a
+    hand-curated page range from the library. That is the data-loss shape this
+    tuple exists to avoid.
+    """
+    entry: BibtexEntry = {
+        "entry_type": "article",
+        "citekey": "k",
+        "fields": {"title": "T", "pages": "107--113", "publisher": "ACM"},
+    }
+    projection: BibtexEntry = {
+        "entry_type": "article",
+        "citekey": "k",
+        # disagrees on `pages`, omits `publisher`, offers a new `volume`
+        "fields": {"title": "T", "pages": "1--9", "volume": "51"},
+    }
+
+    merged = merge_projected_entry(entry, projection)
+
+    assert merged["fields"]["pages"] == "107--113", "must not overwrite"
+    assert merged["fields"]["publisher"] == "ACM", "must not delete"
+    assert merged["fields"]["volume"] == "51", "must fill a gap"

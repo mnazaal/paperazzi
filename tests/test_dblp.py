@@ -76,3 +76,31 @@ def test_dblp_empty_title_returns_none() -> None:
 def test_dblp_no_hits_returns_none() -> None:
     empty = {"result": {"hits": {}}}
     assert fetch_dblp_record_by_title("x", fetch_text=lambda _: json.dumps(empty)) is None
+
+
+def test_dblp_carries_volume_number_and_pages() -> None:
+    hit = _DBLP_RESPONSE["result"]["hits"]["hit"][0]
+    payload = {
+        "result": {
+            "hits": {
+                "hit": [
+                    {
+                        "info": {
+                            **hit["info"],
+                            "volume": "30",
+                            "number": "2",
+                            "pages": "5998-6008",
+                            "publisher": "Curran Associates",
+                        }
+                    }
+                ]
+            }
+        }
+    }
+    result = fetch_dblp_record_by_title("Attention Is All You Need", fetch_text=lambda _: json.dumps(payload))
+
+    assert result is not None
+    assert result["volume"] == "30"
+    assert result["number"] == "2"
+    assert result["pages"] == "5998--6008"
+    assert result["publisher"] == "Curran Associates"

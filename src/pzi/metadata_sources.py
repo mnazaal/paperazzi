@@ -14,7 +14,7 @@ import urllib.error
 from collections.abc import Callable
 from urllib.parse import quote
 
-from pzi.bibtex import NormalizedRecord
+from pzi.bibtex import NormalizedRecord, page_range_from_parts, set_detail_fields
 from pzi.capture_context import metadata_user_agent
 from pzi.fetch_helpers import fetch_text as _fetch_text
 from pzi.identifiers import normalize_doi
@@ -110,9 +110,35 @@ def _crossref_author_name(author: dict[str, object]) -> str:
     return str(author.get("name") or "").strip()
 
 
+def _join_subtitle(title: object, subtitle: object) -> str | None:
+    """Fold a separately-deposited subtitle back into the title.
+
+    Crossref (and OpenAlex, and Zotero translators for some publishers) deposit
+    `title = ["MapReduce"]` and `subtitle = ["simplified data processing on
+    large clusters"]` as separate arrays. Keeping only the first stored a title
+    that names no subject. BibTeX has no portable `subtitle` field for
+    `@article`, so the colon-joined form is what Zotero, Crossref's own citation
+    formatter and every style we care about render anyway.
+    """
+    base = str(title).strip() if isinstance(title, str) and title.strip() else None
+    if base is None:
+        return None
+    if isinstance(subtitle, list) and subtitle:
+        subtitle = subtitle[0]
+    if not isinstance(subtitle, str) or not subtitle.strip():
+        return base
+    extra = subtitle.strip()
+    # Some deposits repeat the subtitle inside `title`; joining again would give
+    # "X: sub: sub".
+    if extra.lower() in base.lower():
+        return base
+    return f"{base.rstrip(': ')}: {extra}"
+
+
 def _crossref_normalize_work(work: dict[str, object]) -> NormalizedRecord:
     title_list = work.get("title")
     title = title_list[0] if isinstance(title_list, list) and title_list else None
+    title = _join_subtitle(title, work.get("subtitle"))
 
     authors: list[str] = []
     raw_authors = work.get("author")
@@ -156,6 +182,16 @@ def _crossref_normalize_work(work: dict[str, object]) -> NormalizedRecord:
         "venue": str(venue) if venue else None,
         "doi": doi,
     }
+
+    set_detail_fields(
+        record,
+        volume=work.get("volume"),
+        number=work.get("issue"),
+        pages=work.get("page"),
+        publisher=work.get("publisher"),
+        issn=work.get("ISSN"),
+        isbn=work.get("ISBN"),
+    )
 
     item_type = _crossref_type_to_item_type(work.get("type"))
     if item_type is not None:
@@ -305,6 +341,17 @@ def _openalex_normalize_work(work: dict[str, object]) -> NormalizedRecord:
         "doi": doi,
     }
 
+    biblio = work.get("biblio")
+    if isinstance(biblio, dict):
+        set_detail_fields(
+            record,
+            volume=biblio.get("volume"),
+            number=biblio.get("issue"),
+            pages=page_range_from_parts(
+                biblio.get("first_page"), biblio.get("last_page")
+            ),
+        )
+
     item_type = _openalex_type_to_item_type(work.get("type"))
     if item_type is not None:
         record["item_type"] = item_type
@@ -335,6 +382,14 @@ def _openalex_type_to_item_type(value: object) -> str | None:
 # Semantic Scholar
 # ============================================================================
 
+#: S2 returns *only* the fields named here, so reading a field the query never
+#: asked for silently yields nothing. This literal used to be repeated at each
+#: of the three call sites, which is one edit and two stale copies away from
+#: exactly that failure.
+_S2_FIELDS = (
+    "title,authors,year,venue,externalIds,openAccessPdf,journal,publicationVenue"
+)
+
 
 def fetch_semantic_scholar_record(
     doi: str,
@@ -345,7 +400,7 @@ def fetch_semantic_scholar_record(
 ) -> NormalizedRecord | None:
     """Return normalized record from Semantic Scholar for a DOI, or None."""
     fn = fetch_text or _make_fetch_text(api_key)
-    fields = "title,authors,year,venue,externalIds,openAccessPdf"
+    fields = _S2_FIELDS
     base = "https://api.semanticscholar.org/graph/v1/paper"
     url = f"{base}/DOI:{quote(doi, safe='')}?fields={fields}"
     data = _api_json(url, fn=fn, errors=errors)
@@ -375,7 +430,7 @@ def fetch_semantic_scholar_record_by_title(
     if not stripped:
         return None
     fn = fetch_text or _make_fetch_text(api_key)
-    fields = "title,authors,year,venue,externalIds,openAccessPdf"
+    fields = _S2_FIELDS
     url = (
         "https://api.semanticscholar.org/graph/v1/paper/search?"
         f"query={quote(stripped, safe='')}&limit=1&fields={fields}"
@@ -451,6 +506,17 @@ def _s2_normalize_paper(paper: dict[str, object]) -> NormalizedRecord:
     }
     if pdf_url:
         record["pdf_url"] = pdf_url
+
+    journal = paper.get("journal")
+    if isinstance(journal, dict):
+        set_detail_fields(
+            record,
+            volume=journal.get("volume"),
+            pages=journal.get("pages"),
+        )
+    publication_venue = paper.get("publicationVenue")
+    if isinstance(publication_venue, dict):
+        set_detail_fields(record, issn=publication_venue.get("issn"))
     return record
 
 
@@ -485,7 +551,7 @@ def fetch_semantic_scholar_record_by_title_with_error(
     if not stripped:
         return None, "empty title"
     fn = fetch_text or _make_fetch_text(api_key)
-    fields = "title,authors,year,venue,externalIds,openAccessPdf"
+    fields = _S2_FIELDS
     url = (
         "https://api.semanticscholar.org/graph/v1/paper/search?"
         f"query={quote(stripped, safe='')}&limit=1&fields={fields}"
@@ -649,6 +715,13 @@ def _dblp_normalize(info: dict[str, object]) -> NormalizedRecord:
         "venue": venue or None,
         "doi": normalize_doi(raw_doi) if isinstance(raw_doi, str) else None,
     }
+    set_detail_fields(
+        record,
+        volume=info.get("volume"),
+        number=info.get("number"),
+        pages=info.get("pages"),
+        publisher=info.get("publisher"),
+    )
     raw_type = info.get("type")
     if isinstance(raw_type, str):
         item_type = _DBLP_TYPE_MAP.get(raw_type)

@@ -112,7 +112,9 @@ def record_overrides_from_capture_body(body: dict[str, Any]) -> dict[str, object
     _maybe_set_fallback_str(body, "embedded_venue", record_overrides, "fallback_venue")
     _maybe_set_fallback_str(body, "embedded_abstract", record_overrides, "fallback_abstract")
     _maybe_set_fallback_str(body, "embedded_volume", record_overrides, "fallback_volume")
-    _maybe_set_fallback_str(body, "embedded_issue", record_overrides, "fallback_issue")
+    # `number`, not `issue`: BibTeX's field for it is `number`, and
+    # `split_record_overrides` strips the prefix to get the record key.
+    _maybe_set_fallback_str(body, "embedded_issue", record_overrides, "fallback_number")
     _maybe_set_fallback_str(body, "embedded_pages", record_overrides, "fallback_pages")
     _maybe_set_fallback_str(body, "embedded_issn", record_overrides, "fallback_issn")
     _maybe_set_fallback_str(body, "embedded_isbn", record_overrides, "fallback_isbn")

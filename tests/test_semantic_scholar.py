@@ -250,3 +250,34 @@ def test_probe_s2_api_unreachable_on_garbage() -> None:
     assert probe_s2_api(
         fetch_text=lambda _: "not json",
     ) is False
+
+
+def test_s2_carries_journal_volume_and_pages() -> None:
+    """S2 nests these under `journal`, and only when asked for the field."""
+    payload = {
+        **_S2_RESPONSE,
+        "journal": {"name": "Communications of the ACM", "volume": "51", "pages": "107-113"},
+        "publicationVenue": {"issn": "0001-0782"},
+    }
+    result = fetch_semantic_scholar_record(
+        "10.1145/1327452.1327492", fetch_text=lambda _: json.dumps(payload)
+    )
+
+    assert result is not None
+    assert result["volume"] == "51"
+    assert result["pages"] == "107--113"
+    assert result["issn"] == "0001-0782"
+
+
+def test_s2_requests_the_journal_field_it_now_reads() -> None:
+    """Reading `journal` is useless unless the query asks S2 to return it."""
+    seen: list[str] = []
+
+    def _capture(url: str) -> str:
+        seen.append(url)
+        return json.dumps(_S2_RESPONSE)
+
+    fetch_semantic_scholar_record("10.1145/x", fetch_text=_capture)
+
+    assert seen, "no request issued"
+    assert "journal" in seen[0], seen[0]

@@ -144,7 +144,9 @@ def test_record_overrides_accepts_embedded_metadata() -> None:
     assert result["fallback_venue"] == "Journal of Tests"
     assert result["fallback_abstract"] == "This paper tests the capture pipeline."
     assert result["fallback_volume"] == "42"
-    assert result["fallback_issue"] == "3"
+    # BibTeX names this field `number`; the mapping renames it so that
+    # `split_record_overrides` yields the record key the writer emits.
+    assert result["fallback_number"] == "3"
     assert result["fallback_pages"] == "100--199"
     assert result["fallback_issn"] == "1234-5678"
     assert result["fallback_isbn"] == "978-0-123-45678-9"
