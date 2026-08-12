@@ -69,7 +69,10 @@ def run_import_command(
         print(f"{prefix}{result['skipped_errors']} errors", file=stdout)
 
     for r in result.get("results", []):
-        status_mark = "✓" if r["status"] in ("imported", "would_import") else "✗"
+        # Only an error is a failure. Marking anything that was not an insert
+        # with ✗ put a cross beside every entry an import successfully updated,
+        # and beside every duplicate it correctly skipped.
+        status_mark = "✗" if r["status"] == "error" else "✓"
         print(f"  {status_mark} {r['citekey']}: {r['status']}", file=stdout)
 
     if result.get("errors"):

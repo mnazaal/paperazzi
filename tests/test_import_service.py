@@ -509,3 +509,39 @@ def test_reimporting_a_file_reports_that_it_doubled_the_library() -> None:
     # said so. What it must not do is insert and stay silent.
     inserted_again = second["imported"] > 0
     assert (not inserted_again) or second["warnings"], second
+
+
+def test_a_dry_run_classifies_exactly_as_the_run_it_previews() -> None:
+    """The preview counted every ok result as an import.
+
+    So a source whose entries the library already has previewed
+    `imported 2/2` and then ran as `imported 1/2, skipped 1 duplicates` — the
+    one number a preview exists to get right, wrong in the direction that makes
+    the user proceed.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        cp, bp, _pd = _setup_config(td)
+        Path(bp).write_text(SIMPLE_BIB)
+        src = os.path.join(td, "source.bib")
+        # One entry the library already has, enriched so it counts as an update,
+        # and one it does not.
+        Path(src).write_text(
+            SIMPLE_BIB.replace("}\n", "  abstract = {Newly supplied},\n}\n", 1)
+            + "\n@article{fresh2022,\n  title = {Something New},\n"
+            "  author = {Other, B},\n  year = {2022},\n}\n"
+        )
+
+        preview = import_from_bibtex(
+            config_path=cp, home_dir=td, source_path=src, dry_run=True
+        )
+        applied = import_from_bibtex(
+            config_path=cp, home_dir=td, source_path=src, dry_run=False
+        )
+
+        for key in ("imported", "updated", "skipped_duplicates", "skipped_errors"):
+            assert preview.get(key) == applied.get(key), (
+                f"{key}: preview {preview.get(key)} != applied {applied.get(key)}"
+            )
+        # Same classification per entry, differing only in tense.
+        assert [r["status"] for r in preview["results"]] == ["would_update", "would_import"]
+        assert [r["status"] for r in applied["results"]] == ["updated", "imported"]

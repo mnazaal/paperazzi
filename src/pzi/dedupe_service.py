@@ -208,6 +208,13 @@ def _identity_components(
 #: Where a record field lands in a BibTeX entry, for the few that are not
 #: spelled the same. Used to say which raw fields a merge overwrites.
 _RAW_KEYS_FOR_RECORD_FIELD: dict[str, tuple[str, ...]] = {
+    # `authors` is the one whose record name and BibTeX name differ only by a
+    # plural, which is presumably how it went missing. Without it the preview
+    # could not tell that a changed `authors` means the raw `author` field is
+    # overwritten, so it reported the survivor's author as "kept (conflict)"
+    # while the run replaced it — the single most load-bearing field in the
+    # entry, previewed backwards.
+    "authors": ("author",),
     "venue": ("journal", "booktitle"),
     "tags": ("keywords",),
     "local_pdf_path": ("file",),
@@ -371,6 +378,10 @@ def merge_duplicates(
         "changed_fields": changed_fields,
         "carried_fields": carried_fields,
         "dropped_fields": merge_result.get("dropped_fields", conflicting_fields),
+        # Set on the preview only, so the run that actually destroyed a field
+        # was the one that stayed silent about it — the reverse of what a
+        # preview/apply pair should do.
+        "overwritten_fields": overwritten_fields,
         "backup_path": str(backup_path),
     }
     if orphaned_pdf:

@@ -49,6 +49,18 @@ next to the diff it explains.
   the gate that was added for the URL branch.
 - `--strict-metadata` no longer fails on a provider error that a later provider
   recovered from: a Crossref 429 used to fail an add OpenAlex completed.
+- Three `--dry-run` previews that disagreed with the run they preview. `import`
+  counted every entry as an import, so a source the library already had
+  previewed `imported 2/2` and ran as `imported 1/2, skipped 1 duplicates`; it
+  now classifies exactly as the run does, differing only in tense
+  (`would_update` / `updated`). `fix merge` reported the survivor's author as
+  kept when the merge replaces it, and named the fields it overwrites only in
+  the preview — so the run that destroys them was the silent one. `fix reindex
+  --dry-run` ran a weaker set of gates than the write, so a library the real run
+  refuses outright previewed as a feasible rename list, including a rename for
+  the entry causing the refusal.
+- `pzi import` no longer marks a successful update or a correctly skipped
+  duplicate with ✗; only an error is a failure.
 - `pzi check` no longer discards a completed audit because one BibTeX block was
   dropped. A single duplicate citekey made it exit 5 with no report file and
   nothing printed — after every network lookup had been made — while `--json`

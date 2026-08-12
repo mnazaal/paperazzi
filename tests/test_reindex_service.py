@@ -434,3 +434,53 @@ def test_a_renamed_citekey_is_never_reissued_to_another_entry() -> None:
             f"a vacated citekey was reissued: renames were {result['changed']}"
         )
         assert len(new_keys) == len(set(new_keys)), "two entries were given the same citekey"
+
+
+def test_a_dry_run_refuses_what_the_real_run_refuses() -> None:
+    """The preview ran a weaker set of gates than the write it previews.
+
+    A library the real run declines outright — exit 5, nothing written —
+    previewed as a feasible list of renames at exit 1, and one of the renames it
+    offered was for the very entry that causes the refusal. A preview is where
+    the user decides to proceed, so previewing a different command is worse than
+    not previewing at all.
+    """
+    import pytest
+
+    from pzi.errors import PziError
+
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "wedged.bib")
+        papers = os.path.join(td, "papers")
+        _write_bib(
+            bib,
+            "@article{aaa,\n  title = {One},\n  author = {Smith, Jane},\n"
+            "  year = {2020},\n}\n"
+            "@article{,\n  title = {Keyless},\n  year = {2021},\n}\n",
+        )
+
+        with pytest.raises(PziError) as preview_error:
+            reindex_library(bib_path=bib, papers_dir=papers, dry_run=True)
+        with pytest.raises(PziError) as applied_error:
+            reindex_library(bib_path=bib, papers_dir=papers, dry_run=False)
+
+        # Same refusal, same words, so the exit code is the same too.
+        assert preview_error.value.message == applied_error.value.message
+        assert "no citekey" in preview_error.value.message
+
+
+def test_a_dry_run_still_previews_a_healthy_library() -> None:
+    """The added gates must not refuse anything the real run accepts."""
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "fine.bib")
+        papers = os.path.join(td, "papers")
+        _write_bib(
+            bib,
+            "@article{oldkey,\n  title = {A Paper},\n  author = {Smith, Jane},\n"
+            "  year = {2020},\n}\n",
+        )
+
+        result = reindex_library(bib_path=bib, papers_dir=papers, dry_run=True)
+
+        assert result["status"] == "ok"
+        assert [c["new_citekey"] for c in result["changed"]] == ["smith2020paper"]

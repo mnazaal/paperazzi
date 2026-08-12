@@ -5,13 +5,17 @@ from __future__ import annotations
 import os
 import shutil
 from pathlib import Path
-from typing import Any, NotRequired, TypedDict
+from typing import Any, NotRequired, TypedDict, cast
 
 from pzi.bib_repository import (
     backup_path_for,
+    parse_bib_library,
     read_bib_file_raw_with_failures,
     read_bib_notices,
+    read_bib_source,
     rewrite_entries_in_order_locked,
+    validate_bibtex_roundtrip,
+    validate_library_parseable,
     with_bib_lock,
 )
 from pzi.bibtex import BibtexEntry, NormalizedRecord
@@ -53,6 +57,21 @@ class ReindexResult(TypedDict):
     #: Where the pre-rewrite library was copied, or ``None`` when nothing was
     #: rewritten (a dry run, or a library already matching ``citekey_format``).
     backup_path: NotRequired[str | None]
+
+
+def _entries_with_planned_citekeys(
+    entries: list[BibtexEntry], changes: list[CitekeyChange]
+) -> list[BibtexEntry]:
+    """*entries* as the apply path would leave them, without touching them.
+
+    The apply path renames in place inside ``_rename_planned_pdfs``, so a dry
+    run had no renamed entry list to hand to the write's own validation gate —
+    which is why it could not run it.
+    """
+    previewed = [dict(entry) for entry in entries]
+    for change in changes:
+        previewed[change["entry_index"]]["citekey"] = change["new_citekey"]
+    return cast("list[BibtexEntry]", previewed)
 
 
 def plan_reindex(
@@ -242,6 +261,16 @@ def reindex_library(
         backup_path: Path | None = None
 
         if dry_run:
+            # Both gates the apply path enforces through the rewrite, in its
+            # order: the file must be writable at all, then the renamed entries
+            # must survive a round-trip. The PDF checks below were already
+            # shared; these were not, so a library the real run refuses outright
+            # at exit 5 previewed as a feasible rename list at exit 1 — and one
+            # of the renames it offered was `" → 2021"`, for the keyless entry
+            # that causes the refusal. Raising the same PziError the write
+            # raises keeps the two identical, message and exit code included.
+            validate_library_parseable(parse_bib_library(read_bib_source(bib_path)))
+            validate_bibtex_roundtrip(_entries_with_planned_citekeys(entries, changes))
             # Apply the real run's tests, not a weaker subset: it also refuses
             # to overwrite an existing destination, so previewing a rename the
             # real run declines is a preview of a different command.

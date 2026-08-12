@@ -165,3 +165,24 @@ def test_fix_merge_names_the_survivor_fields_it_overwrites(tmp_path: Path) -> No
     assert "overwritten by drop2020: title" in text, text
     # And it must no longer claim the opposite.
     assert "fields kept from keep2020 (conflict): title" not in text, text
+
+    # "In dry run and real run alike" — this test said that and then checked
+    # only the dry run, so the applied path went on setting `overwritten_fields`
+    # nowhere at all: the run that destroys the field was the silent one.
+    out_real, err_real = StringIO(), StringIO()
+    dedupe_command.run_merge_command(
+        Namespace(
+            citekey_a="drop2020", citekey_b="keep2020",
+            dry_run=False, json=False, target=None,
+        ),
+        home_dir=str(tmp_path),
+        config_path=str(config),
+        stdout=out_real,
+        stderr=err_real,
+        bib_selector=None,
+    )
+
+    real_text = out_real.getvalue()
+    assert "overwritten by drop2020: title" in real_text, real_text
+    # And the file agrees: the survivor's title really was replaced.
+    assert "A Considerably Longer Title That Will Win" in bib.read_text()

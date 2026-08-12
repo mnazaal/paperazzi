@@ -224,18 +224,13 @@ def import_from_bibtex(
             # entry is an "insert".  Decide on the structured action, not on
             # substring-matching the human message.
             action = result.get("action", "insert")
-            if result.get("dry_run", False) or dry_run:
-                # Counted, because the caller prints `imported N/total` for a
-                # dry run too — and printing 0 for a run that would import 2 is
-                # the one number a preview exists to get right.
-                imported += 1
-                results.append({
-                    "citekey": citekey,
-                    "status": "would_import",
-                    "action": action,
-                    "message": result.get("message", ""),
-                })
-            elif action == "update" and not result.get("changed_fields"):
+            # A preview classifies exactly as the run it previews. It used to
+            # count every ok result as an import, so `--dry-run` promised
+            # "imported 2/2" for a run that then said "imported 1/2, skipped 1
+            # duplicates" — the one number a preview exists to get right, wrong
+            # in the direction that makes the user proceed.
+            previewing = bool(result.get("dry_run", False) or dry_run)
+            if action == "update" and not result.get("changed_fields"):
                 # Merged into an existing entry and changed nothing about it —
                 # a re-import of a record the library already has.
                 skipped_dupes += 1
@@ -255,7 +250,7 @@ def import_from_bibtex(
                 updated += 1
                 results.append({
                     "citekey": citekey,
-                    "status": "updated",
+                    "status": "would_update" if previewing else "updated",
                     "action": action,
                     "changed_fields": list(result.get("changed_fields") or []),
                     "message": result.get("message", ""),
@@ -264,7 +259,7 @@ def import_from_bibtex(
                 imported += 1
                 results.append({
                     "citekey": citekey,
-                    "status": "imported",
+                    "status": "would_import" if previewing else "imported",
                     "action": action,
                     "message": result.get("message", ""),
                 })
