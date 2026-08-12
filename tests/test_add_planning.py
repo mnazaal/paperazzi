@@ -277,13 +277,20 @@ def test_format_pdf_filename_sanitizes_path_separators_and_adds_extension() -> N
 def test_format_citekey_supports_zotero_template_and_collision_suffix() -> None:
     template = '{{ firstCreator }}{{ year }}{{ title truncate="5" }}'
 
-    assert format_citekey(template, RECORD, {"smith2024astu"}) == "smith2024astu-2"
+    # Case survives a template now — the final sanitizer used to lowercase
+    # everything, which is also why `.upper` could never do anything.
+    assert format_citekey(template, RECORD, {"Smith2024AStu"}) == "Smith2024AStu-2"
 
 
 def test_format_citekey_supports_common_better_bibtex_formula() -> None:
-    # shorttitle(3,3): first 3 non-stopword title words, each truncated to 3
-    # chars — "Study", "Graph", "Parsers" -> "stu"+"gra"+"par".
-    assert format_citekey("auth.lower + shorttitle(3,3) + year", RECORD, set()) == "smithstugrapar2024"
+    # shorttitle(n, m) per Better BibTeX: first `n` non-stopword title words,
+    # the first `m` of them capitalized. `m` is not a truncation length — it
+    # defaults to 0, so that reading would make every plain shorttitle()
+    # render empty.
+    assert (
+        format_citekey("auth.lower + shorttitle(3,3) + year", RECORD, set())
+        == "smithStudyGraphParsers2024"
+    )
 
 
 # ---------------------------------------------------------------------------

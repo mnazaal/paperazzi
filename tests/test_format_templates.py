@@ -116,16 +116,22 @@ def test_format_pdf_filename_truncates_overlong_stem() -> None:
 @pytest.mark.parametrize(
     "template,expected",
     [
-        ("auth + year", "smith2024"),
+        # Case is preserved now: BBT's `auth` yields the family name as
+        # written, and `.lower` is what asks for lowercase. The old value
+        # came from a final sanitizer that lowercased everything, which is
+        # also why `.upper` below could never have an effect.
+        ("auth + year", "Smith2024"),
         ("auth.lower + year", "smith2024"),
-        ("auth.upper", "smith"),  # citekey is lowercased by final sanitize
+        ("auth.upper", "SMITH"),
         ("title.lower", "thegraphneuralnetworksoftomorrow"),
         ("'fixed' + year", "fixed2024"),
         ('"dq" + year', "dq2024"),
         ("doi", "101foo"),
         ("venue.lower", "neurips"),
         ("shorttitle(3)", "graphneuralnetworks"),
-        ("shorttitle(3,5)", "graphneuranetwo"),
+        # BBT: `m` is the number of words to capitalize, not a truncation
+        # length. Five requested, three available, so all three.
+        ("shorttitle(3,5)", "GraphNeuralNetworks"),
         ("shorttitle(1)", "graph"),
         # Regression: the unrecognized-field fallback used to look the value
         # up by the original filter-suffixed, mixed-case token
@@ -149,9 +155,9 @@ def test_format_citekey_no_template_generates_base() -> None:
 
 
 def test_format_citekey_resolves_collision() -> None:
-    out = format_citekey("auth + year", _RECORD, {"smith2024"})
-    assert out != "smith2024"
-    assert out.startswith("smith2024")
+    out = format_citekey("auth + year", _RECORD, {"Smith2024"})
+    assert out != "Smith2024"
+    assert out.startswith("Smith2024")
 
 
 def test_format_citekey_fold_filter_strips_accents() -> None:

@@ -12,9 +12,32 @@ from pzi.bibtex import generate_citekey_base, normalize_authors, resolve_citekey
 
 _TEMPLATE_RE = re.compile(r"{{\s*:?\s*([A-Za-z][A-Za-z0-9_]*)\s*([^{}]*)}}")
 _NON_CITEKEY = re.compile(r"[^a-z0-9]+")
+#: Applied to each rendered *variable*, so a raw `title` cannot contribute a
+#: separator — only a quoted literal may. BBT's own `citekeyUnsafeChars` is
+#: `\"#%'(),={}~`, so the four separators kept below are safe in a key.
+_ALPHANUMERIC_ONLY = re.compile(r"[^A-Za-z0-9]+")
+_ALPHANUMERIC_OR_INNER_HYPHEN = re.compile(r"[^A-Za-z0-9-]+")
+#: Trailing/leading/doubled separators, once empty components are dropped.
+_SEPARATOR_RUN = re.compile(r"[-_:.]{2,}")
+_NON_CITEKEY_KEEPING_SEPARATORS = re.compile(r"[^A-Za-z0-9\-_:.]+")
 _FILENAME_FORBIDDEN = re.compile(r"[\\/\x00-\x1f:]+")
 _WHITESPACE = re.compile(r"\s+")
-_STOPWORDS = frozenset({"a", "an", "and", "for", "in", "of", "on", "the", "to", "with"})
+#: Better BibTeX's default `skipWords`, which `title`/`shorttitle` always apply.
+#: pzi shipped a 10-word list, so a title beginning "Towards …" or "From …"
+#: built its key on the skipped word — a plausible-looking key that simply did
+#: not match the one the same formula produces in Zotero. Kept separate from
+#: `bibtex._STOPWORDS`, which belongs to the built-in scheme and is unaffected.
+_STOPWORDS = frozenset(
+    """a ab aboard about above across after against al along amid among an and
+    anti around as at before behind below beneath beside besides between beyond
+    but by d da das de del dell dello dei degli della delle dem den der des
+    dessus dopo down du during ein eine einem einen einer eines el en et except
+    for from gli i il in inside into is l la las le les like lo los near nor of
+    off on onto or over past per plus round save since so some sur than the
+    through to toward towards un una unas under underneath une unlike uno unos
+    until up upon versus via vom von vor while with within without yet zu
+    zum""".split()
+)
 
 
 def render_zotero_template(template: str, record: Mapping[str, Any]) -> str:
@@ -61,13 +84,32 @@ def format_citekey(
             base = render_zotero_template(template, record)
         else:
             base = _render_better_bibtex_formula(template, record)
+        # A template is an explicit instruction, so its separators are kept —
+        # a library exported from Better BibTeX is full of `auth-title-year`
+        # keys, and stripping the literals the user wrote made that shape
+        # impossible to reproduce while reporting no error.
+        cleaned = _sanitize_citekey_keeping_separators(base)
     else:
         base = generate_citekey_base(_citekey_input(record))
+        # The built-in scheme never emits separators; keep it strictly
+        # alphanumeric so existing keys are unaffected by any of this.
+        cleaned = _sanitize_citekey(base)
 
-    cleaned = _sanitize_citekey(base)
     if not cleaned:
         cleaned = generate_citekey_base(_citekey_input(record))
     return resolve_citekey_collision(cleaned, existing_keys)
+
+
+def _sanitize_citekey_keeping_separators(value: str) -> str:
+    """Strip unsafe characters but keep the separators a template asked for.
+
+    An absent component (a record with no year) leaves an adjacent separator
+    with nothing to join, so runs are collapsed and the ends trimmed: the key
+    is `tsiotras-algorithmic`, never `tsiotras-algorithmic-`.
+    """
+    cleaned = _NON_CITEKEY_KEEPING_SEPARATORS.sub("", _ascii(value))
+    cleaned = _SEPARATOR_RUN.sub(lambda m: m.group(0)[0], cleaned)
+    return cleaned.strip("-_:.")
 
 
 def _parse_options(text: str) -> dict[str, str]:
@@ -203,7 +245,12 @@ def _render_bbt_part(part: str, record: Mapping[str, Any]) -> str:
     is_single_quoted = part.startswith("'") and part.endswith("'")
     is_double_quoted = part.startswith('"') and part.endswith('"')
     if is_single_quoted or is_double_quoted:
-        return part[1:-1]
+        # A quoted literal is the *only* way a separator may enter a key. It
+        # keeps its own text as well: `'fixed' + year` is a documented use.
+        # Anything outside [alnum] + the four safe separators is dropped, since
+        # it would either break BibTeX or reintroduce the punctuation the
+        # sanitizer exists to remove.
+        return _NON_CITEKEY_KEEPING_SEPARATORS.sub("", _ascii(part[1:-1]))
 
     lower = part.lower()
     filters = lower.split(".")
@@ -222,6 +269,18 @@ def _render_bbt_part(part: str, record: Mapping[str, Any]) -> str:
     else:
         value = str(record.get(head) or "")
 
+    # Sanitized *here*, per part, rather than once over the joined result. The
+    # join now carries separators that must survive, and `title` (and the
+    # unknown-field fallback) hand back a raw field value — so a single loose
+    # sanitizer at the end would either delete the separators or let a title's
+    # spaces and punctuation into the key.
+    #
+    # `auth` is the exception: a hyphen inside "Domingo-Enrich" is part of the
+    # name, and BBT keeps it. Every other variable is stripped to alphanumerics,
+    # so a title still cannot smuggle a separator in.
+    pattern = _ALPHANUMERIC_OR_INNER_HYPHEN if head == "auth" else _ALPHANUMERIC_ONLY
+    value = pattern.sub("", _ascii(value)).strip("-")
+
     for flt in filters[1:]:
         if flt == "lower":
             value = value.lower()
@@ -235,18 +294,28 @@ def _render_bbt_part(part: str, record: Mapping[str, Any]) -> str:
 
 
 def _shorttitle(record: Mapping[str, Any], token: str) -> str:
-    """Better BibTeX ``shorttitle(N)``/``shorttitle(N,M)``: first N title words
-    (stopwords dropped), each optionally truncated to M characters."""
+    """Better BibTeX ``shorttitle(n=3, m=0)``.
+
+    Per BBT's own reference: "the first `n` (default: 3) words of the title,
+    apply capitalization to first `m` (default: 0) of those". Stopwords are
+    dropped first, and the words are concatenated with no separator.
+
+    `m` used to be read as a per-word truncation length, which cannot be what
+    it means: it *defaults to 0*, so on that reading every plain
+    ``shorttitle()`` — including the ``shorttitle(3,3)`` in pzi's own shipped
+    config template — would render the empty string.
+    """
     title = str(record.get("title") or "")
     match = re.search(r"shorttitle\((\d+)(?:\s*,\s*(\d+))?\)", token)
     n_words = int(match.group(1)) if match else 3
-    max_chars = int(match.group(2)) if match and match.group(2) else None
+    capitalize = int(match.group(2)) if match and match.group(2) else 0
     words = [_sanitize_citekey(w) for w in title.split()]
     words = [w for w in words if w and w not in _STOPWORDS]
     selected = words[:n_words]
-    if max_chars is not None:
-        selected = [word[:max_chars] for word in selected]
-    return "".join(selected)
+    return "".join(
+        word.capitalize() if index < capitalize else word
+        for index, word in enumerate(selected)
+    )
 
 
 def _first_creator(record: Mapping[str, Any]) -> str:

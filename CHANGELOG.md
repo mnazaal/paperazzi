@@ -55,6 +55,23 @@ next to the diff it explains.
 
 ### Fixed
 
+- **Breaking:** `citekey_format` can now reproduce a Better BibTeX key. Quoted
+  literals may contribute `-`, `_`, `:` and `.`, which the final sanitizer used
+  to delete — so `auth.lower + "-" + shorttitle(1,0).lower + "-" + year` gave
+  `smith2024` instead of `smith-graph-2024`, with no error. Measured against a
+  real 22k-entry BBT library, exact-key agreement went from 93.5% to 98.0%.
+- **Breaking:** `shorttitle(n, m)`'s second argument capitalizes the first `m`
+  selected words, as Better BibTeX documents; it was read as a per-word
+  truncation length. `m` defaults to 0, so that reading made every plain
+  `shorttitle()` — including the `shorttitle(3,3)` in pzi's own config
+  template — render the empty string.
+- **Breaking:** a `citekey_format` template no longer force-lowercases its
+  result, so `.upper` works and `auth` keeps the family name's capitals. The
+  built-in scheme used when no template is set is unchanged.
+- `citekey_format` drops Better BibTeX's full default `skipWords` list rather
+  than ten words, so a title starting "Towards …" no longer keys on "towards".
+- A hyphenated surname keeps its hyphen (`domingo-enrich`, not
+  `domingoenrich`).
 - A Crossref subtitle is folded into the title, so the MapReduce paper stores
   `MapReduce: simplified data processing on large clusters` rather than
   `MapReduce`. Crossref deposits the two as separate fields.

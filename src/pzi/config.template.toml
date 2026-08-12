@@ -16,7 +16,17 @@ api_listen_port = 8765
 # semantic_scholar_api_key_cmd = "pass show semantic-scholar" # Semantic Scholar API key
 # semantic_scholar_api_key = "..."          # plaintext alternative to the _cmd form above
 
-# Optional Zotero/Better BibTeX-style naming templates
+# Optional Zotero/Better BibTeX-style naming templates.
+# citekey_format supports a subset of the Better BibTeX formula language:
+#   auth, title, shorttitle(n, m), year, doi, venue, and any other bib field,
+#   with the .lower / .upper / .fold / .clean filters, plus quoted literals.
+#   shorttitle(n, m) = first n title words (Better BibTeX's skipWords dropped),
+#   the first m of them capitalized; m defaults to 0, meaning none.
+# Quoted literals may contribute the separators - _ : . so a library exported
+# from Better BibTeX can be matched key-for-key, e.g.
+#   citekey_format = 'auth.lower + "-" + shorttitle(1, 0).lower + "-" + year'
+# yields smith-graph-2024. Known deviation: on a collision pzi appends -2, -3
+# where Better BibTeX appends a, b.
 # citekey_format = "auth.lower + shorttitle(3,3) + year"
 # pdf_filename_format = "{{ firstCreator suffix=\" - \" }}{{ year suffix=\" - \" }}{{ title truncate=\"100\" }}"
 # PDF file fields default to absolute paths. Set "relative" to write paths relative to the .bib file.
