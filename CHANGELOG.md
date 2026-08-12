@@ -49,6 +49,18 @@ next to the diff it explains.
   the gate that was added for the URL branch.
 - `--strict-metadata` no longer fails on a provider error that a later provider
   recovered from: a Crossref 429 used to fail an add OpenAlex completed.
+- `pzi init --rotate-token` works on an installation that has a config. The
+  "config already exists" refusal fired first, so the flag exited 2 and rotated
+  nothing unless `--force` was also given — and `--force` replaces the config
+  with the shipped template, so the documented way to replace a token was to
+  discard your configuration. It now rotates the token and leaves the config
+  alone.
+- `pzi init --force` backups go to `<data-home>/config-backups/config.toml.<timestamp>`
+  and are never overwritten. They were a single `config.toml.bak` beside the
+  config, so a second `--force` replaced the backup with the first run's
+  template output and the original was unrecoverable. The config write is now
+  atomic, and resolves a symlinked config so a config tracked in a dotfiles
+  repository keeps its symlink and gets its content replaced in place.
 - Three `--dry-run` previews that disagreed with the run they preview. `import`
   counted every entry as an import, so a source the library already had
   previewed `imported 2/2` and ran as `imported 1/2, skipped 1 duplicates`; it

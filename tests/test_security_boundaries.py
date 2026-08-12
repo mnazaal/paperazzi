@@ -86,6 +86,112 @@ def test_init_rotate_token_replaces_it(tmp_path: Path, monkeypatch) -> None:
     assert (data_home / "api_token").read_text().strip() != "original-token"
 
 
+def test_init_rotate_token_works_on_a_config_that_exists(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """The test above passes a config path that does not exist.
+
+    So it never reached the `config already exists` refusal, which fires before
+    the token is provisioned — meaning `--rotate-token` exited 2 and rotated
+    nothing on every real installation, while `README.md` documents rotation as
+    independent of `--force`. The only way through was `--force`, which also
+    replaces the config with the shipped template.
+    """
+    from pzi.commands.init import run_init_command
+
+    home = tmp_path / "home"
+    data_home = home / ".local" / "share" / "pzi"
+    data_home.mkdir(parents=True)
+    (data_home / "api_token").write_text("original-token\n", encoding="utf-8")
+    monkeypatch.setenv("XDG_DATA_HOME", str(home / ".local" / "share"))
+    config = tmp_path / "config.toml"
+    config.write_text('[[bibs]]\nname = "mine"\npath = "/tmp/mine.bib"\ndefault = true\n')
+
+    import sys
+
+    code = run_init_command(
+        _init_args(rotate_token=True),
+        home_dir=str(home),
+        config_path=str(config),
+        stdout=sys.stdout,
+        stderr=sys.stderr,
+    )
+
+    assert code == exit_codes.OK
+    assert (data_home / "api_token").read_text().strip() != "original-token"
+    # And the config it was not asked to touch is untouched.
+    assert 'name = "mine"' in config.read_text()
+    assert "was not modified" in capsys.readouterr().out
+
+
+def test_init_force_never_clobbers_an_earlier_backup(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """`{dest}.bak` was a single fixed slot, so the second `--force` overwrote
+    the backup with the first run's template output and the user's original
+    config became unrecoverable — the one scenario a backup exists for."""
+    from pzi.commands.init import run_init_command
+
+    home = tmp_path / "home"
+    (home / ".local" / "share" / "pzi").mkdir(parents=True)
+    monkeypatch.setenv("XDG_DATA_HOME", str(home / ".local" / "share"))
+    config = tmp_path / "config.toml"
+    config.write_text("# the original\n")
+
+    import sys
+
+    for _ in range(2):
+        run_init_command(
+            _init_args(force=True),
+            home_dir=str(home),
+            config_path=str(config),
+            stdout=sys.stdout,
+            stderr=sys.stderr,
+        )
+
+    backups = sorted((home / ".local" / "share" / "pzi" / "config-backups").iterdir())
+    assert len(backups) == 2, backups
+    assert any("# the original" in b.read_text() for b in backups)
+    # And nothing was dropped beside the config itself.
+    assert not (tmp_path / "config.toml.bak").exists()
+
+
+def test_init_force_writes_through_a_symlinked_config(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A config symlinked into a dotfiles repo is an ordinary setup.
+
+    The write must replace the file the link points at and leave the link in
+    place, rather than replacing the link with a regular file and detaching the
+    config from the repository that tracks it.
+    """
+    from pzi.commands.init import run_init_command
+
+    home = tmp_path / "home"
+    (home / ".local" / "share" / "pzi").mkdir(parents=True)
+    monkeypatch.setenv("XDG_DATA_HOME", str(home / ".local" / "share"))
+    tracked = tmp_path / "dotfiles" / "config.toml"
+    tracked.parent.mkdir()
+    tracked.write_text("# tracked original\n")
+    config = tmp_path / "config.toml"
+    config.symlink_to(tracked)
+
+    import sys
+
+    run_init_command(
+        _init_args(force=True),
+        home_dir=str(home),
+        config_path=str(config),
+        stdout=sys.stdout,
+        stderr=sys.stderr,
+    )
+
+    assert config.is_symlink(), "the symlink was replaced by a regular file"
+    assert config.resolve() == tracked.resolve()
+    assert "# tracked original" not in tracked.read_text()
+    assert tracked.read_text() == config.read_text()
+
+
 def test_init_refuses_library_flags_without_setup(tmp_path: Path, capsys) -> None:
     """They were accepted and dropped, and `pzi init --bib …` is what the docs
     tell people to run."""

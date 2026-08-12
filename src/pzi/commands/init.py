@@ -5,11 +5,14 @@ from __future__ import annotations
 import importlib.resources
 import os
 import shutil
+import tempfile
+import time
 from pathlib import Path
 from typing import TextIO
 
 from pzi import exit_codes, setup_service
 from pzi.config import default_data_home, load_config_file
+from pzi.fileio import fsync_parent_dir
 
 
 def _configured_data_home(config_path: Path, home_dir: str) -> str:
@@ -29,11 +32,87 @@ def _configured_data_home(config_path: Path, home_dir: str) -> str:
     return default_data_home(home_dir)
 
 
+def _rotate_token_only(dest: Path, *, home_dir: str, stdout: TextIO) -> int:
+    """Replace the API token, leaving an existing config file untouched."""
+    data_home = Path(_configured_data_home(dest, home_dir))
+    token_path, _created = setup_service.provision_api_token(data_home, rotate=True)
+    print(
+        f"API auth token replaced at {token_path} (mode 0600). Any paired "
+        "browser extension is now unpaired — paste the new token into it. "
+        f"{dest} was not modified.",
+        file=stdout,
+    )
+    return exit_codes.OK
+
+
+def _backup_config(dest: Path, home_dir: str) -> str:
+    """Copy the config being replaced somewhere it cannot be clobbered.
+
+    Two properties the previous ``{dest}.bak`` had neither of. It was a fixed
+    name, so a second ``--force`` overwrote the backup with the first run's
+    template output and the original became unrecoverable — the one scenario a
+    backup exists for. And it sat beside the config, which is commonly a symlink
+    into a dotfiles repository, so the recovery copy landed in a directory the
+    user tracks (or, for a symlinked config, in a different directory from the
+    file actually being replaced).
+
+    The data home is neither: pzi's own, never tracked, and the timestamp means
+    a rotation history rather than a single overwritable slot.
+    """
+    backups = Path(default_data_home(home_dir)) / "config-backups"
+    backups.mkdir(parents=True, exist_ok=True, mode=0o700)
+    stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
+    backup = backups / f"{dest.name}.{stamp}"
+    suffix = 1
+    while backup.exists():
+        # Two runs in the same second must not collide either.
+        backup = backups / f"{dest.name}.{stamp}.{suffix}"
+        suffix += 1
+    shutil.copy2(dest, backup)
+    os.chmod(backup, 0o600)
+    return str(backup)
+
+
+def _write_config_atomically(dest: Path, content: str) -> None:
+    """Replace *dest*'s contents in one step, following a symlink to its target.
+
+    The write was a direct ``O_TRUNC``, so an interrupt left a half-written
+    config — and a config is exactly the file that must not be half-written,
+    since the next run reads it to find the library. Resolving the symlink first
+    keeps the link itself intact: a config symlinked into a dotfiles repository
+    stays symlinked, and it is the tracked file that gets the new content.
+    """
+    target = dest.resolve() if dest.is_symlink() else dest
+    fd, tmp_name = tempfile.mkstemp(dir=str(target.parent), prefix=f".{target.name}.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp_name, 0o600)
+        os.replace(tmp_name, target)
+    except BaseException:
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
+    fsync_parent_dir(str(target))
+
+
 def run_init_command(
     args, *, home_dir: str, config_path: str, stdout: TextIO, stderr: TextIO
 ) -> int:
     dest = Path(config_path)
+    rotate_token = bool(getattr(args, "rotate_token", False))
     if dest.exists() and not args.force:
+        if rotate_token:
+            # Rotation is about the token, not the config, and this refusal
+            # fired first — so `--rotate-token` exited 2 on every real
+            # installation and rotated nothing. The only way through was
+            # `--force`, which also replaces the config with the shipped
+            # template: the flag documented as replacing a token could only be
+            # used by discarding the user's configuration.
+            return _rotate_token_only(
+                dest, home_dir=home_dir, stdout=stdout,
+            )
         print(f"config already exists: {dest} (use --force to overwrite)", file=stderr)
         # USAGE: refused before doing anything, not a finding.
         return exit_codes.USAGE
@@ -100,15 +179,8 @@ def run_init_command(
     # file that also carries `api_auth_token` and `*_cmd` hooks.
     backup: str | None = None
     if os.path.exists(dest):
-        backup = f"{dest}.bak"
-        shutil.copy2(dest, backup)
-        os.chmod(backup, 0o600)
-    fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    try:
-        os.write(fd, content.encode("utf-8"))
-    finally:
-        os.close(fd)
-    os.chmod(dest, 0o600)
+        backup = _backup_config(dest, home_dir)
+    _write_config_atomically(dest, content)
     if backup is not None:
         print(f"overwrote {dest} (mode 0600); previous config saved to {backup}", file=stdout)
     else:
