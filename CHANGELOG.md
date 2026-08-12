@@ -49,6 +49,13 @@ next to the diff it explains.
   the gate that was added for the URL branch.
 - `--strict-metadata` no longer fails on a provider error that a later provider
   recovered from: a Crossref 429 used to fail an add OpenAlex completed.
+- `pzi check` no longer discards a completed audit because one BibTeX block was
+  dropped. A single duplicate citekey made it exit 5 with no report file and
+  nothing printed — after every network lookup had been made — while `--json`
+  still emitted the audited items, so the two output modes disagreed about
+  whether the run had produced anything. The dropped block is now a warning
+  beside the results, as in `entries`, `search` and `fix dedupe`, and the run
+  exits 1: ran fine, has something to report.
 - `--force-new` says what it duplicated: "inserted a second entry for a paper
   already in the library as `<citekey>`". The near-duplicate hint returned
   early on an *exact* match — the one case `--force-new` is defined to bypass —

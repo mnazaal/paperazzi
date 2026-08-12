@@ -234,3 +234,24 @@ def test_check_refuses_an_unwritable_report_path_before_auditing(tmp_path) -> No
     assert audited == [], "the audit should not have started"
     assert code != 0
     assert "--report" in stderr.getvalue()
+
+
+def test_a_partial_audit_is_reported_and_written_not_discarded(tmp_path: Path) -> None:
+    """The runner must not read "one block dropped" as "could not run".
+
+    It treated any non-ok status that way, so a duplicate citekey anywhere in
+    the library meant no report file, nothing on stdout and exit 5 — after the
+    audit had already made every network lookup it was going to make.
+    """
+    report = tmp_path / "audit.json"
+    result = {**_result(), "warnings": ["not audited: duplicate citekey 'a' at line 7"]}
+
+    code, out, err = _run(_args(report=str(report)), lambda **_k: result, tmp_path)
+
+    # Ran fine, has something to report — not "could not run".
+    assert code == exit_codes.FINDINGS
+    assert report.exists(), "the completed audit was discarded"
+    assert json.loads(report.read_text())["total"] == 1
+    # The audited entry is shown, and the gap is named.
+    assert "checked 1" in out
+    assert "duplicate citekey" in err

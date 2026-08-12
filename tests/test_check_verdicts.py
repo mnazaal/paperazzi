@@ -221,7 +221,14 @@ def test_a_defect_from_a_lower_scoring_source_is_not_suppressed(
 def test_entries_the_parser_dropped_are_reported_not_ignored(tmp_path: Path) -> None:
     """A 3-entry bib with a duplicate citekey audited as `total: 1,
     verified: 1, problematic: 0, status: ok` — an unaudited entry inside a
-    clean bill of health."""
+    clean bill of health.
+
+    The first fix for that set `status: "error"`, which the runner reads as
+    "could not run": it discarded the completed audit, wrote no report and
+    exited 5. The requirement was never that the audit be thrown away, only
+    that it not read as clean — so the notice moved to the `warnings` channel
+    the other read commands use, and the run exits `FINDINGS`.
+    """
     config_path, _bib_path = _config(
         tmp_path,
         "@article{shared,\n  title = {Real Paper},\n  author = {Smith, Jane},\n"
@@ -237,8 +244,10 @@ def test_entries_the_parser_dropped_are_reported_not_ignored(tmp_path: Path) -> 
         fetch_crossref=lambda title: None,
     )
 
-    assert result["status"] == "error"
-    assert any("not audited" in error for error in result["errors"])
+    assert any("not audited" in warning for warning in result["warnings"])
+    # The audit it *did* complete survives, rather than being discarded.
+    assert result["status"] == "ok"
+    assert result["total"] == 1
 
 
 # ---------------------------------------------------------------------------

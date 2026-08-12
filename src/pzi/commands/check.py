@@ -201,4 +201,10 @@ def run_check_command(
     # it also decide whether a finding is reported is what opened the hole.
     counts = result["counts"]
     findings = counts["problematic"] + counts["could_not_verify"]
+    # A block the parser dropped is an entry this audit did not cover, which is
+    # something to report even when everything it *did* cover verified clean.
+    # Exit 1, not 5: the run happened, the report was written, and 1 is the
+    # documented code for "ran fine, has something to report".
+    if result.get("warnings"):
+        return exit_codes.FINDINGS
     return exit_codes.FINDINGS if findings else exit_codes.OK

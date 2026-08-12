@@ -83,6 +83,10 @@ class CheckResult(TypedDict):
     counts: dict[str, int]
     items: list[CheckItem]
     errors: list[str]
+    #: Blocks the parser dropped, in the same channel every other read command
+    #: uses for them. Not `errors`: the audit ran and these say what it could
+    #: not cover.
+    warnings: list[str]
 
 
 # Title-search providers in throughput-aware order: polite-pool DOI sources
@@ -448,20 +452,23 @@ def check_bib(
     run_errors = [
         f"{name}: unreachable for some or all entries" for name in failed_sources
     ]
-    run_errors.extend(
-        f"not audited: {message}" for message in dropped_blocks
-    )
-
     return {
-        # A run that could not read part of the file has not audited it, and
-        # `ok` would be read as "everything here is fine".
-        "status": "ok" if not dropped_blocks else "error",
+        # A dropped block is not a failure to run. `error` here meant the runner
+        # threw the whole audit away — no report file, nothing printed, exit 5 —
+        # after every network lookup had already been made, because one entry in
+        # the file had a duplicate citekey. `entries`, `search` and `fix dedupe`
+        # all show what they could read and say what they lost; `check` is the
+        # read command that did not, and the parametrized test covering exactly
+        # that behaviour is the one it was left out of.
+        "status": "ok",
         "bib_name": bib["name"],
         "strict": strict,
         "total": len(items),
         "counts": counts,
         "items": items,
         "errors": run_errors,
+        # The shared read-notice channel, rendered by `print_read_warnings`.
+        "warnings": [f"not audited: {message}" for message in dropped_blocks],
     }
 
 
@@ -474,4 +481,5 @@ def _error_result(strict: bool, errors: list[str]) -> CheckResult:
         "counts": {"verified": 0, "could_not_verify": 0, "problematic": 0},
         "items": [],
         "errors": errors,
+        "warnings": [],
     }

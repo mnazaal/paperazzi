@@ -474,3 +474,55 @@ def test_a_defect_from_a_source_that_did_identify_the_work_still_counts(tmp_path
     item = result["items"][0]
     assert item["verdict"] == "problematic"
     assert "doi_mismatch" in item["flags"]
+
+
+def test_a_dropped_block_does_not_discard_the_whole_audit(tmp_path):
+    """One duplicate citekey used to throw away a completed network audit.
+
+    `check` returned `status: "error"` whenever the parser dropped a block, and
+    the runner reads any non-ok status as "could not run": no report file,
+    nothing printed, exit 5 — after every lookup had already been made. The
+    dropped block belongs in the read-notice channel `entries`, `search` and
+    `fix dedupe` all use, beside the results.
+    """
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text(
+        "@article{alpha2020,\n"
+        "  title = {Attention Is All You Need},\n"
+        "  author = {Vaswani, Ashish},\n"
+        "  year = {2017}\n"
+        "}\n"
+        "@article{alpha2020,\n"
+        "  title = {A Second Paper Under The Same Key},\n"
+        "  year = {2021}\n"
+        "}\n"
+    )
+    config_path = _write_config(tmp_path, bib_path)
+
+    def crossref(_title, **_kw):
+        return {
+            "title": "Attention Is All You Need",
+            "authors": ["Ashish Vaswani"],
+            "year": 2017,
+            "venue": "NeurIPS",
+        }
+
+    result = check_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        fetch_crossref=crossref,
+        fetch_openalex=_no_source,
+        fetch_dblp=_no_source,
+        fetch_openreview=_no_source,
+        fetch_s2=_no_source,
+        now_year=2026,
+    )
+
+    assert result["status"] == "ok"
+    # The entry it could read was audited.
+    assert result["total"] == 1
+    assert result["items"][0]["verdict"] == "verified"
+    # And the one it could not is reported, as a warning rather than an error.
+    assert any("duplicate citekey" in w for w in result["warnings"]), result
+    assert not any("not audited" in e for e in result["errors"]), result
