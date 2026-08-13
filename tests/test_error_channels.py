@@ -376,7 +376,13 @@ def test_csv_export_neutralizes_formula_cells(tmp_path: Path) -> None:
 
 def test_exit_code_partial_is_reachable_for_promote() -> None:
     """`PromoteItem` had no `failed` key, so the runner's PARTIAL branch could
-    never be taken and a run where every promotion failed exited 0."""
+    never be taken and a run where every promotion failed exited 0.
+
+    The fixture is a genuinely *partial* batch — one promotion succeeded, one
+    failed. It used to be a single failing item, which reads as PARTIAL only
+    while "some failed" and "some succeeded" are the same condition; under the
+    shared batch contract a batch in which nothing succeeded is 5.
+    """
     from pzi.commands.update import run_update_command
 
     class _Args:
@@ -403,7 +409,16 @@ def test_exit_code_partial_is_reachable_for_promote() -> None:
                     "pdf_attached": None,
                     "note": "promotion failed: boom",
                     "failed": True,
-                }
+                },
+                {
+                    "preprint_citekey": "b2",
+                    "published_citekey": "b2published",
+                    "action": "fork",
+                    "changed_fields": ["venue"],
+                    "pdf_attached": None,
+                    "note": "",
+                    "failed": False,
+                },
             ],
             "errors": ["a1: promotion failed: boom"],
         }
@@ -584,3 +599,80 @@ def test_a_read_command_says_the_configured_bib_does_not_exist(
     )
 
     assert missing in err.getvalue(), f"{argv}: stderr said {err.getvalue()!r}"
+
+
+# ---------------------------------------------------------------------------
+# The batch contract: one rule, four commands
+# ---------------------------------------------------------------------------
+
+
+def test_batch_exit_code_is_one_rule() -> None:
+    """Every batch command answers from the same function.
+
+    Duplicating the rule per command is how they diverged: `add --from-file`
+    returned 5 when nothing succeeded while `inbox` and `import` returned 4
+    regardless, so identical all-invalid input exited differently depending on
+    which command consumed it — against a README that states the rule flatly.
+    """
+    from pzi.commands.common import batch_exit_code
+
+    assert batch_exit_code(succeeded=0, failed=0) == exit_codes.OK
+    assert batch_exit_code(succeeded=3, failed=0) == exit_codes.OK
+    assert batch_exit_code(succeeded=2, failed=1) == exit_codes.PARTIAL
+    assert batch_exit_code(succeeded=0, failed=3) == exit_codes.ENVIRONMENT
+
+
+def test_an_all_failed_inbox_drain_exits_environment() -> None:
+    """Reproduced against `add --from-file`: identical input, exits 5 there."""
+    import tempfile
+
+    from pzi.commands.inbox import run_inbox_command
+
+    class _Args:
+        json = False
+        dry_run = False
+        tags = None
+        delay = 0.0
+
+    def _drain(**_kwargs):
+        return {
+            "status": "ok",
+            "inbox_file": "/tmp/inbox.txt",
+            "dry_run": False,
+            "total": 2,
+            "counts": {"added": 0, "exists": 0, "failed": 2},
+            "items": [
+                {"value": "nope-1", "status": "failed", "errors": ["boom"]},
+                {"value": "nope-2", "status": "failed", "errors": ["boom"]},
+            ],
+            "errors": [],
+        }
+
+    with tempfile.TemporaryDirectory() as td:
+        inbox = Path(td) / "inbox.txt"
+        inbox.write_text("10.1000/one\n10.1000/two\n")
+        args = _Args()
+        args.file = str(inbox)  # type: ignore[attr-defined]
+        code = run_inbox_command(
+            args,
+            home_dir=td,
+            config_path=str(Path(td) / "c.toml"),
+            stdout=io.StringIO(),
+            stderr=io.StringIO(),
+            drain_inbox_fn=_drain,
+        )
+
+    assert code == exit_codes.ENVIRONMENT
+
+
+def test_an_all_failed_import_exits_environment() -> None:
+    from pzi.commands.import_ import _import_exit_code
+
+    assert _import_exit_code(
+        {"imported": 0, "updated": 0, "skipped_duplicates": 0, "skipped_errors": 2}
+    ) == exit_codes.ENVIRONMENT
+    # A duplicate the run correctly skipped is a success: the entry is present,
+    # which is what the caller asked for.
+    assert _import_exit_code(
+        {"imported": 0, "updated": 0, "skipped_duplicates": 1, "skipped_errors": 1}
+    ) == exit_codes.PARTIAL

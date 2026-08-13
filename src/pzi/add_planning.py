@@ -171,6 +171,27 @@ def has_minimum_metadata(record: Mapping[str, object]) -> bool:
     return False
 
 
+def _answers_the_lookup(record: Mapping[str, object] | None) -> bool:
+    """Whether a provider's answer is worth stopping the cascade for.
+
+    Every normalizer returns a dict whether or not the response said anything —
+    `_crossref_normalize_work` builds one with `title: None` for an empty
+    `message` — and the cascade stopped at the first non-`None`. So a thin
+    Crossref answer won permanently, and OpenAlex and Semantic Scholar were
+    never consulted for it: the fallbacks existed for exactly this case and
+    could not be reached. A record with a DOI but no title then passed the
+    acceptance gate and was written.
+
+    A title is the bar. It is what `has_minimum_metadata` requires, what the
+    citekey is built from, and what distinguishes "the provider knows this
+    paper" from "the provider answered".
+    """
+    if record is None:
+        return False
+    title = record.get("title")
+    return isinstance(title, str) and bool(title.strip())
+
+
 def identifies_a_paper(record: Mapping[str, object]) -> bool:
     """Whether *record* says which paper it is, by any means at all.
 
@@ -671,10 +692,16 @@ def fetch_record_for_input(
                 fetch_text=metadata_fetch_text,
             )),
         ):
-            meta = call()
-            if meta is not None:
+            candidate = call()
+            if _answers_the_lookup(candidate):
+                meta = candidate
                 winner = provider
                 break
+            if candidate is not None and meta is None:
+                # Keep the first thin answer as a floor, so a DOI that only
+                # Crossref knows about still yields what little it said when no
+                # later provider does better.
+                meta = candidate
         if meta is not None:
             best = dict(merge_record_sources(fallback, meta))
             record = _with_pdf_discovery(cast(NormalizedRecord, best))

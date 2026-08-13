@@ -244,6 +244,31 @@ def exit_code_for_error(result: Mapping[str, object]) -> int:
 _SUBCOMMAND_ATTRS = ("fix_command", "tag_command", "pdf_command")
 
 
+def batch_exit_code(*, succeeded: int, failed: int) -> int:
+    """Exit code for a batch of items, from its outcome counts alone.
+
+    One function so every batch command answers the same way. It was duplicated
+    per command instead, and the copies diverged: `add --from-file` returned
+    ENVIRONMENT when nothing succeeded while `inbox` and `import` returned
+    PARTIAL regardless, so identical all-invalid input exited 5 from one command
+    and 4 from another — against a README that documents the all-failed rule
+    without qualification.
+
+    - Nothing failed: OK. An empty batch is a run with nothing to report, not a
+      failure.
+    - Something failed but something succeeded: PARTIAL (4), which is what 4
+      means.
+    - Everything failed: ENVIRONMENT (5). PARTIAL would claim a partial success
+      that did not happen, and 1 is reserved for "ran fine, has something to
+      report".
+    """
+    if not failed:
+        return exit_codes.OK
+    if succeeded:
+        return exit_codes.PARTIAL
+    return exit_codes.ENVIRONMENT
+
+
 def command_label(args: object) -> str:
     """The envelope ``command`` label for an invocation.
 

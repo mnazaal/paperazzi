@@ -36,6 +36,40 @@ next to the diff it explains.
 
 ### Changed
 
+- **Breaking:** every batch command answers with one rule. A batch in which
+  *nothing* succeeded exits 5, not 4 — `add --from-file` already did this while
+  `inbox` and `import` returned 4 regardless, so identical all-invalid input
+  exited differently depending on which command consumed it. `pzi update` uses
+  the same rule.
+- **Breaking:** `pzi search` and `pzi import` derive their exit code from the
+  failure the service reported instead of hardcoding 5. A tag that normalizes to
+  nothing, and an unparseable import source, are usage errors (2) — both already
+  said `"reason": "usage"` in the JSON envelope while exiting 5, and
+  `pzi.http_status` reads that same field, so the CLI and HTTP API disagreed
+  about one failure.
+- **Breaking:** `pzi check` reports an unwritable `--report`/`--jsonl`
+  destination as 5, not 2. The flag is spelled correctly; permission or a
+  missing parent directory is an environment failure.
+- `pzi fix clean --fix` exits 0 when it resolved everything. The issue list is
+  computed before the quarantine, so a successful run kept reporting the orphans
+  it had just filed away and `pzi fix clean --fix && next-step` could never
+  proceed.
+- `pzi inbox` honours `--json` on the failures that happen before the drain
+  (missing file, unloadable config, backend not running). They printed prose to
+  stderr and left stdout empty — for the command most likely to run from cron.
+- `pzi pdf attach|retry` print the service's warnings in text mode, including
+  the FlareSolverr terms-of-service notice and the "a previous PDF was
+  superseded" notice. The services were fixed to return them; the runner never
+  read them.
+- `entries --stats --json` reports `bib_name` instead of `null`.
+- A capture no longer stops at the first provider that answers *anything*. Every
+  normalizer returns a record even when the response was empty, so a thin
+  Crossref answer won permanently and OpenAlex and Semantic Scholar were never
+  consulted — the fallbacks existed for exactly that case and could not be
+  reached. A provider now has to supply a title to end the cascade; a thin answer
+  is still used if nothing better arrives.
+- A renderer indexing a missing key reports it as an error instead of a
+  traceback (and, under `--json`, instead of a truncated document).
 - **Breaking:** a capture whose metadata identifies no paper is refused, and
   the refusal says how to proceed. This is no longer tied to
   `--strict-metadata`: a `.bib` entry naming nothing is not something a flag

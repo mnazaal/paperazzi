@@ -8,7 +8,7 @@ from typing import TextIO
 from pzi import cli_json, exit_codes
 from pzi.cli_parser import load_text_arg
 from pzi.cli_render import _error_lines
-from pzi.commands.common import print_lines
+from pzi.commands.common import batch_exit_code, exit_code_for_error, print_lines
 from pzi.import_service import import_from_bibtex
 
 
@@ -53,11 +53,16 @@ def run_import_command(
             cli_json.emit_result(result, stdout, command="import")
         else:
             print_lines(_error_lines("import failed", result.get("errors", [])), stderr)
-        return exit_codes.ENVIRONMENT
+        # Through the shared mapper, not a hardcoded ENVIRONMENT: the service
+        # classifies an unreadable source as REASON_USAGE, and hardcoding 5 here
+        # made the emitted envelope say `"reason": "usage"` while the process
+        # exited 5. `pzi.http_status` reads that same field, so the CLI and the
+        # HTTP API disagreed about one failure.
+        return exit_code_for_error(result)
 
     if as_json:
         cli_json.emit_result(result, stdout, command="import")
-        return exit_codes.OK if result["skipped_errors"] == 0 else exit_codes.PARTIAL
+        return _import_exit_code(result)
 
     prefix = "DRY RUN: " if getattr(args, "dry_run", False) else ""
     print(f"{prefix}imported {result['imported']}/{result['total_source']} entries", file=stdout)
@@ -84,6 +89,20 @@ def run_import_command(
     for warning in result.get("warnings") or []:
         print(f"  ! {warning}", file=stderr)
 
-    # Some entries imported and some failed is a partial result, distinct from
-    # the whole command failing.
-    return exit_codes.OK if result["skipped_errors"] == 0 else exit_codes.PARTIAL
+    return _import_exit_code(result)
+
+
+def _import_exit_code(result) -> int:
+    """The shared batch contract, applied to an import's counters.
+
+    A duplicate the run correctly skipped counts as a success: the entry is in
+    the library, which is what the caller asked for. Only `skipped_errors` are
+    failures. This returned PARTIAL whenever any entry errored — including when
+    *none* succeeded, which the README documents as 5.
+    """
+    succeeded = (
+        result.get("imported", 0)
+        + result.get("updated", 0)
+        + result.get("skipped_duplicates", 0)
+    )
+    return batch_exit_code(succeeded=succeeded, failed=result["skipped_errors"])

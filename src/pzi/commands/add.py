@@ -22,6 +22,7 @@ from pzi.cli_parser import (
 )
 from pzi.cli_render import _error_lines, _render_add_success
 from pzi.commands.common import (
+    batch_exit_code,
     command_label,
     emit_usage_error,
     first_error,
@@ -416,24 +417,17 @@ def _run_batch(
         print_capture_summary(
             counts, dry_run=args.dry_run, stdout=stdout, failures_path=failures_path
         )
-    # A batch where some items failed is PARTIAL, not FINDINGS: `1` is reserved
-    # for "ran fine and has something to report", so a script branching on it
-    # must not see a half-failed capture as a clean run with findings.
     if interrupted:
         # 130, the documented interrupted code, and only *after* the summary,
         # envelope and failures file are out. The user gets what the run
         # achieved and a list to resume from; the shell gets the right signal.
         return exit_codes.INTERRUPTED
-    if not counts["failed"]:
-        return exit_codes.OK
-    # 4 is documented as "some items succeeded", and it fired whenever anything
-    # failed — including when *nothing* succeeded, where the JSON envelope
-    # simultaneously said `status: "error"`. Two channels, opposite answers, for
-    # a batch in which every single item failed. Nothing succeeded is a failed
-    # run, which is ENVIRONMENT, the same code a single failed `add` returns.
-    if counts["added"] + counts["exists"] == 0:
-        return exit_codes.ENVIRONMENT
-    return exit_codes.PARTIAL
+    # The shared contract — see `batch_exit_code`. This command had the correct
+    # rule and the other two did not, which is the argument for there being one
+    # of it rather than three.
+    return batch_exit_code(
+        succeeded=counts["added"] + counts["exists"], failed=counts["failed"]
+    )
 
 
 def _classify(result: Mapping[str, Any]) -> str:

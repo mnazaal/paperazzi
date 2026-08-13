@@ -275,6 +275,17 @@ def run_cli(
             # a bare `ValueError` printed a traceback and *nothing at all* on
             # stdout — the two things `--json` exists to rule out.
             return _fail(str(exc), [], exit_codes.ENVIRONMENT)
+        except KeyError as exc:
+            # Same defence, for the renderers. Every one of them indexes its
+            # result with `[...]` rather than `.get`, so a service that stops
+            # emitting a key surfaces as a raw traceback — and under `--json`
+            # after a partial emit, leaving invalid JSON on stdout. Naming the
+            # missing key is the whole diagnostic, so it goes in the message.
+            return _fail(
+                f"internal error: result is missing the key {exc}",
+                [],
+                exit_codes.ENVIRONMENT,
+            )
 
     print(f"unknown command: {args.command}", file=err)
     return exit_codes.USAGE

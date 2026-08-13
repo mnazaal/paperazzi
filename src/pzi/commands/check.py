@@ -17,6 +17,7 @@ from pzi.commands.common import (
     print_lines,
     print_read_warnings,
 )
+from pzi.errors import REASON_UNAVAILABLE
 
 
 def _describe_unwritable(path: str) -> str | None:
@@ -107,13 +108,30 @@ def run_check_command(
             )
         unwritable = _describe_unwritable(path)
         if unwritable is not None:
-            return emit_usage_error(
-                args,
-                f"{flag} {unwritable}",
-                command_path=("check",),
-                stdout=stdout,
-                stderr=stderr,
+            # ENVIRONMENT, not USAGE. The flag is spelled correctly and the
+            # value is the path the user meant; what failed is permission or a
+            # missing parent directory, which `exit_codes` defines as 5 and the
+            # README documents as 5. Reaching for `emit_usage_error` because it
+            # was the helper already in hand made this the one I/O failure in
+            # the CLI reported as a usage mistake.
+            print_lines(
+                _error_lines(f"cannot write {flag} {path}", [unwritable]), stderr
             )
+            if getattr(args, "json", False):
+                cli_json.emit_result(
+                    {
+                        "status": "error",
+                        "bib_name": None,
+                        "errors": [f"{flag} {unwritable}"],
+                        # `unavailable`: the destination cannot be used right
+                        # now. Both mappers turn it into 5 / HTTP 503.
+                        "reason": REASON_UNAVAILABLE,
+                    },
+                    stdout,
+                    command="check",
+                    items=[],
+                )
+            return exit_codes.ENVIRONMENT
 
     strict: bool = getattr(args, "strict", False)
     result = check_bib_fn(

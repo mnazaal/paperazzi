@@ -9,14 +9,54 @@ from typing import TextIO
 
 from pzi import cli_json, exit_codes
 from pzi.commands.common import (
+    batch_exit_code,
+    exit_code_for_error,
     first_error,
     print_capture_stream_line,
     print_capture_summary,
     print_dry_run_banner,
 )
 from pzi.config import load_config_file
+from pzi.errors import REASON_CONFIG, REASON_UNAVAILABLE
 from pzi.inbox_service import DrainItem, DrainResult, drain_inbox, parse_inbox_line
 from pzi.tag_service import parse_tag_csv
+
+
+def _fail_early(
+    message: str,
+    *,
+    inbox_path: Path,
+    dry_run: bool,
+    as_json: bool,
+    reason: str,
+    stdout: TextIO,
+    stderr: TextIO,
+) -> int:
+    """Report a failure that happens before the drain, honouring ``--json``.
+
+    Every early exit here printed prose to stderr and left stdout empty, even
+    under ``--json`` — so `pzi inbox /nonexistent --json` produced zero bytes on
+    stdout at exit 5. `inbox` is the command most likely to run unattended from
+    cron, which is exactly the caller that cannot read prose.
+    """
+    if as_json:
+        cli_json.emit_result(
+            {
+                "status": "error",
+                "inbox_file": str(inbox_path),
+                "dry_run": dry_run,
+                "total": 0,
+                "counts": {"added": 0, "exists": 0, "failed": 0},
+                "items": [],
+                "errors": [message],
+                "reason": reason,
+            },
+            stdout,
+            command="inbox",
+        )
+    else:
+        print(message, file=stderr)
+    return exit_code_for_error({"reason": reason})
 
 
 def run_inbox_command(
@@ -35,18 +75,27 @@ def run_inbox_command(
     extra_tags = parse_tag_csv(raw_tags) if raw_tags else []
     delay: float = max(0.0, getattr(args, "delay", 1.0) or 0.0)
 
+    as_json: bool = getattr(args, "json", False)
+
     # Fast-fail before touching the translation server: if the file is missing
     # or has nothing to process, there is no reason to spin up a backend.
     try:
         raw_text = inbox_path.read_text(encoding="utf-8")
     except FileNotFoundError:
-        print(f"inbox file not found: {inbox_path}", file=stderr)
-        return exit_codes.ENVIRONMENT
+        # `unavailable`, not `not_found`: exit 3 is documented as an unknown
+        # *citekey*, and a caller branching on it would read "no such entry" for
+        # a mistyped path. The README puts a missing input under 5.
+        return _fail_early(
+            f"inbox file not found: {inbox_path}",
+            inbox_path=inbox_path, dry_run=dry_run, as_json=as_json,
+            reason=REASON_UNAVAILABLE, stdout=stdout, stderr=stderr,
+        )
     except OSError as exc:
-        print(f"cannot read inbox file: {exc}", file=stderr)
-        return exit_codes.ENVIRONMENT
-
-    as_json: bool = getattr(args, "json", False)
+        return _fail_early(
+            f"cannot read inbox file: {exc}",
+            inbox_path=inbox_path, dry_run=dry_run, as_json=as_json,
+            reason=REASON_UNAVAILABLE, stdout=stdout, stderr=stderr,
+        )
 
     if not any(parse_inbox_line(line) for line in raw_text.splitlines()):
         if as_json:
@@ -109,9 +158,13 @@ def run_inbox_command(
             )
         else:
             print_capture_summary(result["counts"], dry_run=dry_run, stdout=stdout)
-        # PARTIAL, not FINDINGS — see the matching note in `commands/add.py`.
-        return (
-            exit_codes.PARTIAL if result["counts"]["failed"] else exit_codes.OK
+        # The shared contract — see `batch_exit_code`. This returned PARTIAL
+        # whenever anything failed, so a drain in which *every* line failed
+        # reported "some items succeeded" and exited 4, while identical input
+        # through `add --from-file` exited 5.
+        counts = result["counts"]
+        return batch_exit_code(
+            succeeded=counts["added"] + counts["exists"], failed=counts["failed"]
         )
 
     # Real drain needs the translation server; an injected fake (tests) does not.
@@ -119,9 +172,11 @@ def run_inbox_command(
         cfg = load_config_file(config_path, home_dir=home_dir)
         config = cfg.get("config")
         if config is None:
-            for line in cfg.get("errors") or ["config could not be loaded"]:
-                print(f"error: {line}", file=stderr)
-            return exit_codes.ENVIRONMENT
+            return _fail_early(
+                "; ".join(cfg.get("errors") or ["config could not be loaded"]),
+                inbox_path=inbox_path, dry_run=dry_run, as_json=as_json,
+                reason=REASON_CONFIG, stdout=stdout, stderr=stderr,
+            )
         from pzi.ts_backend import backend_session
 
         with backend_session(
@@ -133,12 +188,12 @@ def run_inbox_command(
             interactive=True, stdout=stderr, stderr=stderr,
         ) as backend:
             if not backend["ready"]:
-                print(
+                return _fail_early(
                     "translation server is not running — cannot add papers.\n"
                     "  Run 'pzi server' (it starts the translation-server), then retry.",
-                    file=stderr,
+                    inbox_path=inbox_path, dry_run=dry_run, as_json=as_json,
+                    reason=REASON_UNAVAILABLE, stdout=stdout, stderr=stderr,
                 )
-                return exit_codes.ENVIRONMENT
             return _work()
 
     return _work()

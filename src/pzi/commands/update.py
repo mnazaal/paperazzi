@@ -12,6 +12,7 @@ from pzi.cli_render import (
     _render_bib_update_items,
 )
 from pzi.commands.common import (
+    batch_exit_code,
     emit_usage_error,
     print_lines,
     print_metadata_diagnostics,
@@ -57,7 +58,8 @@ def run_update_command(
 
     as_json = getattr(args, "json", False)
     ok = True
-    any_item_failed = False
+    items_succeeded = 0
+    items_failed = 0
     collected: list[tuple[str, Mapping[str, Any]]] = []
     for target in target_list(args.target):
         if promote:
@@ -86,8 +88,11 @@ def run_update_command(
         # A record the run could not update is a partly-failed batch. Failures
         # used to survive only as free text in each item's `note`, which nothing
         # read, so a run where every record failed still exited 0.
-        if any(item.get("failed") for item in result.get("items") or []):
-            any_item_failed = True
+        for item in result.get("items") or []:
+            if item.get("failed"):
+                items_failed += 1
+            else:
+                items_succeeded += 1
 
         collected.append((target or "default", dict(result)))
         if as_json:
@@ -123,4 +128,7 @@ def run_update_command(
         )
     if not ok:
         return exit_codes.ENVIRONMENT
-    return exit_codes.PARTIAL if any_item_failed else exit_codes.OK
+    # The shared batch contract — see `batch_exit_code`. `update` returns 4 too,
+    # which `exit_codes.py` and the `pzi --help` epilog both describe as
+    # import/bulk-add only.
+    return batch_exit_code(succeeded=items_succeeded, failed=items_failed)

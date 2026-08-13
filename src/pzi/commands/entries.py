@@ -187,7 +187,15 @@ def _run_stats(args, home_dir, config_path, stdout, stderr, bib_selector) -> int
 
     result = bib_stats(bib_path=target["path"], papers_dir=target["papers_dir"])
     if getattr(args, "json", False):
-        cli_json.emit_result(result, stdout, command="entries --stats", items=[])
+        # `bib_stats` takes a path rather than a selector, so it cannot name the
+        # library; the runner resolved the target to call it and can. This was
+        # the seventh call site of a fix the other six got, so the envelope here
+        # carried `"bib_name": null` permanently against a README documenting it
+        # as a real value.
+        cli_json.emit_result(
+            result, stdout, command="entries --stats", items=[],
+            bib_name=target["name"],
+        )
         return exit_codes.OK if result["status"] == "ok" else exit_codes.ENVIRONMENT
     if result["status"] == "ok":
         print_lines(_render_bib_stats(result), stdout)

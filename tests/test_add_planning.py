@@ -664,3 +664,61 @@ def test_a_candidate_that_agrees_or_is_silent_about_the_doi_is_still_taken() -> 
 
     assert record["title"] == "The Paper"
     assert record["doi"] == "10.1145/3372297"
+
+
+# --- The provider cascade must reach its fallbacks ---------------------------
+
+
+def test_a_thin_first_answer_does_not_stop_the_cascade() -> None:
+    """Every normalizer returns a dict even when the response said nothing.
+
+    `_crossref_normalize_work` builds one with `title: None` for an empty
+    `message`, and the cascade broke on `meta is not None` — so a thin Crossref
+    answer won permanently and OpenAlex and Semantic Scholar were never
+    consulted. The fallbacks existed for exactly this case and could not be
+    reached, and the resulting titleless record then passed the acceptance gate.
+    """
+    from pzi.add_planning import fetch_record_for_input
+
+    calls: list[str] = []
+
+    def _thin_crossref(doi, **_kw):
+        calls.append("crossref")
+        return {"title": None, "authors": [], "year": None, "doi": doi}
+
+    def _good_openalex(doi, **_kw):
+        calls.append("openalex")
+        return {"title": "The Real Paper", "authors": ["Smith, Jane"], "year": 2020}
+
+    record, _errors, _results = fetch_record_for_input(
+        raw_value="10.1000/thin",
+        classified={"kind": "doi", "normalized": "10.1000/thin"},
+        server_url="http://127.0.0.1:59999",
+        fetch_web=lambda *a, **k: [],
+        fetch_search=lambda *a, **k: [],
+        fetch_crossref=_thin_crossref,
+        fetch_openalex=_good_openalex,
+        fetch_s2=lambda *a, **k: None,
+    )
+
+    assert calls == ["crossref", "openalex"], calls
+    assert record is not None and record["title"] == "The Real Paper"
+
+
+def test_a_thin_answer_is_still_used_when_nothing_better_arrives() -> None:
+    """The floor: what little Crossref said is better than nothing at all."""
+    from pzi.add_planning import fetch_record_for_input
+
+    record, _errors, _results = fetch_record_for_input(
+        raw_value="10.1000/thin",
+        classified={"kind": "doi", "normalized": "10.1000/thin"},
+        server_url="http://127.0.0.1:59999",
+        fetch_web=lambda *a, **k: [],
+        fetch_search=lambda *a, **k: [],
+        fetch_crossref=lambda doi, **_kw: {"title": None, "doi": doi, "year": 2020},
+        fetch_openalex=lambda *a, **k: None,
+        fetch_s2=lambda *a, **k: None,
+    )
+
+    assert record is not None
+    assert record.get("year") == 2020

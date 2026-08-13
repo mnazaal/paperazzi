@@ -357,6 +357,27 @@ def clean_library(
                     action["error"] = str(exc)
 
     validation["actions"] = actions
+    if not dry_run:
+        # An orphan that was quarantined is no longer an outstanding issue. The
+        # issue list is built by `validate_library` *before* the move, so a
+        # successful `--fix` kept reporting every orphan it had just filed away
+        # — and the runner turns a non-empty issue list into exit 1, so
+        # `pzi fix clean --fix && next-step` could never proceed on success.
+        moved = {action["source"] for action in actions if action.get("done")}
+        if moved:
+            moved_names = {Path(source).name for source in moved}
+            validation["issues"] = [
+                issue
+                for issue in validation["issues"]
+                if not (
+                    issue.get("type") == "orphan_pdf"
+                    and issue.get("message", "").removeprefix("orphan PDF: ")
+                    in moved_names
+                )
+            ]
+            validation["orphan_pdfs"] = [
+                path for path in validation["orphan_pdfs"] if path not in moved
+            ]
     failures = [
         f"could not move {action['source']} to {action['destination']}: {action['error']}"
         for action in actions

@@ -9,6 +9,7 @@ from pzi import cli_json, exit_codes
 from pzi.cli_render import _error_lines, _render_search_matches
 from pzi.commands.common import (
     emit_usage_error,
+    exit_code_for_error,
     print_lines,
     print_read_warnings,
     target_list,
@@ -41,6 +42,12 @@ def run_search_command(
     as_json = getattr(args, "json", False)
     ok = True
     found_any = False
+    #: The first failure's exit code, from the shared `reason` mapper. Returning
+    #: a hardcoded ENVIRONMENT meant a tag that normalizes to nothing — which
+    #: `search_service` classifies as REASON_USAGE — exited 5 while the emitted
+    #: envelope said `"reason": "usage"`, and while the sibling usage check a few
+    #: lines above exited 2 for the same class of mistake.
+    failure_code: int | None = None
     collected: list[tuple[str, dict]] = []
     for target in target_list(bib_selector):
         result = search_bib_fn(
@@ -54,6 +61,8 @@ def run_search_command(
         )
         if result["status"] != "ok":
             ok = False
+            if failure_code is None:
+                failure_code = exit_code_for_error(result)
         if result.get("matches"):
             found_any = True
         collected.append((target or "default", dict(result)))
@@ -78,6 +87,6 @@ def run_search_command(
             merged, stdout, command="search", items=merged["items"],
         )
     if not ok:
-        return exit_codes.ENVIRONMENT
+        return failure_code if failure_code is not None else exit_codes.ENVIRONMENT
     # grep's convention: nothing matched is a reportable outcome, not an error.
     return exit_codes.OK if found_any else exit_codes.FINDINGS
