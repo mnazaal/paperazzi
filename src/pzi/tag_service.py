@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import unicodedata
 from typing import Literal, NotRequired, TypedDict, cast
 
@@ -20,11 +19,6 @@ from pzi.errors import REASON_CONFIG, REASON_USAGE
 # ---------------------------------------------------------------------------
 # Tag normalization
 # ---------------------------------------------------------------------------
-
-#: Kept for callers that imported it. The normalizer no longer uses it: an
-#: ASCII-only character class is what erased every non-Latin tag.
-TAG_SEPARATOR_PATTERN = re.compile(r"[^a-z0-9]+")
-
 
 def normalize_tag(value: str) -> str | None:
     """Normalize a user tag into a lowercase slug, or None if it has no letters.
@@ -61,10 +55,6 @@ def parse_tag_csv(value: str) -> list[str]:
     """Parse a comma-separated tag string using the shared normalization rules."""
     return normalize_tags(value.split(","))
 
-
-def _to_ascii(value: str) -> str:
-    normalized = unicodedata.normalize("NFKD", value)
-    return normalized.encode("ascii", "ignore").decode("ascii")
 
 class TagListResult(TypedDict):
     status: str

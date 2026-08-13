@@ -35,14 +35,17 @@ api_listen_port = 8765
 # page_metadata_cmd = "paper-meta --json"
 # page_metadata_timeout_seconds = 5
 
-# PDF download options (try in order: direct → browser → flaresolverr)
+# PDF download options. The chain is: direct → persistent server browser →
+# browser_pdf_cmd → FlareSolverr → desktop browser + Downloads watcher.
 # Browser hook uses your browser profile for authenticated institutional access.
 # pzi init --setup writes the full command; change the path (or --browser) here.
 # Firefox: ~/.mozilla/firefox/xxx.default-release
 # Chrome:  ~/.config/google-chrome/Default
 # Chromium: ~/.config/chromium
 # browser_pdf_cmd = "... -m pzi.browser_pdf_hook --profile ~/.mozilla/firefox/xxx.default-release --browser firefox"
-# browser_hook = true  # set to false to skip desktop browser PDF fallback in headless/server envs
+# browser_hook = true  # false skips the *headless* stages (persistent server browser and
+#                      # browser_pdf_cmd) in headless/server envs. It does NOT control the
+#                      # desktop-browser fallback — that is PZI_DISABLE_DESKTOP_BROWSER_FALLBACK.
 
 # FlareSolverr bypasses Cloudflare (gray area — may violate publisher ToS)
 # flaresolverr_url = "http://127.0.0.1:8191"
@@ -67,7 +70,8 @@ api_listen_port = 8765
 # desktop_fallback_hosts = ["biorxiv.org", "medrxiv.org", "researchsquare.com", "ssrn.com", "authorea.com"]
 
 # ezproxy_host = "proxy.lib.university.edu"  # route PDF downloads through institutional EZProxy
-# (bare hostname; this host is trusted and may resolve to a private/campus IP — see docs/security.md)
+# (bare hostname; this host is trusted and may resolve to a private/campus IP — see
+# https://github.com/mnazaal/paperazzi/blob/main/docs/security.md)
 
 # Metadata confidence tuning
 # promote_confidence_threshold = 60  # min 0-100 match score to promote a preprint → published (default 60)

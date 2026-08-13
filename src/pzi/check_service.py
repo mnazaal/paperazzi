@@ -167,7 +167,6 @@ def _verify_entry(
 
     sources_checked: list[str] = []
     source_errors: list[str] = []
-    source_notes: list[str] = []
     scored: list[tuple[str, MatchScore]] = []
     for name, fetch in providers:
         provider_errors: list[str] = []
@@ -199,7 +198,6 @@ def _verify_entry(
             # a genuine citation of being fabricated. A hit this far from the
             # title is a search miss, not evidence: the source simply does not
             # have this work, which is `could_not_verify`.
-            source_notes.append(f"{name}: no matching record found")
             continue
         # Authors confirmed by ≥2 sources earn a confidence bonus.
         confirming = 1 + sum(

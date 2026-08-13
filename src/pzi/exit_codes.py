@@ -23,7 +23,13 @@ configured library is `ENVIRONMENT` instead: the config is what defines the set
 of libraries, so that is a misconfiguration, not a missing entry."""
 
 PARTIAL = 4
-"""A batch ran but some items failed (bulk add, import)."""
+"""A batch ran, some items succeeded and some failed.
+
+Returned by `add --from-file`, `import`, `inbox`, `update` and
+`update --promote` — not only the importing commands, which is what this said.
+A batch in which *nothing* succeeded is `ENVIRONMENT`, not this: see
+`commands.common.batch_exit_code`, which is where every batch command gets the
+answer."""
 
 ENVIRONMENT = 5
 """The command could not run: unreadable or invalid config, a locked or

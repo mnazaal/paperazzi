@@ -220,9 +220,13 @@ def _top_level_epilog() -> str:
             (" ", "   duplicates found, integrity issues, unverified citations)"),
             (2, "usage error"),
             (3, "entry not found"),
-            (4, "batch partly failed (some items imported, some did not)"),
+            (4, "batch partly failed: some items succeeded and some did not"),
+            (" ", "   (add --from-file, import, inbox, update, update --promote;"),
+            (" ", "   a batch in which *nothing* succeeded is 5)"),
             (5, "could not run (bad config, unknown --target, locked bib,"),
             (" ", "   permission denied, service unreachable)"),
+            (130, "interrupted (SIGINT)"),
+            (141, "downstream pipe closed (SIGPIPE)"),
         )
     )
     lines.append("")
@@ -804,7 +808,9 @@ def build_parser() -> argparse.ArgumentParser:
     import_parser = subparsers.add_parser(
         "import", help="Import entries from a BibTeX file into your library"
     )
-    import_parser.add_argument("source", help="path to source .bib file")
+    import_parser.add_argument(
+        "source", help="path to source .bib file, or - to read BibTeX from stdin"
+    )
     add_config(import_parser)
     add_single_target(import_parser)
     import_parser.add_argument("--dry-run", action="store_true", help="preview without importing")

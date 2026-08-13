@@ -62,7 +62,7 @@ def _optional_string_list(key: str, value: tuple[str, ...] | None) -> list[str]:
 def _dump_app_config(config: AppConfig) -> str:
     """Serialize an AppConfig to TOML text. **Partial, by design.**
 
-    Emits 23 of ``AppConfig``'s 36 keys. It exists for test fixtures and for
+    Emits 22 of ``AppConfig``'s 35 keys. It exists for test fixtures and for
     ``pzi init``-style scaffolding, where a minimal readable file is wanted —
     not as a faithful round-trip of an arbitrary config. Feeding it a config
     that sets any of the keys below and re-reading the result silently drops

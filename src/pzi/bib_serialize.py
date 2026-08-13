@@ -762,7 +762,7 @@ def _library_entry_to_bibtex_entry(entry: BibtexEntryV2) -> BibtexEntry:
 
 # Citekeys are written as ``@type{<key>,`` (unquoted), and field values as
 # ``{<value>}``.  Untrusted metadata (a hostile capture page, a crafted
-# ``--citekey``/``--title``, a malicious ``--metadata-json``) could otherwise
+# ``--citekey``, a malicious ``--metadata-json``) could otherwise
 # break out of those delimiters and inject or corrupt entries, so both are
 # neutralized where a citekey is *composed* (:func:`_safe_citekey`, used by
 # citekey generation and by the add path's explicit-citekey branch) and checked

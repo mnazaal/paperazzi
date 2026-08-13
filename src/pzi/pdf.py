@@ -259,7 +259,7 @@ def fetch_and_store_pdf_with_fallbacks(
             # Unreachable today: `download_via_server_api` returns bytes only
             # when they start with `%PDF-`, and the `browser_pdf_cmd` and
             # FlareSolverr helpers below do the same. Kept rather than deleted
-            # (PLAN item 196 proposed deleting all three) because that is a
+            # (deleting all three has been proposed) because that is a
             # property of three other modules, not a local invariant, and these
             # bytes are about to be written to the user's papers directory. The
             # check costs one comparison.

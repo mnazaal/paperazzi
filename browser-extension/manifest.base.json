@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "paperazzi capture",
-  "description": "Send the current tab URL to the local paperazzi capture service.",
+  "description": "Capture papers and PDFs from the active tab into your local paperazzi library.",
   "version": "0.1.0",
   "icons": {
     "48": "icon48.png",

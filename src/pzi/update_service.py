@@ -347,7 +347,7 @@ def _conservative_enrich(
 
 #: Re-exported under the old private name so this module's call sites read the
 #: same as before; the definition now lives in `identifiers` because `promote`
-#: needs the identical test (see PLAN.md item 3).
+#: needs the identical test (promotion needs the identical test).
 _has_preprint_identity = has_preprint_identity
 
 

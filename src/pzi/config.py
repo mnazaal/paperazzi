@@ -365,6 +365,15 @@ def validate_app_config(
         raw_metadata_confidence_min_score, bool
     ):
         errors.append("metadata_confidence_min_score must be an integer")
+    elif not 0 <= raw_metadata_confidence_min_score <= 100:
+        # The template documents it as `0-100` and the scores it gates are on
+        # that scale, but only integer-ness was checked — so `min_score = 1000`
+        # loaded fine and silently rejected every capture, and a negative value
+        # loaded fine and gated nothing.
+        errors.append(
+            "metadata_confidence_min_score must be between 0 and 100 "
+            f"(got {raw_metadata_confidence_min_score})"
+        )
 
     raw_promote_confidence_threshold = raw.get(
         "promote_confidence_threshold", DEFAULT_PROMOTE_CONFIDENCE_THRESHOLD

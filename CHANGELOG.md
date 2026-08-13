@@ -34,6 +34,41 @@ next to the diff it explains.
   path, status, ms). Off by default; the query string is never logged.
 - `pzi inbox --json`, the last runner without it.
 
+### Removed
+
+- `.dockerignore` (there is no Dockerfile, and none is documented), an
+  unreferenced test fixture, and three dead definitions: `TAG_SEPARATOR_PATTERN`
+  and a private `_to_ascii` in `tag_service` — a diverged copy of the naive
+  folding that `normalize_tag`'s own docstring identifies as the bug that erased
+  non-Latin tags — plus a `source_notes` list `check` accumulated and never
+  returned.
+
+### Documentation
+
+- `--no-auth` is documented in the security model, which never mentioned the one
+  flag that turns the API's only authorization control off; and the token is
+  described as mandatory rather than "optional but recommended".
+- The route count is 21, not nineteen, itemized by kind.
+- The PDF fallback chain is the five stages the code runs, not three, with
+  `browser_hook` correctly described as gating the two headless stages rather
+  than the desktop one.
+- `browser_engine` is set in `config.toml`; `pzi init --browser` writes
+  `browser_pdf_cmd`, which the README claimed otherwise.
+- `pzi check --force` and `pzi server --log-requests` appear in the synopsis,
+  `PZI_NODE_VERSION` in the environment table, and `pzi import -` in the help.
+- The exit-code epilog lists 130 and 141 and describes 4 as covering `update`
+  and `inbox` too, matching `exit_codes.py`.
+- The data directory is described as rebuildable *except* the token and the new
+  config backups, and the sidecar files a write leaves are listed.
+- "No test reaches the network" is qualified: `tests/live/`, behind `PZI_LIVE=1`,
+  deliberately does.
+- The extension README describes the payload it actually sends and the
+  `/attach-pdf-raw`-first upload order; the manifest description matches.
+- The packaged config template links to `docs/security.md` on GitHub, since
+  `MANIFEST.in` prunes `docs/` from the installed package.
+- `metadata_confidence_min_score` is validated as 0-100, which the template
+  documented and nothing enforced.
+
 ### Security
 
 - **Breaking:** every spelling of the wildcard bind is refused, by both entry

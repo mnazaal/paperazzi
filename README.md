@@ -146,8 +146,9 @@ Use `pzi server` for the browser extension and `pzi add` for CLI capture; both s
 
 To keep the browser-capture server running without a dedicated terminal, run it as a **user** service. A ready-made unit ships in [`packaging/systemd/pzi.service`](packaging/systemd/pzi.service):
 
-The server refuses to start without an API token, so run `pzi init` first
-(or add `--no-auth` to `ExecStart` to serve unauthenticated deliberately).
+The server refuses to start without an API token, so run `pzi init` first.
+`--no-auth` permits that tokenless start; it does *not* switch off a token you
+already have — with one configured, every request is still checked.
 
 ```sh
 mkdir -p ~/.config/systemd/user
@@ -176,7 +177,9 @@ translation-server is the concern, a timed restart (`RuntimeMaxSec=` or a
 Your library is a `.bib` file and a `papers/` directory, and those are the only
 files you need to back up. pzi also maintains a private data directory —
 `$XDG_DATA_HOME/pzi/` (`~/.local/share/pzi/` by default), overridable with
-`pzi_data_home` — which is disposable: delete it and the next run rebuilds it.
+`pzi_data_home`. Everything in it is rebuildable **except** the API token and
+the config backups: delete those and a paired browser extension stops working,
+and `pzi init --force`'s undo is gone.
 
 | Path | What it is | Size |
 |---|---|---|
@@ -185,7 +188,14 @@ files you need to back up. pzi also maintains a private data directory —
 | `ts/` | Zotero's translation-server: three git clones plus `node_modules`. | ~300–500 MB |
 | `ts.install.lock` | Guards concurrent installs. | tiny |
 | `ts-stderr.log` | The translation-server child's stderr — the first place to look when a capture fails. | grows |
-| `metadata-cache/` | Provider responses, only when `metadata_cache_ttl > 0` (off by default). | small |
+| `metadata-cache/` | Provider responses, only when `metadata_cache_ttl > 0` (off by default). Swept on write and capped. | small |
+| `config-backups/` | Timestamped copies of a config replaced by `pzi init --force`. **Not rebuildable.** | tiny |
+
+Beside the library itself, writes leave: `<bib>.lock` and `<inbox>.lock` while a
+command holds them, `<bib>.<citekey>.bak` from `delete`/`fix merge`,
+`<bib>.promote.bak` from one `update --promote --replace` run, the
+`--failures-out` file from a bulk `add`, and `papers/.orphans/` from
+`fix clean --fix`.
 
 Outside the data directory, PDF acquisition may briefly write a clone of your
 browser profile to `$TMPDIR` (`pzi-chrome-*`) when `browser_pdf_cmd` uses a
@@ -197,7 +207,7 @@ killed by its timeout) are swept on the next launch.
 
 ### Config
 
-`pzi init --setup --bib ~/bibs/main.bib` writes `~/.config/pzi/config.toml` and an API token to `<data-home>/api_token` (mode 0600). Re-running `init` reuses the existing token so a paired browser extension keeps working; `--rotate-token` replaces it, which un-pairs the extension until you paste the new one in. `pzi add --force-new` inserts a second entry for a paper pzi considers a duplicate. Common options: `contact_email`, `unpaywall_email`, `browser_pdf_cmd`, `citekey_format`, `pdf_filename_format`, `papers_dir`, `browser_engine` (headless Playwright browser for automated capture, set via `pzi init --browser`; not the same setting as `PZI_BROWSER` below), and multiple `[[bibs]]`. See `src/pzi/config.template.toml` for all options and comments. `papers_dir` defaults to `<bib-dir>/papers/`; use `_cmd` variants for secrets.
+`pzi init --setup --bib ~/bibs/main.bib` writes `~/.config/pzi/config.toml` and an API token to `<data-home>/api_token` (mode 0600). Re-running `init` reuses the existing token so a paired browser extension keeps working; `--rotate-token` replaces it, which un-pairs the extension until you paste the new one in. `pzi add --force-new` inserts a second entry for a paper pzi considers a duplicate. Common options: `contact_email`, `unpaywall_email`, `browser_pdf_cmd`, `citekey_format`, `pdf_filename_format`, `papers_dir`, `browser_engine` (headless Playwright browser for automated capture, set in `config.toml`; `pzi init --browser` writes `browser_pdf_cmd`, not this, and it is not the same setting as `PZI_BROWSER` below), and multiple `[[bibs]]`. See `src/pzi/config.template.toml` for all options and comments. `papers_dir` defaults to `<bib-dir>/papers/`; use `_cmd` variants for secrets.
 
 ### CLI reference
 
@@ -211,12 +221,14 @@ Shared flags: every command accepts `[--config PATH]` to point at a config file 
 | 1 | Ran fine and has something to report: no search matches, duplicates or fuzzy near-duplicates found, integrity issues, entries `check` could not verify |
 | 2 | Usage error (unknown command, bad or missing arguments, or a refusal to overwrite without `--force`) |
 | 3 | Entry not found (unknown citekey) |
-| 4 | Batch partly failed — one or more items in a batch failed while at least one succeeded (`add --from-file`, `import`, `inbox drain`). A batch in which *nothing* succeeded is `5`. |
+| 4 | Batch partly failed — one or more items in a batch failed while at least one succeeded (`add --from-file`, `import`, `inbox drain`, `update`, `update --promote`). A batch in which *nothing* succeeded is `5`. |
 | 5 | Could not run: unreadable or invalid config, unknown `--target`, a locked or externally modified bib, permission denied, unreachable service |
 | 130 / 141 | Interrupted (SIGINT) / downstream pipe closed (SIGPIPE) |
 
-Note that `1` never means "the command failed" — a failure to run is always `5`,
-so `pzi search ... || echo broken` does not fire on an empty result set.
+Note that `1` never means "the command failed" — a failure to run is always `5`.
+So `pzi search ... || echo broken` *does* fire on an empty result set (`||`
+takes any non-zero status); what `1` tells you is that the command ran fine and
+has something to report. To branch on failure alone, test for `5`.
 
 **`--json`.** Every command that reports a result accepts `--json` — except
 `export`, `server` and `init` — and emits exactly **one** JSON document
@@ -254,7 +266,7 @@ pzi pdf attach <citekey> <url-or-path>
 pzi tag add|remove <citekey> <tag...> [--dry-run]
 pzi tag list [citekey] [--json]
 pzi search [--query <text>] [--author <name>] [--year <int>] [--tag <tag>]
-pzi check [--strict] [--report PATH] [--jsonl PATH] [--json]   # validate references
+pzi check [--strict] [--report PATH] [--jsonl PATH] [--force] [--json]   # validate references; --force overwrites an existing report
 pzi update [--dry-run]                        # fill missing metadata
 pzi update --promote [--dry-run] [--replace] [--mark-resolved]  # replace preprints with published versions
 pzi entries [--offset N] [--limit N] [--sort citekey|title|year|author]
@@ -268,7 +280,7 @@ pzi fix reindex [--rename-citekeys [--dry-run] [--force]]  # audit citekeys; ren
 pzi export [--format bibtex|csv|json|ris] [-o <output>] [--force]
 pzi import <source.bib> [--dry-run] [--force-new]
 pzi doctor [--config-only] [--reinstall-server]  # health check; --reinstall-server reinstalls the translation-server
-pzi server [--host H --port P] [--stop-after N] [--no-auth]
+pzi server [--host H --port P] [--stop-after N] [--no-auth] [--log-requests]
 ```
 `--strict-metadata` refuses a capture whose metadata does not identify a paper —
 a title plus at least one of DOI, author or year — and fails when no provider
@@ -399,9 +411,10 @@ Expected coverage for common sources. ✅ = works out-of-box. ⚠️ = needs con
 | `PZI_CONFIG` | Config file path. `--config` takes precedence; otherwise this, then the XDG default |
 | `PZI_SKIP_AUTO_START` | Set to `1` to skip auto-starting the translation-server (for CI/testing) |
 | `PZI_BROWSER_PDF_CMD` | Override the `browser_pdf_cmd` config value |
-| `PZI_BROWSER` | Preferred **desktop** browser for the manual "open and watch Downloads/" PDF fallback: `firefox` or `chromium` (default: `firefox`). Independent of `pzi init --browser`/`browser_engine`, which picks the **headless** Playwright browser used for automated capture (default: `chromium`) |
+| `PZI_BROWSER` | Preferred **desktop** browser for the manual "open and watch Downloads/" PDF fallback: `firefox` or `chromium` (default: `firefox`). Independent of `browser_engine`, which picks the **headless** Playwright browser used for automated capture (default: `chromium`) |
 | `PZI_BROWSER_PROFILE` | Desktop browser profile directory override for the fallback above |
 | `PZI_NODE` | Explicit Node.js >=22 binary for the translation-server (absolute path or a command name on PATH). Overrides PATH auto-detect and the `node_path` config; when set, pzi never prompts or downloads. A broken value is a hard error, not a silent fallback. Use this under systemd/daemons whose PATH lacks your shell's version-manager (fnm/nvm/volta/asdf) shims |
+| `PZI_NODE_VERSION` | Pin the Node.js version pzi downloads, as full `X.Y.Z` (a leading `v` is accepted) |
 | `PZI_NODE_MIRROR` | Override the Node.js download server (default: `https://nodejs.org/dist`); must be `https://` |
 | `PZI_NPM_REGISTRY` | Override the npm registry used when installing the translation-server's dependencies |
 | `PZI_DISABLE_DESKTOP_BROWSER_FALLBACK` | Set to `1` to skip the "open in desktop browser and watch Downloads/" PDF fallback |
@@ -427,10 +440,19 @@ flaresolverr_url = "http://127.0.0.1:8191"
 
 FlareSolverr may violate publisher terms of service; paperazzi warns when it is used.
 
-PDF download tries in order:
-1. **Direct download** - fastest, works for open-access papers
-2. **Browser profile** - uses your authenticated session
-3. **FlareSolverr** - optional Cloudflare fallback
+PDF download tries in order (`pdf.fetch_and_store_pdf_with_fallbacks`):
+1. **Direct download** — fastest, works for open-access papers
+2. **Persistent server browser** — the headless `browser_engine` session, when
+   `pzi server` is running and `browser_hook` is on
+3. **`browser_pdf_cmd`** — your own command, using a real browser profile
+4. **FlareSolverr** — optional Cloudflare fallback (may violate publisher ToS)
+5. **Desktop browser + Downloads watcher** — opens the page in your desktop
+   browser and waits for the file, for hosts in `desktop_fallback_hosts`
+
+Stages 2 and 3 are skipped when `browser_hook = false`; stage 5 has its own
+switch, `PZI_DISABLE_DESKTOP_BROWSER_FALLBACK`. Some stages are also skipped by
+origin — a candidate whose host is not the one that blocked you does not get the
+full chain.
 
 ## Troubleshooting capture flow
 
@@ -484,7 +506,9 @@ pytest --cov=pzi --cov-report=term-missing -q
 ```
 
 The suite is hermetic: two autouse fixtures in `tests/conftest.py` pin DNS and
-refuse any non-loopback connection, so no test reaches the network.
+refuse any non-loopback connection, so no test in the default run reaches the
+network. The exception is `tests/live/`, which is selected only by `PZI_LIVE=1`
+and deliberately does use it.
 
 `tests/test_cli_end_to_end.py` covers three behaviours that look untestable and
 are not. Each spawns a subprocess, so they are slower than the rest:

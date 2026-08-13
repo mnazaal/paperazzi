@@ -1,10 +1,17 @@
 # paperazzi browser extension
 
-Minimal Manifest V3 extension that sends the current tab URL to the local
-`pzi server` HTTP API. When paperazzi can capture metadata but direct CLI-style
-PDF download is blocked, the extension can fetch visible PDF candidates with the
-active browser session (`credentials: "include"`) and upload the PDF bytes to
-the local `/attach-pdf-bytes` endpoint.
+Minimal Manifest V3 extension that captures the current tab into your local
+library through the `pzi server` HTTP API. The capture body carries the tab URL,
+its title and head, the metadata read from the page, PDF candidates, your chosen
+bib and tags, and — for a same-origin request — the cookies needed to reach a
+paywalled PDF.
+
+`/capture` completes **first**; the extension's own PDF recovery runs only if no
+PDF was attached by then. When it does run, it fetches visible PDF candidates
+with the active browser session (`credentials: "include"`) and uploads the bytes
+to `/attach-pdf-raw` — a session-bound endpoint whose token, TTL and allowlisted
+source URLs tie the upload to the capture that planned it. `/attach-pdf-bytes`
+is the fallback for when no such session exists, and is correspondingly weaker.
 
 Install as an unpacked/temporary extension. On first install, an onboarding page
 opens to help set up the API token and test the connection. Once configured, you
