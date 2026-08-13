@@ -15,14 +15,7 @@ next to the diff it explains.
 
 ## [Unreleased]
 
-### Removed
-
-- **Breaking:** the inbound HTTP rate limiter, and its `rate_limit_rpm` config
-  key. It was keyed on the peer address — so on loopback every local process
-  shared one bucket — and ran after the auth gate, so it never metered a failed
-  token: it throttled your own tools and not an attacker. A config still
-  carrying `rate_limit_rpm` loads, with a warning saying the key is retired.
-  (The *outbound* limiter that spaces provider requests is unaffected.)
+## [0.1.0b6] - 2026-08-13
 
 ### Added
 
@@ -36,6 +29,12 @@ next to the diff it explains.
 
 ### Removed
 
+- **Breaking:** the inbound HTTP rate limiter, and its `rate_limit_rpm` config
+  key. It was keyed on the peer address — so on loopback every local process
+  shared one bucket — and ran after the auth gate, so it never metered a failed
+  token: it throttled your own tools and not an attacker. A config still
+  carrying `rate_limit_rpm` loads, with a warning saying the key is retired.
+  (The *outbound* limiter that spaces provider requests is unaffected.)
 - `.dockerignore` (there is no Dockerfile, and none is documented), an
   unreferenced test fixture, and three dead definitions: `TAG_SEPARATOR_PATTERN`
   and a private `_to_ascii` in `tag_service` — a diverged copy of the naive
@@ -1794,7 +1793,8 @@ First public beta.
 - No sync, group libraries, or desktop reader (by design).
 - Not yet on PyPI; install from GitHub for now.
 
-[Unreleased]: https://github.com/mnazaal/paperazzi/compare/v0.1.0b5...HEAD
+[Unreleased]: https://github.com/mnazaal/paperazzi/compare/v0.1.0b6...HEAD
+[0.1.0b6]: https://github.com/mnazaal/paperazzi/compare/v0.1.0b5...v0.1.0b6
 [0.1.0b5]: https://github.com/mnazaal/paperazzi/compare/v0.1.0b4...v0.1.0b5
 [0.1.0b4]: https://github.com/mnazaal/paperazzi/compare/v0.1.0b3...v0.1.0b4
 [0.1.0b3]: https://github.com/mnazaal/paperazzi/compare/v0.1.0b2...v0.1.0b3
