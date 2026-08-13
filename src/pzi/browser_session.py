@@ -112,7 +112,7 @@ def browser_launch_options(browser: str, *, headless: bool = True) -> dict[str, 
     return options
 
 
-def _default_url_allowed(url: str) -> bool:
+def default_url_allowed(url: str) -> bool:
     """The production predicate: a public http(s) destination and nothing else."""
     from pzi.url_safety import safe_public_http_url
 
@@ -137,7 +137,7 @@ class BrowserSession:
     #: caller that overrides it is the test suite, whose fixture servers are on
     #: loopback — and a test that has to reach into the process to change it
     #: cannot be triggered from outside.
-    url_allowed: Callable[[str], bool] = field(default=_default_url_allowed, repr=False)
+    url_allowed: Callable[[str], bool] = field(default=default_url_allowed, repr=False)
     _closed: bool = field(default=False, init=False)
     _temp_profile: Path | None = field(default=None, init=False, repr=False)
 
@@ -312,7 +312,7 @@ class FetchResult:
 
 
 def install_request_guard(
-    page: Any, url_allowed: Callable[[str], bool] = _default_url_allowed
+    page: Any, url_allowed: Callable[[str], bool] = default_url_allowed
 ) -> None:
     """Refuse browser requests to non-public destinations.
 
@@ -342,12 +342,12 @@ def install_request_guard(
         page.route("**/*", _guard)
 
 
-def _launch_browser(
+def launch_browser(
     browser: str,
     profile_path: str | None,
     *,
     headless: bool = True,
-    url_allowed: Callable[[str], bool] = _default_url_allowed,
+    url_allowed: Callable[[str], bool] = default_url_allowed,
 ) -> BrowserSession:
     """Launch a browser and return a BrowserSession."""
     try:
@@ -437,7 +437,7 @@ def open_browser_session(
     profile_path: str | None = None,
     *,
     headless: bool = True,
-    url_allowed: Callable[[str], bool] = _default_url_allowed,
+    url_allowed: Callable[[str], bool] = default_url_allowed,
 ) -> Iterator[BrowserSession]:
     """Context manager: guaranteed cleanup even on exception.
 
@@ -446,7 +446,7 @@ def open_browser_session(
             session.navigate("https://example.com")
             ...
     """
-    session = _launch_browser(
+    session = launch_browser(
         browser, profile_path, headless=headless, url_allowed=url_allowed
     )
     try:

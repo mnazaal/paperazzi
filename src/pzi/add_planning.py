@@ -192,6 +192,18 @@ def _answers_the_lookup(record: Mapping[str, object] | None) -> bool:
     return isinstance(title, str) and bool(title.strip())
 
 
+def classify_capture_outcome(result: Mapping[str, object]) -> str:
+    """Which of `added` / `exists` / `failed` a capture result counts as.
+
+    One rule, because two commands report the same counts from it: `inbox` and
+    `add --from-file` each had a byte-identical private copy, so the batch
+    summaries the two print could drift apart without either one changing.
+    """
+    if result.get("status") == "error":
+        return "failed"
+    return "exists" if result.get("action") == "update" else "added"
+
+
 def identifies_a_paper(record: Mapping[str, object]) -> bool:
     """Whether *record* says which paper it is, by any means at all.
 
@@ -490,7 +502,7 @@ def next_pdf_candidate_for_config(config: AppConfig, bib: BibConfig) -> NextPdfC
     return _next
 
 
-def _carry_item_type(record: dict[str, Any], selected: Mapping[str, Any]) -> None:
+def carry_item_type(record: dict[str, Any], selected: Mapping[str, Any]) -> None:
     """Copy a translation result's ``item_type`` into the record it wraps.
 
     ``normalize_translation_item`` returns ``item_type`` as a *sibling* of
@@ -565,7 +577,7 @@ def fetch_record_for_input(
     translation_results: list[dict] = []
     kind = classified["kind"]
     normalized = cast(str | None, classified["normalized"])
-    fallback = _fallback_record_for_input(
+    fallback = fallback_record_for_input(
         kind=cast(str, kind), normalized=normalized, raw_value=raw_value
     )
 
@@ -646,7 +658,7 @@ def fetch_record_for_input(
         if usable:
             selected = select_best_metadata_result(usable, fallback)
             best = dict(merge_record_sources(fallback, selected["record"]))
-            _carry_item_type(best, selected)
+            carry_item_type(best, selected)
             return (
                 _with_pdf_discovery(
                     cast(NormalizedRecord, best),
@@ -730,7 +742,7 @@ def fetch_record_for_input(
                 # first and typed every conference paper it found as `@article`.
                 selected = select_best_metadata_result(usable_web, fallback)
                 best = dict(merge_record_sources(fallback, selected["record"]))
-                _carry_item_type(best, selected)
+                carry_item_type(best, selected)
                 return (
                     _with_pdf_discovery(
                         cast(NormalizedRecord, best),
@@ -775,7 +787,7 @@ def fetch_record_for_input(
         if results:
             selected = select_best_metadata_result(results, fallback)
             best = dict(selected["record"])
-            _carry_item_type(best, selected)
+            carry_item_type(best, selected)
             best = _with_pdf_discovery(
                 cast(NormalizedRecord, best), translation_attachments=selected.get("attachments")
             )
@@ -1080,7 +1092,7 @@ def _call_metadata_fetcher(
         return None
 
 
-def _fallback_record_for_input(
+def fallback_record_for_input(
     *, kind: str, normalized: str | None, raw_value: str
 ) -> NormalizedRecord:
     if kind == "doi" and normalized is not None:

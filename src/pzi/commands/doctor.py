@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from pzi import cli_json, exit_codes
-from pzi.cli_render import _error_lines, _render_doctor_result
+from pzi.cli_render import error_lines, render_doctor_result
 from pzi.commands.common import emit_usage_error, print_lines
 from pzi.config import load_config_file
 from pzi.doctor_service import doctor_check
@@ -58,14 +58,14 @@ def run_doctor_command(args, *, home_dir, config_path, stdout, stderr) -> int:
         if valid:
             print(f"config valid: {cfg['path']}", file=stdout)
             return exit_codes.OK
-        print_lines(_error_lines("config invalid", cfg["errors"]), stderr)
+        print_lines(error_lines("config invalid", cfg["errors"]), stderr)
         return exit_codes.ENVIRONMENT
 
     result = doctor_check(config_path=config_path, home_dir=home_dir)
     if getattr(args, "json", False):
         cli_json.emit_result(result, stdout, command="doctor")
     else:
-        print_lines(_render_doctor_result(result), stdout)
+        print_lines(render_doctor_result(result), stdout)
     # A health check has to fail when the health is bad: reporting an
     # unreachable translation-server and exiting 0 makes it useless as a gate.
     # `status` is computed from the same problem list the report prints, so the
@@ -106,7 +106,7 @@ def _reinstall_server(*, config_path, home_dir, stdout, stderr, args=None) -> in
     config = cfg["config"]
     if config is None:
         if not as_json:
-            print_lines(_error_lines("failed to load config", cfg["errors"]), stderr)
+            print_lines(error_lines("failed to load config", cfg["errors"]), stderr)
         return _finish(
             exit_codes.ENVIRONMENT, "failed to load config", list(cfg["errors"])
         )

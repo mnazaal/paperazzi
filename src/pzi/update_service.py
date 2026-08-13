@@ -31,7 +31,7 @@ from pzi.errors import REASON_CONFIG
 from pzi.identifiers import has_preprint_identity
 from pzi.protocols import SearchTranslationFetcher
 from pzi.resolution_match import score_match
-from pzi.similarity import _canonical_doi, normalize_title
+from pzi.similarity import canonical_doi, normalize_title
 from pzi.translation_server import fetch_search_translations
 
 
@@ -375,8 +375,8 @@ def _candidate_rejection(
     """
     candidate = selected.get("record") if isinstance(selected, Mapping) else None
     if isinstance(candidate, Mapping):
-        record_doi = _canonical_doi(record.get("doi"))
-        candidate_doi = _canonical_doi(candidate.get("doi"))
+        record_doi = canonical_doi(record.get("doi"))
+        candidate_doi = canonical_doi(candidate.get("doi"))
         # The preprint exemption is deliberately narrow. `is_preprint` treats a
         # venue-less record as a preprint, which is most of what `update` runs
         # on — using it here would exempt nearly everything. Only a record with

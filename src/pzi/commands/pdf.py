@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping
 from typing import Any, TextIO
 
 from pzi import cli_json, exit_codes
-from pzi.cli_render import _error_lines, _render_pdf_success
+from pzi.cli_render import error_lines, render_pdf_success
 from pzi.commands.common import emit_usage_error, exit_code_for_error, print_lines
 from pzi.pdf_service import attach_pdf, retry_failed_pdfs, retry_pdf
 
@@ -41,10 +41,10 @@ def run_pdf_command(
             _print_warnings(result, stderr)
             return _pdf_exit_code(result)
         if result["status"] == "ok":
-            print(_render_pdf_success("attached", result), file=stdout)
+            print(render_pdf_success("attached", result), file=stdout)
             _print_warnings(result, stderr)
             return exit_codes.OK
-        print_lines(_error_lines(result["message"], result["errors"]), stderr)
+        print_lines(error_lines(result["message"], result["errors"]), stderr)
         _print_warnings(result, stderr)
         return _pdf_exit_code(result)
 
@@ -77,7 +77,7 @@ def run_pdf_command(
                 return exit_codes.ENVIRONMENT
             return exit_codes.PARTIAL if result.get("failures") else exit_codes.OK
         if result["status"] == "error":
-            print_lines(_error_lines(result["message"], result["errors"]), stderr)
+            print_lines(error_lines(result["message"], result["errors"]), stderr)
             _print_warnings(result, stderr)
             return exit_codes.ENVIRONMENT
 
@@ -117,10 +117,10 @@ def run_pdf_command(
         _print_warnings(result, stderr)
         return _pdf_exit_code(result)
     if result["status"] == "ok":
-        print(_render_pdf_success("fetched", result), file=stdout)
+        print(render_pdf_success("fetched", result), file=stdout)
         _print_warnings(result, stderr)
         return exit_codes.OK
-    print_lines(_error_lines(result["message"], result["errors"]), stderr)
+    print_lines(error_lines(result["message"], result["errors"]), stderr)
     _print_warnings(result, stderr)
     return _pdf_exit_code(result)
 

@@ -6,7 +6,7 @@ import os
 
 from pzi import cli_json, exit_codes
 from pzi.clean_service import clean_library, validate_library
-from pzi.cli_render import _error_lines, _render_clean_result
+from pzi.cli_render import error_lines, render_clean_result
 from pzi.commands.common import emit_usage_error, print_lines, print_read_warnings, resolve_target
 
 
@@ -65,11 +65,11 @@ def run_clean_command(args, *, home_dir, config_path, stdout, stderr, bib_select
         # for "ran fine, has something to report". Returning 1 here made an
         # unreadable bib indistinguishable from a handful of orphan PDFs.
         print_lines(
-            _error_lines("clean failed", result.get("errors") or ["unparseable library"]),
+            error_lines("clean failed", result.get("errors") or ["unparseable library"]),
             stderr,
         )
         return exit_codes.ENVIRONMENT
 
     print_read_warnings(result, stderr)
-    print_lines(_render_clean_result(result, dry_run=args.dry_run or not args.fix), stdout)
+    print_lines(render_clean_result(result, dry_run=args.dry_run or not args.fix), stdout)
     return exit_codes.OK if not result.get("issues") else exit_codes.FINDINGS

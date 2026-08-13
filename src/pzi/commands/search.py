@@ -6,7 +6,7 @@ from collections.abc import Callable, Sequence
 from typing import TextIO
 
 from pzi import cli_json, exit_codes
-from pzi.cli_render import _error_lines, _render_search_matches
+from pzi.cli_render import error_lines, render_search_matches
 from pzi.commands.common import (
     emit_usage_error,
     exit_code_for_error,
@@ -69,7 +69,7 @@ def run_search_command(
         if as_json:
             continue
         if result["status"] == "ok":
-            print_lines(_render_search_matches(result), stdout)
+            print_lines(render_search_matches(result), stdout)
             print_read_warnings(result, stderr)
             if not result.get("matches"):
                 print("no matches", file=stderr)
@@ -77,7 +77,7 @@ def run_search_command(
             # Name the target: with `--target` repeated, "search failed" with no
             # library named leaves the user to guess which one.
             label = result.get("bib_name") or target or "default"
-            print_lines(_error_lines(f"search failed ({label})", result["errors"]), stderr)
+            print_lines(error_lines(f"search failed ({label})", result["errors"]), stderr)
     if as_json:
         # One document for the whole run, not one per library, built by the
         # shared merge so nothing the service reported is dropped — the

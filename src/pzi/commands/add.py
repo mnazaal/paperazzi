@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from pzi import cli_json, exit_codes
+from pzi.add_planning import classify_capture_outcome
 from pzi.add_service import describe_invalid_add_input
 from pzi.capture_core import capture_to_bib
 from pzi.capture_models import AuthHints, CaptureInput
@@ -20,7 +21,7 @@ from pzi.cli_parser import (
     load_text_arg,
     parse_batch_values,
 )
-from pzi.cli_render import _error_lines, _render_add_success
+from pzi.cli_render import error_lines, render_add_success
 from pzi.commands.common import (
     batch_exit_code,
     command_label,
@@ -204,7 +205,7 @@ def _capture_and_render(
             # have to switch shapes depending on the outcome.
             cli_json.emit_result(result, stdout, command="add")
         else:
-            print_lines(_error_lines(result["message"], result["errors"]), stderr)
+            print_lines(error_lines(result["message"], result["errors"]), stderr)
         # A failed capture has as much to say as a successful one — often more,
         # since the way out of the refusal is a warning. These were rendered on
         # the success path only, so a service that explained how to proceed
@@ -219,7 +220,7 @@ def _capture_and_render(
             print(f"warning: {warning}", file=stderr)
         return exit_codes.OK
 
-    print(_render_add_success(result), file=stdout)
+    print(render_add_success(result), file=stdout)
     if args.dry_run and result.get("diff"):
         print(result["diff"], file=stdout, end="" if result["diff"].endswith("\n") else "\n")
     if args.verbose:
@@ -430,12 +431,7 @@ def _run_batch(
     )
 
 
-def _classify(result: Mapping[str, Any]) -> str:
-    if result.get("status") == "error":
-        return "failed"
-    return "exists" if result.get("action") == "update" else "added"
-
-
+_classify = classify_capture_outcome
 
 
 def _stream_line(

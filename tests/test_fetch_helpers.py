@@ -1,7 +1,7 @@
 import pytest
 
 from pzi import fetch_helpers
-from pzi.fetch_helpers import _read_limited
+from pzi.fetch_helpers import read_limited
 
 
 class _FakeResponse:
@@ -165,18 +165,18 @@ class _LengthResponse:
 def test_read_limited_rejects_body_shorter_than_content_length() -> None:
     response = _LengthResponse(b"%PDF-1.4 only-40-bytes-of-900", {"Content-Length": "900"})
     with pytest.raises(ValueError, match="truncated"):
-        _read_limited(response, max_bytes=1_000_000)
+        read_limited(response, max_bytes=1_000_000)
 
 
 def test_read_limited_accepts_body_matching_content_length() -> None:
     body = b"%PDF-1.4 complete"
     response = _LengthResponse(body, {"Content-Length": str(len(body))})
-    assert _read_limited(response, max_bytes=1_000_000) == body
+    assert read_limited(response, max_bytes=1_000_000) == body
 
 
 def test_read_limited_skips_reconciliation_without_content_length() -> None:
     body = b"%PDF-1.4 no length header"
-    assert _read_limited(_LengthResponse(body, {}), max_bytes=1_000_000) == body
+    assert read_limited(_LengthResponse(body, {}), max_bytes=1_000_000) == body
 
 
 def test_read_limited_skips_reconciliation_for_encoded_bodies() -> None:
@@ -186,7 +186,7 @@ def test_read_limited_skips_reconciliation_for_encoded_bodies() -> None:
     response = _LengthResponse(
         body, {"Content-Length": "8", "Content-Encoding": "gzip"}
     )
-    assert _read_limited(response, max_bytes=1_000_000) == body
+    assert read_limited(response, max_bytes=1_000_000) == body
 
 
 def test_a_typeerror_inside_a_fetcher_is_not_swallowed() -> None:

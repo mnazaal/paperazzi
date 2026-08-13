@@ -140,7 +140,7 @@ def test_update_bib_entry_refuses_an_entry_that_cannot_round_trip(
     def _explode(_entries) -> None:
         raise PziError("write plan produces invalid BibTeX: synthetic")
 
-    monkeypatch.setattr(bib_repository, "_validate_bibtex_roundtrip", _explode)
+    monkeypatch.setattr(bib_repository, "validate_bibtex_roundtrip", _explode)
 
     def _touch(entry: BibtexEntry, _record) -> BibtexEntry:
         touched = dict(entry)
@@ -164,7 +164,7 @@ def test_delete_bib_entry_validates_what_remains(
     def _explode(_entries) -> None:
         raise PziError("write plan produces invalid BibTeX: synthetic")
 
-    monkeypatch.setattr(bib_repository, "_validate_bibtex_roundtrip", _explode)
+    monkeypatch.setattr(bib_repository, "validate_bibtex_roundtrip", _explode)
     with pytest.raises(PziError):
         delete_bib_entry(path, "smith2020")
 
@@ -239,30 +239,30 @@ def test_the_gate_rejects_output_the_parser_drops(
     bibtexparser v2 files the result in ``failed_blocks`` instead of raising, so
     a gate that only watches for an exception passes it straight to disk.
     """
-    from pzi.bib_serialize import _validate_bibtex_roundtrip
+    from pzi.bib_serialize import validate_bibtex_roundtrip
 
     _serialize_values_verbatim(monkeypatch)
 
     with pytest.raises(PziError, match="invalid BibTeX"):
-        _validate_bibtex_roundtrip([_entry(title="Graph Networks\\", year="2019")])
+        validate_bibtex_roundtrip([_entry(title="Graph Networks\\", year="2019")])
 
 
 def test_the_gate_rejects_output_that_parses_back_as_different_fields(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Round-tripping is not enough: the entry has to come back unchanged."""
-    from pzi.bib_serialize import _validate_bibtex_roundtrip
+    from pzi.bib_serialize import validate_bibtex_roundtrip
 
     _serialize_values_verbatim(monkeypatch)
 
     with pytest.raises(PziError, match="invalid BibTeX"):
-        _validate_bibtex_roundtrip([_entry(title="Fine}, evil = {injected", year="2019")])
+        validate_bibtex_roundtrip([_entry(title="Fine}, evil = {injected", year="2019")])
 
 
 def test_the_gate_rejects_output_that_loses_an_entry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from pzi.bib_serialize import _validate_bibtex_roundtrip
+    from pzi.bib_serialize import validate_bibtex_roundtrip
 
     _serialize_values_verbatim(monkeypatch)
     good = _entry(title="Fine", year="2019")
@@ -270,23 +270,23 @@ def test_the_gate_rejects_output_that_loses_an_entry(
     broken["fields"] = {"title": "Trailing\\"}
 
     with pytest.raises(PziError, match="invalid BibTeX"):
-        _validate_bibtex_roundtrip([good, broken])
+        validate_bibtex_roundtrip([good, broken])
 
 
 def test_the_gate_accepts_an_entry_that_survives_unchanged() -> None:
-    from pzi.bib_serialize import _validate_bibtex_roundtrip
+    from pzi.bib_serialize import validate_bibtex_roundtrip
 
-    _validate_bibtex_roundtrip([_entry(title="Graph Networks", year="2019")])
+    validate_bibtex_roundtrip([_entry(title="Graph Networks", year="2019")])
 
 
 def test_the_gate_keeps_the_duplicate_citekey_message(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """`build_library`'s refusal is already phrased for the user; do not rewrap it."""
-    from pzi.bib_serialize import _validate_bibtex_roundtrip
+    from pzi.bib_serialize import validate_bibtex_roundtrip
 
     with pytest.raises(PziError, match="duplicate citekey"):
-        _validate_bibtex_roundtrip([_entry(title="One"), _entry(title="Two")])
+        validate_bibtex_roundtrip([_entry(title="One"), _entry(title="Two")])
 
 
 # ---------------------------------------------------------------------------
@@ -498,7 +498,7 @@ def test_a_batch_dry_run_refuses_what_the_real_write_would_refuse(tmp_path: Path
     """A preview must not report success for a batch the write would reject.
 
     `batch_write_session` returned before `check_consistency` and
-    `_validate_bibtex_roundtrip`, and those validate the *whole library* while a
+    `validate_bibtex_roundtrip`, and those validate the *whole library* while a
     dry run otherwise only checks each incoming entry alone. So a pre-existing
     entry that blocks the write was invisible until the real run: `import
     --dry-run` said `would_import` at exit 0, then `import` exited 5 having

@@ -8,7 +8,7 @@ from typing import Any, TypeAlias, cast
 
 from pzi import add_planning as _add_planning
 from pzi.add_planning import (
-    _carry_item_type,
+    carry_item_type,
     fetch_record_for_input,
     merge_record_sources,
     select_best_metadata_result,
@@ -167,7 +167,7 @@ def _adopt_title_search_hit(
     record = dict(found)
     # As the DOI and URL paths already do: without it every conference paper
     # captured from a local PDF became `@article` with `journal = {proceedings}`.
-    _carry_item_type(record, selected)
+    carry_item_type(record, selected)
     return cast(NormalizedRecord, record)
 
 
@@ -258,9 +258,10 @@ def add_local_pdf(
         cast(NormalizedRecord, r) for r in read_result["records"]
     ]
     metadata_errors: list[str] = []
+    extracted = extract_pdf_metadata(raw_value)
     base_record = local_pdf_base_record(
         raw_value=raw_value,
-        extracted=extract_pdf_metadata(raw_value),
+        extracted=extracted,
         server_url=server_url,
         fetch_search=fetch_search,
         fetch_web=fetch_web,
@@ -290,6 +291,17 @@ def add_local_pdf(
     # reported exactly like a clean one. Carried as warnings from here on, the
     # same wording `add_input_to_bib._finalize` uses for the other branch.
     provider_warnings = [f"provider error ({error})" for error in metadata_errors]
+    # pypdf's verdict on the file, which was discarded: a truncated, encrypted
+    # or 0-byte PDF looked exactly like a scan with no extractable text, so pzi
+    # stored a file it could not read and said nothing. Reported rather than
+    # refused — some legitimate publisher PDFs defeat pypdf, and rejecting those
+    # would be worse than storing them with a note.
+    unreadable = extracted.get("unreadable")
+    if isinstance(unreadable, str) and unreadable:
+        provider_warnings.append(
+            f"this PDF could not be parsed ({unreadable}); it is stored as given, "
+            "but no metadata could be read from it"
+        )
     # The acceptance gate. This branch returns before the one in
     # `add_service.add_input_to_bib`, so for a release that gate did not exist
     # here: `pzi add empty.pdf` wrote `@article{unknownxxxxuntitled}` carrying

@@ -328,7 +328,7 @@ def test_a_real_doi_is_still_an_identity_however_it_was_written() -> None:
 def test_a_shared_landing_url_does_not_match_two_different_papers() -> None:
     """A URL is a location, not an identifier.
 
-    `_canonical_doi` drops placeholder DOIs because "a placeholder is the
+    `canonical_doi` drops placeholder DOIs because "a placeholder is the
     absence of a DOI, not a shared one" — every entry carrying the same filler
     collapsed into one identity. `canonical_url` was taken verbatim and never
     got that reasoning, so two entries sharing a publisher landing page became

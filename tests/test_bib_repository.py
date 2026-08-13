@@ -733,13 +733,13 @@ def test_write_paths_parse_the_library_exactly_once(tmp_path: Path, monkeypatch)
     from pzi import bib_repository
 
     calls = {"n": 0}
-    real = bib_repository._parse_bib_library
+    real = bib_repository.parse_bib_library
 
     def counting(source: str):
         calls["n"] += 1
         return real(source)
 
-    monkeypatch.setattr(bib_repository, "_parse_bib_library", counting)
+    monkeypatch.setattr(bib_repository, "parse_bib_library", counting)
 
     path = tmp_path / "library.bib"
     path.write_text("@article{a2024,\n  title = {A}\n}\n")

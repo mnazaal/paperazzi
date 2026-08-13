@@ -6,7 +6,7 @@ import ipaddress
 import queue
 import socket
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any, TypeAlias
 from urllib.parse import urlsplit
 
@@ -119,3 +119,29 @@ def public_ip_address(value: str) -> bool:
     # is_global already excludes private/loopback/link-local/reserved/CGNAT,
     # but (surprisingly) not multicast, so that stays an explicit check.
     return ip.is_global and not ip.is_multicast
+
+
+def origin_of(url: str) -> str | None:
+    """``scheme://host[:port]`` for an http(s) URL, or None.
+
+    One copy of what `pdf_attach_session._origin` and `pdf_discovery._origin_of`
+    each implemented — identically apart from one of them stripping whitespace
+    first, which is the version kept.
+    """
+    parts = urlsplit(url.strip())
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        return None
+    return f"{parts.scheme}://{parts.netloc.lower()}"
+
+
+def unique_nonempty(urls: Iterable[str]) -> tuple[str, ...]:
+    """*urls*, stripped, without blanks or repeats, in first-seen order."""
+    seen: set[str] = set()
+    result: list[str] = []
+    for url in urls:
+        clean = url.strip()
+        if not clean or clean in seen:
+            continue
+        seen.add(clean)
+        result.append(clean)
+    return tuple(result)

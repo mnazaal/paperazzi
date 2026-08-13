@@ -7,6 +7,7 @@ from typing import TypedDict
 from urllib.parse import urlsplit
 
 from pzi.token_compare import tokens_match
+from pzi.url_safety import DEFAULT_DNS_LOOKUP_TIMEOUT_SECONDS
 from pzi.url_safety import safe_public_http_url as _shared_safe_public_http_url
 
 DEFAULT_ALLOWED_ORIGINS = (
@@ -17,7 +18,10 @@ DEFAULT_ALLOWED_ORIGINS = (
 )
 DEFAULT_MAX_BODY_BYTES = 64 * 1024 * 1024
 AUTH_HEADER = "X-Pzi-Token"
-DNS_LOOKUP_TIMEOUT_SECONDS = 0.25
+#: Re-exported from `url_safety`, which owns DNS resolution. Three modules
+#: each defined their own `0.25`, so tuning the timeout meant finding all
+#: three — and two of them drifting apart would be invisible.
+DNS_LOOKUP_TIMEOUT_SECONDS = DEFAULT_DNS_LOOKUP_TIMEOUT_SECONDS
 
 
 class HttpSecurityConfig(TypedDict):

@@ -17,7 +17,13 @@ from pzi.bibtex import (
     apply_record_to_entry,
 )
 from pzi.capture_context import resolve_api_auth_token
-from pzi.config import AppConfig, BibResolutionFailure, load_bib_target
+from pzi.config import (
+    DEFAULT_API_LISTEN_HOST,
+    DEFAULT_API_LISTEN_PORT,
+    AppConfig,
+    BibResolutionFailure,
+    load_bib_target,
+)
 from pzi.errors import REASON_CONFIG, REASON_USAGE
 from pzi.pdf import (
     fetch_and_store_pdf_trying_sources,
@@ -99,8 +105,8 @@ def _fallback_kwargs(config: AppConfig) -> dict[str, Any]:
     api_url = config.get("api_url")
     if not api_url:
         api_url = (
-            f"http://{config.get('api_listen_host', '127.0.0.1')}"
-            f":{config.get('api_listen_port', 8765)}"
+            f"http://{config.get('api_listen_host', DEFAULT_API_LISTEN_HOST)}"
+            f":{config.get('api_listen_port', DEFAULT_API_LISTEN_PORT)}"
         )
     return {
         "flaresolverr_url": config.get("flaresolverr_url"),
@@ -828,8 +834,15 @@ _TITLE_SKIP_PATTERNS = (
 )
 
 
-def empty_pdf_metadata() -> PdfExtractionResult:
-    return {"doi": None, "title": None, "text_sample": None}
+def empty_pdf_metadata(unreadable: str | None = None) -> PdfExtractionResult:
+    """No metadata. *unreadable* says why, when the file could not be parsed.
+
+    pypdf's verdict used to be discarded: a 0-byte, truncated or encrypted PDF
+    was indistinguishable from a scan with no extractable text, so pzi stored a
+    file it could not read and said nothing. `%PDF-` at the front was the only
+    gate anything applied.
+    """
+    return {"doi": None, "title": None, "text_sample": None, "unreadable": unreadable}
 
 
 def pdf_metadata_from_text(text: str) -> PdfExtractionResult:
@@ -897,8 +910,11 @@ def extract_pdf_metadata(path: str) -> PdfExtractionResult:
     try:
         reader = PdfReader(str(file_path))
         pages = list(reader.pages[:3])
-    except (OSError, ValueError, PyPdfError):
-        return empty_pdf_metadata()
+    except (OSError, ValueError, PyPdfError) as exc:
+        # Reported rather than fatal. Some legitimate publisher PDFs defeat
+        # pypdf, so refusing the acquisition would reject files the user can
+        # open perfectly well; storing one silently is the other failure.
+        return empty_pdf_metadata(f"{type(exc).__name__}: {exc}".strip().rstrip(":"))
 
     for page in pages:
         try:

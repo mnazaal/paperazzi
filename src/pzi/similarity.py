@@ -36,7 +36,7 @@ def extract_identities(record: MatchableRecord) -> list[Identity]:
     ``10.1145/abc/``, so re-capturing a paper wrote a second entry for it.
     """
     candidates: list[tuple[IdentityKind, str | None]] = [
-        ("doi", _canonical_doi(record.get("doi"))),
+        ("doi", canonical_doi(record.get("doi"))),
         ("arxiv", _canonical_arxiv_id(record.get("arxiv_id"))),
         ("url", _canonical_url(record.get("canonical_url"))),
     ]
@@ -91,7 +91,7 @@ def _titles_corroborate(a: MatchableRecord, b: MatchableRecord) -> bool:
 _URL_TITLE_AGREEMENT = 0.6
 
 
-def _canonical_doi(value: object) -> str | None:
+def canonical_doi(value: object) -> str | None:
     """Canonical form of a stored DOI, or ``None`` when the value is not one.
 
     A value the DOI parser rejects used to fall back to a case-folded strip, so
@@ -159,7 +159,7 @@ def find_exact_match(
             # publisher landing pages, repository indexes and shared hosts are
             # routinely one URL across many papers. Accepting it alone turned an
             # insert into an update, and the existing entry took the incoming
-            # paper's title, DOI and abstract. Same reasoning `_canonical_doi`
+            # paper's title, DOI and abstract. Same reasoning `canonical_doi`
             # applies to placeholder DOIs, and the same trade-off: a missed
             # match costs a duplicate, which `fix dedupe` can undo, while a
             # wrong merge cannot be undone.
@@ -280,14 +280,14 @@ def split_family_given(name: str) -> tuple[str, str]:
     return " ".join(parts[start:]), " ".join(parts[:start])
 
 
-def _split_family_given(name: str) -> tuple[str, str]:
+def split_family_given_folded(name: str) -> tuple[str, str]:
     """:func:`split_family_given`, folded and lowercased for matching."""
     family, given = split_family_given(name)
     return _to_ascii(family).lower(), _to_ascii(given).lower()
 
 
 def _normalize_author(name: str) -> str:
-    family, _ = _split_family_given(name)
+    family, _ = split_family_given_folded(name)
     return _NON_ALNUM.sub("", family)
 
 

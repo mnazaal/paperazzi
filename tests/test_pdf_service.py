@@ -892,6 +892,9 @@ def test_pdf_metadata_from_text_returns_empty_fields_for_blank_text():
         "doi": None,
         "title": None,
         "text_sample": None,
+        # None, not absent: blank text is a *readable* PDF with nothing in it,
+        # which is a different outcome from one pypdf could not parse.
+        "unreadable": None,
     }
 
 
@@ -910,7 +913,9 @@ def test_pdf_metadata_from_text_limits_text_sample():
 """Tests for PDF metadata extraction."""
 def test_extract_pdf_metadata_missing_file(tmp_path: Path) -> None:
     result = pdf_service.extract_pdf_metadata(str(tmp_path / "nonexistent.pdf"))
-    assert result == {"doi": None, "title": None, "text_sample": None}
+    assert result == {
+        "doi": None, "title": None, "text_sample": None, "unreadable": None,
+    }
 
 
 def test_extract_doi_from_text_finds_first() -> None:
@@ -1237,3 +1242,36 @@ def test_attach_pdf_removes_new_pdf_when_the_write_raises(
     assert not new_pdf.exists(), "the PDF this operation created was left behind"
     # And a file that was already there is untouched.
     assert pre_existing.exists()
+
+
+def test_an_unparseable_pdf_reports_why_instead_of_looking_empty(tmp_path: Path) -> None:
+    """pypdf's verdict was discarded, so `%PDF-` was the only gate anything applied.
+
+    A truncated, encrypted or 0-byte file was indistinguishable from a scan with
+    no extractable text: pzi stored a PDF it could not read and said nothing.
+    Reported rather than refused — some legitimate publisher PDFs defeat pypdf,
+    and rejecting those would be worse than storing them with a note.
+    """
+    broken = tmp_path / "broken.pdf"
+    broken.write_bytes(b"%PDF-1.4\ntruncated")
+
+    result = pdf_service.extract_pdf_metadata(str(broken))
+
+    assert result["doi"] is None and result["title"] is None
+    assert isinstance(result["unreadable"], str) and result["unreadable"]
+
+
+def test_a_readable_pdf_reports_no_parse_failure(tmp_path: Path) -> None:
+    """The other half: a file that parses must not carry the warning."""
+    pytest.importorskip("pypdf")
+    from pypdf import PdfWriter
+
+    good = tmp_path / "good.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=200, height=200)
+    with good.open("wb") as handle:
+        writer.write(handle)
+
+    result = pdf_service.extract_pdf_metadata(str(good))
+
+    assert result["unreadable"] is None

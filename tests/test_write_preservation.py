@@ -613,3 +613,43 @@ def test_a_composite_file_field_resolves_to_its_pdf(path_style: str) -> None:
         result = read_bib_file(bib)
 
         assert result["records"][0]["local_pdf_path"] == pdf
+
+
+def test_a_relative_file_path_survives_an_unrelated_edit() -> None:
+    """`file` is read as an absolute `local_pdf_path` and written back absolute.
+
+    So any command that touched an entry rewrote a portable `papers/x.pdf` into
+    a machine-specific `/home/you/bibs/papers/x.pdf` — reproduced with `tag
+    add`, where the tagged entry went absolute while every untouched entry
+    stayed relative. A git-tracked library drifted to machine-specific one entry
+    at a time, silently, and `pdf_file_path_style` defaults to `absolute` so the
+    default install had it.
+
+    Preserving what the entry already had is not the same decision as what to
+    write for a *new* attachment, which is still `pdf_file_path_style`'s.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        cp, bib, papers = _config(td)
+        Path(os.path.join(papers, "a2020.pdf")).write_bytes(b"%PDF-1.4\n")
+        Path(os.path.join(papers, "b2021.pdf")).write_bytes(b"%PDF-1.4\n")
+        Path(bib).write_text(
+            "@article{a2020,\n  title = {A},\n  author = {Smith, Jane},\n"
+            "  year = {2020},\n  file = {papers/a2020.pdf}\n}\n"
+            "@article{b2021,\n  title = {B},\n  author = {Doe, John},\n"
+            "  year = {2021},\n  file = {papers/b2021.pdf}\n}\n"
+        )
+
+        result = add_tags(
+            config_path=cp, home_dir=td, bib_selector=None,
+            citekey="a2020", tags=["ml"],
+        )
+
+        assert result["status"] == "ok" and result["changed"]
+        text = Path(bib).read_text()
+        assert "file = {papers/a2020.pdf}" in text, text
+        assert "file = {papers/b2021.pdf}" in text
+        assert td not in text, "an absolute path leaked into a relative library"
+        # And the attachment is still found through the relative path.
+        assert read_bib_file(bib)["records"][0]["local_pdf_path"].endswith(
+            "papers/a2020.pdf"
+        )

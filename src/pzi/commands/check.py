@@ -10,12 +10,12 @@ from typing import TextIO
 
 from pzi import cli_json, exit_codes
 from pzi.check_service import CheckResult, check_bib
-from pzi.cli_render import _error_lines, _render_check_items
+from pzi.cli_render import error_lines, render_check_items
 from pzi.commands.common import (
-    _write_atomic,
     emit_usage_error,
     print_lines,
     print_read_warnings,
+    write_atomic,
 )
 from pzi.errors import REASON_UNAVAILABLE
 
@@ -115,7 +115,7 @@ def run_check_command(
             # was the helper already in hand made this the one I/O failure in
             # the CLI reported as a usage mistake.
             print_lines(
-                _error_lines(f"cannot write {flag} {path}", [unwritable]), stderr
+                error_lines(f"cannot write {flag} {path}", [unwritable]), stderr
             )
             if getattr(args, "json", False):
                 cli_json.emit_result(
@@ -145,7 +145,7 @@ def run_check_command(
         if getattr(args, "json", False):
             cli_json.emit_result(result, stdout, command="check")
         else:
-            print_lines(_error_lines("check failed", result["errors"]), stderr)
+            print_lines(error_lines("check failed", result["errors"]), stderr)
         return exit_codes.ENVIRONMENT
 
     # Read notices first: "the library file is not there" changes what every
@@ -158,7 +158,7 @@ def run_check_command(
     # to know that before trusting a "could not verify".
     if result["errors"]:
         print_lines(
-            _error_lines("metadata sources unavailable", result["errors"]), stderr
+            error_lines("metadata sources unavailable", result["errors"]), stderr
         )
 
     # An audit that reached no source audited nothing, and the run exits 5 for
@@ -184,7 +184,7 @@ def run_check_command(
         # `open(..., "w")` truncated an existing report before the audit had
         # produced a replacement, so an interrupted run destroyed the previous
         # one. The gate is applied up front, beside the writability probe.
-        _write_atomic(Path(report_path), json.dumps(result, indent=2, default=str))
+        write_atomic(Path(report_path), json.dumps(result, indent=2, default=str))
 
     if jsonl_path:
         lines = [json.dumps(item, default=str) for item in result["items"]]
@@ -194,7 +194,7 @@ def run_check_command(
             for line in lines:
                 print(line, file=stdout)
         else:
-            _write_atomic(Path(jsonl_path), "".join(line + "\n" for line in lines))
+            write_atomic(Path(jsonl_path), "".join(line + "\n" for line in lines))
 
     if getattr(args, "json", False):
         cli_json.emit_result(result, stdout, command="check")
@@ -203,7 +203,7 @@ def run_check_command(
         # corrupt the stream. `--jsonl -` was guarded and `--report -` was not,
         # so `pzi check --report - | jq .` — the only reason `--report -` exists
         # — got the report with a plain-text table appended to it.
-        print_lines(_render_check_items(result), stdout)
+        print_lines(render_check_items(result), stdout)
 
     # An audit that reached no source at all audited nothing. Exiting 0 there
     # reports a clean library, which is precisely the claim the run cannot make.

@@ -114,9 +114,9 @@ class BrowserSessionManager:
 
     def _launch(self) -> Any:
         """Launch a fresh BrowserSession (called under lock)."""
-        from pzi.browser_session import _launch_browser
+        from pzi.browser_session import launch_browser
 
-        return _launch_browser(
+        return launch_browser(
             self._browser,
             self._profile_path,
             headless=self._headless,

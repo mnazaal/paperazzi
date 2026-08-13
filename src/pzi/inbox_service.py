@@ -15,6 +15,7 @@ from typing import Any, NotRequired, TypedDict
 
 import portalocker
 
+from pzi.add_planning import classify_capture_outcome
 from pzi.bib_repository import (
     LOCK_TIMEOUT_SECONDS,
     acquire_lock_with_timeout,
@@ -175,10 +176,7 @@ def _write_inbox_atomically(inbox_path: Path, lines: list[str]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _classify(result: dict[str, Any]) -> str:
-    if result.get("status") == "error":
-        return "failed"
-    return "exists" if result.get("action") == "update" else "added"
+_classify = classify_capture_outcome
 
 
 def drain_inbox(

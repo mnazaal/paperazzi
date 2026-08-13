@@ -7,7 +7,7 @@ from typing import TextIO
 
 from pzi import cli_json, exit_codes
 from pzi.cli_parser import load_text_arg
-from pzi.cli_render import _error_lines
+from pzi.cli_render import error_lines
 from pzi.commands.common import batch_exit_code, exit_code_for_error, print_lines
 from pzi.import_service import import_from_bibtex
 
@@ -52,7 +52,7 @@ def run_import_command(
         if as_json:
             cli_json.emit_result(result, stdout, command="import")
         else:
-            print_lines(_error_lines("import failed", result.get("errors", [])), stderr)
+            print_lines(error_lines("import failed", result.get("errors", [])), stderr)
         # Through the shared mapper, not a hardcoded ENVIRONMENT: the service
         # classifies an unreadable source as REASON_USAGE, and hardcoding 5 here
         # made the emitted envelope say `"reason": "usage"` while the process

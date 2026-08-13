@@ -8,7 +8,7 @@ from typing import Any, TypeAlias
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
-from pzi.fetch_helpers import DEFAULT_MAX_RESPONSE_BYTES, _read_limited
+from pzi.fetch_helpers import DEFAULT_MAX_RESPONSE_BYTES, read_limited
 
 FetchText = Callable[[str, object], str]
 
@@ -175,7 +175,7 @@ def _download_with_cookies(
     )
 
     with opener.open(request, timeout=90) as response:
-        data = _read_limited(
+        data = read_limited(
             response,
             max_bytes=max_bytes,
         )  # pragma: no cover — covered by integration/browser tests
@@ -198,5 +198,5 @@ def _post_json(
     )
     with urlopen(request, timeout=90) as response:
 # pragma: no cover — covered by integration/browser tests
-        data = _read_limited(response, max_bytes=max_bytes)
+        data = read_limited(response, max_bytes=max_bytes)
         return data.decode("utf-8")  # pragma: no cover

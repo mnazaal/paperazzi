@@ -7,9 +7,9 @@ from typing import Any, TextIO
 
 from pzi import cli_json, exit_codes
 from pzi.cli_render import (
-    _error_lines,
-    _render_bib_promote_items,
-    _render_bib_update_items,
+    error_lines,
+    render_bib_promote_items,
+    render_bib_update_items,
 )
 from pzi.commands.common import (
     batch_exit_code,
@@ -71,7 +71,7 @@ def run_update_command(
                 keep_preprint=not args.replace,
                 mark_resolved=mark_resolved,
             )
-            render = _render_bib_promote_items
+            render = render_bib_promote_items
             failure = "promote failed"
         else:
             result = update_bib_fn(
@@ -80,7 +80,7 @@ def run_update_command(
                 bib_selector=target,
                 dry_run=args.dry_run,
             )
-            render = _render_bib_update_items
+            render = render_bib_update_items
             failure = "update failed"
 
         if result["status"] != "ok":
@@ -108,7 +108,7 @@ def run_update_command(
         else:
             # Name the failing target, as `search` does.
             label = result.get("bib_name") or target or "default"
-            print_lines(_error_lines(f"{failure} ({label})", result["errors"]), stderr)
+            print_lines(error_lines(f"{failure} ({label})", result["errors"]), stderr)
 
     if as_json:
         # One document for the whole run, the same shape whether or not

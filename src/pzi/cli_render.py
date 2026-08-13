@@ -11,20 +11,20 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 
-def _error_lines(message: str, errors: Sequence[str]) -> list[str]:
+def error_lines(message: str, errors: Sequence[str]) -> list[str]:
     return [message, *(f"- {error}" for error in errors)]
 
 
-def _render_add_success(result: Mapping[str, Any]) -> str:
+def render_add_success(result: Mapping[str, Any]) -> str:
     prefix = _dry_run_prefix(result)
     return f"{prefix}{result['action']} {result['citekey']} in {result['bib_name']}"
 
 
-def _render_pdf_success(action: str, result: Mapping[str, Any]) -> str:
+def render_pdf_success(action: str, result: Mapping[str, Any]) -> str:
     return f"{action} PDF {result['citekey']} -> {result['local_pdf_path']}"
 
 
-def _render_tag_mutation_success(result: Mapping[str, Any]) -> str:
+def render_tag_mutation_success(result: Mapping[str, Any]) -> str:
     prefix = _dry_run_prefix(result)
     joined = ", ".join(result["tags"]) if result["tags"] else "(none)"
     return f"{prefix}{result['message']} for {result['citekey']}: {joined}"
@@ -49,7 +49,7 @@ def render_cell(value: object) -> str:
     return _UNSAFE_IN_ROW.sub("", text.replace("\t", " ").replace("\n", " ").replace("\r", " "))
 
 
-def _render_search_matches(result: Mapping[str, Any]) -> list[str]:
+def render_search_matches(result: Mapping[str, Any]) -> list[str]:
     lines = []
     for match in result["matches"]:
         title = match["title"] or ""
@@ -70,7 +70,7 @@ def _render_search_matches(result: Mapping[str, Any]) -> list[str]:
 _CHECK_SYMBOL = {"verified": "✓", "could_not_verify": "?", "problematic": "✗"}
 
 
-def _render_check_items(result: Mapping[str, Any]) -> list[str]:
+def render_check_items(result: Mapping[str, Any]) -> list[str]:
     # Problematic first, then could-not-verify, then verified — most actionable on top.
     order = {"problematic": 0, "could_not_verify": 1, "verified": 2}
     items = sorted(result["items"], key=lambda i: order.get(i["verdict"], 3))
@@ -93,7 +93,7 @@ def _render_check_items(result: Mapping[str, Any]) -> list[str]:
     return [*(lines or ["no entries to check"]), summary]
 
 
-def _render_bib_update_items(result: Mapping[str, Any]) -> list[str]:
+def render_bib_update_items(result: Mapping[str, Any]) -> list[str]:
     prefix = _dry_run_prefix(result)
     lines = []
     for item in result["items"]:
@@ -103,7 +103,7 @@ def _render_bib_update_items(result: Mapping[str, Any]) -> list[str]:
     return lines or [f"{prefix}no updates"]
 
 
-def _render_bib_promote_items(result: Mapping[str, Any]) -> list[str]:
+def render_bib_promote_items(result: Mapping[str, Any]) -> list[str]:
     prefix = _dry_run_prefix(result)
     lines = []
     for item in result["items"]:
@@ -152,7 +152,7 @@ def _dry_run_prefix(result: Mapping[str, Any]) -> str:
     return "DRY RUN: " if result["dry_run"] else ""
 
 
-def _render_bib_stats(result: Mapping[str, Any]) -> list[str]:
+def render_bib_stats(result: Mapping[str, Any]) -> list[str]:
     """Render bib-stats result as human-readable lines."""
     lines = [
         f"path: {result['bib_path']}",
@@ -171,7 +171,7 @@ def _render_bib_stats(result: Mapping[str, Any]) -> list[str]:
     return lines
 
 
-def _render_clean_result(result: Mapping[str, Any], dry_run: bool) -> list[str]:
+def render_clean_result(result: Mapping[str, Any], dry_run: bool) -> list[str]:
     """Render clean/validate result as human-readable lines."""
     prefix = "DRY RUN: " if dry_run else ""
     lines = [
@@ -218,7 +218,7 @@ def _render_clean_result(result: Mapping[str, Any], dry_run: bool) -> list[str]:
     return lines
 
 
-def _render_dedupe_result(result: Mapping[str, Any]) -> list[str]:
+def render_dedupe_result(result: Mapping[str, Any]) -> list[str]:
     """Render dedupe result as human-readable lines."""
     lines = [
         f"path: {result['bib_path']}",
@@ -235,7 +235,7 @@ def _render_dedupe_result(result: Mapping[str, Any]) -> list[str]:
     return lines
 
 
-def _render_reindex_result(result: Mapping[str, Any], dry_run: bool) -> list[str]:
+def render_reindex_result(result: Mapping[str, Any], dry_run: bool) -> list[str]:
     """Render reindex result as human-readable lines."""
     prefix = "DRY RUN: " if dry_run else ""
     lines = [f"bib: {result['bib_path']}", f"entries: {result['total_entries']}"]
@@ -263,7 +263,7 @@ def reindex_error_lines(result: Mapping[str, Any]) -> list[str]:
     return [f"error: {err}" for err in result.get("errors", [])]
 
 
-def _render_delete_success(result: Mapping[str, Any]) -> str:
+def render_delete_success(result: Mapping[str, Any]) -> str:
     """Render delete result as a single status line."""
     prefix = "DRY RUN: " if result["dry_run"] else ""
     msg = result["message"]
@@ -271,7 +271,7 @@ def _render_delete_success(result: Mapping[str, Any]) -> str:
     return f"{prefix}{msg}{pdf}"
 
 
-def _render_doctor_result(result: Mapping[str, Any]) -> list[str]:
+def render_doctor_result(result: Mapping[str, Any]) -> list[str]:
     """Render `pzi doctor` as status lines for a human."""
     ok = "ok"
     bad = "FAIL"

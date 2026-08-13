@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pzi import cli_json, exit_codes
-from pzi.cli_render import _error_lines, _render_dedupe_result
+from pzi.cli_render import error_lines, render_dedupe_result
 from pzi.commands.common import (
     exit_code_for_error,
     print_lines,
@@ -28,7 +28,7 @@ def run_dedupe_command(args, *, home_dir, config_path, stdout, stderr, bib_selec
     if getattr(args, "json", False):
         cli_json.emit_result(result, stdout, command="fix dedupe", bib_name=target["name"])
         return exit_codes.OK if findings == 0 else exit_codes.FINDINGS
-    print_lines(_render_dedupe_result(result), stdout)
+    print_lines(render_dedupe_result(result), stdout)
     # A duplicate citekey never reaches the identity index -- the parser keeps
     # only the first block -- so without this the command built to find
     # duplicates reports "0 clusters" for a file that plainly has one.
@@ -56,7 +56,7 @@ def run_merge_command(args, *, home_dir, config_path, stdout, stderr, bib_select
         )
         return exit_codes.OK if result["status"] == "ok" else exit_code_for_error(result)
     if result["status"] != "ok":
-        print_lines(_error_lines(result["message"], []), stderr)
+        print_lines(error_lines(result["message"], []), stderr)
         # Both branches go through the same mapper so they cannot drift apart
         # the way `pdf retry --failed-only`'s JSON and text paths did.
         return exit_code_for_error(result)

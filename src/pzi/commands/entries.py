@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pzi import cli_json, exit_codes
 from pzi.bib_service import bib_stats, entry_detail, list_entries
-from pzi.cli_render import _error_lines, _render_bib_stats, render_cell
+from pzi.cli_render import error_lines, render_bib_stats, render_cell
 from pzi.commands.common import (
     emit_usage_error,
     exit_code_for_error,
@@ -121,7 +121,7 @@ def _run_list(args, home_dir, config_path, stdout, stderr, bib_selector) -> int:
             file=stderr,
         )
         return exit_codes.OK
-    print_lines(_error_lines("failed to list entries", result["errors"]), stderr)
+    print_lines(error_lines("failed to list entries", result["errors"]), stderr)
     return exit_codes.ENVIRONMENT
 
 
@@ -139,7 +139,7 @@ def _run_detail(args, home_dir, config_path, stdout, stderr, bib_selector) -> in
         if getattr(args, "json", False):
             cli_json.emit_result(result, stdout, command="entries", items=[])
         else:
-            print_lines(_error_lines(result["message"], result["errors"]), stderr)
+            print_lines(error_lines(result["message"], result["errors"]), stderr)
         return exit_code_for_error(result)
     record = result["record"]
     print_read_warnings(result, stderr)
@@ -198,10 +198,10 @@ def _run_stats(args, home_dir, config_path, stdout, stderr, bib_selector) -> int
         )
         return exit_codes.OK if result["status"] == "ok" else exit_codes.ENVIRONMENT
     if result["status"] == "ok":
-        print_lines(_render_bib_stats(result), stdout)
+        print_lines(render_bib_stats(result), stdout)
         print_read_warnings(result, stderr)
         return exit_codes.OK
-    print_lines(_error_lines("stats failed", result["errors"]), stderr)
+    print_lines(error_lines("stats failed", result["errors"]), stderr)
     return exit_codes.ENVIRONMENT
 
 

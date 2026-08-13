@@ -2880,13 +2880,20 @@ console.log(JSON.stringify({ headLength: (meta.headHtml || "").length }));
     assert 0 < result["headLength"] <= 64 * 1024, result
 
 
-def test_hidden_iframe_probes_are_bounded_by_us_not_by_the_page(tmp_path: Path) -> None:
-    """Each probe is a real navigation carrying the user's session.
+def test_click_discovery_returns_what_it_found_and_probes_nothing(tmp_path: Path) -> None:
+    """It injected hidden iframes to read a cache it can never see.
 
-    `clickPdfDiscovery` injected one hidden iframe per discovered URL, in
-    parallel, and the match set is whatever the page offers — a publisher page
-    with a "PDF" link beside every reference produced dozens of simultaneous
-    navigations.
+    The always-on observer cache is module state in `observer.js`, written only
+    by the `webRequest` listener `background.js` registers **in the service
+    worker**. `clickPdfDiscovery`'s only caller is `captureCurrentTab`, which
+    `popup.js` imports directly — `background.js` says that is deliberate, since
+    Firefox only grants an optional host permission while the user gesture is
+    live. The popup therefore loads its own copy of the module graph, with its
+    own empty cache.
+
+    So every capture opened up to five hidden cross-origin navigations, each
+    carrying the user's cookies, waited 500ms, and returned the difference of
+    two empty lists — while discarding the URLs its own DOM scan had found.
     """
     result = _run_background_module(
         r'''
@@ -2895,10 +2902,10 @@ globalThis.chrome = {
   runtime: { onInstalled: { addListener: () => {} } },
   webRequest: { onHeadersReceived: { addListener: () => {}, removeListener: () => {} } },
   scripting: {
-    executeScript: async ({ args }) => {
-      // First call is the DOM scan; later ones are the iframe injections.
+    executeScript: async ({ args, func }) => {
+      // The DOM scan takes no args; anything with args would be a probe.
       if (!args || args.length === 0) {
-        return [{ result: Array.from({ length: 40 }, (_, i) => `https://paper.test/ref-${i}.pdf`) }];
+        return [{ result: ["https://paper.test/a.pdf", "https://paper.test/b.pdf"] }];
       }
       globalThis.injected.push(args[0]);
       return [{ result: null }];
@@ -2906,20 +2913,19 @@ globalThis.chrome = {
   },
 };
 const mod = await import("./background/pdf_discovery.mjs");
-await mod.clickPdfDiscovery(7, "https://paper.test/article");
-console.log(JSON.stringify({
-  injected: globalThis.injected.length,
-  offered: 40,
-  cap: mod.MAX_HIDDEN_IFRAME_PROBES ?? null,
-}));
+const found = await mod.clickPdfDiscovery(7, "https://paper.test/article");
+console.log(JSON.stringify({ found, injected: globalThis.injected.length }));
 ''',
         tmp_path,
     )
 
-    # Behavioural: fewer probes than the page offered. Stated this way so the
-    # test fails against the unbounded version rather than on a missing export.
-    assert result["injected"] < result["offered"], result
-    assert result["cap"] and result["injected"] <= result["cap"], result
+    # The scan's own results are returned rather than thrown away.
+    assert result["found"] == [
+        "https://paper.test/a.pdf",
+        "https://paper.test/b.pdf",
+    ], result
+    # And no cookie-carrying navigation was opened to learn nothing.
+    assert result["injected"] == 0, result
 
 
 def test_the_bypass_budget_is_per_capture_not_per_tab(tmp_path: Path) -> None:

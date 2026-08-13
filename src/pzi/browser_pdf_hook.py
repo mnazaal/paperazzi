@@ -280,7 +280,7 @@ def main() -> int:  # pragma: no cover — CLI entry point
     return 0
 
 
-def _launch_browser(
+def launch_browser(
     browser: str,
     profile_path: str | None = None,
     *,
@@ -288,12 +288,12 @@ def _launch_browser(
     url_allowed: Callable[[str], bool] | None = None,
 ) -> BrowserSession:
     """Launch a browser and return a BrowserSession (delegates to browser_session module)."""
-    from pzi.browser_session import _default_url_allowed
-    from pzi.browser_session import _launch_browser as _impl
+    from pzi.browser_session import default_url_allowed
+    from pzi.browser_session import launch_browser as _impl
 
     return _impl(
         browser, profile_path, headless=headless,
-        url_allowed=url_allowed or _default_url_allowed,
+        url_allowed=url_allowed or default_url_allowed,
     )
 
 
@@ -324,7 +324,7 @@ def discover_pdf_url(
     if _session is not None:  # pragma: no branch
         session = _session
     else:  # pragma: no cover
-        session = _launch_browser(
+        session = launch_browser(
             browser, profile_path, headless=headless, url_allowed=url_allowed
         )
 
@@ -388,7 +388,7 @@ def download_pdf(
     if _session is not None:  # pragma: no branch
         session = _session
     else:  # pragma: no cover
-        session = _launch_browser(
+        session = launch_browser(
             browser, profile_path, headless=headless, url_allowed=url_allowed
         )
 

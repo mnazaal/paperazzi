@@ -24,6 +24,8 @@ from pzi.bibtex import normalize_authors
 from pzi.capture_core import capture_to_bib
 from pzi.capture_models import AuthHints, CaptureInput, CaptureOptions, PageArtifact, PdfCandidate
 from pzi.config import (
+    DEFAULT_API_LISTEN_HOST,
+    DEFAULT_API_LISTEN_PORT,
     BibResolutionFailure,
     load_bib_target,
     load_config_file,
@@ -723,8 +725,8 @@ def _attach_base_url_from_config(config: Mapping[str, Any] | None) -> str:
         # pointing at the default port to anyone who had moved the server —
         # `api_listen_port = 9000` with no explicit `api_url` produced an attach
         # URL nothing was listening on.
-        host = "127.0.0.1"
-        port: Any = 8765
+        host = DEFAULT_API_LISTEN_HOST
+        port: Any = DEFAULT_API_LISTEN_PORT
         if isinstance(config, Mapping):
             host = str(config.get("api_listen_host") or host)
             port = config.get("api_listen_port") or port

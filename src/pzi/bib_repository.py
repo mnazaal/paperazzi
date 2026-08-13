@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import contextlib
 import difflib
-import errno
 import hashlib
 import os
 import shutil
@@ -24,17 +23,17 @@ from bibtexparser.model import Entry as BibtexEntryV2
 
 from pzi import exit_codes
 from pzi.bib_serialize import (
-    _bibtex_entry_to_library_entry,
-    _library_to_entries_records,
-    _parse_bib_library,
-    _resolve_file_field,
-    _serialize_library,
-    _validate_bibtex_roundtrip,
-    _validate_library_parseable,
+    bibtex_entry_to_library_entry,
     build_library,
     detect_bib_layout,
+    library_to_entries_records,
     merge_preserving_unchanged_source,
+    parse_bib_library,
     parse_bibtex_with_failures,
+    resolve_file_field,
+    serialize_library,
+    validate_bibtex_roundtrip,
+    validate_library_parseable,
 )
 from pzi.bib_serialize import parse_bibtex as _parse_bibtex
 from pzi.bibtex import (
@@ -47,7 +46,7 @@ from pzi.bibtex import (
     resolve_citekey_collision,
 )
 from pzi.errors import PziError
-from pzi.fileio import fsync_parent_dir, read_text_utf8
+from pzi.fileio import fsync_parent_dir, read_text_utf8, write_all
 from pzi.identifiers import detect_preprint_source
 from pzi.similarity import (
     IdentityKind,
@@ -314,7 +313,7 @@ def _read_bib_file_raw_with_failures(path: str) -> tuple[ReadBibResult, list[str
     entries, failures = parse_bibtex_with_failures(text)
     records: list[NormalizedRecord] = [bibtex_entry_to_record(entry) for entry in entries]
     for record, entry in zip(records, entries):
-        _resolve_file_field(record, entry, path)
+        resolve_file_field(record, entry, path)
     return {"entries": entries, "records": records}, failures
 
 
@@ -374,24 +373,8 @@ def _existing_file_mode(file_path: Path) -> int | None:
         return None
 
 
-def _write_all(fd: int, content: bytes) -> None:
-    """Write every byte of *content*, or raise.
-
-    ``os.write`` is allowed to write fewer bytes than it was given, and its
-    return value was previously discarded — a short write installed a truncated
-    library (a monkeypatched 7-byte write left the file holding ``@articl``)
-    with the fsync and the atomic replace both reporting success.
-    """
-    view = memoryview(content)
-    written = 0
-    while written < len(view):
-        count = os.write(fd, view[written:])
-        if count <= 0:  # pragma: no cover — kernels do not do this in practice
-            raise OSError(
-                errno.EIO,
-                f"short write: {written} of {len(view)} bytes written",
-            )
-        written += count
+#: The shared writer — see `fileio.write_all`.
+_write_all = write_all
 
 
 def _write_bib_text_atomic(path: str, text: str) -> None:
@@ -455,7 +438,7 @@ def _update_library_blocks(
     rebuilt from the internal entry dict. Rebuilding them was lossy in two ways:
     it dropped the parser's record of each field's original enclosing —
     severing every ``@string`` macro reference in the file (see
-    ``_serialize_library``) — and it reformatted the entire library on every
+    ``serialize_library``) — and it reformatted the entire library on every
     one-entry write.
 
     ``None`` means *every* position is touched, which rebuilds the whole
@@ -466,7 +449,7 @@ def _update_library_blocks(
     which is what a pure insert does.
     """
     new_entry_blocks: list[BibtexEntryV2] = [
-        _bibtex_entry_to_library_entry(e, bib_path, file_path_style=file_path_style)
+        bibtex_entry_to_library_entry(e, bib_path, file_path_style=file_path_style)
         for e in entries
     ]
     # ``entries`` comes from ``apply_write_plan``, which only ever replaces an
@@ -536,7 +519,7 @@ def _render_updated_library(
     the same string. Every write parsed the file twice; a dry-run followed by a
     real write parsed it four times.
 
-    Collapsing the passes also tightens `_validate_bibtex_roundtrip`: it now
+    Collapsing the passes also tightens `validate_bibtex_roundtrip`: it now
     guards the exact entry list that gets serialized, rather than a first-pass
     list that merely matched the written one by determinism.
     """
@@ -547,7 +530,7 @@ def _render_updated_library(
         file_path_style=file_path_style,
         touched_indices=set() if updated_index is None else {updated_index},
     )
-    return _serialize_library(updated_library, layout=detect_bib_layout(source))
+    return serialize_library(updated_library, layout=detect_bib_layout(source))
 
 
 def execute_write_plan(
@@ -575,13 +558,13 @@ def execute_write_plan(
                 f"bib file {path} was modified externally "
                 f"while acquiring lock; aborting to prevent data loss"
             )
-        library = _parse_bib_library(source)
+        library = parse_bib_library(source)
         # Inserts are gated too. An insert rewrites the whole file just as an
         # update does, so adding to a bib with an unparseable block used to
         # re-emit that block under bibtexparser's `% WARNING Parsing failed`
         # header — a fresh copy of the marker on every subsequent add.
-        _validate_library_parseable(library)
-        entries, records = _library_to_entries_records(library, path)
+        validate_library_parseable(library)
+        entries, records = library_to_entries_records(library, path)
 
         if plan["action"] == "update":
             _validate_update_plan_against_current(records, plan)
@@ -592,7 +575,7 @@ def execute_write_plan(
             plan = _rebase_insert_plan_against_current(records, entries, plan)
 
         updated_entries = apply_write_plan(entries, plan)
-        _validate_bibtex_roundtrip(updated_entries)
+        validate_bibtex_roundtrip(updated_entries)
 
         new_source = _render_updated_library(
             library,
@@ -734,9 +717,9 @@ def batch_write_session(
     """
     with with_bib_lock(path):
         source = _read_bib_source(path)
-        library = _parse_bib_library(source)
-        _validate_library_parseable(library)
-        entries, records = _library_to_entries_records(library, path)
+        library = parse_bib_library(source)
+        validate_library_parseable(library)
+        entries, records = library_to_entries_records(library, path)
         session = BatchWriteSession(
             entries=entries, records=records, index=build_identity_index(records),
         )
@@ -755,7 +738,7 @@ def batch_write_session(
         # different amounts, which is why the gap took so long to characterize.
         # Neither gate mutates.
         session.check_consistency()
-        _validate_bibtex_roundtrip(session.entries)
+        validate_bibtex_roundtrip(session.entries)
         if not write:
             return
         new_library = _update_library_blocks(
@@ -765,7 +748,7 @@ def batch_write_session(
             file_path_style=file_path_style,
             touched_indices=session.touched,
         )
-        new_source = _serialize_library(new_library, layout=detect_bib_layout(source))
+        new_source = serialize_library(new_library, layout=detect_bib_layout(source))
         if new_source != source:
             _write_bib_text_atomic(path, new_source)
 
@@ -784,13 +767,13 @@ def preview_write_plan(
     """
     with with_bib_lock(path, shared=True):
         source = _read_bib_source(path)
-        library = _parse_bib_library(source)
+        library = parse_bib_library(source)
         # Inserts are gated too. An insert rewrites the whole file just as an
         # update does, so adding to a bib with an unparseable block used to
         # re-emit that block under bibtexparser's `% WARNING Parsing failed`
         # header — a fresh copy of the marker on every subsequent add.
-        _validate_library_parseable(library)
-        entries, records = _library_to_entries_records(library, path)
+        validate_library_parseable(library)
+        entries, records = library_to_entries_records(library, path)
 
         if plan["action"] == "update":
             _validate_update_plan_against_current(records, plan)
@@ -801,7 +784,7 @@ def preview_write_plan(
             plan = _rebase_insert_plan_against_current(records, entries, plan)
 
         updated_entries = apply_write_plan(entries, plan)
-        _validate_bibtex_roundtrip(updated_entries)
+        validate_bibtex_roundtrip(updated_entries)
 
         new_source = _render_updated_library(
             library,
@@ -836,9 +819,9 @@ def preview_batch_write(
     """
     with with_bib_lock(path, shared=True):
         source = _read_bib_source(path)
-        library = _parse_bib_library(source)
-        _validate_library_parseable(library)
-        entries, records = _library_to_entries_records(library, path)
+        library = parse_bib_library(source)
+        validate_library_parseable(library)
+        entries, records = library_to_entries_records(library, path)
         session = BatchWriteSession(
             entries=entries, records=records, index=build_identity_index(records),
         )
@@ -850,7 +833,7 @@ def preview_batch_write(
         # so the command whose dry run exists to be trusted had the weakest one.
         # Neither gate mutates.
         session.check_consistency()
-        _validate_bibtex_roundtrip(session.entries)
+        validate_bibtex_roundtrip(session.entries)
         new_library = _update_library_blocks(
             library,
             session.entries,
@@ -858,7 +841,7 @@ def preview_batch_write(
             file_path_style=file_path_style,
             touched_indices=session.touched,
         )
-        new_source = _serialize_library(new_library, layout=detect_bib_layout(source))
+        new_source = serialize_library(new_library, layout=detect_bib_layout(source))
         return {
             "changed": new_source != source,
             "diff": _source_diff(source, new_source, path),
@@ -1004,7 +987,7 @@ def _rebase_insert_plan_against_current(
         # the entry to whatever the stale plan assumed — turning the race this
         # rebase exists to absorb into silent data loss. Unlike there, no
         # snapshot-skew guard is needed: every caller derives both lists from one
-        # `_library_to_entries_records` call.
+        # `library_to_entries_records` call.
         _invariant(
             len(current_entries) == len(current_records),
             "rebase entry and record snapshots disagree",
@@ -1059,9 +1042,9 @@ def update_bib_entry(
     """
     with with_bib_lock(path):
         source = _read_bib_source(path)
-        library = _parse_bib_library(source)
-        _validate_library_parseable(library)
-        entries, records = _library_to_entries_records(library, path)
+        library = parse_bib_library(source)
+        validate_library_parseable(library)
+        entries, records = library_to_entries_records(library, path)
 
         index = _find_entry_index(entries, citekey)  # type: ignore[arg-type]
         if index is None:
@@ -1078,7 +1061,7 @@ def update_bib_entry(
             # the path behind `tag`, `pdf attach/retry`, `update` and `promote`
             # — i.e. the commands that were writing unparseable libraries while
             # the safety net sat unwired two functions away.
-            _validate_bibtex_roundtrip(entries)
+            validate_bibtex_roundtrip(entries)
             # `entries` already has the update applied at `index`, which is
             # exactly what apply_write_plan would produce for this plan — so
             # there is nothing left to re-derive from `source`.
@@ -1133,8 +1116,8 @@ def delete_bib_entry(
     """
     with with_bib_lock(path):
         source = _read_bib_source(path)
-        library = _parse_bib_library(source)
-        _validate_library_parseable(library)
+        library = parse_bib_library(source)
+        validate_library_parseable(library)
 
         new_blocks: list = []
         removed = False
@@ -1148,13 +1131,13 @@ def delete_bib_entry(
             return {"found": False, "entries": [], "entry": None, "record": None}
 
         new_library = build_library(new_blocks)
-        remaining, _remaining_records = _library_to_entries_records(new_library, path)
+        remaining, _remaining_records = library_to_entries_records(new_library, path)
         # The same round-trip gate the other write sinks apply. A delete cannot
         # invent a bad entry on its own, but it rewrites the whole file, so it
         # can commit one that was already unrepresentable — which is exactly how
         # a wedged library used to survive a `delete` unnoticed.
-        _validate_bibtex_roundtrip(remaining)
-        new_source = _serialize_library(new_library, layout=detect_bib_layout(source))
+        validate_bibtex_roundtrip(remaining)
+        new_source = serialize_library(new_library, layout=detect_bib_layout(source))
         if new_source != source:
             if backup_path is not None:
                 # Under the lock and immediately before the write, so the backup
@@ -1206,9 +1189,9 @@ def merge_bib_entries(
         )
     with with_bib_lock(path):
         source = _read_bib_source(path)
-        library = _parse_bib_library(source)
-        _validate_library_parseable(library)
-        entries, records = _library_to_entries_records(library, path)
+        library = parse_bib_library(source)
+        validate_library_parseable(library)
+        entries, records = library_to_entries_records(library, path)
 
         idx_a = _find_entry_index(entries, citekey_a)  # type: ignore[arg-type]
         idx_b = _find_entry_index(entries, citekey_b)  # type: ignore[arg-type]
@@ -1228,7 +1211,7 @@ def merge_bib_entries(
         merged_entry, dropped_fields = _carry_unmodelled_fields(
             merged_entry, entries[idx_a]
         )
-        _validate_bibtex_roundtrip([merged_entry])
+        validate_bibtex_roundtrip([merged_entry])
         # Through `merge_preserving_unchanged_source`, as `_update_library_blocks`
         # does — a rebuilt block carries neither the parser's enclosing record nor
         # the user's field spelling, so writing it straight back rewrote
@@ -1239,7 +1222,7 @@ def merge_bib_entries(
         strings = {definition.key: definition.value for definition in library.strings}
         merged_block = merge_preserving_unchanged_source(
             library.entries[idx_b],
-            _bibtex_entry_to_library_entry(
+            bibtex_entry_to_library_entry(
                 merged_entry, path, file_path_style=file_path_style
             ),
             strings,
@@ -1260,7 +1243,7 @@ def merge_bib_entries(
             new_blocks.append(block)
 
         new_library = build_library(new_blocks)
-        new_source = _serialize_library(new_library, layout=detect_bib_layout(source))
+        new_source = serialize_library(new_library, layout=detect_bib_layout(source))
         if new_source != source:
             if backup_path is not None:
                 backup_path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
@@ -1334,9 +1317,9 @@ def rewrite_entries_in_order_locked(
     positions, ``@string``, and ``@preamble`` are preserved.
     """
     source = _read_bib_source(path)
-    library = _parse_bib_library(source)
-    _validate_library_parseable(library)
-    existing_entries, _records = _library_to_entries_records(library, path)
+    library = parse_bib_library(source)
+    validate_library_parseable(library)
+    existing_entries, _records = library_to_entries_records(library, path)
     if len(entries) != len(existing_entries):
         # A user-facing message, not the internal function's name and arity:
         # this is reachable when the bib changes between planning a reindex and
@@ -1347,13 +1330,13 @@ def rewrite_entries_in_order_locked(
             "retry the command",
             code=exit_codes.ENVIRONMENT,
         )
-    _validate_bibtex_roundtrip(entries)
+    validate_bibtex_roundtrip(entries)
     # No `touched_indices`: reindex rewrites the `file` field of every entry, so
     # every block really is touched and rebuilding all of them is correct here.
     new_library = _update_library_blocks(
         library, entries, path, file_path_style=file_path_style
     )
-    new_source = _serialize_library(new_library, layout=detect_bib_layout(source))
+    new_source = serialize_library(new_library, layout=detect_bib_layout(source))
     if new_source != source:
         _write_bib_text_atomic(path, new_source)
     return entries
@@ -1364,11 +1347,8 @@ def rewrite_entries_in_order_locked(
 read_bib_file_raw = _read_bib_file_raw
 read_bib_file_raw_with_failures = _read_bib_file_raw_with_failures
 parse_bibtex = _parse_bibtex
-parse_bib_library = _parse_bib_library
-validate_library_parseable = _validate_library_parseable
 find_entry_index = _find_entry_index
 read_bib_source = _read_bib_source
-validate_bibtex_roundtrip = _validate_bibtex_roundtrip
 
 
 # ---------------------------------------------------------------------------

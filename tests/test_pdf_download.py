@@ -79,7 +79,7 @@ def test_fetch_and_store_reports_incomplete_read_instead_of_raising(tmp_path) ->
 
 def test_fetch_and_store_reports_content_length_truncation(tmp_path) -> None:
     """The silent case: a body with a known Content-Length that stops early.
-    _read_limited reconciles and raises ValueError, which surfaces as an error
+    read_limited reconciles and raises ValueError, which surfaces as an error
     rather than a half-written PDF in the library."""
 
     def short_fetcher(url):

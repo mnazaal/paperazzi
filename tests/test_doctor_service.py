@@ -310,9 +310,9 @@ def test_doctor_reports_a_config_key_it_does_not_recognize() -> None:
     for. `--config-only` reported it; the plain run computed the warning and
     then dropped it on the floor.
     """
-    from pzi.cli_render import _render_doctor_result
+    from pzi.cli_render import render_doctor_result
 
-    lines = _render_doctor_result({
+    lines = render_doctor_result({
         "config_ok": True,
         "config_path": "/tmp/config.toml",
         "config_errors": [],

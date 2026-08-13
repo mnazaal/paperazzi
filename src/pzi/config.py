@@ -124,6 +124,14 @@ def validate_bib_config(
     return config, []
 
 
+#: The API's default listen address. Written as a bare literal at eight sites —
+#: config normalization, the parser's help text, the rendered template, the
+#: attach-URL builder, `pdf_service`'s fallback — so "the default port" was a
+#: fact you had to find rather than one you could read.
+DEFAULT_API_LISTEN_HOST = "127.0.0.1"
+DEFAULT_API_LISTEN_PORT = 8765
+
+
 def _safe_int(value: object, default: int, *, min_value: int = 0) -> int:
     """Return an int from a trusted-or-unknown raw config value, or *default*."""
     if isinstance(value, int) and not isinstance(value, bool):
@@ -256,7 +264,7 @@ def _normalize_app_config(
 
     api_url = opt("api_url")
     api_listen_host = str(raw_api_listen_host).strip()
-    api_listen_port = _safe_int(raw_api_listen_port, 8765, min_value=1)
+    api_listen_port = _safe_int(raw_api_listen_port, DEFAULT_API_LISTEN_PORT, min_value=1)
     if not api_url:
         api_url = f"http://{api_listen_host}:{api_listen_port}"
 

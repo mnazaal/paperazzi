@@ -182,7 +182,7 @@ def print_capture_stream_line(
         print(f"      warning: {warning}", file=stderr)
 
 
-def _write_atomic(output_path: Path, content: str) -> None:
+def write_atomic(output_path: Path, content: str) -> None:
     """Write *content* to *output_path* all-or-nothing.
 
     Shared because two runners write user-named files. `export -o` was atomic

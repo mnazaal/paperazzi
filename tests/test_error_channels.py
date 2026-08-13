@@ -116,9 +116,9 @@ def test_an_update_where_every_item_failed_is_not_ok(tmp_path: Path) -> None:
 
 
 def test_a_failed_quarantine_move_is_not_rendered_as_a_dry_run(tmp_path: Path) -> None:
-    from pzi.cli_render import _render_clean_result
+    from pzi.cli_render import render_clean_result
 
-    lines = _render_clean_result(
+    lines = render_clean_result(
         {
             "status": "error",
             "bib_path": str(tmp_path / "main.bib"),

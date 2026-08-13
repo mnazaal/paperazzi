@@ -186,7 +186,7 @@ def test_open_browser_session_closes_on_exception(monkeypatch) -> None:
             closed.append(True)
 
     monkeypatch.setattr(
-        browser_session, "_launch_browser", lambda *_a, **_k: _Session()
+        browser_session, "launch_browser", lambda *_a, **_k: _Session()
     )
 
     try:
@@ -226,7 +226,7 @@ def test_a_failed_launch_removes_the_cloned_chrome_profile(tmp_path, monkeypatch
     )
 
     with pytest.raises(RuntimeError):
-        module._launch_browser("chromium", str(tmp_path / "profile"))
+        module.launch_browser("chromium", str(tmp_path / "profile"))
 
     assert not clone.exists()
     playwright.stop.assert_called_once()

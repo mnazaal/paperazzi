@@ -17,10 +17,9 @@ from typing import TypedDict
 
 from pzi.identifiers import detect_preprint_source
 from pzi.similarity import (
-    _canonical_doi,
-    _split_family_given,
     author_surnames,
     authors_swapped,
+    canonical_doi,
     classify_given_pair,
     has_truncation_sentinel,
     is_alphabetized_record,
@@ -28,6 +27,7 @@ from pzi.similarity import (
     jaccard_similarity,
     levenshtein_within_1,
     normalize_title,
+    split_family_given_folded,
     title_tokens,
 )
 
@@ -72,7 +72,7 @@ def _str_field(record: Mapping[str, object], key: str) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def _title_similarity(a: str | None, b: str | None) -> int:
+def title_similarity_score(a: str | None, b: str | None) -> int:
     return round(jaccard_similarity(title_tokens(a), title_tokens(b)) * 100)
 
 
@@ -123,8 +123,8 @@ def _doi_mismatch(entry: Mapping[str, object], candidate: Mapping[str, object]) 
     this function. Penalizing it there would suppress valid promotions, which is
     the failure mode this guard exists to prevent.
     """
-    e = _canonical_doi(entry.get("doi"))
-    c = _canonical_doi(candidate.get("doi"))
+    e = canonical_doi(entry.get("doi"))
+    c = canonical_doi(candidate.get("doi"))
     if e is None or c is None or e == c:
         return False
     if detect_preprint_source(entry) is not None:
@@ -145,13 +145,13 @@ def _given_name_substitutions(
     """
     by_surname: dict[str, str] = {}
     for name in candidate:
-        family, given = _split_family_given(name)
+        family, given = split_family_given_folded(name)
         if family:
             by_surname.setdefault(family, given)
 
     substituted: list[str] = []
     for name in entry:
-        family, given = _split_family_given(name)
+        family, given = split_family_given_folded(name)
         cand_given = by_surname.get(family)
         if cand_given is None:
             continue  # unmatched surname is _fabricated_surnames' business
@@ -175,7 +175,7 @@ def score_match(
     lists) where the cost of a missed defect outweighs a false alarm.
     """
     entry_authors, cand_authors = _authors(entry), _authors(candidate)
-    title_sim = _title_similarity(
+    title_sim = title_similarity_score(
         _str_field(entry, "title"), _str_field(candidate, "title")
     )
     author_sim = _author_similarity(entry_authors, cand_authors)

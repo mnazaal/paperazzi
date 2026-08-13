@@ -8,12 +8,12 @@ from typing import TextIO
 
 from pzi import cli_json, exit_codes
 from pzi.bib_service import delete_entry
-from pzi.cli_render import _error_lines, _render_delete_success
+from pzi.cli_render import error_lines, render_delete_success
 from pzi.commands.common import emit_usage_error, exit_code_for_error, print_lines, resolve_target
 
 
 def _render_errors(title: str, errors: Sequence[str], stderr: TextIO, code: int) -> int:
-    print_lines(_error_lines(title, errors), stderr)
+    print_lines(error_lines(title, errors), stderr)
     return code
 
 
@@ -66,7 +66,7 @@ def run_delete_command(args, *, home_dir, config_path, stdout, stderr, bib_selec
                 result, stdout, command="delete", items=[], bib_name=target["name"]
             )
         else:
-            print(_render_delete_success(result), file=stdout)
+            print(render_delete_success(result), file=stdout)
         backup = result.get("backup_path")
         if isinstance(backup, str):
             print(f"backup saved to {backup}", file=stderr)

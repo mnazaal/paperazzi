@@ -6,12 +6,12 @@ from pathlib import Path
 from typing import TextIO
 
 from pzi import exit_codes
-from pzi.cli_render import _error_lines
+from pzi.cli_render import error_lines
 from pzi.commands.common import (
-    _write_atomic,
     emit_usage_error,
     print_lines,
     resolve_target,
+    write_atomic,
 )
 from pzi.export_service import export_bibtex, export_csv, export_json, export_ris
 
@@ -44,7 +44,7 @@ def run_export_command(
     result = exporters[args.format](bib_path=target["path"])
 
     if result["status"] != "ok":
-        print_lines(_error_lines("export failed", result.get("errors", [])), stderr)
+        print_lines(error_lines("export failed", result.get("errors", [])), stderr)
         return exit_codes.ENVIRONMENT
 
     content = result["content"]
@@ -74,7 +74,7 @@ def run_export_command(
         # truncates first, so an interrupted or failing export replaced a good
         # backup with a partial one — worst on `--force`, whose whole purpose is
         # overwriting a file the user still wants if the export fails.
-        _write_atomic(output_path, content)
+        write_atomic(output_path, content)
         print(f"exported {result['total_entries']} entries to {args.output}", file=stdout)
     else:
         print(content, file=stdout)

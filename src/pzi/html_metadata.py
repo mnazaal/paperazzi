@@ -14,7 +14,7 @@ import json
 from html.parser import HTMLParser
 
 from pzi.bibtex import NormalizedRecord
-from pzi.identifiers import _extract_year_from_str, normalize_doi
+from pzi.identifiers import extract_year_from_str, normalize_doi
 
 
 def _parse_embedded_metadata(html: str) -> tuple[dict[str, list[str]], list[object]]:
@@ -137,7 +137,7 @@ def _from_citation_meta(meta: dict[str, list[str]]) -> NormalizedRecord:
     title = first("citation_title")
     authors = [a for a in meta.get("citation_author", []) if a]
     date = first("citation_date") or first("citation_publication_date") or first("citation_year")
-    year = _extract_year_from_str(date) if date else None
+    year = extract_year_from_str(date) if date else None
     venue = (
         first("citation_journal_title")
         or first("citation_conference_title")
@@ -200,7 +200,7 @@ def _from_json_ld(json_ld: list[object]) -> NormalizedRecord:
         authors = _json_ld_authors(item.get("author"))
 
         date = item.get("datePublished") or item.get("dateCreated")
-        year = _extract_year_from_str(str(date)) if date else None
+        year = extract_year_from_str(str(date)) if date else None
         raw_doi = item.get("identifier") or item.get("sameAs")
         doi = normalize_doi(str(raw_doi)) if raw_doi else None
 

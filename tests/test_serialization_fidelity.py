@@ -331,12 +331,12 @@ COMMENTED = """@article{a1,
 def test_an_inline_comment_is_reported_and_the_entry_is_not_rewritten(
     tmp_path: Path,
 ) -> None:
-    from pzi.bib_serialize import _parse_bib_library, describe_failed_blocks
+    from pzi.bib_serialize import describe_failed_blocks, parse_bib_library
 
     bib = tmp_path / "main.bib"
     path = _write(bib, COMMENTED)
 
-    warnings = describe_failed_blocks(_parse_bib_library(bib.read_text(encoding="utf-8")))
+    warnings = describe_failed_blocks(parse_bib_library(bib.read_text(encoding="utf-8")))
     assert any("'%' comment inside the entry" in message for message in warnings)
 
     with pytest.raises(PziError, match="refusing to rewrite"):

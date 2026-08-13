@@ -9,6 +9,7 @@ raw ``UnicodeDecodeError``.
 
 from __future__ import annotations
 
+import errno
 import os
 from pathlib import Path
 
@@ -52,3 +53,26 @@ def fsync_parent_dir(path: str | Path) -> None:
         pass
     finally:
         os.close(fd)
+
+
+def write_all(fd: int, content: bytes) -> None:
+    """Write every byte of *content* to *fd*, or raise.
+
+    ``os.write`` may write fewer bytes than it was given, and its return value
+    was previously discarded — a short write installed a truncated library (a
+    monkeypatched 7-byte write left the file holding ``@articl``) with the fsync
+    and the atomic replace both reporting success.
+
+    One copy: `bib_repository` and `pdf_download` each had their own, and only
+    one of them carried the reasoning above.
+    """
+    view = memoryview(content)
+    written = 0
+    while written < len(view):
+        count = os.write(fd, view[written:])
+        if count <= 0:  # pragma: no cover — kernels do not do this in practice
+            raise OSError(
+                errno.EIO,
+                f"short write: {written} of {len(view)} bytes written",
+            )
+        written += count

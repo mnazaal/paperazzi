@@ -17,8 +17,8 @@ from urllib.parse import urlsplit
 
 from pzi import add_planning as _add_planning
 from pzi.add_planning import (
-    _fallback_record_for_input,
     build_discovery_context,
+    fallback_record_for_input,
     fetch_record_for_input,
     has_minimum_metadata,
     identifies_a_paper,
@@ -185,7 +185,7 @@ def add_input_to_bib(
         )
     metadata_diagnostics: list[str] = []
     metadata_warnings: list[str] = []
-    fallback_for_diagnostics = _fallback_record_for_input(
+    fallback_for_diagnostics = fallback_record_for_input(
         kind=cast(str, classified["kind"]),
         normalized=cast(str | None, classified["normalized"]),
         raw_value=value,
@@ -415,7 +415,7 @@ def add_input_to_bib(
         manual_record = _manual_record_from_overrides(record_overrides)
         if classified["kind"] in {"doi", "url", "pdf_url"} and has_minimum_metadata(manual_record):
             fallback_record = merge_record_sources(
-                _fallback_record_for_input(
+                fallback_record_for_input(
                     kind=cast(str, classified["kind"]),
                     normalized=cast(str | None, classified["normalized"]),
                     raw_value=value,

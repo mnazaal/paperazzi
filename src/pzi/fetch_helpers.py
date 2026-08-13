@@ -82,7 +82,7 @@ def _expected_content_length(response) -> int | None:
     return int(str(raw).strip())
 
 
-def _read_limited(response, *, max_bytes: int) -> bytes:
+def read_limited(response, *, max_bytes: int) -> bytes:
     """Read response body up to max_bytes, failing before unbounded memory growth.
 
     Also reconciles what was read against ``Content-Length``: for a body with a
@@ -190,7 +190,7 @@ def fetch_text(
         headers=headers,
         timeout=timeout,
         max_retries=max_retries,
-        extract=lambda response: _read_limited(response, max_bytes=max_bytes).decode("utf-8"),
+        extract=lambda response: read_limited(response, max_bytes=max_bytes).decode("utf-8"),
     )
 
 
@@ -307,7 +307,7 @@ def fetch_binary(
         # Content-Type is read off the live response, before the body, which is
         # why `extract` takes the response rather than bytes.
         extract=lambda response: (
-            _read_limited(response, max_bytes=max_bytes),
+            read_limited(response, max_bytes=max_bytes),
             response.headers.get("Content-Type"),
         ),
     )

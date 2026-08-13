@@ -58,7 +58,7 @@ from pzi.protocols import (
     accepts_keyword,
 )
 from pzi.resolution_match import score_match
-from pzi.similarity import _canonical_doi, normalize_title
+from pzi.similarity import canonical_doi, normalize_title
 from pzi.tag_service import add_tags
 from pzi.translation_server import fetch_search_translations
 
@@ -753,13 +753,13 @@ def _find_duplicate_citekey(
     # `10.1145/abc` and `"Deep  Residual Learning"` (double space) vs
     # `"Deep Residual Learning"` — and the write that follows uses
     # `force_new=True`, so nothing downstream catches the duplicate it creates.
-    c_doi = _canonical_doi(candidate.get("doi"))
+    c_doi = canonical_doi(candidate.get("doi"))
     c_title = normalize_title(candidate.get("title"))
     for rec in records:
         ck = rec.get("citekey")
         if not isinstance(ck, str) or ck == exclude_citekey:
             continue
-        if c_doi and _canonical_doi(rec.get("doi")) == c_doi:
+        if c_doi and canonical_doi(rec.get("doi")) == c_doi:
             return ck
         if c_title and normalize_title(rec.get("title")) == c_title:
             return ck

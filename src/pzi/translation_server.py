@@ -10,9 +10,9 @@ from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
 from pzi.bibtex import NormalizedRecord, repair_split_initials, set_detail_fields
-from pzi.fetch_helpers import DEFAULT_MAX_RESPONSE_BYTES, _read_limited
+from pzi.fetch_helpers import DEFAULT_MAX_RESPONSE_BYTES, read_limited
 from pzi.identifiers import (
-    _extract_year_from_str,
+    extract_year_from_str,
     normalize_arxiv_id,
     normalize_doi,
     normalize_url,
@@ -180,7 +180,7 @@ def _post(
         method="POST",
     )
     with urlopen(request, timeout=30) as response:  # pragma: no cover
-        data = _read_limited(response, max_bytes=max_bytes)
+        data = read_limited(response, max_bytes=max_bytes)
         return json.loads(data.decode("utf-8"))  # pragma: no cover
 
 
@@ -212,7 +212,7 @@ def _extract_year(item: Mapping[str, object]) -> int | None:
     date_value = _mapping_string(item, "date")
     if date_value is None:
         return None
-    return _extract_year_from_str(date_value)
+    return extract_year_from_str(date_value)
 
 
 def _extract_arxiv_id(item: Mapping[str, object]) -> str | None:

@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 from pzi import exit_codes
 from pzi.errors import PziError
 from pzi.fetch_helpers import fetch_binary as _fetch_binary
+from pzi.fileio import write_all
 from pzi.pdf_planning import (
     is_pdf_bytes,
     is_pdf_content_type,
@@ -278,11 +279,7 @@ def _link_or_replace(temp_path: Path, destination: Path) -> None:
     os.replace(temp_path, destination)
 
 
-def _write_all(fd: int, data: bytes) -> None:
-    view = memoryview(data)
-    total = 0
-    while total < len(view):
-        written = os.write(fd, view[total:])
-        if written <= 0:
-            raise OSError("short write while storing PDF")
-        total += written
+#: The shared writer — see `fileio.write_all`.
+_write_all = write_all
+
+

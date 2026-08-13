@@ -139,6 +139,14 @@ def build_pdf_acquisition_plan(
 
 
 def _unique_nonempty(urls: Iterable[str]) -> tuple[str, ...]:
+    """Deliberately *not* shared with :func:`pzi.url_safety.unique_nonempty`.
+
+    That is the copy every other caller uses. This module is tiered CORE
+    precisely because it imports nothing from pzi (see the module docstring and
+    ``tests/test_layer_boundaries.py``), so importing the shared one to save
+    nine lines would trade a documented architectural property for a
+    deduplication. The other three duplicates of this helper *were* merged.
+    """
     seen: set[str] = set()
     result: list[str] = []
     for url in urls:

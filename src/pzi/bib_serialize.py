@@ -45,7 +45,7 @@ from pzi.errors import PziError
 def parse_bibtex(text: str) -> list[BibtexEntry]:
     """Parse BibTeX text into entry dictionaries using bibtexparser v2."""
     library = parse_string(text)
-    return [_library_entry_to_bibtex_entry(entry) for entry in library.entries]
+    return [library_entry_to_bibtex_entry(entry) for entry in library.entries]
 
 
 def build_library(blocks: Sequence[Block]) -> Library:
@@ -77,7 +77,7 @@ def build_library(blocks: Sequence[Block]) -> Library:
 def serialize_bibtex(entries: list[BibtexEntry]) -> str:
     """Serialize entries in a deterministic formatting style."""
     return _write_library_text(
-        build_library([_bibtex_entry_to_library_entry(entry) for entry in entries])
+        build_library([bibtex_entry_to_library_entry(entry) for entry in entries])
     )
 
 
@@ -85,9 +85,9 @@ def _write_library_text(library: Library) -> str:
     """Write *library* in a deterministic style, for validation round-trips.
 
     Deliberately **not** layout-aware: its two callers are
-    :func:`serialize_bibtex` and :func:`_validate_bibtex_roundtrip`, and neither
+    :func:`serialize_bibtex` and :func:`validate_bibtex_roundtrip`, and neither
     output is ever written to a user's file — the second is reparsed and thrown
-    away. Real writes go through :func:`_serialize_library`, which takes a
+    away. Real writes go through :func:`serialize_library`, which takes a
     :class:`BibLayout` sniffed from the file being rewritten. Do not "fix" this
     one to match; a validation gate wants one canonical form.
     """
@@ -172,7 +172,7 @@ def detect_bib_layout(source: str) -> BibLayout:
     )
 
 
-def _resolve_file_field(record: NormalizedRecord, entry: BibtexEntry, bib_path: str) -> None:
+def resolve_file_field(record: NormalizedRecord, entry: BibtexEntry, bib_path: str) -> None:
     """Resolve a relative ``file`` field to an absolute ``local_pdf_path``.
 
     When a BibTeX entry stores ``file = {papers/citekey.pdf}`` (relative
@@ -232,7 +232,7 @@ def _normalize_file_field(entry: BibtexEntry, bib_path: str) -> BibtexEntry:
     return new_entry
 
 
-def _parse_bib_library(raw_text: str) -> Library:
+def parse_bib_library(raw_text: str) -> Library:
     """Parse BibTeX source text into a v2 Library."""
     if not raw_text:
         return Library(blocks=[])
@@ -263,11 +263,11 @@ def describe_case_colliding_field_keys(library: Library) -> list[str]:
     """One message per entry carrying two spellings of one field key.
 
     Field keys are case-folded at the parse boundary
-    (:func:`_library_entry_to_bibtex_entry`), which is what makes a JabRef-style
+    (:func:`library_entry_to_bibtex_entry`), which is what makes a JabRef-style
     ``Author =`` readable at all. The fold targets a ``dict``, so an entry
     holding *both* ``Title`` and ``title`` keeps only the last and the other
     value is gone — and nothing else catches it: bibtexparser flags only
-    byte-identical duplicate keys, and :func:`_validate_bibtex_roundtrip`
+    byte-identical duplicate keys, and :func:`validate_bibtex_roundtrip`
     compares the already-collapsed entry against itself. The first write to
     touch the entry commits the deletion.
 
@@ -386,7 +386,7 @@ def _user_facing_parse_error(error: object) -> str:
 def parse_bibtex_with_failures(text: str) -> tuple[list[BibtexEntry], list[str]]:
     """Parse BibTeX text, returning entries and a message per dropped block."""
     library = parse_string(text)
-    entries = [_library_entry_to_bibtex_entry(entry) for entry in library.entries]
+    entries = [library_entry_to_bibtex_entry(entry) for entry in library.entries]
     return entries, describe_failed_blocks(library)
 
 
@@ -406,7 +406,7 @@ def parse_bibtex_for_import(text: str) -> tuple[list[BibtexEntry], list[str]]:
     problems = [message for _key, message in failed_block_details(library)]
     entries: list[BibtexEntry] = []
     for block in library.entries:
-        entry = _library_entry_to_bibtex_entry(block)
+        entry = library_entry_to_bibtex_entry(block)
         refusal = unwritable_field_key(entry)
         if refusal is None:
             entries.append(entry)
@@ -429,7 +429,7 @@ def unwritable_field_key(entry: BibtexEntry) -> str | None:
     return None
 
 
-def _validate_library_parseable(library: Library) -> None:
+def validate_library_parseable(library: Library) -> None:
     """Raise :exc:`PziError` if the library has unparseable blocks.
 
     Guards the *write* paths: rewriting a file whose blocks the parser never
@@ -478,21 +478,21 @@ def _malformed_bib_refusal(detail: str) -> PziError:
     )
 
 
-def _library_to_entries_records(
+def library_to_entries_records(
     library: Library, bib_path: str
 ) -> tuple[list[BibtexEntry], list[NormalizedRecord]]:
     """Extract entries and normalized records from a v2 Library."""
-    entries = [_library_entry_to_bibtex_entry(e) for e in library.entries]
+    entries = [library_entry_to_bibtex_entry(e) for e in library.entries]
     records: list[NormalizedRecord] = [bibtex_entry_to_record(e) for e in entries]
     for record, entry in zip(records, entries):
-        _resolve_file_field(record, entry, bib_path)
+        resolve_file_field(record, entry, bib_path)
     return entries, records
 
 
-def _serialize_library(library: Library, *, layout: BibLayout | None) -> str:
+def serialize_library(library: Library, *, layout: BibLayout | None) -> str:
     """Serialize a v2 Library to BibTeX text, preserving enclosings and layout.
 
-    ``_parse_bib_library`` strips enclosings with ``RemoveEnclosingMiddleware``,
+    ``parse_bib_library`` strips enclosings with ``RemoveEnclosingMiddleware``,
     which records what it removed (including ``no-enclosing`` for a bare
     ``@string`` macro reference) on each block. The writer's *default* unparse
     stack discards that record and braces everything, which turns
@@ -501,7 +501,7 @@ def _serialize_library(library: Library, *, layout: BibLayout | None) -> str:
     those fields back exactly as they were found.
 
     This only helps blocks that still carry the parser's record. Entries a write
-    plan rebuilt (see ``_bibtex_entry_to_library_entry``) carry none, so they
+    plan rebuilt (see ``bibtex_entry_to_library_entry``) carry none, so they
     fall back to ``default_enclosing`` and are brace-wrapped. That is also what
     keeps ``_safe_field_value``'s injection guard meaningful: every value this
     code composes is enclosed, and only text read verbatim off disk is written
@@ -536,7 +536,7 @@ def _serialize_library(library: Library, *, layout: BibLayout | None) -> str:
     )
 
 
-def _validate_bibtex_roundtrip(entries: list[BibtexEntry]) -> None:
+def validate_bibtex_roundtrip(entries: list[BibtexEntry]) -> None:
     """Raise if entries cannot survive a serialize→parse round-trip.
 
     A :exc:`PziError` from :func:`build_library` (a duplicate citekey) already
@@ -553,7 +553,7 @@ def _validate_bibtex_roundtrip(entries: list[BibtexEntry]) -> None:
     rewrite; what must not change is anything the serializer itself did.
     """
     try:
-        blocks = [_bibtex_entry_to_library_entry(entry) for entry in entries]
+        blocks = [bibtex_entry_to_library_entry(entry) for entry in entries]
         text = _write_library_text(build_library(blocks))
         reparsed = parse_string(text)
     except PziError:
@@ -670,7 +670,7 @@ def merge_preserving_unchanged_source(
         entry_type=rebuilt.entry_type, key=rebuilt.key, fields=fields,
     )
     # `parser_metadata` is bibtexparser's own (experimental) channel for this;
-    # `_serialize_library`'s AddEnclosingMiddleware reads exactly this key to
+    # `serialize_library`'s AddEnclosingMiddleware reads exactly this key to
     # decide which fields to write back unenclosed. Only preserved fields get an
     # entry, so every rebuilt value falls through to the default `{` enclosing.
     if preserved_enclosing:
@@ -692,19 +692,39 @@ def _file_field_still_points_at(source_value: str, rebuilt_value: str) -> bool:
     them read. Instead the field counts as unchanged while it still points at
     the same attachment, and the source text is kept verbatim.
 
-    The rebuilt value is derived *from* this source by `_resolve_file_field`, so
+    The rebuilt value is derived *from* this source by `resolve_file_field`, so
     it is either the primary path itself (absolute) or the bib directory joined
     to it (relative) — which is why no bib path is needed here. A `..` segment
     could defeat the suffix test; that fails safe, rewriting to a bare path,
     which is today's behaviour.
     """
     primary = primary_pdf_path(source_value)
-    if primary is None or primary == source_value.strip():
-        return False  # already a bare path; the normal comparison applies
+    if primary is None:
+        return False
+    if primary == source_value.strip():
+        # A bare path. It still counts as unchanged when it is *relative* and
+        # the rebuilt absolute path names the same file, because `file` is read
+        # into the record model as an absolute `local_pdf_path` and written back
+        # absolute — so any command that touched an entry rewrote a portable
+        # `papers/x.pdf` into a machine-specific `/home/you/bibs/papers/x.pdf`.
+        # Reproduced with `tag add`: one tagged entry became absolute while
+        # every untouched entry stayed relative, i.e. a git-tracked library
+        # drifted to machine-specific one entry at a time, silently.
+        #
+        # This preserves what the entry already had rather than imposing a
+        # style, the same principle as sniffing the file's layout: it is not
+        # `pdf_file_path_style`'s job to decide what an *existing* field looks
+        # like. That setting still decides what a newly attached PDF is written
+        # as.
+        if not primary.startswith(("/", "~")) and rebuilt_value.endswith(
+            "/" + str(Path(primary))
+        ):
+            return True
+        return False  # already a bare absolute path; the normal comparison applies
     if rebuilt_value == primary:
         return True
     if not primary.startswith(("/", "~")):
-        # Relative primary: `_resolve_file_field` joined the bib directory to it.
+        # Relative primary: `resolve_file_field` joined the bib directory to it.
         return rebuilt_value.endswith("/" + str(Path(primary)))
     # Absolute primary under `pdf_file_path_style = "relative"`:
     # `_normalize_file_field` shortened the rebuilt value against the bib dir.
@@ -721,7 +741,7 @@ def _unchanged_forms(
 
     - ``parse_bibtex`` (``read_bib_file``, and so every service that plans from
       records) *resolves* a bare ``@string`` reference, yielding the definition.
-    - ``_parse_bib_library`` (``update_bib_entry``, ``merge_bib_entries``) does
+    - ``parse_bib_library`` (``update_bib_entry``, ``merge_bib_entries``) does
       not, yielding the macro name as written.
 
     The write path cannot adopt the resolving stack — resolution also erases the
@@ -738,7 +758,7 @@ def _unchanged_forms(
     return frozenset({value, strings.get(value.strip(), value)})
 
 
-def _library_entry_to_bibtex_entry(entry: BibtexEntryV2) -> BibtexEntry:
+def library_entry_to_bibtex_entry(entry: BibtexEntryV2) -> BibtexEntry:
     """Convert a bibtexparser v2 Entry to the internal BibtexEntry dict.
 
     Field keys are case-folded here, at the single parse boundary. BibTeX field
@@ -789,7 +809,7 @@ _UNSAFE_ENTRY_TYPE = re.compile(r"[^A-Za-z]")
 # as the file's own newline. A `\r` surviving inside a value therefore became
 # `\r\r\n` on a CRLF file. Values read from disk never contain one — `read_text`
 # translates newlines — so this only ever arrived with text injected from a
-# metadata provider, which is also why `_validate_bibtex_roundtrip` could not
+# metadata provider, which is also why `validate_bibtex_roundtrip` could not
 # catch it: that runs on the LF text, before the newline conversion.
 _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f]")
 
@@ -972,7 +992,7 @@ def _balance_braces(value: str) -> str:
     return "".join(reversed(out))
 
 
-def _bibtex_entry_to_library_entry(
+def bibtex_entry_to_library_entry(
     entry: BibtexEntry,
     bib_path: str = "",
     *,

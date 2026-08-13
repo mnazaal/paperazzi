@@ -23,10 +23,13 @@ from urllib.parse import urlsplit, urlunsplit
 from pzi.bibtex import NormalizedRecord
 from pzi.identifiers import detect_preprint_source
 from pzi.protocols import accepts_keyword
-from pzi.url_safety import safe_public_http_url
+from pzi.url_safety import DEFAULT_DNS_LOOKUP_TIMEOUT_SECONDS, origin_of, safe_public_http_url
 
 PdfDiscoveryContext: TypeAlias = dict[str, Any]
-DNS_LOOKUP_TIMEOUT_SECONDS = 0.25
+#: Re-exported from `url_safety`, which owns DNS resolution. Three modules
+#: each defined their own `0.25`, so tuning the timeout meant finding all
+#: three — and two of them drifting apart would be invisible.
+DNS_LOOKUP_TIMEOUT_SECONDS = DEFAULT_DNS_LOOKUP_TIMEOUT_SECONDS
 
 PdfCandidate: TypeAlias = dict[str, Any]
 
@@ -329,14 +332,9 @@ def cookies_for_url(context: PdfDiscoveryContext, url: str) -> str | None:
     return cookies
 
 
-def _origin_of(url: str) -> str | None:
-    parts = urlsplit(url.strip())
-    if parts.scheme not in ("http", "https") or not parts.netloc:
-        return None
-    return f"{parts.scheme}://{parts.netloc.lower()}"
+_origin_of = origin_of
 
 
-@discovery_phase("http")
 def web_attachment_step(
     record: NormalizedRecord, context: PdfDiscoveryContext
 ) -> NormalizedRecord:

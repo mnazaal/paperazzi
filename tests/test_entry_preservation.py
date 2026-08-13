@@ -284,7 +284,7 @@ def test_export_to_an_existing_file_is_all_or_nothing(
     # `try/except OSError: pass` also passes when the call raises nothing at
     # all, or raises a *different* OSError than the one injected.
     with pytest.raises(OSError) as excinfo:
-        common_module._write_atomic(destination, "new content")
+        common_module.write_atomic(destination, "new content")
     assert excinfo.value.errno == 28
 
     assert destination.read_text(encoding="utf-8") == "PREVIOUS GOOD BACKUP\n"

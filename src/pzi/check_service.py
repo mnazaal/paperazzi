@@ -34,7 +34,7 @@ from pzi.metadata_sources import (
     fetch_openreview_record_by_title,
     fetch_semantic_scholar_record_by_title,
 )
-from pzi.resolution_match import MatchScore, _title_similarity, score_match
+from pzi.resolution_match import MatchScore, score_match, title_similarity_score
 
 Verdict = Literal["verified", "could_not_verify", "problematic"]
 
@@ -234,7 +234,7 @@ def _is_unrelated_hit(
     with a different title, while a genuine match with a *typo* stays well
     above the floor.
     """
-    return _title_similarity(
+    return title_similarity_score(
         _record_title(record), _record_title(candidate)
     ) < _UNRELATED_TITLE
 

@@ -278,7 +278,7 @@ def _normalize_special_path(*, hostname: str, path: str) -> str:
     return path or "/"
 
 
-def _extract_year_from_str(value: str) -> int | None:
+def extract_year_from_str(value: str) -> int | None:
     """Extract a four-digit year string from a date string, or None."""
     match = _YEAR_PATTERN.search(value)
     return int(match.group(0)) if match else None
@@ -365,7 +365,7 @@ def has_preprint_identity(record: Mapping[str, object]) -> bool:
 def _canonical_doi_for_identity(doi: object) -> str | None:
     """Local canonicalizer, kept here so this module stays leaf-level.
 
-    `similarity._canonical_doi` does the same job, but importing it would point
+    `similarity.canonical_doi` does the same job, but importing it would point
     an identifier primitive at the matching layer.
     """
     return normalize_doi(doi) if isinstance(doi, str) else None

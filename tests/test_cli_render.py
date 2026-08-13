@@ -1,16 +1,16 @@
 from pzi.cli_render import (
-    _error_lines,
-    _render_add_success,
-    _render_bib_promote_items,
-    _render_bib_update_items,
-    _render_pdf_success,
-    _render_search_matches,
-    _render_tag_mutation_success,
+    error_lines,
+    render_add_success,
+    render_bib_promote_items,
+    render_bib_update_items,
+    render_pdf_success,
+    render_search_matches,
+    render_tag_mutation_success,
 )
 
 
 def test_error_lines_prefixes_each_error() -> None:
-    assert _error_lines("failed", ["first", "second"]) == [
+    assert error_lines("failed", ["first", "second"]) == [
         "failed",
         "- first",
         "- second",
@@ -19,7 +19,7 @@ def test_error_lines_prefixes_each_error() -> None:
 
 def test_render_add_success_includes_dry_run_prefix() -> None:
     assert (
-        _render_add_success(
+        render_add_success(
             {
                 "action": "insert",
                 "citekey": "smith2024graph",
@@ -33,7 +33,7 @@ def test_render_add_success_includes_dry_run_prefix() -> None:
 
 def test_render_pdf_success_formats_action_path() -> None:
     assert (
-        _render_pdf_success(
+        render_pdf_success(
             "attached",
             {"citekey": "smith2024graph", "local_pdf_path": "/tmp/paper.pdf"},
         )
@@ -43,7 +43,7 @@ def test_render_pdf_success_formats_action_path() -> None:
 
 def test_render_tag_mutation_success_uses_none_for_empty_tags() -> None:
     assert (
-        _render_tag_mutation_success(
+        render_tag_mutation_success(
             {
                 "message": "removed tags",
                 "citekey": "smith2024graph",
@@ -57,8 +57,8 @@ def test_render_tag_mutation_success_uses_none_for_empty_tags() -> None:
 
 def test_render_search_matches_formats_matches_and_empty_result() -> None:
     # No matches renders nothing: empty stdout keeps the output pipeable.
-    assert _render_search_matches({"matches": []}) == []
-    assert _render_search_matches(
+    assert render_search_matches({"matches": []}) == []
+    assert render_search_matches(
         {
             "matches": [
                 {
@@ -73,10 +73,10 @@ def test_render_search_matches_formats_matches_and_empty_result() -> None:
 
 
 def test_render_bib_update_items_handles_noop_and_empty() -> None:
-    assert _render_bib_update_items({"dry_run": True, "items": []}) == [
+    assert render_bib_update_items({"dry_run": True, "items": []}) == [
         "DRY RUN: no updates"
     ]
-    assert _render_bib_update_items(
+    assert render_bib_update_items(
         {
             "dry_run": False,
             "items": [
@@ -87,10 +87,10 @@ def test_render_bib_update_items_handles_noop_and_empty() -> None:
 
 
 def test_render_bib_promote_items_includes_pdf_and_published_key() -> None:
-    assert _render_bib_promote_items({"dry_run": False, "items": []}) == [
+    assert render_bib_promote_items({"dry_run": False, "items": []}) == [
         "no preprints to promote"
     ]
-    assert _render_bib_promote_items(
+    assert render_bib_promote_items(
         {
             "dry_run": True,
             "items": [
@@ -107,7 +107,7 @@ def test_render_bib_promote_items_includes_pdf_and_published_key() -> None:
 
 
 def test_render_bib_promote_items_describes_create_and_update_actions() -> None:
-    assert _render_bib_promote_items(
+    assert render_bib_promote_items(
         {
             "dry_run": False,
             "items": [
@@ -136,7 +136,7 @@ def test_render_bib_promote_items_describes_create_and_update_actions() -> None:
 
 
 def test_render_bib_promote_items_includes_summary_footer() -> None:
-    assert _render_bib_promote_items(
+    assert render_bib_promote_items(
         {
             "dry_run": True,
             "items": [],
@@ -157,7 +157,7 @@ def test_render_bib_promote_items_includes_summary_footer() -> None:
 
 
 def test_render_bib_promote_items_surfaces_s2_warning() -> None:
-    lines = _render_bib_promote_items(
+    lines = render_bib_promote_items(
         {
             "dry_run": False,
             "items": [],
@@ -192,9 +192,9 @@ def test_a_tab_or_newline_in_a_field_does_not_forge_a_row() -> None:
     write, so the rendering layer is where they have to be neutralized — the
     stored entry keeps them.
     """
-    from pzi.cli_render import _render_search_matches
+    from pzi.cli_render import render_search_matches
 
-    lines = _render_search_matches({
+    lines = render_search_matches({
         "matches": [
             {
                 "citekey": "evil2024",
@@ -214,9 +214,9 @@ def test_a_tab_or_newline_in_a_field_does_not_forge_a_row() -> None:
 
 def test_control_characters_are_stripped_from_rendered_output() -> None:
     """An ANSI escape in a captured title rewrites the user's terminal."""
-    from pzi.cli_render import _render_search_matches
+    from pzi.cli_render import render_search_matches
 
-    lines = _render_search_matches({
+    lines = render_search_matches({
         "matches": [
             {
                 "citekey": "a2024",

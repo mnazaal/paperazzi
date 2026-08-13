@@ -8,12 +8,12 @@ what made it read as a contradiction, so it now says what was actually
 established — and, when no key is configured, that the quota is the shared one.
 """
 
-from pzi.cli_render import _render_doctor_result
+from pzi.cli_render import render_doctor_result
 
 
 def _render(**s2: object) -> str:
     return "\n".join(
-        _render_doctor_result(
+        render_doctor_result(
             {"semantic_scholar": {"reachable": True, "configured": "not configured", **s2}}
         )
     )

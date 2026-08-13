@@ -109,6 +109,21 @@ next to the diff it explains.
 
 ### Changed
 
+- A relative `file` path survives an unrelated edit. `file` is read as an
+  absolute `local_pdf_path` and written back absolute, so any command that
+  touched an entry rewrote a portable `papers/x.pdf` into a machine-specific
+  `/home/you/bibs/papers/x.pdf` — one `tag add` was enough, and a git-tracked
+  library drifted to machine-specific one entry at a time. What an entry
+  already has is now preserved; `pdf_file_path_style` still decides how a
+  *newly* attached PDF is written.
+- A PDF that pypdf cannot parse is stored with a warning saying so, instead of
+  being indistinguishable from a scan with no extractable text. `%PDF-` at the
+  front was the only gate anything applied, and the parse verdict was
+  discarded. Not a refusal: some legitimate publisher PDFs defeat pypdf.
+- The click-based PDF discovery step returns the URLs it found instead of
+  opening up to five hidden cross-origin iframes, each carrying your cookies,
+  to read an observer cache that is always empty in the realm it runs in — the
+  cache is written by the service worker, and capture runs in the popup.
 - Semantic Scholar failures are reported on the title-search path, which is
   what `check` uses. The guard returned one line before the reader could see
   the body, so the reporting branch was unreachable for exactly the payloads it

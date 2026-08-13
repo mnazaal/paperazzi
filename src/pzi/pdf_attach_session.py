@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from urllib.parse import urlsplit
 
 from pzi.token_compare import tokens_match
+from pzi.url_safety import origin_of, unique_nonempty
 
 
 @dataclass(frozen=True)
@@ -112,20 +112,9 @@ def _source_allowed(source_url: str | None, allowed_source_urls: tuple[str, ...]
     )
 
 
-def _origin(url: str) -> str | None:
-    parsed = urlsplit(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        return None
-    return f"{parsed.scheme}://{parsed.netloc.lower()}"
+_origin = origin_of
 
 
-def _unique_nonempty(urls: Iterable[str]) -> tuple[str, ...]:
-    seen: set[str] = set()
-    result: list[str] = []
-    for url in urls:
-        clean = url.strip()
-        if not clean or clean in seen:
-            continue
-        seen.add(clean)
-        result.append(clean)
-    return tuple(result)
+_unique_nonempty = unique_nonempty
+
+

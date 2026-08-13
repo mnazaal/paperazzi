@@ -7,7 +7,6 @@
 import { isSafePublicHttpUrl, originOf, sameOrigin, tryHostname } from "./utils.js";
 import {
   getObserverUrlsForDomain,
-  observerCacheUrls,
   recentObserverUrls,
 } from "./observer.js";
 
@@ -62,11 +61,6 @@ export function scanDomForPdfUrls(doc = document) {
 // are added in priority order (observer hits, then site extractors, then DOM),
 // so truncating keeps the best ones.
 export const MAX_PDF_URL_CANDIDATES = 20;
-
-//: How many discovered URLs `clickPdfDiscovery` may load in hidden iframes for
-//: one capture. Each is a real navigation with the user's session attached, so
-//: the count must come from us and not from the page.
-export const MAX_HIDDEN_IFRAME_PROBES = 5;
 
 /**
  * Append *value* to *candidates* if it passes every rule the server enforces.
@@ -135,40 +129,6 @@ export async function extractPdfUrlCandidates(tabId, pageUrl) {
 // application/pdf responses via the always-on observer.  No tab navigation.
 // Replaces the old click-based approach that disrupted the user's tab.
 const HIDDEN_IFRAME_DISCOVERY_TIMEOUT_MS = 3000;
-
-async function _injectHiddenIframe(tabId, url) {
-  try {
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      func: (iframeUrl, timeout) => {
-        return new Promise((done) => {
-          const iframe = document.createElement("iframe");
-          iframe.style.cssText = "display:none;width:0;height:0;border:0;";
-          iframe.src = iframeUrl;
-          const cleanup = () => {
-            if (iframe.parentNode) {
-              try { iframe.parentNode.removeChild(iframe); } catch (_e) {}
-            }
-            done();
-          };
-          iframe.addEventListener("load", () => {});
-          iframe.addEventListener("error", () => {});
-          document.body.appendChild(iframe);
-          setTimeout(cleanup, timeout);
-        });
-      },
-      args: [url, HIDDEN_IFRAME_DISCOVERY_TIMEOUT_MS],
-    });
-  } catch (_e) {
-    /* Silently ignore injection failures. */
-  }
-}
-
-function _collectObserverUrlsAfterIframe(beforeUrls) {
-  const after = recentObserverUrls();
-  const beforeSet = new Set(beforeUrls || []);
-  return after.filter((u) => !beforeSet.has(u) && isSafePublicHttpUrl(u));
-}
 
 export async function clickPdfDiscovery(tabId, pageUrl) {
   if (!tabId) return [];
@@ -275,25 +235,25 @@ export async function clickPdfDiscovery(tabId, pageUrl) {
     }
   }
 
-  if (!discoveredUrls.length) return [];
-
-  // 2. Snapshot current observer cache.
-  const beforeUrls = observerCacheUrls();
-
-  // 3. Load the most promising discovered URLs in hidden iframes (parallel).
-  // Bounded: this used to inject one iframe per match, all at once, and the
-  // match set is whatever the page offers — a publisher page with a "PDF" link
-  // per reference produced dozens of simultaneous navigations, each carrying
-  // the user's cookies. The list is in discovery order, so the first few are
-  // the ones worth probing.
-  const probes = discoveredUrls.slice(0, MAX_HIDDEN_IFRAME_PROBES);
-  await Promise.all(probes.map((url) => _injectHiddenIframe(tabId, url)));
-
-  // 4. Small wait for observer to process responses.
-  await new Promise((r) => setTimeout(r, 500));
-
-  // 5. Return new observer-caught entries.
-  return _collectObserverUrlsAfterIframe(beforeUrls);
+  // 2. Return what the scan found.
+  //
+  // This used to discard `discoveredUrls` and instead load the first few in
+  // hidden iframes, wait 500ms, and return whatever the always-on `webRequest`
+  // observer had newly cached. That could never return anything: the observer
+  // cache is module state in `observer.js`, written only by the `webRequest`
+  // listener that `background.js` registers **in the service worker**, while
+  // this function's only caller — `captureCurrentTab`, via `popup.js` — runs in
+  // the *popup's* realm, which loads its own copy of the module graph with its
+  // own empty cache. `background.js` says the popup calls capture directly on
+  // purpose (Firefox only grants an optional host permission while the user
+  // gesture is live), so that is not going to change.
+  //
+  // So every capture injected up to five hidden cross-origin navigations, each
+  // carrying the user's cookies, in order to read a cache that is always empty
+  // — and threw away the URLs it had legitimately found on the way. Returning
+  // those costs nothing extra and is what "click-based PDF discovery" was for;
+  // the caller feeds them through `addPdfUrlCandidate` like every other source.
+  return discoveredUrls;
 }
 
 export function buildPdfCandidates(urls, pageUrl, observedUrls = []) {

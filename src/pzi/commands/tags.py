@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping
 from typing import Any, TextIO
 
 from pzi import cli_json, exit_codes
-from pzi.cli_render import _error_lines, _render_tag_mutation_success
+from pzi.cli_render import error_lines, render_tag_mutation_success
 from pzi.commands.common import exit_code_for_error, print_lines, print_read_warnings
 from pzi.tag_service import add_tags, list_tags, parse_tag_csv, remove_tags
 
@@ -45,7 +45,7 @@ def run_tag_command(
             for tag in result["tags"]:
                 print(tag, file=stdout)
             return exit_codes.OK
-        print_lines(_error_lines("failed to list tags", result["errors"]), stderr)
+        print_lines(error_lines("failed to list tags", result["errors"]), stderr)
         return exit_code_for_error(result)
 
     flat_tags = [tag for raw in args.tags for tag in parse_tag_csv_fn(raw)]
@@ -67,12 +67,12 @@ def run_tag_command(
                 result, stdout, command=mutation_command, items=result.get("tags") or [],
             )
         else:
-            print(_render_tag_mutation_success(result), file=stdout)
+            print(render_tag_mutation_success(result), file=stdout)
         return exit_codes.OK
     if getattr(args, "json", False):
         cli_json.emit_result(
             result, stdout, command=mutation_command, items=result.get("tags") or [],
         )
     else:
-        print_lines(_error_lines(result["message"], result["errors"]), stderr)
+        print_lines(error_lines(result["message"], result["errors"]), stderr)
     return exit_code_for_error(result)

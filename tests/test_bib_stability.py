@@ -19,10 +19,10 @@ from pathlib import Path
 import pytest
 
 from pzi.bib_repository import (
-    _parse_bib_library,
-    _serialize_library,
     execute_write_plan,
+    parse_bib_library,
     preview_write_plan,
+    serialize_library,
     update_bib_entry,
 )
 from pzi.bib_serialize import describe_failed_blocks, detect_bib_layout, serialize_bibtex
@@ -59,8 +59,8 @@ BIB_WITH_EXTRAS = r"""@string{ jmlr = {Journal of Machine Learning Research} }
 
 def test_parse_library_serialize_roundtrip_preserves_extras() -> None:
     """Parse with comments/strings/preamble → serialize → all content survives."""
-    library = _parse_bib_library(BIB_WITH_EXTRAS)
-    result = _serialize_library(library, layout=detect_bib_layout(BIB_WITH_EXTRAS))
+    library = parse_bib_library(BIB_WITH_EXTRAS)
+    result = serialize_library(library, layout=detect_bib_layout(BIB_WITH_EXTRAS))
 
     # Comments preserved (content, not exact whitespace)
     assert "% A comment between entries" in result
@@ -91,10 +91,10 @@ def test_parse_library_serialize_roundtrip_stable() -> None:
     read off the serializer's own output has to describe that output, or a
     second write would drift again.
     """
-    library = _parse_bib_library(BIB_WITH_EXTRAS)
-    pass1 = _serialize_library(library, layout=detect_bib_layout(BIB_WITH_EXTRAS))
-    library2 = _parse_bib_library(pass1)
-    pass2 = _serialize_library(library2, layout=detect_bib_layout(pass1))
+    library = parse_bib_library(BIB_WITH_EXTRAS)
+    pass1 = serialize_library(library, layout=detect_bib_layout(BIB_WITH_EXTRAS))
+    library2 = parse_bib_library(pass1)
+    pass2 = serialize_library(library2, layout=detect_bib_layout(pass1))
     assert pass1 == pass2
 
 
@@ -119,7 +119,7 @@ def test_write_plan_insert_preserves_comments_and_strings(tmp_path: Path) -> Non
     bib_path.write_text(BIB_WITH_EXTRAS)
 
     # Parse existing library
-    library = _parse_bib_library(bib_path.read_text())
+    library = parse_bib_library(bib_path.read_text())
     orig_comment_count = len(library.comments)
     orig_string_count = len(library.strings)
     orig_preamble_count = len(library.preambles)
@@ -142,7 +142,7 @@ def test_write_plan_insert_preserves_comments_and_strings(tmp_path: Path) -> Non
     after_content = bib_path.read_text()
 
     # Comments, strings, preamble must remain
-    after_library = _parse_bib_library(after_content)
+    after_library = parse_bib_library(after_content)
     assert len(after_library.comments) == orig_comment_count
     assert len(after_library.strings) == orig_string_count
     assert len(after_library.preambles) == orig_preamble_count
@@ -253,7 +253,7 @@ def test_write_plan_update_only_changes_target_entry(tmp_path: Path) -> None:
     assert "jones2023" in diff
 
     # Parse the after-content to verify entry-level integrity
-    after_library = _parse_bib_library(result["new_source"])
+    after_library = parse_bib_library(result["new_source"])
     smith_fields = {f.key: f.value for f in after_library.entries[0].fields}
     # Smith's entry should still have original content (modulo v2 formatting)
     assert "John Smith" in smith_fields.get("author", "")
@@ -276,7 +276,7 @@ def test_update_bib_entry_preserves_extras(tmp_path: Path) -> None:
 
     after_content = bib_path.read_text()
     # Everything must be preserved after a no-op update
-    after_library = _parse_bib_library(after_content)
+    after_library = parse_bib_library(after_content)
     assert len(after_library.comments) == 2  # two % comments
     assert len(after_library.strings) == 1  # jmlr string
     assert len(after_library.preambles) == 1  # ACM preamble
@@ -324,7 +324,7 @@ def test_string_references_not_expanded(tmp_path: Path) -> None:
     bib_path = tmp_path / "test.bib"
     bib_path.write_text(BIB_WITH_EXTRAS)
 
-    library = _parse_bib_library(bib_path.read_text())
+    library = parse_bib_library(bib_path.read_text())
     # smith2024 has journal = jmlr — this should be the raw reference
     smith = [e for e in library.entries if e.key == "smith2024"][0]
     journal_field = next(f for f in smith.fields if f.key == "journal")
@@ -346,7 +346,7 @@ def test_string_references_not_expanded(tmp_path: Path) -> None:
     execute_write_plan(str(bib_path), plan)
     after = bib_path.read_text()
     # journal reference should still be jmlr, not Journal of Machine Learning Research
-    after_library = _parse_bib_library(after)
+    after_library = parse_bib_library(after)
     smith_after = [e for e in after_library.entries if e.key == "smith2024"][0]
     journal_after = next(f for f in smith_after.fields if f.key == "journal")
     assert journal_after.value == "jmlr", (
@@ -544,7 +544,7 @@ def test_write_plan_update_still_encloses_rewritten_values(tmp_path: Path) -> No
     after = bib_path.read_text()
 
     # One entry, and no injected second field: the braces were neutralized.
-    library = _parse_bib_library(after)
+    library = parse_bib_library(after)
     assert len(library.entries) == 1
     assert library.entries[0].fields_dict["title"].value == "An Article"
     assert "pwned" not in library.entries[0].fields_dict["title"].value
@@ -558,7 +558,7 @@ def test_carriage_return_is_stripped_from_a_field_value(tmp_path: Path) -> None:
     replaces every `\\n` with `\\r\\n`, doubling the carriage return into
     `\\r\\r\\n`. Values read off disk are safe — `read_text` translates
     newlines — so this only bites text injected from a metadata provider.
-    `_validate_bibtex_roundtrip` cannot catch it either: it runs on the LF text,
+    `validate_bibtex_roundtrip` cannot catch it either: it runs on the LF text,
     before the newline conversion.
     """
     bib = tmp_path / "crlf.bib"
@@ -608,7 +608,7 @@ def test_an_entry_with_no_citekey_is_reported_on_read(tmp_path: Path) -> None:
     write an entry with an empty citekey", naming no file, no line, no entry.
     """
     src = "@article{,\n  title = {No Key}\n}\n\n@article{good2020,\n  title = {Fine}\n}\n"
-    library = _parse_bib_library(src)
+    library = parse_bib_library(src)
 
     warnings = describe_failed_blocks(library)
 
@@ -648,7 +648,7 @@ def test_field_keys_differing_only_in_case_are_reported_on_read() -> None:
         "  author = {A, B},\n"
         "}\n"
     )
-    library = _parse_bib_library(src)
+    library = parse_bib_library(src)
 
     warnings = describe_failed_blocks(library)
 
@@ -681,7 +681,7 @@ def test_a_batch_preview_runs_the_gates_the_batch_write_runs(tmp_path: Path) -> 
     """`preview_batch_write` was the fifth path validating a different amount.
 
     `batch_write_session` runs `check_consistency` and
-    `_validate_bibtex_roundtrip` even when `write=False`, with a comment
+    `validate_bibtex_roundtrip` even when `write=False`, with a comment
     claiming four paths now validate the same thing. `preview_batch_write` —
     what `update --promote --dry-run` uses — ran neither, so a batch whose
     state every real write refuses previewed as a clean diff.
