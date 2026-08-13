@@ -1414,3 +1414,74 @@ def test_promote_does_not_fork_an_entry_that_merely_lacks_a_venue(tmp_path):
     assert result["status"] == "ok"
     assert result["items"] == [], f"venue-less non-preprint was promoted: {result['items']}"
     assert bib_path.read_text().count("@article") == 1
+
+
+def _distinct_published_candidate(query: str, *, server_url: str):
+    """A published version per preprint, so all three really are promoted.
+
+    The resolver's query is "<title> <authors> <year>", so the title is
+    recovered from it rather than assumed to be the whole string — a candidate
+    titled with the query scores 30 and falls below the confidence gate.
+    """
+    title = query.split(" Smith,")[0]
+    return [
+        {
+            "item_type": "journalArticle",
+            "record": {
+                "title": title,
+                "venue": "Journal of Parsing",
+                "doi": f"10.9/jop-{title.split()[-1]}",
+                "year": 2024,
+                "authors": ["Smith, Jane"],
+            },
+            "attachments": [],
+        }
+    ]
+
+
+def test_promoting_several_preprints_leaves_one_backup(tmp_path):
+    """`backup_path_for` was called inside the per-preprint loop.
+
+    It never reuses a name and `update_bib_entry` copies the whole file, so a
+    `--replace` run wrote a full copy of the library per promoted entry:
+    against a 15.8 MB library, promoting 100 preprints leaves roughly 1.6 GB of
+    `.bak` files that nothing ever cleans up. One run, one undo.
+    """
+    bib_path = tmp_path / "ml.bib"
+    config_path = _write_config(tmp_path, bib_path)
+    for index in range(3):
+        add_record_to_bib(
+            config_path=str(config_path),
+            home_dir=str(tmp_path),
+            record={
+                "citekey": f"smith{index}graph",
+                # Distinct papers: one shared title would make candidates 2 and 3
+                # "already exists as smith0graph", which is correct behaviour but
+                # would leave nothing for this test to measure.
+                "title": f"Graph Parsers Volume {index}",
+                "arxiv_id": f"2401.1234{index}",
+                "year": 2024,
+                "authors": ["Smith, Jane"],
+            },
+            bib_selector=None,
+            dry_run=False,
+        )
+    before = bib_path.read_text()
+
+    result = promote_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        keep_preprint=False,
+        dry_run=False,
+        fetch_search=_distinct_published_candidate,
+    )
+
+    promoted = [item for item in result["items"] if item["action"] == "update"]
+    assert len(promoted) == 3, result["items"]
+    backups = list(tmp_path.glob("*.bak*"))
+    assert len(backups) == 1, [b.name for b in backups]
+    # And it holds the library as it was before the run, not a half-promoted one.
+    assert backups[0].read_text() == before
+    # Every promoted entry points at that one file, so the undo is findable.
+    assert {item.get("backup_path") for item in promoted} == {str(backups[0])}

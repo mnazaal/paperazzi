@@ -594,10 +594,16 @@ def resolve_library_target(
 
     normalized_selector = selector.strip()
     normalized_path = _normalize_path(normalized_selector, home_dir=home_dir)
+    # Compared through symlinks: `--target` pointing at a symlink to a
+    # configured bib missed the configured entry and fell through to the ad-hoc
+    # branch below. The write layer *does* resolve it, so the lock and the
+    # replace landed on the right file while `papers_dir` was derived from the
+    # symlink's own directory — splitting one library's PDFs across two places.
+    real_path = _resolved_path(normalized_path)
     for bib in bibs:
         if bib["name"] == normalized_selector:
             return bib
-        if _normalize_path(bib["path"], home_dir=home_dir) == normalized_path:
+        if _resolved_path(_normalize_path(bib["path"], home_dir=home_dir)) == real_path:
             return bib
 
     if normalized_selector.endswith(".bib"):
@@ -608,6 +614,11 @@ def resolve_library_target(
         # above: that is a library the user declared and pzi will create.
         if not os.path.exists(normalized_path):
             return None
+        if os.path.isdir(normalized_path):
+            # Existence was the only check, so a directory named `refs.bib`
+            # resolved as a library and every command then failed inside the
+            # reader with an `IsADirectoryError` naming no target.
+            return None
         return {
             "name": os.path.splitext(os.path.basename(normalized_path))[0],
             "path": normalized_path,
@@ -616,6 +627,19 @@ def resolve_library_target(
         }
 
     return None
+
+
+def _resolved_path(path: str) -> str:
+    """*path* with symlinks resolved, or unchanged when it cannot be resolved.
+
+    Used only to decide whether two spellings name the same library. The stored
+    path stays as the user wrote it: resolving it there would rewrite their
+    configured path in every message.
+    """
+    try:
+        return os.path.realpath(path)
+    except OSError:  # pragma: no cover - realpath does not raise for absent paths
+        return path
 
 
 def _normalize_path(value: str, *, home_dir: str, base_dir: str | None = None) -> str:
@@ -757,11 +781,29 @@ def unknown_config_keys(raw: Mapping[str, object]) -> list[str]:
     the default in place with no diagnostic — the setting simply did nothing.
     """
     known = set(AppConfig.__annotations__) | {"bibs"}
-    return [
+    warnings = [
         RETIRED_CONFIG_KEYS.get(key) or f"unknown config key {key!r} (ignored)"
         for key in sorted(raw)
         if key not in known
     ]
+    # Inside `[[bibs]]` as well as at the top level. Only top-level keys were
+    # checked, so `papers_dirs` or `defualt` in a bib table was accepted with no
+    # warning and no error — and those two settings decide where every PDF is
+    # written and which library a command acts on, which makes a silent typo
+    # there worse than a silent typo anywhere else.
+    known_bib_keys = set(BibConfig.__annotations__)
+    bibs = raw.get("bibs")
+    if isinstance(bibs, list):
+        for index, entry in enumerate(bibs):
+            if not isinstance(entry, Mapping):
+                continue
+            label = entry.get("name") if isinstance(entry.get("name"), str) else index
+            warnings.extend(
+                f"unknown key {key!r} in [[bibs]] {label!r} (ignored)"
+                for key in sorted(entry)
+                if key not in known_bib_keys
+            )
+    return warnings
 
 
 def load_config_file(path: str, *, home_dir: str) -> LoadConfigResult:

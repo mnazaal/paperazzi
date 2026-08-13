@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import functools
 from collections.abc import Callable, Mapping
+from pathlib import Path
 from typing import Any, NotRequired, TypedDict, cast
 from urllib.error import HTTPError
 
@@ -163,6 +164,14 @@ def promote_bib(
     errors: list[str] = []
     summary = _empty_summary()
     resolved_preprints: list[str] = []
+    # One backup for the run, not one per promoted entry. `backup_path_for` never
+    # reuses a name and `update_bib_entry` copies the whole file, so computing it
+    # inside the loop left a full copy of the library per `--replace` promotion:
+    # against the 15.8 MB library configured here, promoting 100 preprints wrote
+    # roughly 1.6 GB of `.bak` files that nothing ever cleans up. The first write
+    # takes it — under its lock, immediately before writing, as `delete` and
+    # `fix merge` do — and the rest pass None.
+    run_backup = _RunBackup(bib["path"])
 
     for record in records:
         preprint_ck = record.get("citekey")
@@ -291,6 +300,7 @@ def promote_bib(
                     candidate=candidate,
                     dry_run=dry_run,
                     file_path_style=file_path_style,
+                    run_backup=run_backup,
                     **pdf_kwargs,
                 )
         except Exception as exc:  # one failing entry must not abort the run
@@ -1071,6 +1081,37 @@ def _preview_in_place_update(
     return preview_write_plan(bib_path, plan, file_path_style=file_path_style)["diff"]
 
 
+class _RunBackup:
+    """The single ``.bak`` a promote run leaves, taken by whichever write is first.
+
+    ``update_bib_entry`` copies the whole bib to the path it is given, so passing
+    a fresh path per entry meant a full copy per promotion, and passing the *same*
+    path per entry would overwrite the original with an already-promoted state.
+    Handing the path to the first write only gets both right: one copy, of the
+    library as it was before the run.
+    """
+
+    def __init__(self, bib_path: str) -> None:
+        self._bib_path = bib_path
+        self._path: Path | None = None
+        self._taken = False
+
+    def take(self) -> Path | None:
+        """The backup path for the next write, or None once one has been taken."""
+        if self._taken:
+            return None
+        self._taken = True
+        self._path = backup_path_for(self._bib_path, "promote")
+        return self._path
+
+    @property
+    def path(self) -> Path | None:
+        """The backup that was written, or None if nothing was backed up."""
+        if self._path is not None and self._path.exists():
+            return self._path
+        return None
+
+
 def _handle_update_in_place(
     *,
     bib_path: str,
@@ -1085,6 +1126,7 @@ def _handle_update_in_place(
     browser_hook: bool = True,
     file_path_style: str = "absolute",
     next_candidate: NextPdfCandidate | None = None,
+    run_backup: _RunBackup | None = None,
 ) -> PromoteItem:
     preprint_ck = cast(str, preprint_record.get("citekey", ""))
 
@@ -1128,7 +1170,14 @@ def _handle_update_in_place(
         # metadata and deliberately strips its identity (`eprint`, the arXiv
         # DOI, the preprint URL). That is destruction of the same kind `delete`
         # and `fix merge` back up, and it had no undo at all.
-        backup_target = backup_path_for(bib_path, preprint_ck)
+        #
+        # One backup for the whole run — see `_RunBackup`. This was
+        # `backup_path_for(bib_path, preprint_ck)`, i.e. a full copy of the
+        # library per promoted entry.
+        backup_target = (
+            run_backup.take() if run_backup is not None
+            else backup_path_for(bib_path, preprint_ck)
+        )
         update_result = update_bib_entry(
             bib_path,
             preprint_ck,
@@ -1144,7 +1193,17 @@ def _handle_update_in_place(
             )
         # Written only when the write actually changed something, so its
         # existence is the honest test of whether there is anything to undo.
-        backup = str(backup_target) if backup_target.exists() else None
+        # With a run-level backup, every promoted entry reports the same path:
+        # it is the one file that undoes the run.
+        if run_backup is not None:
+            existing_backup = run_backup.path
+            backup = str(existing_backup) if existing_backup is not None else None
+        else:
+            backup = (
+                str(backup_target)
+                if backup_target is not None and backup_target.exists()
+                else None
+            )
 
     # Over the union of both key sets: iterating `updated` alone could only ever
     # report fields that survived, so a field the promotion *removed* — the

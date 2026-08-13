@@ -36,6 +36,26 @@ next to the diff it explains.
 
 ### Changed
 
+- A PDF this run downloaded is removed when the BibTeX write *raises*, not only
+  when the entry disappeared. A refused write left the file on disk with nothing
+  referring to it, and a later `fix clean --fix` quarantined it — one command
+  tidying up after another. Files that were already there are never touched.
+- `update --promote --replace` leaves one backup per run instead of one per
+  promoted entry. `update_bib_entry` copies the whole library, so promoting 100
+  preprints against a 15.8 MB library wrote roughly 1.6 GB of `.bak` files.
+- Re-adding a paper no longer reorders its `keywords`. Merging compared a sorted
+  set against the user's own order, so it reported a change that was only the
+  comparison's doing and rewrote the field.
+- The metadata cache keys on the API key and polite-pool identity as well as the
+  URL — an anonymous-quota response could be served to an authenticated caller
+  for the whole TTL — and is now bounded, sweeping expired entries and capping
+  the directory. Entries were reclaimed only by a repeat lookup of the same URL.
+- A typo inside a `[[bibs]]` table is reported. Only top-level keys were
+  checked, so `papers_dirs` or `defualt` was accepted silently — the two
+  settings that decide where PDFs are written and which library is acted on.
+- `--target` pointing at a symlink resolves to the configured library instead of
+  falling through to an ad-hoc one with a different `papers_dir`, and a
+  *directory* named `something.bib` is refused rather than accepted as a library.
 - **Breaking:** every batch command answers with one rule. A batch in which
   *nothing* succeeded exits 5, not 4 — `add --from-file` already did this while
   `inbox` and `import` returned 4 regardless, so identical all-invalid input

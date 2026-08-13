@@ -255,8 +255,13 @@ def build_metadata_fetch_text(
     limiter = rate_limiter if rate_limiter is not None else RateLimiter()
 
     def fetch(url: str, **kwargs: Any) -> str:
+        # Everything other than the URL that changes the response: the bound
+        # API key, and the polite-pool identity the caller passes per request.
+        # Keyed on the URL alone, an anonymous answer and an authenticated one
+        # shared a cache entry.
+        scope = f"{api_key or ''}\0{kwargs.get('user_agent') or ''}"
         if cache is not None:
-            hit = cache.get(url)
+            hit = cache.get(url, scope)
             if hit is not None:
                 return hit
         limiter.wait(url)
@@ -267,7 +272,7 @@ def build_metadata_fetch_text(
         # "rate limit exceeded" returned for the whole TTL. A failure is not a
         # result and must not be stored.
         if cache is not None and not _is_transient_error_body(text):
-            cache.set(url, text)
+            cache.set(url, text, scope)
         return text
 
     return fetch

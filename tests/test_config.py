@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from pzi import config as config_module
 from pzi.config import (
     default_config_path,
@@ -630,3 +632,65 @@ def test_a_retired_config_key_still_loads_and_says_why(tmp_path) -> None:
     assert "rate_limit_rpm" in warning
     assert "retired" in warning
     assert "unknown config key" not in warning
+
+
+def test_a_typo_inside_a_bibs_table_is_reported(tmp_path: Path) -> None:
+    """Only top-level keys were checked.
+
+    `papers_dirs` or `defualt` in a `[[bibs]]` table was accepted with no
+    warning and no error — and those two settings decide where every PDF is
+    written and which library a command acts on.
+    """
+    from pzi.config import unknown_config_keys
+
+    warnings = unknown_config_keys(
+        {
+            "contact_email": "a@b.c",
+            "bibs": [
+                {"name": "ml", "path": "/x.bib", "papers_dirs": "/p", "defualt": True},
+            ],
+        }
+    )
+
+    assert any("papers_dirs" in w for w in warnings), warnings
+    assert any("defualt" in w for w in warnings), warnings
+    # The library is named, so the user knows which table to fix.
+    assert all("'ml'" in w for w in warnings), warnings
+
+
+def test_a_symlinked_target_resolves_to_the_configured_library(tmp_path: Path) -> None:
+    """The write layer resolves symlinks and target resolution did not.
+
+    So `--target` via a symlink missed the configured entry and fell through to
+    the ad-hoc branch: the lock and the replace landed on the right file while
+    `papers_dir` came from the symlink's own directory, splitting one library's
+    PDFs across two places.
+    """
+    from pzi.config import resolve_library_target
+
+    real = tmp_path / "real.bib"
+    real.write_text("")
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    link = tmp_path / "link.bib"
+    link.symlink_to(real)
+
+    bibs = [
+        {"name": "ml", "path": str(real), "papers_dir": str(papers), "default": True}
+    ]
+    resolved = resolve_library_target(bibs, str(link), home_dir=str(tmp_path))
+
+    assert resolved is not None
+    assert resolved["name"] == "ml"
+    assert resolved["papers_dir"] == str(papers)
+
+
+def test_a_directory_is_not_a_library(tmp_path: Path) -> None:
+    """Existence was the only check, so a directory named `refs.bib` resolved
+    and every command then failed inside the reader naming no target."""
+    from pzi.config import resolve_library_target
+
+    directory = tmp_path / "refs.bib"
+    directory.mkdir()
+
+    assert resolve_library_target([], str(directory), home_dir=str(tmp_path)) is None

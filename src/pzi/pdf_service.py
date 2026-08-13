@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, TypeAlias, cast
 
@@ -29,6 +29,32 @@ from pzi.pdf import snapshot_pdf_paths as _snapshot_pdf_paths
 from pzi.pdf_download import copy_pdf_to_papers_dir
 from pzi.pdf_planning import pdf_file_present
 from pzi.protocols import BinaryFetcher
+
+
+def _update_entry_keeping_pdf_consistent(
+    update: Callable[[], Any],
+    *,
+    new_pdf: str | None,
+    existing_pdf_paths: set[Path],
+) -> Any:
+    """Run *update*, removing a newly downloaded PDF if the write raises.
+
+    Every PDF path here cleaned up when the entry had *disappeared* — the one
+    outcome `update_bib_entry` reports by returning — and not when it raised.
+    So a refused write (a duplicate citekey elsewhere in the file, a library
+    that no longer round-trips, a full disk) left the downloaded file on disk
+    with nothing referring to it, and a later `fix clean --fix` quarantined it:
+    a second command tidying up after the first.
+
+    Only files this operation created are removed; *existing_pdf_paths* is the
+    snapshot taken before the download, so a pre-existing PDF is never touched.
+    `capture_local_pdf` already does exactly this around its own write.
+    """
+    try:
+        return update()
+    except BaseException:
+        _remove_new_pdf(new_pdf, existing_pdf_paths)
+        raise
 
 
 def _superseded_pdf_warning(
@@ -192,16 +218,20 @@ def retry_pdf(
             "errors": _pdf_failure_errors(warning, "failed to fetch PDF"),
         }
 
-    update_result = update_bib_entry(
-        bib["path"],
-        citekey,
-        lambda entry, record: _entry_with_pdf_fields(
-            entry,
-            cast(NormalizedRecord, dict(record)),
-            local_pdf_path=local_pdf_path,
-            pdf_url=pdf_url,
+    update_result = _update_entry_keeping_pdf_consistent(
+        lambda: update_bib_entry(
+            bib["path"],
+            citekey,
+            lambda entry, record: _entry_with_pdf_fields(
+                entry,
+                cast(NormalizedRecord, dict(record)),
+                local_pdf_path=local_pdf_path,
+                pdf_url=pdf_url,
+            ),
+            file_path_style=config.get("pdf_file_path_style", "absolute"),
         ),
-        file_path_style=config.get("pdf_file_path_style", "absolute"),
+        new_pdf=local_pdf_path,
+        existing_pdf_paths=existing_pdf_paths,
     )
     if not update_result["found"]:
         _remove_new_pdf(local_pdf_path, existing_pdf_paths)
@@ -334,16 +364,20 @@ def retry_failed_pdfs(
             failures.append({"citekey": citekey, "error": warning or "failed to fetch PDF"})
             continue
 
-        update_result = update_bib_entry(
-            bib["path"],
-            citekey,
-            lambda entry, rec: _entry_with_pdf_fields(
-                entry,
-                cast(NormalizedRecord, dict(rec)),
-                local_pdf_path=cast(str, local_pdf_path),
-                pdf_url=pdf_url,
+        update_result = _update_entry_keeping_pdf_consistent(
+            lambda: update_bib_entry(
+                bib["path"],
+                citekey,
+                lambda entry, rec: _entry_with_pdf_fields(
+                    entry,
+                    cast(NormalizedRecord, dict(rec)),
+                    local_pdf_path=cast(str, local_pdf_path),
+                    pdf_url=pdf_url,
+                ),
+                file_path_style=config.get("pdf_file_path_style", "absolute"),
             ),
-            file_path_style=config.get("pdf_file_path_style", "absolute"),
+            new_pdf=local_pdf_path,
+            existing_pdf_paths=existing_pdf_paths,
         )
         if not update_result["found"]:
             _remove_new_pdf(local_pdf_path, existing_pdf_paths)
@@ -438,16 +472,20 @@ def attach_pdf(
             "errors": _pdf_failure_errors(acquisition_note, "failed to attach PDF"),
         }
 
-    update_result = update_bib_entry(
-        bib["path"],
-        citekey,
-        lambda entry, record: _entry_with_pdf_fields(
-            entry,
-            cast(NormalizedRecord, dict(record)),
-            local_pdf_path=local_pdf_path,
-            pdf_url=source if source.startswith(("http://", "https://")) else None,
+    update_result = _update_entry_keeping_pdf_consistent(
+        lambda: update_bib_entry(
+            bib["path"],
+            citekey,
+            lambda entry, record: _entry_with_pdf_fields(
+                entry,
+                cast(NormalizedRecord, dict(record)),
+                local_pdf_path=local_pdf_path,
+                pdf_url=source if source.startswith(("http://", "https://")) else None,
+            ),
+            file_path_style=config.get("pdf_file_path_style", "absolute"),
         ),
-        file_path_style=config.get("pdf_file_path_style", "absolute"),
+        new_pdf=local_pdf_path,
+        existing_pdf_paths=existing_pdf_paths,
     )
     if not update_result["found"]:
         _remove_new_pdf(local_pdf_path, existing_pdf_paths)
@@ -637,16 +675,20 @@ def _attach_pdf_data(
     else:
         destination = write_pdf_bytes(data=data, papers_dir=papers_dir, citekey=citekey)
 
-    update_result = update_bib_entry(
-        bib_path,
-        citekey,
-        lambda entry, record: _entry_with_pdf_fields(
-            entry,
-            cast(NormalizedRecord, dict(record)),
-            local_pdf_path=destination,
-            pdf_url=source_url,
+    update_result = _update_entry_keeping_pdf_consistent(
+        lambda: update_bib_entry(
+            bib_path,
+            citekey,
+            lambda entry, record: _entry_with_pdf_fields(
+                entry,
+                cast(NormalizedRecord, dict(record)),
+                local_pdf_path=destination,
+                pdf_url=source_url,
+            ),
+            file_path_style=file_path_style,
         ),
-        file_path_style=file_path_style,
+        new_pdf=destination,
+        existing_pdf_paths=existing_pdf_paths,
     )
     if not update_result["found"]:
         _remove_new_pdf(destination, existing_pdf_paths)

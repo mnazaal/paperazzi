@@ -66,3 +66,32 @@ def test_corrupt_entry_is_a_miss(tmp_path: Path) -> None:
 def test_get_miss_returns_none(tmp_path: Path) -> None:
     cache = MetadataCache(tmp_path, 60)
     assert cache.get("http://never/set") is None
+
+
+def test_an_authenticated_lookup_does_not_read_an_anonymous_cache_entry(tmp_path) -> None:
+    """The key was the URL alone, while the caller binds an api_key.
+
+    So a Semantic Scholar lookup made without a key and the same lookup made
+    with one shared an entry, and an anonymous-quota answer could be served to
+    an authenticated caller for the whole TTL.
+    """
+    from pzi.metadata_cache import MetadataCache
+
+    cache = MetadataCache(tmp_path / "c", ttl_seconds=600)
+    cache.set("https://api.semanticscholar.org/x", '{"quota": "exceeded"}', scope="")
+
+    assert cache.get("https://api.semanticscholar.org/x", scope="") is not None
+    assert cache.get("https://api.semanticscholar.org/x", scope="secret-key\0ua") is None
+
+
+def test_the_cache_is_bounded(tmp_path, monkeypatch) -> None:
+    """Entries were reclaimed only by a `get()` on that exact URL, so a lookup
+    never repeated was never expired and the directory grew without bound."""
+    from pzi import metadata_cache
+
+    monkeypatch.setattr(metadata_cache, "_MAX_ENTRIES", 5)
+    cache = metadata_cache.MetadataCache(tmp_path / "c", ttl_seconds=600)
+    for index in range(12):
+        cache.set(f"https://example.org/{index}", "{}")
+
+    assert len(list((tmp_path / "c").glob("*.json"))) <= 5

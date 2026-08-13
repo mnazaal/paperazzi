@@ -1536,7 +1536,12 @@ def merge_entries(existing: MergeableEntry, incoming: MergeableEntry) -> MergeDe
     existing_tags = existing.get("tags") or []
     incoming_tags = incoming.get("tags") or []
     merged_tags = sorted({*existing_tags, *incoming_tags})
-    if merged_tags != existing_tags:
+    # Compared as a *set*: `merged_tags` is sorted and `existing_tags` is in the
+    # user's own order, so re-adding a paper whose `keywords` are not
+    # alphabetical reported `changed_fields: ["tags"]` and rewrote the field —
+    # reordering keywords nobody asked to reorder, and reporting a change that
+    # was only the comparison's own doing.
+    if set(merged_tags) != set(existing_tags):
         merged["tags"] = merged_tags
         changed_fields.append("tags")
     elif existing.get("tags") is not None:

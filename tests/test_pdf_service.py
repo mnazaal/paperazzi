@@ -6,6 +6,8 @@ _attach_pdf_data, _store_pdf_source, and _entry_with_pdf_fields.
 
 from pathlib import Path
 
+import pytest
+
 from pzi import pdf_service
 from pzi.config import BibResolutionFailure
 
@@ -1180,3 +1182,58 @@ def test_reattaching_says_the_previous_pdf_was_left_behind(monkeypatch, tmp_path
     assert any(str(old_pdf) in w for w in result["warnings"]), result
     # And it is still there — this reports, it does not delete.
     assert old_pdf.exists()
+
+
+def test_attach_pdf_removes_new_pdf_when_the_write_raises(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The sibling of `..._when_update_disappears`, which was the only case.
+
+    Cleanup ran when `update_bib_entry` *returned* `found: False` and not when
+    it raised — so a refused write (a duplicate citekey elsewhere in the file, a
+    library that no longer round-trips, a full disk) left the downloaded PDF on
+    disk with nothing referring to it, and a later `fix clean --fix` quarantined
+    it: a second command tidying up after the first.
+    """
+    from pzi.errors import PziError
+
+    papers_dir = tmp_path / "papers"
+    new_pdf = papers_dir / "smith2024.pdf"
+    pre_existing = papers_dir / "unrelated.pdf"
+    monkeypatch.setattr(
+        pdf_service, "load_bib_target",
+        lambda **kw: (_app_config(), {"name": "ml", "path": "/b", "papers_dir": str(papers_dir)}),
+    )
+    monkeypatch.setattr(
+        pdf_service,
+        "read_bib_file",
+        lambda path: {
+            "entries": [{"citekey": "smith2024", "fields": {}}],
+            "records": [{"citekey": "smith2024"}],
+        },
+    )
+    papers_dir.mkdir(parents=True, exist_ok=True)
+    pre_existing.write_bytes(b"%PDF-old")
+
+    def fake_store(**kwargs):
+        new_pdf.write_bytes(b"%PDF-new")
+        return str(new_pdf), None
+
+    def _refuse(*_args, **_kwargs):
+        raise PziError("refusing to write: duplicate citekey elsewhere")
+
+    monkeypatch.setattr(pdf_service, "_store_pdf_source", fake_store)
+    monkeypatch.setattr(pdf_service, "update_bib_entry", _refuse)
+
+    with pytest.raises(PziError):
+        pdf_service.attach_pdf(
+            config_path="/f",
+            home_dir="/h",
+            bib_selector=None,
+            citekey="smith2024",
+            source="/tmp/real.pdf",
+        )
+
+    assert not new_pdf.exists(), "the PDF this operation created was left behind"
+    # And a file that was already there is untouched.
+    assert pre_existing.exists()

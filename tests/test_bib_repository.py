@@ -914,3 +914,34 @@ def test_every_user_owned_field_is_protected_by_the_merge() -> None:
 
     overlap = USER_OWNED_FIELDS & bib_repository._PREFER_LONGER_TEXT_FIELDS
     assert not overlap, f"user-owned fields must not prefer the longer value: {overlap}"
+
+
+def test_merging_tags_does_not_reorder_the_users_keywords(tmp_path: Path) -> None:
+    """`sorted(set(...))` was compared against the *unsorted* existing list.
+
+    So re-adding a paper whose `keywords` are not alphabetical reported
+    `changed_fields: ["tags"]` and rewrote the field — reordering keywords
+    nobody asked to reorder, and reporting a change that was only the
+    comparison's own doing.
+    """
+    from pzi.bib_repository import merge_entries
+
+    decision = merge_entries(
+        {"citekey": "a2020", "title": "A", "tags": ["zeta", "alpha"]},
+        {"citekey": "a2020", "title": "A", "tags": ["alpha"]},
+    )
+
+    assert "tags" not in decision["changed_fields"]
+    assert decision["merged"]["tags"] == ["zeta", "alpha"]
+
+
+def test_merging_tags_still_reports_a_genuinely_new_tag(tmp_path: Path) -> None:
+    from pzi.bib_repository import merge_entries
+
+    decision = merge_entries(
+        {"citekey": "a2020", "title": "A", "tags": ["zeta", "alpha"]},
+        {"citekey": "a2020", "title": "A", "tags": ["newone"]},
+    )
+
+    assert "tags" in decision["changed_fields"]
+    assert set(decision["merged"]["tags"]) == {"zeta", "alpha", "newone"}
