@@ -715,7 +715,20 @@ def _maybe_add_pdf_request(
 
 def _attach_base_url_from_config(config: Mapping[str, Any] | None) -> str:
     api_url = config.get("api_url") if isinstance(config, Mapping) else None
-    base = api_url.strip().rstrip("/") if isinstance(api_url, str) and api_url.strip() else "http://127.0.0.1:8765"
+    if isinstance(api_url, str) and api_url.strip():
+        base = api_url.strip().rstrip("/")
+    else:
+        # Derived from the configured listen address, as `capture_context` does
+        # for the same value. Hardcoding `127.0.0.1:8765` handed an attach URL
+        # pointing at the default port to anyone who had moved the server —
+        # `api_listen_port = 9000` with no explicit `api_url` produced an attach
+        # URL nothing was listening on.
+        host = "127.0.0.1"
+        port: Any = 8765
+        if isinstance(config, Mapping):
+            host = str(config.get("api_listen_host") or host)
+            port = config.get("api_listen_port") or port
+        base = f"http://{host}:{port}"
     return f"{base}/attach-pdf-raw"
 
 

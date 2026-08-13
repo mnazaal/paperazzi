@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from pzi.bibtex import generate_citekey_base, normalize_authors, resolve_citekey_collision
+from pzi.similarity import split_family_given
 
 _TEMPLATE_RE = re.compile(r"{{\s*:?\s*([A-Za-z][A-Za-z0-9_]*)\s*([^{}]*)}}")
 _NON_CITEKEY = re.compile(r"[^a-z0-9]+")
@@ -141,10 +142,14 @@ def describe_template_error(template: str | None) -> str | None:
     Used by config validation so a typo is reported once, at load, instead of
     silently changing every filename it touches.
     """
-    if not template or "{{" not in template:
-        # Better-BibTeX style formulas take a different renderer that never
-        # reaches `shlex`, so there is nothing to check here.
+    if not template:
         return None
+    if "{{" not in template:
+        # Better-BibTeX style formulas take a different renderer that never
+        # reaches `shlex` — but they still have a grammar, and returning None
+        # here meant the dialect most of these templates are written in was
+        # never checked at all.
+        return describe_bbt_formula_error(template)
     for match in _TEMPLATE_RE.finditer(template):
         options_text = match.group(2)
         lexer = shlex.shlex(options_text, posix=True)
@@ -231,6 +236,61 @@ def _template_value(variable: str, record: Mapping[str, Any]) -> str:
         return str(record.get("item_type") or record.get("itemType") or "")
     value = record.get(key)
     return str(value) if value is not None else ""
+
+
+#: Filters `_render_bbt_part` implements. An unrecognized one is *ignored* at
+#: render time, which is exactly the silent degradation validation exists to
+#: catch: `auth.lowr` renders `Smith`, not `smith`.
+_BBT_FILTERS = frozenset({"lower", "upper", "fold", "clean"})
+
+#: Variables with dedicated handling. Any other bare word is read as a record
+#: field (`_render_bbt_part`'s fallback), so the validator accepts a real
+#: `NormalizedRecord` key and rejects everything else — `authr` used to render
+#: as the empty string and silently vanish from every generated key.
+_BBT_VARIABLES = frozenset({"auth", "title", "year", "doi", "venue"})
+
+_SHORTTITLE_RE = re.compile(r"^shorttitle(\((\d+)(\s*,\s*\d+)?\))?$")
+
+
+def describe_bbt_formula_error(template: str) -> str | None:
+    """Why *template* is not a usable Better BibTeX formula, or None.
+
+    `describe_template_error` returned None for anything without `{{`, so *no*
+    Better BibTeX formula was validated at all — the dialect this project's own
+    config uses. `'authr.lower + year'`, `'auth.lowr + year'` and `'this is not
+    a formula'` were all accepted, and each renders as a silently shorter key,
+    which is precisely what the config-level check says it exists to prevent.
+
+    Deliberately permissive about *fields*: any `NormalizedRecord` key is a
+    valid variable, because the renderer falls back to reading one.
+    """
+    from pzi.bibtex import NormalizedRecord
+
+    known_fields = set(NormalizedRecord.__annotations__)
+    for raw_part in template.split("+"):
+        part = raw_part.strip()
+        if not part:
+            return "empty component (a stray '+'?)"
+        if (part.startswith("'") and part.endswith("'")) or (
+            part.startswith('"') and part.endswith('"')
+        ):
+            continue
+        segments = part.lower().split(".")
+        head = segments[0]
+        if not _SHORTTITLE_RE.match(head) and head not in _BBT_VARIABLES:
+            if head not in known_fields:
+                return (
+                    f"unknown variable {segments[0]!r} — expected one of "
+                    f"{', '.join(sorted(_BBT_VARIABLES))}, shorttitle(n[,m]), "
+                    "a record field, or a quoted literal"
+                )
+        for flt in segments[1:]:
+            if flt not in _BBT_FILTERS:
+                return (
+                    f"unknown filter {flt!r} on {segments[0]!r} — expected one of "
+                    f"{', '.join(sorted(_BBT_FILTERS))}"
+                )
+    return None
 
 
 def _render_better_bibtex_formula(template: str, record: Mapping[str, Any]) -> str:
@@ -324,6 +384,15 @@ def _first_creator(record: Mapping[str, Any]) -> str:
 
 
 def _author_family_names(record: Mapping[str, Any]) -> list[str]:
+    """Family names, split the same way author *matching* splits them.
+
+    This had its own split — `text.split()[-1]` for an unreversed name — so
+    `"van der Berg, Anna"` gave `vanderberg` while `"Anna van der Berg"`, the
+    same author written the other way round, gave `berg`: one person, two
+    citekeys, decided by how the source happened to store the name.
+    `similarity.split_family_given` already absorbed the particles, and its
+    comment describes this exact defect for the matching path.
+    """
     authors = normalize_authors(record.get("authors"))
     if not authors:
         return []
@@ -335,8 +404,9 @@ def _author_family_names(record: Mapping[str, Any]) -> list[str]:
         text = author.strip()
         if _bare.match(text):
             continue
-        family = text.split(",", 1)[0] if "," in text else text.split()[-1]
-        families.append(family.strip())
+        family, _given = split_family_given(text)
+        if family:
+            families.append(family)
     return families
 
 
@@ -364,5 +434,26 @@ def _sanitize_filename_stem(value: str) -> str:
     return cleaned
 
 
+#: Letters NFKD cannot decompose, because they have no combining form — a
+#: stroke or a ligature is part of the letter. `encode("ascii", "ignore")`
+#: therefore *deletes* them, which is how `Weiß` became `Wei`, `Søndergaard`
+#: became `Sndergaard` and `Łukasz` became `ukasz`: a name silently missing a
+#: letter, in the key and in the filename.
+#:
+#: Deliberately *not* `similarity._TRANSLITERATIONS`, which maps `ü`→`ue` for
+#: author matching. Better BibTeX folds `ü` to `u`, and reproducing a BBT key is
+#: the whole point of this dialect — sharing that table would have swapped one
+#: parity break for another. The two tables differ because the two jobs do.
+_CITEKEY_TRANSLITERATIONS = {
+    ord("ß"): "ss", ord("æ"): "ae", ord("Æ"): "Ae", ord("œ"): "oe",
+    ord("Œ"): "Oe", ord("ø"): "o", ord("Ø"): "O", ord("ł"): "l",
+    ord("Ł"): "L", ord("đ"): "d", ord("Đ"): "D", ord("ð"): "d",
+    ord("Ð"): "D", ord("þ"): "th", ord("Þ"): "Th", ord("ħ"): "h",
+    ord("Ħ"): "H", ord("ı"): "i", ord("İ"): "I",
+}
+
+
 def _ascii(value: str) -> str:
-    return unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
+    """Fold to ASCII the way Better BibTeX does, rather than deleting."""
+    folded = value.translate(_CITEKEY_TRANSLITERATIONS)
+    return unicodedata.normalize("NFKD", folded).encode("ascii", "ignore").decode("ascii")

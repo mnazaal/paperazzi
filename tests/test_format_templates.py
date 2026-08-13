@@ -165,6 +165,39 @@ def test_format_citekey_fold_filter_strips_accents() -> None:
     assert format_citekey("auth.fold.lower + year", record, set()) == "muller2020"
 
 
+def test_folding_matches_better_bibtex_rather_than_deleting() -> None:
+    """NFKD has no combining form for a stroked letter, so ASCII-encoding
+    *deleted* it: `Weiß`→`Wei` (BBT writes `weiss`), `Søndergaard`→`Sndergaard`,
+    `Łukasz`→`ukasz` — a name missing a letter, in the key and the filename."""
+    def _key(author: str) -> str:
+        return format_citekey(
+            "auth.lower", {"authors": [author], "title": "X", "year": 2020}, set()
+        )
+
+    assert _key("Weiß, Klaus") == "weiss"
+    assert _key("Søndergaard, Ole") == "sondergaard"
+    assert _key("Łukasz Kaiser") == "kaiser"
+    # Umlauts stay BBT's way (`u`, not `ue`) — author *matching* folds them
+    # differently on purpose, and reproducing a BBT key is what this dialect is
+    # for.
+    assert _key("Müller, Anna") == "muller"
+
+
+def test_a_particle_name_keys_the_same_either_way_round() -> None:
+    """One author, two storage forms, two different citekeys.
+
+    `auth` took `text.split()[-1]` for an unreversed name, so
+    `"van der Berg, Anna"` gave `vanderberg` and `"Anna van der Berg"` gave
+    `berg`. `similarity` had already fixed the identical split for matching.
+    """
+    def _key(author: str) -> str:
+        return format_citekey(
+            "auth.lower", {"authors": [author], "title": "X", "year": 2020}, set()
+        )
+
+    assert _key("van der Berg, Anna") == _key("Anna van der Berg") == "vanderberg"
+
+
 def test_format_citekey_empty_base_falls_back_to_generated() -> None:
     # A template that renders to nothing falls back to the generated base.
     record = {"authors": ["Smith, John"], "title": "Graphs", "year": 2024}
@@ -179,5 +212,29 @@ def test_describe_template_error_flags_an_unbalanced_quote() -> None:
     assert describe_template_error('{{ title truncate="100 }}') is not None
     assert describe_template_error("{{ title truncate='100' }}") is None
     assert describe_template_error(None) is None
-    # Better-BibTeX formulas take a renderer that never reaches shlex.
-    assert describe_template_error("auth.lower + 's + year") is None
+    # Better-BibTeX formulas take a different renderer, which is why this used
+    # to assert `is None` — but "different renderer" was read as "no grammar",
+    # so the dialect these templates are actually written in went unchecked.
+    # An unterminated quote is a typo there too.
+    assert describe_template_error("auth.lower + 's + year") is not None
+
+
+def test_describe_template_error_checks_better_bibtex_formulas() -> None:
+    """`"{{" not in template` returned None, so *no* BBT formula was validated.
+
+    The config-level check says it exists so "a typo would [not] silently drop
+    the option from every citekey it generates" — which is exactly what an
+    unknown variable or filter does in this dialect.
+    """
+    from pzi.format_templates import describe_template_error
+
+    # The formula this project's own library was keyed with must stay valid.
+    assert describe_template_error(
+        'auth.lower + "-" + shorttitle(1,0).lower + "-" + year'
+    ) is None
+    assert describe_template_error("shorttitle(3,3)") is None
+    assert describe_template_error("volume + pages") is None  # any record field
+
+    assert "authr" in (describe_template_error("authr.lower + year") or "")
+    assert "lowr" in (describe_template_error("auth.lowr + year") or "")
+    assert describe_template_error("this is not a formula") is not None

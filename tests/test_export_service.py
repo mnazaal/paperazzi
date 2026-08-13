@@ -337,3 +337,57 @@ def test_export_ris_never_emits_an_untagged_line(tmp_path: Path) -> None:
     abstract_lines = [ln for ln in ris.splitlines() if ln.startswith("AB  - ")]
     assert len(abstract_lines) == 1
     assert "which continues here" in abstract_lines[0]
+
+
+_DETAILED_BIB = (
+    "@article{smith2024,\n"
+    "  title = {A Detailed Paper},\n"
+    "  author = {Smith, Jane},\n"
+    "  year = {2024},\n"
+    "  journal = {Journal of Things},\n"
+    "  volume = {12},\n"
+    "  number = {3},\n"
+    "  pages = {123--145},\n"
+    "  publisher = {Academic Press},\n"
+    "  issn = {1234-5678},\n"
+    "  isbn = {978-3-16-148410-0},\n"
+    "}\n"
+)
+
+
+def test_ris_export_carries_the_fields_a_citation_needs(tmp_path: Path) -> None:
+    """RIS exists to hand a citation to another reference manager.
+
+    `_RIS_FIELDS` omitted volume, number, pages, publisher, issn and isbn — the
+    six the records gained in 04e3997 — while `export_json` emitted all of them,
+    so an export used as a backup lost page numbers on two of the four formats.
+    """
+    from pzi.export_service import export_ris
+
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text(_DETAILED_BIB)
+
+    content = export_ris(bib_path=str(bib_path))["content"]
+
+    assert "VL  - 12" in content
+    assert "IS  - 3" in content
+    assert "PB  - Academic Press" in content
+    assert "SN  - 1234-5678" in content
+    # RIS splits a page range across two tags rather than carrying `123--145`.
+    assert "SP  - 123" in content
+    assert "EP  - 145" in content
+
+
+def test_csv_export_carries_the_same_fields(tmp_path: Path) -> None:
+    from pzi.export_service import export_csv
+
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text(_DETAILED_BIB)
+
+    content = export_csv(bib_path=str(bib_path))["content"]
+
+    header, row = content.splitlines()[0], content.splitlines()[1]
+    for column in ("volume", "number", "pages", "publisher", "issn", "isbn"):
+        assert column in header, column
+    assert "123--145" in row
+    assert "Academic Press" in row

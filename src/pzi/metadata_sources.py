@@ -436,7 +436,12 @@ def fetch_semantic_scholar_record_by_title(
         f"query={quote(stripped, safe='')}&limit=1&fields={fields}"
     )
     data = _api_json(url, fn=fn, errors=errors)
-    if not isinstance(data, dict) or "error" in data or "message" in data:
+    # The guard used to also return on `"error" in data or "message" in data`,
+    # one line before `_s2_data_error` could read them — so the reporting branch
+    # below was unreachable for exactly the bodies it was written to catch. This
+    # is the *title-search* path, which is what `check` uses, so an S2 rate limit
+    # was invisible there while the by-DOI path reported it correctly.
+    if not isinstance(data, dict):
         return None
     s2_error = _s2_data_error(data)
     if s2_error is not None:
@@ -525,12 +530,15 @@ def _make_fetch_text(api_key: str | None) -> FetchText:
 
 
 def _s2_error_message(data: object) -> str | None:
-    """Extract error string from an S2 API JSON response, or None."""
-    if isinstance(data, dict):
-        err = data.get("error")
-        if isinstance(err, str):
-            return err
-    return None
+    """Extract the error string from an S2 JSON response, or None.
+
+    Delegates to :func:`_s2_data_error` rather than keeping its own reader: this
+    copy handled ``error`` but not ``message``, so the third S2 entry point
+    reported a subset of the failures the other two did. S2 uses both keys.
+    """
+    if not isinstance(data, dict):
+        return None
+    return _s2_data_error(data)
 
 
 def fetch_semantic_scholar_record_by_title_with_error(

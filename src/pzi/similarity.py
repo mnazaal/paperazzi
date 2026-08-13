@@ -223,6 +223,16 @@ _TRANSLITERATIONS = {
     ord("Ä"): "Ae", ord("Ö"): "Oe", ord("Ü"): "Ue",
     ord("æ"): "ae", ord("Æ"): "Ae", ord("ø"): "oe", ord("Ø"): "Oe",
     ord("å"): "aa", ord("Å"): "Aa",
+    # Latin letters with a stroke or bar. NFKD has no combining form to
+    # decompose these into, so `encode("ascii", "ignore")` *deletes* them:
+    # `Łukasz` became `ukasz` and `Đorđe` became `ore` — a name silently
+    # missing its first letter, in a citekey and in every author comparison.
+    ord("ł"): "l", ord("Ł"): "L",
+    ord("đ"): "d", ord("Đ"): "D", ord("ð"): "d", ord("Ð"): "D",
+    ord("þ"): "th", ord("Þ"): "Th",
+    ord("ħ"): "h", ord("Ħ"): "H",
+    ord("ı"): "i", ord("İ"): "I",
+    ord("œ"): "oe", ord("Œ"): "Oe",
 }
 
 
@@ -241,28 +251,39 @@ _NAME_PARTICLES = frozenset({
 })
 
 
-def _split_family_given(name: str) -> tuple[str, str]:
-    """Split a personal name into (family, given) in ASCII, lowercased.
+def split_family_given(name: str) -> tuple[str, str]:
+    """Split a personal name into (family, given), unchanged otherwise.
 
     Handles both ``"Family, Given"`` and ``"Given Family"`` orderings.
+
+    Splitting only: no folding and no lowercasing, because the two callers fold
+    differently on purpose. Matching wants ``ü``→``ue``; a citekey has to
+    reproduce Better BibTeX, which writes ``u``. Doing it here would force one
+    of them to be wrong.
     """
-    ascii_name = _to_ascii(name).strip()
-    if "," in ascii_name:
-        family, _, given = ascii_name.partition(",")
-        return family.strip().lower(), given.strip().lower()
-    parts = ascii_name.split()
+    stripped = name.strip()
+    if "," in stripped:
+        family, _, given = stripped.partition(",")
+        return family.strip(), given.strip()
+    parts = stripped.split()
     if not parts:
         return "", ""
     # Absorb nobiliary particles into the family name. Taking `parts[-1]` alone
     # made "Jan van der Berg" a `berg` while "van der Berg, Jan" — the same
     # person, written the other way round — was a `van der berg`, so the two
     # spellings of one author never matched and the entry scored 66 with a
-    # `chimeric` flag.
+    # `chimeric` flag. Citekey generation had the same split and the same bug,
+    # which is why it now calls this instead of keeping its own copy.
     start = len(parts) - 1
     while start > 0 and parts[start - 1].lower() in _NAME_PARTICLES:
         start -= 1
-    family = " ".join(parts[start:]).lower()
-    return family, " ".join(parts[:start]).lower()
+    return " ".join(parts[start:]), " ".join(parts[:start])
+
+
+def _split_family_given(name: str) -> tuple[str, str]:
+    """:func:`split_family_given`, folded and lowercased for matching."""
+    family, given = split_family_given(name)
+    return _to_ascii(family).lower(), _to_ascii(given).lower()
 
 
 def _normalize_author(name: str) -> str:

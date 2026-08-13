@@ -59,6 +59,18 @@ _RIS_FIELDS: list[tuple[str, str]] = [
     # UR line rather than two.
     ("year", "PY"),
     ("abstract", "AB"),
+    # The bibliographic detail a journal style needs to render a citation. RIS
+    # has a standard tag for every one of these, and RIS exists to hand a
+    # citation to another reference manager — so an export missing them arrives
+    # as a citation that cannot be rendered. `export_json` emitted all six from
+    # the day the records gained them; CSV and RIS did not, which made a backup
+    # taken in two of the four formats lossy.
+    # `pages` is handled below: RIS splits it into SP/EP.
+    ("volume", "VL"),
+    ("number", "IS"),
+    ("publisher", "PB"),
+    ("issn", "SN"),
+    ("isbn", "SN"),
     ("note", "N1"),
     ("citekey", "ID"),  # custom: citekey as reference ID
 ]
@@ -67,6 +79,7 @@ _CSV_HEADERS = [
     "citekey", "entry_type", "title", "authors", "year",
     "venue", "doi", "arxiv_id", "canonical_url", "local_pdf_path",
     "abstract", "tags", "note",
+    "volume", "number", "pages", "publisher", "issn", "isbn",
 ]
 
 
@@ -220,7 +233,17 @@ def export_csv(bib_path: str) -> ExportResult:
             record.get("abstract", ""),
             _normalize_tags(record.get("tags")),
             record.get("note", ""),
+            record.get("volume", ""),
+            record.get("number", ""),
+            record.get("pages", ""),
+            record.get("publisher", ""),
+            record.get("issn", ""),
+            record.get("isbn", ""),
         ]
+        # The row is built positionally, so it has to stay the same length as
+        # the header — adding a column to one and not the other writes a CSV
+        # whose values are under the wrong names.
+        assert len(row) == len(_CSV_HEADERS), (len(row), len(_CSV_HEADERS))
         writer.writerow([_csv_safe(cell) for cell in row])
 
     return {
@@ -284,6 +307,16 @@ def export_ris(bib_path: str) -> ExportResult:
                 value = record.get(field_key)
             if value is not None and (not isinstance(value, str) or value.strip()):
                 lines.append(f"{ris_tag}  - {_ris_value(value)}")
+
+        # Pages, which RIS splits across a start and an end tag rather than
+        # carrying BibTeX's `123--145` range in one field.
+        pages = record.get("pages")
+        if isinstance(pages, str) and pages.strip():
+            start, _, end = pages.replace("--", "-").partition("-")
+            if start.strip():
+                lines.append(f"SP  - {_ris_value(start.strip())}")
+            if end.strip():
+                lines.append(f"EP  - {_ris_value(end.strip())}")
 
         # Tags as KW
         tags = record.get("tags")

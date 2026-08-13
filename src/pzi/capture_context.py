@@ -250,19 +250,6 @@ def resolve_contact_email(
     )
 
 
-def resolve_unpaywall_email(
-    config: Mapping[str, Any], *, run_command: Callable[[str], str] | None = None
-) -> str | None:
-    explicit = resolve_optional_value(
-        command=config.get("unpaywall_email_cmd"),
-        fallback=config.get("unpaywall_email"),
-        run_command=run_command,
-    )
-    if explicit:
-        return explicit
-    return resolve_contact_email(config, run_command=run_command)
-
-
 def metadata_user_agent(contact_email: str | None) -> str:
     if contact_email:
         return f"pzi/1.0 (mailto:{contact_email})"

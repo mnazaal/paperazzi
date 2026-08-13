@@ -64,6 +64,29 @@ next to the diff it explains.
 
 ### Changed
 
+- Semantic Scholar failures are reported on the title-search path, which is
+  what `check` uses. The guard returned one line before the reader could see
+  the body, so the reporting branch was unreachable for exactly the payloads it
+  was written for — an S2 rate limit was invisible there while the by-DOI path
+  named it. All three S2 entry points now read both `error` and `message`.
+- `export --format csv|ris` carry `volume`, `number`, `pages`, `publisher`,
+  `issn` and `isbn`. RIS gets the standard tags, including `SP`/`EP` for a page
+  range, so an export handed to another reference manager is a complete
+  citation; `export_json` had emitted all six since the records gained them.
+- Attach URLs derive from `api_listen_host`/`api_listen_port` when `api_url` is
+  unset, instead of assuming `127.0.0.1:8765`.
+- **Breaking:** `citekey_format` validates Better BibTeX formulas. Nothing
+  without `{{` was checked at all, so `authr.lower + year` (unknown variable)
+  and `auth.lowr + year` (unknown filter) were accepted and silently rendered a
+  shorter key — the exact failure the check documents itself as preventing.
+- A citekey folds like Better BibTeX instead of deleting: `Weiß` → `weiss`, not
+  `wei`; `Søndergaard` → `sondergaard`; `Łukasz` → `lukasz`. NFKD has no
+  combining form for a stroked letter, so ASCII-encoding dropped it and the key
+  lost a letter. Author *matching* keeps its own folding (`ü` → `ue`), which is
+  correct for comparison and wrong for a BBT key.
+- A name with a nobiliary particle keys the same in either storage form:
+  `"van der Berg, Anna"` and `"Anna van der Berg"` both give `vanderberg`,
+  where the second used to give `berg`. Existing citekeys are never rewritten.
 - A PDF this run downloaded is removed when the BibTeX write *raises*, not only
   when the entry disappeared. A refused write left the file on disk with nothing
   referring to it, and a later `fix clean --fix` quarantined it — one command
