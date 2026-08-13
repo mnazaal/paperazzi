@@ -199,3 +199,47 @@ def test_translation_item_omits_detail_keys_it_was_not_given() -> None:
 
     for key in ("volume", "number", "pages", "publisher", "issn", "isbn"):
         assert key not in result["record"], key
+
+
+# --- Contract against the pinned upstream ------------------------------------
+
+
+def test_a_multiple_choice_response_is_explained_not_reported_as_a_server_error() -> None:
+    """`/web` answers 300 with a selection map, not an item list.
+
+    From `src/webEndpoint.js` at the pinned commit: when a page yields several
+    candidate items the session is stored and the response is 300 Multiple
+    Choices. pzi does not select among them, so finding nothing is correct — but
+    `safe_api_call` reported every status as bare `HTTP <code>`, so the user was
+    told "HTTP 300", which reads as a broken translation server rather than as a
+    page that needs a more specific URL.
+    """
+    import urllib.error
+
+    from pzi.add_planning import safe_api_call
+
+    def _multiple_choices():
+        raise urllib.error.HTTPError(
+            "http://127.0.0.1:1969/web", 300, "Multiple Choices", {}, None  # type: ignore[arg-type]
+        )
+
+    errors: list[str] = []
+    assert safe_api_call(_multiple_choices, errors=errors) == []
+    assert len(errors) == 1
+    assert "several possible items" in errors[0]
+    assert "HTTP 300" not in errors[0]
+
+
+def test_other_statuses_keep_their_terse_form() -> None:
+    import urllib.error
+
+    from pzi.add_planning import safe_api_call
+
+    def _server_error():
+        raise urllib.error.HTTPError(
+            "http://127.0.0.1:1969/web", 500, "Server Error", {}, None  # type: ignore[arg-type]
+        )
+
+    errors: list[str] = []
+    safe_api_call(_server_error, errors=errors)
+    assert errors == ["HTTP 500"]

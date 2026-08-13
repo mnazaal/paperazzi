@@ -44,7 +44,12 @@ authorization. Treat the token as equivalent to shell access to your library.
 - Traffic stays on the loopback interface unless you bind a specific address
   yourself: `pzi server --host 192.168.1.5` is permitted **only** with a token
   configured, and the bundled extension only ever talks to loopback.
-- Translation-server is a local process; paperazzi auto-starts and auto-stops it.
+- Translation-server is a local process; paperazzi auto-starts and auto-stops it,
+  and pins it to `127.0.0.1` via `NODE_CONFIG`. Upstream's own default is
+  `0.0.0.0:1969` and it maps no `PORT` variable, so a translation server started
+  any other way — by hand, or by a pzi older than this release — listens on
+  **every interface** with no authentication and will fetch any URL it is
+  handed. Check with `ss -ltnp | grep 1969`.
 - PDF bytes and BibTeX metadata never leave the local machine through paperazzi.
 
 ## Extension permissions — why each exists

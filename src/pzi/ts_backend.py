@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import json
 import os
 import re
 import shutil
@@ -581,7 +582,7 @@ def start_ts(
     proc = subprocess.Popen(
         [node_bin, str(ts_dir / "src" / "server.js")],
         cwd=str(ts_dir),
-        env={**os.environ, "PORT": str(port)},
+        env={**os.environ, **ts_child_env(port)},
         stdout=subprocess.DEVNULL,
         stderr=stderr_dest,
         start_new_session=True,
@@ -591,6 +592,34 @@ def start_ts(
     if stderr_handle is not None:
         stderr_handle.close()
     return proc
+
+
+def ts_child_env(port: int) -> dict[str, str]:
+    """Environment that makes the translation-server child listen where we say.
+
+    ``PORT`` alone was passed here, and **nothing reads it**. Verified against
+    the pinned upstream commit (`_TS_REPOS`): `config/default.json5` sets
+    ``port: 1969`` and ``host: "0.0.0.0"``, `src/server.js` does
+    ``app.listen(config.get('port'), config.get('host'))``, and node-config maps
+    exactly one environment variable — `config/custom-environment-variables.json`
+    contains only ``translatorsDirectory``. So the child ignored the port pzi
+    chose and bound **every interface**.
+
+    Two consequences, both real: a non-default ``translation_server_url`` port
+    made `wait_for_ts` poll a port nothing was listening on; and the translation
+    server — which fetches any URL it is handed — was reachable from the whole
+    network on 1969, with no authentication, for as long as pzi ran it.
+
+    ``NODE_CONFIG`` is node-config's own documented override (it takes a JSON
+    object merged over the config files), so this steers the upstream server
+    without patching the vendored checkout — which would be undone by the next
+    reinstall. ``PORT`` is kept alongside it: harmless, and it remains correct
+    if upstream ever maps it.
+    """
+    return {
+        "PORT": str(port),
+        "NODE_CONFIG": json.dumps({"port": port, "host": "127.0.0.1"}),
+    }
 
 
 def terminate_ts(proc: subprocess.Popen[bytes], *, grace_seconds: float = 5.0) -> None:

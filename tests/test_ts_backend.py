@@ -840,3 +840,49 @@ def test_watchdog_restart_aborted_when_stop_races_in() -> None:
 
     assert fresh in terminated      # replacement torn down, not leaked
     assert w.current_proc is dead   # original proc not swapped out
+
+
+def test_the_child_is_told_where_to_listen_in_a_variable_upstream_reads() -> None:
+    """`PORT` alone was passed, and nothing upstream reads it.
+
+    Verified against the pinned commit in `_TS_REPOS`: `config/default.json5`
+    sets `port: 1969` and `host: "0.0.0.0"`, `src/server.js` calls
+    `app.listen(config.get('port'), config.get('host'))`, and node-config maps
+    exactly one environment variable — `config/custom-environment-variables.json`
+    contains only `translatorsDirectory`. So the child ignored pzi's port and
+    bound *every interface*: a fetch-anything server, unauthenticated, reachable
+    from the whole network for as long as pzi ran it.
+
+    `NODE_CONFIG` is node-config's own override, so this steers the upstream
+    server without patching the vendored checkout — which the next reinstall
+    would discard.
+    """
+    import json
+
+    from pzi.ts_backend import ts_child_env
+
+    env = ts_child_env(9999)
+    overrides = json.loads(env["NODE_CONFIG"])
+
+    assert overrides["port"] == 9999
+    assert overrides["host"] == "127.0.0.1"
+    # Kept alongside: harmless, and correct if upstream ever maps it.
+    assert env["PORT"] == "9999"
+
+
+def test_the_pinned_translation_server_still_needs_the_override() -> None:
+    """A guard on the reason this override exists.
+
+    If a future bump to `_TS_REPOS` picks up an upstream that maps `PORT` (or
+    stops defaulting to `0.0.0.0`), this override becomes redundant and the
+    comment above it becomes wrong. Pinning the commit it was derived from means
+    the next person to move that pin sees this test and re-checks.
+    """
+    from pzi.ts_backend import _TS_REPOS
+
+    server = next(r for r in _TS_REPOS if r["name"] == "translation-server")
+    assert server["ref"] == "d88a8d5384456439962edfef129b14841b09af6d", (
+        "translation-server pin moved: re-check config/default.json5 (host) and "
+        "config/custom-environment-variables.json (does it map PORT yet?) before "
+        "trusting ts_child_env's rationale"
+    )

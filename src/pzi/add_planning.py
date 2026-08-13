@@ -809,6 +809,25 @@ def fetch_record_for_input(
     )
 
 
+def _describe_http_failure(exc: urllib.error.HTTPError) -> str:
+    """A provider's HTTP status, in the terms the user can act on.
+
+    Every status was reported as bare ``HTTP <code>``. That is fine for a 500
+    and misleading for 300: the translation server answers `/web` with **300
+    Multiple Choices** when a page yields several candidate items, returning a
+    selection map rather than an item list (`src/webEndpoint.js` at the pinned
+    commit). pzi does not choose among them, so the capture correctly finds
+    nothing — but "HTTP 300" reads as a broken server rather than as a page that
+    needs a more specific URL.
+    """
+    if exc.code == 300:
+        return (
+            "the page offered several possible items and pzi does not choose "
+            "between them — capture the specific article URL instead"
+        )
+    return f"HTTP {exc.code}"
+
+
 def safe_api_call(fn, *, errors: list[str] | None = None):
     """Run callable, returning [] on an expected provider failure.
 
@@ -828,7 +847,7 @@ def safe_api_call(fn, *, errors: list[str] | None = None):
         return fn()
     except urllib.error.HTTPError as exc:
         if errors is not None:
-            errors.append(f"HTTP {exc.code}")
+            errors.append(_describe_http_failure(exc))
         return []
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         if errors is not None:

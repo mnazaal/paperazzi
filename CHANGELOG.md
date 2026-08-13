@@ -71,6 +71,16 @@ next to the diff it explains.
 
 ### Security
 
+- The translation-server child is pinned to `127.0.0.1`. pzi passed it `PORT`
+  and **nothing read that variable**: at the pinned upstream commit,
+  `config/default.json5` sets `host: "0.0.0.0"`, `src/server.js` listens on
+  `config.get('host')`, and node-config maps only `translatorsDirectory` — so
+  the child ignored the port pzi chose and bound every interface. For as long
+  as pzi ran it, a server that fetches any URL it is handed was reachable from
+  the whole network, unauthenticated, on port 1969. It is now steered with
+  node-config's own `NODE_CONFIG` override, which also makes a non-default
+  `translation_server_url` port work rather than leaving `wait_for_ts` polling
+  a port nothing listens on.
 - **Breaking:** every spelling of the wildcard bind is refused, by both entry
   points into the server. The guard enumerated `0.0.0.0`, `::` and `*`, so the
   legacy short forms `0`, `0.0`, `0x0`, `00` — and the empty string — passed it
