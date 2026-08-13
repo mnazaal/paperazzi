@@ -48,7 +48,25 @@ IDLE_POLL_SECONDS = 30
 
 
 def server_exposure_error(host: str, security: HttpSecurityConfig) -> str | None:
-    """Return refusal reason for unsafe direct server exposure, if any."""
+    """Return refusal reason for unsafe direct server exposure, if any.
+
+    Two separate refusals. A wildcard bind is refused outright, token or not:
+    binding every interface is not something a token makes safe, and it is what
+    `docs/security.md` tells the reader cannot happen. Then, for a specific
+    address, an unauthenticated non-loopback bind is refused.
+
+    This checked only token-or-loopback, so a token was enough to expose the API
+    on every interface here — while `cli_server.build_server_plan` refused the
+    same thing. The two entry points into `run_server` disagreed, and the test
+    covering this one asserted the hole was intended.
+    """
+    from pzi.cli_server import is_wildcard_bind
+
+    if is_wildcard_bind(host):
+        return (
+            f"refusing to bind every interface ({host!r}); "
+            "bind a specific address, or 127.0.0.1 for local use"
+        )
     if security.get("auth_token") or loopback_bind_host(host):
         return None
     return (

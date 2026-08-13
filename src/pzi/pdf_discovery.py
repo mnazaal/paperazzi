@@ -350,6 +350,18 @@ def web_attachment_step(
     candidate_urls = landing_page_urls(base_record=record, raw_value=context["raw_value"])
 
     for url in candidate_urls:
+        # The translation-server *fetches* whatever URL it is handed, so an
+        # unvalidated one makes it a proxy into this machine's network — the
+        # same defect `flaresolverr.py` documents and fixed for the local
+        # browser ("the local browser was an open proxy… Reproduced against the
+        # cloud metadata endpoint"). These URLs come from provider metadata and
+        # captured pages: `canonical_url`, `source_url`, `abstract_url`,
+        # `raw_value`. The PDF URL *returned* was already validated below; the
+        # one going in was not, and `safe_public_http_url` is applied at 18
+        # other call sites. EZProxy is unaffected: its rewrite and its
+        # `allow_host` exemption live in `pdf_download`, not here.
+        if not _safe_public_http_url(url):
+            continue
         try:
             cookies = cookies_for_url(context, url)
             if cookies is not None:

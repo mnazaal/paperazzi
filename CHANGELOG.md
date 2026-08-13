@@ -34,6 +34,34 @@ next to the diff it explains.
   path, status, ms). Off by default; the query string is never logged.
 - `pzi inbox --json`, the last runner without it.
 
+### Security
+
+- **Breaking:** every spelling of the wildcard bind is refused, by both entry
+  points into the server. The guard enumerated `0.0.0.0`, `::` and `*`, so the
+  legacy short forms `0`, `0.0`, `0x0`, `00` — and the empty string — passed it
+  while `socket.bind` binds them all to `0.0.0.0`. `--host ""` was the worst:
+  the security config normalizes an empty host to `127.0.0.1`, so the
+  DNS-rebinding Host check then *accepted* requests arriving from the LAN. The
+  HTTP entry point had no wildcard check at all — a token was enough to expose
+  the API on every interface there, while the CLI refused the same thing.
+  Binding a specific address, with a token, is unchanged.
+- Landing-page URLs are validated before being handed to the translation
+  server, which fetches whatever it is given. They come from provider metadata
+  and captured pages, so an unvalidated one made the local server a proxy into
+  this machine's network — the same defect `flaresolverr.py` documents and
+  fixed for the local browser. EZProxy is unaffected: its rewrite and host
+  exemption live on the download path.
+- The browser extension decides publisher trust in its own realm, from the URL
+  it already passes, and reads a generic page from the ISOLATED world. The
+  check ran *inside* the page as `location.hostname.endsWith(...)`, where a
+  page can replace `String.prototype.endsWith` — so any page could pass the
+  gate, populate the publisher global, and have nine forged fields promoted by
+  the server into authoritative metadata beating the real Crossref lookup.
+- Context-menu capture forwards cookies only when the link is on the same
+  origin as the tab, and validates the URL with `isSafePublicHttpUrl`. A link
+  to `http://127.0.0.1:9999/x` previously had loopback cookies read and
+  transmitted before the server rejected the capture.
+
 ### Changed
 
 - A PDF this run downloaded is removed when the BibTeX write *raises*, not only

@@ -241,7 +241,9 @@ globalThis.chrome = {
   tabs: { query: async () => [{ id: 7, url: "https://example.com/paper" }] },
   scripting: {
     executeScript: async (opts) => {
-      if (opts.world === "MAIN") {
+      globalThis.__worlds = globalThis.__worlds || [];
+      globalThis.__worlds.push(opts.world);
+      if (typeof opts.func === "function") {
         globalThis.location = { hostname: "example.com" };
         globalThis.window = {};
         globalThis.document = {
@@ -262,7 +264,7 @@ globalThis.fetch = async (_url, _options) => ({
 });
 const mod = await import("./background.js");
 const result = await mod.captureCurrentTab({ dryRun: true });
-console.log(JSON.stringify({ capture_body: result.capture_body }));
+console.log(JSON.stringify({ capture_body: result.capture_body, worlds: globalThis.__worlds }));
 ''',
         tmp_path,
     )
@@ -272,6 +274,12 @@ console.log(JSON.stringify({ capture_body: result.capture_body }));
     # label was dropped from the wire. A generic DOM scan trusts nothing.
     assert result["capture_body"]["trusted_fields"] is None
     assert "metadata_source" not in result["capture_body"]
+    # And it is not read in the page's own realm at all. The publisher check ran
+    # *inside* the page as `location.hostname.endsWith(...)`, where
+    # `String.prototype.endsWith` is page-overridable — so any page could pass
+    # the gate and have nine forged `trusted_fields` promoted by the server into
+    # authoritative overrides beating the real Crossref lookup.
+    assert "MAIN" not in (result["worlds"] or []), result["worlds"]
 
 
 def test_bot_bypass_uses_visible_helper_tab_when_hidden_iframe_observes_nothing(tmp_path: Path) -> None:
@@ -4265,3 +4273,76 @@ console.log(JSON.stringify({
     assert result["background"] == "#ffebee"
     assert result["bibOptions"] == 0
     assert result["unhandled"] is None, result["unhandled"]
+
+
+def test_a_page_cannot_forge_publisher_trust_by_hostname(tmp_path: Path) -> None:
+    """The gate is decided from the passed URL, in the extension's own realm.
+
+    `evil-ieeexplore.ieee.org` passes `host.endsWith("ieeexplore.ieee.org")`,
+    and in the MAIN world the page can replace `endsWith` outright.
+    """
+    result = _run_background_module(
+        r'''
+const mod = await import("./background/metadata.mjs");
+console.log(JSON.stringify({
+  real: mod.isTrustedPublisherUrl("https://ieeexplore.ieee.org/document/1"),
+  subdomain: mod.isTrustedPublisherUrl("https://www.ieeexplore.ieee.org/document/1"),
+  lookalike: mod.isTrustedPublisherUrl("https://evil-ieeexplore.ieee.org/x"),
+  suffix_trick: mod.isTrustedPublisherUrl("https://attacker.test/ieeexplore.ieee.org"),
+  garbage: mod.isTrustedPublisherUrl("not a url"),
+}));
+''',
+        tmp_path,
+    )
+
+    assert result["real"] is True
+    assert result["subdomain"] is True
+    assert result["lookalike"] is False
+    assert result["suffix_trick"] is False
+    assert result["garbage"] is False
+
+
+def test_context_menu_capture_only_forwards_same_origin_cookies(tmp_path: Path) -> None:
+    r"""A right-clicked link to another origin carries no session.
+
+    The URL was gated only by `/^https?:\/\//i`, so a link to
+    `http://127.0.0.1:9999/x` had this machine's loopback cookies read and
+    transmitted before the server rejected the capture.
+    """
+    result = _run_background_module(
+        r'''
+const bodies = [];
+globalThis.chrome = {
+  storage: {
+    local: { get: async () => ({ endpoint: "http://127.0.0.1:8765/capture" }) },
+    session: { get: async () => ({}), set: () => {} },
+  },
+  runtime: { onInstalled: { addListener: () => {} } },
+  action: {
+    setBadgeText: () => Promise.resolve(),
+    setBadgeBackgroundColor: () => Promise.resolve(),
+  },
+  cookies: { getAll: async () => [{ name: "session", value: "SECRET" }] },
+  contextMenus: { create: () => {}, onClicked: { addListener: () => {} } },
+};
+globalThis.fetch = async (_url, options) => {
+  bodies.push(JSON.parse(options.body));
+  return { ok: true, json: async () => ({ status: "ok", citekey: "k" }) };
+};
+const mod = await import("./background.js");
+const tab = { id: 3, url: "https://publisher.test/article" };
+await mod._handleContextMenuCapture({ linkUrl: "https://publisher.test/paper.pdf" }, tab);
+await mod._handleContextMenuCapture({ linkUrl: "https://elsewhere.test/paper.pdf" }, tab);
+await mod._handleContextMenuCapture({ linkUrl: "http://127.0.0.1:9999/x" }, tab);
+console.log(JSON.stringify({ bodies }));
+''',
+        tmp_path,
+    )
+
+    bodies = result["bodies"]
+    # The loopback link was refused outright, so only two requests were made.
+    assert len(bodies) == 2, bodies
+    # Same origin as the tab: the session the capture is entitled to reuse.
+    assert bodies[0]["cookies"]
+    # A different domain the user is not on: none.
+    assert not bodies[1]["cookies"]

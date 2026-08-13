@@ -630,3 +630,65 @@ def test_a_public_pdf_url_still_gets_through() -> None:
     result = apply_pdf_discovery({"citekey": "k1"}, [_good_step], {})
 
     assert result["pdf_url"] == "https://arxiv.org/pdf/2301.12345"
+
+
+def test_a_private_landing_page_url_is_never_sent_to_the_translation_server() -> None:
+    """The translation-server *fetches* whatever URL it is handed.
+
+    So an unvalidated one makes it a proxy into this machine's network. These
+    URLs come from provider metadata and captured pages — `canonical_url`,
+    `source_url`, `abstract_url` — and the PDF URL it *returned* was validated
+    while the one going in was not. `flaresolverr.py` documents this same defect
+    and its fix ("the local browser was an open proxy… Reproduced against the
+    cloud metadata endpoint"); that fix landed there and not here.
+    """
+    fetched: list[str] = []
+
+    def _recording_fetch_web(url, *, server_url=None, cookies=None):
+        fetched.append(url)
+        return []
+
+    record = {
+        "title": "Paper",
+        "canonical_url": "http://169.254.169.254/latest/meta-data/",
+        "source_url": "http://127.0.0.1:9999/admin",
+    }
+    context = cast(
+        PdfDiscoveryContext,
+        {
+            "fetch_web": _recording_fetch_web,
+            "server_url": "http://127.0.0.1:1969",
+            "raw_value": "http://10.0.0.5/internal",
+            "cookies": None,
+            "cookie_origin": None,
+        },
+    )
+
+    web_attachment_step(record, context)
+
+    assert fetched == [], f"sent private URLs to the translation server: {fetched}"
+
+
+def test_a_public_landing_page_url_is_still_sent() -> None:
+    """The guard must not disarm discovery for ordinary publisher pages."""
+    fetched: list[str] = []
+
+    def _recording_fetch_web(url, *, server_url=None, cookies=None):
+        fetched.append(url)
+        return []
+
+    record = {"title": "Paper", "canonical_url": "https://example.org/paper"}
+    context = cast(
+        PdfDiscoveryContext,
+        {
+            "fetch_web": _recording_fetch_web,
+            "server_url": "http://127.0.0.1:1969",
+            "raw_value": "",
+            "cookies": None,
+            "cookie_origin": None,
+        },
+    )
+
+    web_attachment_step(record, context)
+
+    assert fetched == ["https://example.org/paper"]

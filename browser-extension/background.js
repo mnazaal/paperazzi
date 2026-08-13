@@ -76,6 +76,11 @@ export { botBypassPdfUrl };
 // the service worker only.
 export { captureCurrentTab } from "./background/capture.js";
 
+// Exported for the test harness: the context-menu path decides what session a
+// captured link may reuse, which is worth asserting directly rather than
+// through a synthesized `contextMenus.onClicked` event.
+export { _handleContextMenuCapture };
+
 
 chrome.runtime.onInstalled.addListener(async (details) => {
   console.log("paperazzi capture extension installed");
@@ -109,16 +114,37 @@ if (typeof chrome !== "undefined" && chrome.contextMenus) {
   });
 }
 
+/** Same scheme+host+port, for deciding whether a link may reuse the tab's session. */
+function _sameOrigin(a, b) {
+  try {
+    return new URL(a).origin === new URL(b).origin;
+  } catch (_) {
+    return false;
+  }
+}
+
 async function _handleContextMenuCapture(info, tab) {
   const url = info.linkUrl;
-  if (!url || !/^https?:\/\//i.test(url)) return;
+  // `isSafePublicHttpUrl`, not a bare scheme test. The scheme regex accepted
+  // `http://127.0.0.1:9999/x`, so right-clicking such a link read this
+  // machine's loopback cookies and transmitted them before the server rejected
+  // the capture.
+  if (!url || !isSafePublicHttpUrl(url)) return;
 
   _setBadge("…", "#FFA500");
 
   try {
     const endpoint = await getEndpoint();
     const authHeaders = await getAuthHeaders();
-    const cookieHeader = await cookieHeaderForUrl(url);
+    // Cookies only when the link is on the origin the user is actually reading.
+    // The bulk path refuses cookies outright because "each result is a
+    // *different* domain the user is not on" (popup.js) — true there, and not
+    // true of a link on the page in front of them, where reusing the session is
+    // the point. A link pointing elsewhere carries none.
+    const pageUrl = tab && tab.url;
+    const cookieHeader = pageUrl && _sameOrigin(url, pageUrl)
+      ? await cookieHeaderForUrl(url)
+      : null;
 
     const response = await fetch(endpoint, {
       method: "POST",

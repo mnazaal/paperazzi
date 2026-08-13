@@ -122,26 +122,62 @@ def test_server_exposure_guard_allows_loopback_without_token() -> None:
 def test_server_exposure_guard_rejects_non_loopback_without_token() -> None:
     sec = build_http_security_config(auth_token=None)
 
-    assert server_exposure_error("0.0.0.0", sec) == (
+    assert server_exposure_error("192.168.1.5", sec) == (
         "refusing to serve unauthenticated API on a non-loopback host; "
         "set api_auth_token or bind to 127.0.0.1/localhost"
     )
 
 
-def test_server_exposure_guard_allows_non_loopback_with_token() -> None:
+def test_server_exposure_guard_allows_a_specific_address_with_token() -> None:
+    """A named LAN address behind a token is the supported sharing setup."""
     sec = build_http_security_config(auth_token="secret")
 
-    assert server_exposure_error("0.0.0.0", sec) is None
+    assert server_exposure_error("192.168.1.5", sec) is None
+
+
+@pytest.mark.parametrize("host", ["0.0.0.0", "::", "*", "", "0", "0.0", "0x0", "00"])
+def test_server_exposure_guard_rejects_every_wildcard_spelling(host: str) -> None:
+    """This asserted `server_exposure_error("0.0.0.0", sec) is None` with a token.
+
+    It named as intended what `build_server_plan` refuses and what
+    `docs/security.md` says cannot happen — the two entry points into
+    `run_server` disagreed. And the guard it covered enumerated spellings, so
+    every legacy `inet_aton` short form slipped past: measured against a real
+    `socket.bind`, `""`, `"0"`, `"0.0"`, `"0x0"` and `"00"` all bind 0.0.0.0.
+    `""` is the worst — `build_http_security_config` normalizes it to
+    `127.0.0.1`, so the DNS-rebinding Host check then *accepts* LAN requests.
+
+    A token does not make binding every interface safe, so this refuses with one.
+    """
+    sec = build_http_security_config(auth_token="secret")
+
+    error = server_exposure_error(host, sec)
+
+    assert error is not None, f"{host!r} binds every interface and was allowed"
+    assert "every interface" in error
 
 
 def test_run_server_rejects_non_loopback_without_token_before_binding(tmp_path: Path) -> None:
+    # A specific LAN address: `0.0.0.0` is now refused one check earlier, as a
+    # wildcard bind, which would make this pass for the wrong reason.
     with pytest.raises(ValueError, match="refusing to serve unauthenticated API"):
+        run_server(
+            config_path=str(tmp_path / "config.toml"),
+            home_dir=str(tmp_path),
+            host="192.168.1.5",
+            port=0,
+            security=build_http_security_config(auth_token=None),
+        )
+
+
+def test_run_server_rejects_a_wildcard_bind_before_binding(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="every interface"):
         run_server(
             config_path=str(tmp_path / "config.toml"),
             home_dir=str(tmp_path),
             host="0.0.0.0",
             port=0,
-            security=build_http_security_config(auth_token=None),
+            security=build_http_security_config(auth_token="secret"),
         )
 
 

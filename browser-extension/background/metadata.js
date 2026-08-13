@@ -14,6 +14,23 @@ const MAX_HEAD_HTML_CHARS = 64 * 1024;
 
 const _EMPTY_METADATA = { pageTitle: null, canonicalUrl: null, sourceUrl: null, abstractUrl: null, doi: null };
 
+// Publisher pages whose page-realm globals pzi reads and marks trusted. Matched
+// on the *host*, exactly or as a subdomain — `endsWith` on the raw string also
+// accepts `evil-ieeexplore.ieee.org`.
+const _TRUSTED_PUBLISHER_HOSTS = ["ieeexplore.ieee.org"];
+
+export function isTrustedPublisherUrl(pageUrl) {
+  let host;
+  try {
+    host = new URL(pageUrl).hostname.toLowerCase();
+  } catch (_) {
+    return false;
+  }
+  return _TRUSTED_PUBLISHER_HOSTS.some(
+    (trusted) => host === trusted || host.endsWith(`.${trusted}`)
+  );
+}
+
 export async function extractPageMetadata(tabId, pageUrl) {
   if (!tabId) {
     return {
@@ -21,11 +38,22 @@ export async function extractPageMetadata(tabId, pageUrl) {
       canonicalUrl: pageUrl, sourceUrl: pageUrl, abstractUrl: pageUrl,
     };
   }
+  // Decided here, in the extension's own realm, from the URL the caller passed.
+  // The publisher check used to run *inside* the page as
+  // `location.hostname.endsWith(...)`, in the MAIN world where a page can
+  // replace `String.prototype.endsWith` — so any page could pass the gate,
+  // populate `window.xplGlobal.document.metadata`, and have its nine
+  // `trusted_fields` promoted by the server into authoritative overrides that
+  // beat the real Crossref lookup.
+  const trustedPublisher = isTrustedPublisherUrl(pageUrl);
   try {
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId },
-      world: "MAIN",
-      func: (currentUrl, maxHeadHtml) => {
+      // MAIN only for a publisher whose page-realm globals we deliberately
+      // read; every other page is read from ISOLATED, where the page cannot
+      // reach the reader at all.
+      world: trustedPublisher ? "MAIN" : "ISOLATED",
+      func: (currentUrl, maxHeadHtml, isTrustedPublisher) => {
         const contentOf = (selector) => document.querySelector(selector)?.getAttribute("content")?.trim() || null;
         const hrefOf = (selector) => document.querySelector(selector)?.getAttribute("href")?.trim() || null;
         const allContentOf = (selector) => {
@@ -80,8 +108,7 @@ export async function extractPageMetadata(tabId, pageUrl) {
           return null;
         };
         const ieee = (() => {
-          const host = location.hostname.toLowerCase();
-          if (!host.endsWith("ieeexplore.ieee.org")) return null;
+          if (!isTrustedPublisher) return null;
           const meta = window.xplGlobal && window.xplGlobal.document && window.xplGlobal.document.metadata;
           if (!meta || typeof meta !== "object") return null;
           const authors = Array.isArray(meta.authors)
@@ -164,7 +191,7 @@ export async function extractPageMetadata(tabId, pageUrl) {
           trusted_fields: ieee ? ["doi", "authors", "year", "title", "venue", "abstract", "pages", "issn", "isbn"] : null,
         };
       },
-      args: [pageUrl, MAX_HEAD_HTML_CHARS],
+      args: [pageUrl, MAX_HEAD_HTML_CHARS, trustedPublisher],
     });
     return result || {
       ..._EMPTY_METADATA,

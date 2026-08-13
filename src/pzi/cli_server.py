@@ -7,6 +7,7 @@ lifecycle is owned by `ts_backend.backend_session`, not this module.
 from __future__ import annotations
 
 import ipaddress
+import socket
 from typing import Any, Literal, TypeAlias, TypedDict
 
 from pzi.http_security import (
@@ -131,12 +132,40 @@ def build_server_plan(
     }
 
 
-def _is_wildcard_bind(host: str) -> bool:
-    """True for addresses that bind every interface (0.0.0.0, ::, and friends)."""
+def is_wildcard_bind(host: str) -> bool:
+    """True for addresses that bind every interface (0.0.0.0, ::, and friends).
+
+    Asks the resolver what the socket layer will do, rather than enumerating
+    spellings. The enumeration missed every legacy ``inet_aton`` short form and
+    the empty string, all of which ``socket.bind`` accepts: measured against a
+    real bind, ``""``, ``"0"``, ``"0.0"``, ``"0x0"`` and ``"00"`` each bind
+    ``0.0.0.0`` and each passed the guard.
+
+    ``""`` was the worst of them. ``http_security.build_http_security_config``
+    normalizes ``listen_host.strip() or "127.0.0.1"``, so the DNS-rebinding Host
+    check then treated the server as loopback-bound and *accepted* requests
+    arriving from the LAN — on the code path whose stated purpose is preventing
+    exactly that.
+    """
     candidate = host.strip().strip("[]").lower()
-    if candidate in {"*", "0.0.0.0", "::"}:
+    if candidate in {"*", ""}:
+        # `*` is not an address at all, and `""` is what `socket.bind` reads as
+        # "every interface" while `getaddrinfo` reads as the loopback default.
         return True
     try:
-        return ipaddress.ip_address(candidate).is_unspecified
-    except ValueError:
+        infos = socket.getaddrinfo(candidate, None, proto=socket.IPPROTO_TCP)
+    except (OSError, UnicodeError):
         return False
+    for info in infos:
+        address = info[4][0]
+        try:
+            if ipaddress.ip_address(address).is_unspecified:
+                return True
+        except ValueError:  # pragma: no cover - getaddrinfo returns real addresses
+            continue
+    return False
+
+
+#: Kept for the module's existing callers; the guard is public now because
+#: `http_api.server_exposure_error` needs the same answer.
+_is_wildcard_bind = is_wildcard_bind
