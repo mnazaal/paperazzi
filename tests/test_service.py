@@ -13,7 +13,7 @@ from pzi.add_service import (
     reuse_existing_pdf_fields_for_exact_match,
     reuse_orphan_pdf_for_planned_path,
 )
-from pzi.bib_repository import ConcurrentEditError, plan_bib_write
+from pzi.bib_repository import StalePlanError, plan_bib_write
 from pzi.bibtex import record_to_bibtex_entry
 from pzi.capture_local_pdf import build_add_record_result, plan_with_applied_record
 
@@ -715,14 +715,15 @@ default = true
     assert "file = {" in bib_path.read_text()
 
 
-def test_add_record_with_bib_retries_once_on_concurrent_edit_without_redownload(
+def test_add_record_with_bib_retries_once_on_stale_plan_without_redownload(
     tmp_path: Path, monkeypatch
 ) -> None:
-    # A concurrent external edit aborts the first write; the retry re-reads,
-    # replans, and commits. The PDF must be downloaded exactly once (the
-    # download happens before planning and is preserved across the retry).
+    # A plan that went stale (its target moved) aborts the first write before
+    # anything is written; the retry re-reads, replans, and commits. The PDF
+    # must be downloaded exactly once (the download happens before planning and
+    # is preserved across the retry).
     from pzi import add_service
-    from pzi.bib_repository import ConcurrentEditError
+    from pzi.bib_repository import StalePlanError
 
     real_execute = add_service.execute_write_plan
     papers = tmp_path / "papers"
@@ -743,7 +744,7 @@ def test_add_record_with_bib_retries_once_on_concurrent_edit_without_redownload(
     def _flaky_execute(path, plan, *, file_path_style="absolute"):
         calls["n"] += 1
         if calls["n"] == 1:
-            raise ConcurrentEditError("bib file was modified externally")
+            raise StalePlanError("the bib changed while this write was being prepared")
         return real_execute(path, plan, file_path_style=file_path_style)
 
     monkeypatch.setattr(add_service, "execute_write_plan", _flaky_execute)
@@ -771,15 +772,15 @@ def test_add_record_with_bib_retries_once_on_concurrent_edit_without_redownload(
     assert "file = {" in bib_path.read_text()
 
 
-def test_add_record_with_bib_reraises_when_concurrent_edit_persists(
+def test_add_record_with_bib_reraises_when_the_plan_stays_stale(
     tmp_path: Path, monkeypatch
 ) -> None:
-    # If the external edit recurs on the retry, give up and re-raise so the
+    # If the plan is stale on the retry too, give up and re-raise so the
     # CLI/HTTP layer can render the friendly message.
     import pytest
 
     from pzi import add_service
-    from pzi.bib_repository import ConcurrentEditError
+    from pzi.bib_repository import StalePlanError
 
     papers = tmp_path / "papers"
     papers.mkdir()
@@ -789,11 +790,11 @@ def test_add_record_with_bib_reraises_when_concurrent_edit_persists(
            "papers_dir": str(papers), "default": True}
 
     def _always_raise(path, plan, *, file_path_style="absolute"):
-        raise ConcurrentEditError("bib file was modified externally")
+        raise StalePlanError("the bib changed while this write was being prepared")
 
     monkeypatch.setattr(add_service, "execute_write_plan", _always_raise)
 
-    with pytest.raises(ConcurrentEditError):
+    with pytest.raises(StalePlanError):
         add_service.add_record_with_bib(
             bib=bib,  # type: ignore[arg-type]
             record={"citekey": "smith2024graph", "title": "Graph Parsers",
@@ -802,16 +803,16 @@ def test_add_record_with_bib_reraises_when_concurrent_edit_persists(
         )
 
 
-def test_add_record_with_bib_cleans_up_pdf_when_concurrent_edit_persists(
+def test_add_record_with_bib_cleans_up_pdf_when_the_plan_stays_stale(
     tmp_path: Path, monkeypatch
 ) -> None:
-    # When the retry also hits a concurrent edit and we give up, the PDF that
+    # When the retry also finds the plan stale and we give up, the PDF that
     # was downloaded before planning must be removed — not left orphaned in
     # papers_dir.
     import pytest
 
     from pzi import add_service
-    from pzi.bib_repository import ConcurrentEditError
+    from pzi.bib_repository import StalePlanError
 
     papers = tmp_path / "papers"
     papers.mkdir()
@@ -827,11 +828,11 @@ def test_add_record_with_bib_cleans_up_pdf_when_concurrent_edit_persists(
         return (b"%PDF-1.7\nbody", "application/pdf")
 
     def _always_raise(path, plan, *, file_path_style="absolute"):
-        raise ConcurrentEditError("bib file was modified externally")
+        raise StalePlanError("the bib changed while this write was being prepared")
 
     monkeypatch.setattr(add_service, "execute_write_plan", _always_raise)
 
-    with pytest.raises(ConcurrentEditError):
+    with pytest.raises(StalePlanError):
         add_service.add_record_with_bib(
             bib=bib,  # type: ignore[arg-type]
             record={
@@ -1550,10 +1551,10 @@ def _fake_fetch_binary(url: str) -> tuple[bytes, str | None]:
 
 
 def test_single_path_retry_then_fail_removes_new_pdf(tmp_path: Path) -> None:
-    """A final ConcurrentEditError on the single-write path removes the PDF.
+    """A final StalePlanError on the single-write path removes the PDF.
 
     The PDF is downloaded before the plan+write loop. On the second
-    ConcurrentEditError the cleanup guard must remove it from papers_dir —
+    StalePlanError the cleanup guard must remove it from papers_dir —
     but must NOT remove any PDF that existed before the capture.
     """
     bib_path = tmp_path / "lib.bib"
@@ -1570,13 +1571,13 @@ def test_single_path_retry_then_fail_removes_new_pdf(tmp_path: Path) -> None:
         "papers_dir": str(papers_dir),
     }
 
-    # Both execute_write_plan attempts raise ConcurrentEditError so the retry
+    # Both execute_write_plan attempts raise StalePlanError so the retry
     # exhausts and re-raises, triggering _cleanup_new_pdf.
     with patch(
         "pzi.add_service.execute_write_plan",
-        side_effect=ConcurrentEditError("external edit"),
+        side_effect=StalePlanError("the entry it targets no longer exists"),
     ):
-        with pytest.raises(ConcurrentEditError):
+        with pytest.raises(StalePlanError):
             add_record_with_bib(
                 bib=cast(dict, bib),
                 record={

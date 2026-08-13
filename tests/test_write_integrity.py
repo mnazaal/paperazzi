@@ -364,17 +364,21 @@ def test_update_plan_does_not_discard_an_edit_made_while_the_plan_was_built(
 ) -> None:
     """An update must be rebased onto the entry as it is *under the lock*.
 
-    `execute_write_plan` snapshots the file digest on the line before it takes
-    the lock, so the window it guards is microseconds wide. The window that
-    matters is much longer: `add_service` reads the library, then resolves
-    metadata over the network and downloads a PDF, and only then executes. An
-    edit landing in that window passes the digest check untouched, and
-    `_validate_update_plan_against_current` only checks that the index is in
-    range and the citekey still matches — never field content — so the stale
+    `add_service` reads the library, then resolves metadata over the network and
+    downloads a PDF, and only then executes — so an edit made in that window is
+    on disk before the write lands. Nothing on the way in compares field
+    content (`_validate_update_plan_against_current` checks only that the index
+    is in range and the citekey still matches), so without the rebase the stale
     `plan["entry"]` was written verbatim and the edit vanished silently.
 
     The insert path already rebases onto the on-disk entry when it discovers a
     match; this pins that the update path does the same.
+
+    Scope, deliberately: this covers the fields the rebase does protect — one
+    unmodelled (`pages`) and one user-owned that the plan does not set (`note`).
+    A field the stale plan *does* carry is still lost; see the KNOWN LIMITATION
+    on `_rebase_update_plan_against_current`. That is not asserted here, because
+    a test asserting the loss would read as certifying it.
     """
     bib = tmp_path / "lib.bib"
     bib.write_text(
@@ -422,6 +426,186 @@ def test_update_plan_does_not_discard_an_edit_made_while_the_plan_was_built(
     assert "hand-written by the user" in written, f"external edit was overwritten:\n{written}"
     # The update itself still applied.
     assert "A Much Longer Title From Crossref" in written
+
+
+def _plan_against_current_library(bib: Path, incoming: dict) -> dict:
+    """Build an update plan the way a capture does, from the library as it is."""
+    before = read_bib_file(str(bib))
+    plan = plan_bib_write(
+        incoming, before["records"], existing_entries=before["entries"]
+    )
+    assert plan["action"] == "update"
+    return plan
+
+
+def test_a_stale_update_plan_does_not_revert_a_concurrent_writers_fields(
+    tmp_path: Path,
+) -> None:
+    """The fields a plan merely *carries* must not win over a concurrent edit.
+
+    `plan["entry"]` is the whole entry, not a diff: it is built by merging onto
+    the entry as it was at plan time, so it holds copies of fields this writer
+    never decided. Letting those win reverted the other writer silently — a
+    `keywords` value they added went back to the plan-time value, and `journal`,
+    which the plan's projection omits entirely, was deleted outright. Both
+    writers report success, so the loss is invisible until someone looks.
+    """
+    bib = tmp_path / "lib.bib"
+    bib.write_text(
+        "@article{a2020,\n"
+        "  author = {Smith, Jane},\n"
+        "  title = {Original Title},\n"
+        "  doi = {10.1000/abc123},\n"
+        "  year = {2020},\n"
+        "  keywords = {original},\n"
+        "}\n"
+    )
+
+    plan = _plan_against_current_library(
+        bib,
+        {
+            "citekey": "a2020",
+            "title": "Original Title",
+            "authors": ["Smith, Jane"],
+            "year": 2020,
+            "doi": "10.1000/abc123",
+            "abstract": "Freshly resolved abstract.",
+        },
+    )
+
+    # Another writer edits the same entry while this one is still resolving.
+    def _edit(entry, record):
+        fields = {**entry["fields"]}
+        fields["keywords"] = "original, added-by-the-other-writer"
+        fields["journal"] = "NeurIPS"
+        return {**entry, "fields": fields}
+
+    update_bib_entry(str(bib), "a2020", _edit)
+
+    execute_write_plan(str(bib), plan)
+
+    written = bib.read_text()
+    assert "added-by-the-other-writer" in written, f"keywords reverted:\n{written}"
+    assert "NeurIPS" in written, f"journal deleted:\n{written}"
+    # …and this writer's own contribution still landed.
+    assert "Freshly resolved abstract." in written
+
+
+def test_a_stale_update_plan_still_wins_the_fields_it_changed(tmp_path: Path) -> None:
+    """Deferring to the current entry must not turn into ignoring the plan."""
+    bib = tmp_path / "lib.bib"
+    bib.write_text(
+        "@article{a2020,\n"
+        "  author = {Smith, Jane},\n"
+        "  title = {Short Title},\n"
+        "  doi = {10.1000/abc123},\n"
+        "  year = {2020},\n"
+        "}\n"
+    )
+
+    plan = _plan_against_current_library(
+        bib,
+        {
+            "citekey": "a2020",
+            "title": "The Full Title From Crossref",
+            "authors": ["Smith, Jane"],
+            "year": 2020,
+            "doi": "10.1000/abc123",
+        },
+    )
+
+    def _edit(entry, record):
+        return {**entry, "fields": {**entry["fields"], "journal": "NeurIPS"}}
+
+    update_bib_entry(str(bib), "a2020", _edit)
+
+    execute_write_plan(str(bib), plan)
+
+    written = bib.read_text()
+    assert "The Full Title From Crossref" in written, "the plan's own change was lost"
+    assert "NeurIPS" in written
+
+
+def test_a_field_the_other_writer_deleted_is_not_resurrected(tmp_path: Path) -> None:
+    """A deletion is an edit too, and the plan is only carrying the old value."""
+    bib = tmp_path / "lib.bib"
+    bib.write_text(
+        "@article{a2020,\n"
+        "  author = {Smith, Jane},\n"
+        "  title = {Original Title},\n"
+        "  doi = {10.1000/abc123},\n"
+        "  year = {2020},\n"
+        "  note = {written in haste},\n"
+        "}\n"
+    )
+
+    plan = _plan_against_current_library(
+        bib,
+        {
+            "citekey": "a2020",
+            "title": "Original Title",
+            "authors": ["Smith, Jane"],
+            "year": 2020,
+            "doi": "10.1000/abc123",
+            "abstract": "Freshly resolved abstract.",
+        },
+    )
+
+    def _drop_the_note(entry, record):
+        fields = {key: value for key, value in entry["fields"].items() if key != "note"}
+        return {**entry, "fields": fields}
+
+    update_bib_entry(str(bib), "a2020", _drop_the_note)
+
+    execute_write_plan(str(bib), plan)
+
+    assert "written in haste" not in bib.read_text()
+
+
+def test_a_hand_built_plan_without_a_base_still_applies_its_deletions(
+    tmp_path: Path,
+) -> None:
+    """`promote --replace`'s preview depends on the older entry-level rebase.
+
+    It assembles its plan literally (`promote_service._preview_in_place_update`)
+    rather than through `plan_bib_write`, so it carries no `base_entry` — and it
+    strips identity fields on purpose. Three-way merging such a plan would hand
+    every stripped field back and make the preview disagree with the write it is
+    previewing, so a plan with no base must keep behaving as it did.
+    """
+    bib = tmp_path / "lib.bib"
+    bib.write_text(
+        "@unpublished{a2020,\n"
+        "  author = {Smith, Jane},\n"
+        "  title = {Original Title},\n"
+        "  year = {2020},\n"
+        "  journal = {arXiv preprint},\n"
+        "}\n"
+    )
+    before = read_bib_file(str(bib))
+    stripped: BibtexEntry = {
+        "entry_type": "article",
+        "citekey": "a2020",
+        "fields": {
+            "author": "Smith, Jane",
+            "title": "Original Title",
+            "year": "2020",
+        },
+    }
+    plan = {
+        "action": "update",
+        "index": 0,
+        "record": before["records"][0],
+        "entry": stripped,
+        "changed_fields": [],
+    }
+    assert "base_entry" not in plan
+
+    execute_write_plan(str(bib), plan)
+
+    written = bib.read_text()
+    assert "arXiv preprint" not in written, "a deliberate strip was undone"
+    assert "@article" in written, "the deliberate retype was undone"
 
 
 def _add_a_keyword(entry, record):

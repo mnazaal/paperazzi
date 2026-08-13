@@ -309,12 +309,17 @@ def test_post_capture_private_url_rejected() -> None:
     assert "public http(s) URL" in body["error"]
 
 
-def test_post_capture_concurrent_edit_returns_409(monkeypatch) -> None:
-    # A concurrent external edit must surface as 409, not an opaque 500.
-    from pzi.bib_repository import ConcurrentEditError
+def test_post_capture_stale_plan_returns_409_naming_what_moved(monkeypatch) -> None:
+    # The refusal the capture path can actually raise (its plan's target moved
+    # and the retry lost too). It is a `PziError`, which nothing between the
+    # repository and the route catches — so before this arm it was a 500.
+    from pzi.bib_repository import StalePlanError
 
     def _raise(*_a, **_k):
-        raise ConcurrentEditError("bib file was modified externally")
+        raise StalePlanError(
+            "the bib changed while this write was being prepared — the entry "
+            "it targets now has a different citekey; retry the command"
+        )
 
     monkeypatch.setattr(http_post_routes, "capture_to_bib", _raise)
     status, body = http_post_routes.process_post_request(
@@ -322,35 +327,47 @@ def test_post_capture_concurrent_edit_returns_409(monkeypatch) -> None:
     )
     assert status == 409
     assert body["status"] == "error"
-    assert any("modified externally" in e for e in body["errors"])
+    assert any("different citekey" in e for e in body["errors"])
 
 
-def test_post_update_concurrent_edit_returns_409(monkeypatch) -> None:
-    from pzi.bib_repository import ConcurrentEditError
+def test_post_update_stale_plan_returns_409(monkeypatch) -> None:
+    # `update --dry-run` previews through `preview_write_plan`, so a moved
+    # target is the refusal this route has to render. It used to guard
+    # `ConcurrentEditError`, which this path cannot raise, and answered 500.
+    from pzi.bib_repository import StalePlanError
 
     def _raise(*_a, **_k):
-        raise ConcurrentEditError("bib file was modified externally")
+        raise StalePlanError(
+            "the bib changed while this write was being prepared — the entry "
+            "it targets no longer exists; retry the command"
+        )
 
     monkeypatch.setattr(http_post_routes, "update_bib", _raise)
     status, body = http_post_routes.process_post_request(
         "/update", {"dry_run": False}, "/tmp/c.toml", "/tmp"
     )
     assert status == 409
-    assert "modified externally" in body["error"]
+    assert "no longer exists" in body["error"]
 
 
 def test_post_promote_concurrent_edit_returns_409(monkeypatch) -> None:
+    # Boundary guard: `promote_bib` currently converts this into a per-preprint
+    # failure, so the arm is not on a live path — but if one escapes, the route
+    # must answer 409 carrying the reason, not the catch-all 500.
     from pzi.bib_repository import ConcurrentEditError
 
     def _raise(*_a, **_k):
-        raise ConcurrentEditError("bib file was modified externally")
+        raise ConcurrentEditError(
+            "citekey smith2024graph appeared in /tmp/lib.bib while promoting "
+            "smith2024graph-preprint; aborting rather than writing a duplicate entry"
+        )
 
     monkeypatch.setattr(http_post_routes, "promote_bib", _raise)
     status, body = http_post_routes.process_post_request(
         "/promote", {"dry_run": False}, "/tmp/c.toml", "/tmp"
     )
     assert status == 409
-    assert "modified externally" in body["error"]
+    assert "writing a duplicate entry" in body["error"]
 
 
 def test_capture_input_from_http_body_maps_capture_hints() -> None:

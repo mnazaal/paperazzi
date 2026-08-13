@@ -1386,12 +1386,20 @@ def test_maybe_start_watchdog_starts_for_owned_ready_backend(dead_port) -> None:
 
 
 def test_run_cli_reports_concurrent_edit_without_traceback(monkeypatch) -> None:
-    # A concurrent external edit aborts the write at the repository layer; the
-    # CLI must render it as a friendly error and exit 1, not a raw traceback.
+    # `ConcurrentEditError` is a `RuntimeError`, so the CLI's RuntimeError
+    # boundary renders it: its own message, exit 5, no traceback. It had a
+    # dedicated arm until that arm turned out to be both unreachable — the only
+    # raiser, `promote_service`, converts it into a per-preprint failure — and
+    # byte-for-byte identical to the boundary below it. This pins the boundary,
+    # not the (injected) route: what matters is that a refusal carrying a
+    # citekey reaches the user with that citekey in it.
     from pzi.bib_repository import ConcurrentEditError
 
     def _raise(*_a, **_k):
-        raise ConcurrentEditError("bib file was modified externally")
+        raise ConcurrentEditError(
+            "citekey smith2024graph appeared in /tmp/lib.bib while promoting "
+            "smith2024graph-preprint; aborting rather than writing a duplicate entry"
+        )
 
     monkeypatch.setattr(cli, "_run_add", _raise)
     stderr = StringIO()
@@ -1402,8 +1410,9 @@ def test_run_cli_reports_concurrent_edit_without_traceback(monkeypatch) -> None:
     )
 
     assert exit_code == exit_codes.ENVIRONMENT
-    assert "modified externally" in stderr.getvalue()
-    assert "retry" in stderr.getvalue()
+    assert "Traceback" not in stderr.getvalue()
+    assert "aborting rather than writing a duplicate entry" in stderr.getvalue()
+    assert "smith2024graph" in stderr.getvalue()
 
 
 def test_init_creates_config_owner_only(tmp_path: Path) -> None:

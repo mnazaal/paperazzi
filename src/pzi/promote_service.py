@@ -966,10 +966,12 @@ def _apply_published_fork(
         record.get("citekey") == published_ck for record in session.records
     ):
         # `published_ck` was generated against the snapshot read at the top of
-        # the run, but this session re-reads under the lock. `execute_write_plan`
-        # caught that drift with its own ConcurrentEditError; a batch session
-        # reads fresh instead, so the collision is checked here — with
-        # `force_new` set, nothing else would.
+        # the run, but this session re-reads under the lock. The single-write
+        # path reconciles that drift in `_rebase_insert_plan_against_current`,
+        # which a batch session does not go through — so the collision is
+        # checked here, and with `force_new` set nothing else would. This is
+        # the only `ConcurrentEditError` left in the tree: everywhere else, a
+        # concurrent edit is absorbed rather than refused.
         raise ConcurrentEditError(
             f"citekey {published_ck} appeared in {bib_path} while promoting "
             f"{preprint_ck}; aborting rather than writing a duplicate entry"

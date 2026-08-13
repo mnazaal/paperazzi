@@ -12,7 +12,7 @@ from pzi.add_planning import (
     select_best_metadata_result,
 )
 from pzi.bib_repository import (
-    ConcurrentEditError,
+    StalePlanError,
     WritePlan,
     preview_write_plan,
     read_bib_file,
@@ -123,12 +123,18 @@ def update_bib(
                 metadata_confidence_min_score=metadata_confidence_min_score,
                 file_path_style=file_path_style,
             )
-        except ConcurrentEditError:
+        except StalePlanError:
             # Not a per-record problem: the bib changed underneath this run, so
             # continuing to write the remaining records is unsafe. Every other
             # command surfaces this at the CLI boundary as ENVIRONMENT, and
             # swallowing it here made `update` the one command that reported
             # success after losing the race.
+            #
+            # This used to name `ConcurrentEditError`, which this path has never
+            # been able to raise: the write goes through `update_bib_entry` and
+            # the dry-run preview through `preview_write_plan`, and only the
+            # latter refuses — as a `StalePlanError`. So the arm below was
+            # swallowing the very failure this one exists to re-raise.
             raise
         except Exception as exc:  # one bad record must not abort the run
             failed_item: UpdatePlanItem = {

@@ -15,6 +15,34 @@ next to the diff it explains.
 
 ## [Unreleased]
 
+### Fixed
+
+- Concurrent writes no longer fail each other. `execute_write_plan` hashed the
+  bib on the line before taking the lock and aborted with "bib file was modified
+  externally" when the hash moved — so a second `pzi add` that had queued for
+  the lock and got it exited 5 and lost its capture, and `add`'s single retry
+  could lose twice under load. The write is rebased onto the library read under
+  the lock instead. A plan whose target entry was deleted or renamed meanwhile
+  is still refused.
+- `pzi update` no longer reports a bib that moved under it as a per-record
+  "update failed" note: the refusal its dry-run preview raises is now the one
+  the run aborts on, which is what its guard always claimed to do.
+- The HTTP `/capture` and `/update` routes answer 409 with the reason a write
+  was refused. Both previously returned 500 for it, having guarded an exception
+  neither could raise; `/promote`, `/update` and `/capture` now all report the
+  specific refusal rather than a fixed "modified externally" line.
+- A write plan that is malformed (rather than stale) is no longer retried as
+  though a retry could fix it, and a failure while replanning after a stale
+  plan no longer leaves the already-downloaded PDF orphaned in `papers_dir`.
+- Two writers editing the same entry no longer lose each other's fields. A
+  write plan is the whole entry, not a diff, so it carried stale copies of
+  fields its writer never touched and those won — a `keywords` value added
+  meanwhile was reverted, and `journal` was deleted outright, both silently and
+  both at exit 0. The plan now applies as a three-way merge against the entry
+  it was built from: what this writer changed wins, what it merely carried
+  defers to whoever else edited it. Predates this release (reproduced against
+  the previous version), and is independent of the lock change above.
+
 ## [0.1.0b6] - 2026-08-13
 
 ### Added

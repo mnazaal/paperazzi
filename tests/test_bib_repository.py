@@ -7,7 +7,7 @@ import pytest
 
 from pzi.add_service import ensure_citekey_for_write
 from pzi.bib_repository import (
-    ConcurrentEditError,
+    StalePlanError,
     _write_bib_text_atomic,
     apply_write_plan,
     describe_missing_bib,
@@ -272,12 +272,21 @@ def test_with_bib_lock_creates_parent_directory(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Concurrent edit detection
+# Writing against a bib that moved since the plan was built
 # ---------------------------------------------------------------------------
 
 
-def test_execute_write_plan_raises_on_external_edit(tmp_path: Path) -> None:
-    """External edit between content snapshot and lock raises ConcurrentEditError."""
+def test_execute_write_plan_absorbs_an_edit_landing_before_the_lock(
+    tmp_path: Path,
+) -> None:
+    """A write whose plan predates another writer's commit still lands.
+
+    This is the property the lock exists for. The previous behaviour hashed the
+    file on the line before `with_bib_lock` and aborted when the digest moved,
+    so a second writer that had correctly waited its turn failed with exit 5 —
+    which is how four concurrent `pzi add`s flaked on CI. The edit must be
+    preserved *and* the planned update applied.
+    """
     path = tmp_path / "library.bib"
     path.write_text(
         """
@@ -299,26 +308,102 @@ def test_execute_write_plan_raises_on_external_edit(tmp_path: Path) -> None:
         "changed_fields": ["title"],
     }
 
-    # Monkey-patch _read_bib_source so the under-lock read differs from the
-    # pre-lock snapshot, simulating an external edit during lock acquisition.
-    from pzi import bib_repository
+    # Another writer commits between plan construction and this call — exactly
+    # what the digest guard used to reject.
+    path.write_text(
+        path.read_text() + "\n@misc{injected,\n  title = {Sneaked in},\n}\n"
+    )
 
-    original_read = bib_repository._read_bib_source
-    calls: list[int] = []
+    execute_write_plan(str(path), plan)
 
-    def fake_read(p: str) -> str:
-        calls.append(1)
-        text = original_read(p)
-        if len(calls) == 1:
-            return text  # first call: pre-lock snapshot
-        return text + "\n@misc{injected,\n  title = {Sneaked in},\n}\n"
+    written = path.read_text()
+    assert "Updated" in written
+    assert "injected" in written, "the concurrent writer's entry was clobbered"
 
-    bib_repository._read_bib_source = fake_read  # type: ignore[assignment]
+
+def test_execute_write_plan_commits_after_waiting_out_another_writer(
+    tmp_path: Path,
+) -> None:
+    """The window the removed digest guard actually covered: the lock wait.
+
+    `test_execute_write_plan_absorbs_an_edit_landing_before_the_lock` above does
+    NOT pin this — the edit there lands before the call, so the deleted guard's
+    pre-lock snapshot would have been taken after it and the digests matched.
+    The guard only ever fired when the edit landed while this writer was
+    *blocked on the lock*, which is exactly what a second `pzi add` does, and is
+    the case that failed on CI. So the holder here takes the lock first, and the
+    write must queue behind it and then commit rather than refuse.
+    """
+    path = tmp_path / "library.bib"
+    path.write_text("@article{smith2024graph,\n  title = {Original},\n}\n")
+
+    plan = {
+        "action": "update",
+        "index": 0,
+        "record": {"citekey": "smith2024graph", "title": "Updated"},
+        "entry": {
+            "entry_type": "article",
+            "citekey": "smith2024graph",
+            "fields": {"title": "Updated"},
+        },
+        "changed_fields": ["title"],
+    }
+
+    holding = threading.Event()
+    released = threading.Event()
+
+    def _other_writer() -> None:
+        with with_bib_lock(str(path)):
+            holding.set()
+            # Commit an edit while the writer below is queued on the lock.
+            path.write_text(
+                path.read_text() + "\n@misc{injected,\n  title = {Sneaked in},\n}\n"
+            )
+            released.set()
+
+    thread = threading.Thread(target=_other_writer)
+    thread.start()
     try:
-        with pytest.raises(ConcurrentEditError, match="modified externally"):
-            execute_write_plan(str(path), plan)
+        assert holding.wait(timeout=5), "the other writer never took the lock"
+        execute_write_plan(str(path), plan)
     finally:
-        bib_repository._read_bib_source = original_read  # type: ignore[assignment]
+        thread.join(timeout=5)
+
+    assert released.is_set()
+    written = path.read_text()
+    assert "Updated" in written, "the queued writer's own change was not committed"
+    assert "injected" in written, "the lock holder's entry was clobbered"
+
+
+def test_execute_write_plan_rejects_a_plan_whose_target_moved(
+    tmp_path: Path,
+) -> None:
+    """Drift a rebase cannot absorb is refused, not written over.
+
+    The entry at the planned index is a *different* paper by the time the lock
+    is taken, so applying the plan there would overwrite an unrelated entry.
+    `add_service` replans once on this; the message tells a human what to do.
+    """
+    path = tmp_path / "library.bib"
+    path.write_text("@article{smith2024graph,\n  title = {Original},\n}\n")
+
+    plan = {
+        "action": "update",
+        "index": 0,
+        "record": {"citekey": "smith2024graph", "title": "Updated"},
+        "entry": {
+            "entry_type": "article",
+            "citekey": "smith2024graph",
+            "fields": {"title": "Updated"},
+        },
+        "changed_fields": ["title"],
+    }
+
+    path.write_text("@article{jones2024trees,\n  title = {Trees},\n}\n")
+
+    with pytest.raises(StalePlanError, match="different citekey"):
+        execute_write_plan(str(path), plan)
+    assert "Updated" not in path.read_text()
 
 
 def test_execute_write_plan_succeeds_without_external_edit(tmp_path: Path) -> None:
@@ -682,8 +767,8 @@ def test_delete_bib_entry_writes_no_backup_when_the_citekey_is_missing(
 def test_with_bib_lock_times_out_instead_of_blocking_forever(tmp_path: Path) -> None:
     """A lock held by another process used to hang pzi silently and forever.
 
-    `portalocker.lock` takes no timeout and blocks in the kernel, and
-    `ConcurrentEditError` only fires *after* the lock is acquired — so nothing
+    `portalocker.lock` takes no timeout and blocks in the kernel, and every
+    other write-path refusal fires *after* the lock is acquired — so nothing
     could produce the exit 5 that `exit_codes` documents for a locked bib.
     """
     import portalocker

@@ -32,8 +32,9 @@ A batch in which *nothing* succeeded is `ENVIRONMENT`, not this: see
 answer."""
 
 ENVIRONMENT = 5
-"""The command could not run: unreadable or invalid config, a locked or
-externally modified bib, permission denied, an unreachable service."""
+"""The command could not run: unreadable or invalid config, a bib locked by
+another process or changed out from under a prepared write, permission denied,
+an unreachable service."""
 
 INTERRUPTED = 130
 """SIGINT (128 + 2)."""

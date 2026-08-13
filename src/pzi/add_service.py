@@ -28,7 +28,7 @@ from pzi.add_planning import (
     minimum_metadata_diagnostics,
 )
 from pzi.bib_repository import (
-    ConcurrentEditError,
+    StalePlanError,
     WritePlan,
     batch_write_session,
     execute_write_plan,
@@ -636,7 +636,7 @@ def add_record_with_bib(
     )
     existing_pdf_paths = _snapshot_pdf_paths(bib["papers_dir"])
     # The PDF download happens exactly once, before planning. The plan+write
-    # tail below may run twice (concurrent-edit retry), but never re-downloads:
+    # tail below may run twice (the stale-plan replan), but never re-downloads:
     # ``record_with_pdf`` already carries ``local_pdf_path``, so the reuse
     # helpers short-circuit on the second pass.
     try:
@@ -728,14 +728,16 @@ def _execute_plan_with_retry(
     existing_pdf_paths: set[Path],
     file_path_style: str,
 ) -> tuple[NormalizedRecord, WritePlan]:
-    """Commit a write plan, retrying once on a concurrent external edit.
+    """Commit a write plan, retrying once when the plan went stale.
 
-    ``execute_write_plan`` raises :class:`ConcurrentEditError` *before* writing
-    when the bib changed between snapshot and lock; the race window is tiny, so
-    a single retry — re-reading the library and rebuilding the plan against the
-    now-current records — almost always succeeds. The already-downloaded PDF is
-    preserved across the retry and only cleaned up when we give up (final
-    failure) or any other exception aborts the write.
+    ``execute_write_plan`` rebases a plan onto the library it reads under the
+    lock, so an ordinary concurrent write needs no retry at all. It raises
+    :class:`StalePlanError` *before* writing only for the drift a rebase cannot
+    absorb — the targeted entry deleted or its citekey changed by another
+    writer — and rebuilding the plan against the now-current records is exactly
+    the answer to that. The already-downloaded PDF is preserved across the retry
+    and only cleaned up when we give up (final failure) or any other exception
+    aborts the write.
     """
     record_with_hint, plan = initial_plan
     records = initial_records
@@ -747,16 +749,24 @@ def _execute_plan_with_retry(
             return record_with_hint, plan_with_applied_record(
                 plan, record_with_hint, updated_entries
             )
-        except ConcurrentEditError:
+        except StalePlanError:
             if attempt == 1:
                 _cleanup_new_pdf(record_with_hint, existing_pdf_paths)
                 raise
             # Re-read the externally-edited library and replan against it.
-            reread = read_bib_file(bib["path"])
-            records = [
-                cast(NormalizedRecord, existing) for existing in reread["records"]
-            ]
-            record_with_hint, plan = build_plan(records, reread["entries"])
+            # Under its own guard: a sibling `except` cannot catch what another
+            # `except` raises, so a failure in the re-read or the replan used to
+            # escape with the downloaded PDF left orphaned in papers_dir — the
+            # one hole in the cleanup this function otherwise guarantees.
+            try:
+                reread = read_bib_file(bib["path"])
+                records = [
+                    cast(NormalizedRecord, existing) for existing in reread["records"]
+                ]
+                record_with_hint, plan = build_plan(records, reread["entries"])
+            except Exception:
+                _cleanup_new_pdf(record_with_hint, existing_pdf_paths)
+                raise
         except Exception:
             _cleanup_new_pdf(record_with_hint, existing_pdf_paths)
             raise

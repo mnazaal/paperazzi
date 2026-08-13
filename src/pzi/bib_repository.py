@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import contextlib
 import difflib
-import hashlib
 import os
 import shutil
 import stat
@@ -57,12 +56,13 @@ from pzi.similarity import (
 
 
 class ConcurrentEditError(RuntimeError):
-    """Raised when the bib file is modified externally during a write operation."""
+    """Raised when a concurrent edit makes a write unsafe to complete.
 
-
-def _source_digest(text: str) -> str:
-    """Content hash of bib source, used to detect external edits across the lock."""
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    Not a general "the file changed" signal — a change the write can absorb is
+    rebased (see :func:`execute_write_plan`). This is for the case a batch
+    session cannot absorb: :func:`pzi.promote_service._apply_published_fork`
+    finds the citekey it is about to fork onto already present under the lock.
+    """
 
 
 def _find_entry_index(entries: Sequence[dict[str, Any]], citekey: str) -> int | None:
@@ -94,6 +94,14 @@ class WritePlan(TypedDict):
     entry: BibtexEntry
     changed_fields: list[str]
     force_new: NotRequired[bool]
+    #: The entry ``entry`` was merged onto when this plan was built, for update
+    #: plans that merged onto one. It is the *base* of the three-way merge in
+    #: :func:`_rebase_update_plan_against_current`: without it, a rebase cannot
+    #: tell a field the writer deliberately set from a stale copy of a field it
+    #: never touched, and silently reverts a concurrent writer's edit. Only
+    #: :func:`plan_bib_write` sets it — a plan assembled by hand (promote's
+    #: ``--replace`` preview) deliberately has no base, and rebases as before.
+    base_entry: NotRequired[BibtexEntry]
 
 
 # Loose record-shaped dict accepted by merge_entries (carries arbitrary keys).
@@ -128,8 +136,8 @@ def acquire_lock_with_timeout(
 
     `portalocker.lock` takes no timeout and blocks in the kernel, so a wedged
     holder hung pzi silently with no message and no exit code — the one case
-    `exit_codes.ENVIRONMENT` names but nothing could produce, since
-    `ConcurrentEditError` only fires *after* the lock is acquired.
+    `exit_codes.ENVIRONMENT` names but nothing could produce, since every
+    write-path refusal fires *after* the lock is acquired.
     """
     deadline = time.monotonic() + timeout
     while True:
@@ -544,20 +552,33 @@ def execute_write_plan(
     Validates that the resulting BibTeX round-trips through
     serialize → parse before committing to disk.
 
-    Raises :exc:`ConcurrentEditError` if the bib file is modified
-    externally between snapshot and lock acquisition.
+    A plan built against an older read is *rebased* under the lock rather than
+    rejected: the read below is the authoritative one, and
+    `_validate_update_plan_against_current` /
+    `_rebase_{update,insert}_plan_against_current` re-project the plan onto it.
+    This used to hash the file on the line before `with_bib_lock` and abort with
+    `ConcurrentEditError` when the digest moved, which inverted the point of the
+    lock — a *correctly serialized* second writer, having waited its turn, was
+    told the file had been "modified externally" and failed with exit 5. Four
+    concurrent `pzi add`s on a two-core CI runner exhausted `add_service`'s
+    single retry and lost their captures outright.
+
+    Being honest about what that guard did and did not do, since it is the
+    argument for removing it: the snapshot was taken before *blocking* on the
+    lock, so it did cover the queue wait — a writer that queued behind another
+    saw the digest move and was forced to replan, which is real protection. It
+    never covered the window that matters, though: the plan predates the
+    snapshot by however long metadata resolution and the PDF download took, and
+    an edit landing in *that* window left the digests equal and passed straight
+    through. So the protection was incidental to contention rather than to
+    staleness, and it was paid for in permanently lost captures. What the guard
+    was accidentally standing in for — a stale plan's carried fields winning
+    over a concurrent writer — is handled where it belongs, in
+    :func:`_rebase_update_plan_against_current`, for both windows rather than
+    the one the digest happened to see.
     """
-    # Snapshot content before locking; compare by hash (not mtime) under the
-    # lock so a fast same-second external edit can't slip past a coarse-
-    # resolution mtime.
-    digest_before = _source_digest(_read_bib_source(path))
     with with_bib_lock(path):
         source = _read_bib_source(path)
-        if _source_digest(source) != digest_before:
-            raise ConcurrentEditError(
-                f"bib file {path} was modified externally "
-                f"while acquiring lock; aborting to prevent data loss"
-            )
         library = parse_bib_library(source)
         # Inserts are gated too. An insert rewrites the whole file just as an
         # update does, so adding to a bib with an unparseable block used to
@@ -860,16 +881,41 @@ def _source_diff(old_source: str, new_source: str, path: str) -> str:
     )
 
 
-def _stale_plan(reason: str) -> PziError:
+class StalePlanError(PziError):
+    """A plan whose target moved before the lock, beyond what a rebase can fix.
+
+    Distinct from a bare :class:`PziError` so the one caller that can do
+    something about it — `add_service._execute_plan_with_retry`, which re-reads
+    and replans — catches this and nothing else. Everything a rebase *can*
+    absorb (an appended entry, a citekey collision, an identity that now
+    matches) never reaches here.
+    """
+
+
+def _stale_plan(reason: str) -> StalePlanError:
     """The bib moved under a plan built before the lock — a retry usually wins.
 
     Reachable whenever a second writer commits in that window, so it is an
     ordinary runtime outcome and has to read like one rather than as a traceback.
     """
-    return PziError(
+    return StalePlanError(
         f"the bib changed while this write was being prepared — {reason}; "
         "retry the command",
         code=exit_codes.ENVIRONMENT,
+    )
+
+
+def _malformed_plan(reason: str) -> PziError:
+    """A plan that is wrong in itself, not one the bib moved under.
+
+    Deliberately *not* a :class:`StalePlanError`: `add_service` retries those by
+    replanning, and replanning cannot fix a plan whose shape is invalid — it
+    would burn a second lock cycle, delete the downloaded PDF and then tell the
+    user to retry a failure that is deterministic. A caller bug reads as a
+    caller bug.
+    """
+    return PziError(
+        f"cannot write this plan — {reason}", code=exit_codes.ENVIRONMENT
     )
 
 
@@ -881,7 +927,7 @@ def _validate_update_plan_against_current(
         raise _stale_plan("the entry it targets no longer exists")
     planned_record = plan.get("record")
     if not isinstance(planned_record, dict):
-        raise _stale_plan("it carries no record to write")
+        raise _malformed_plan("it carries no record to write")
     planned_citekey = planned_record.get("citekey")
     current_citekey = current_records[index].get("citekey")
     if planned_citekey and current_citekey != planned_citekey:
@@ -896,6 +942,39 @@ def _validate_update_plan_against_current(
 _USER_OWNED_ENTRY_FIELDS = ("note", "keywords", "file")
 
 
+def _apply_untouched_fields_from_current(
+    rebased: BibtexEntry,
+    *,
+    base: BibtexEntry,
+    planned: BibtexEntry,
+    current: BibtexEntry,
+) -> None:
+    """Three-way merge: the current entry wins every field the plan left alone.
+
+    *base* is the entry the plan merged onto when it was built. A field whose
+    planned value still equals its base value was never decided by this writer —
+    it is a copy carried along — so a concurrent writer's version of it must
+    survive. A field the plan did change wins, which is what makes a deliberate
+    edit (and `promote --replace`'s deliberate *deletions*) still apply.
+
+    Field order is taken from the current entry first, so the result does not
+    depend on set-iteration order: `PYTHONHASHSEED` varying between runs would
+    otherwise reorder fields and break byte-identical rewrites.
+    """
+    for field in dict.fromkeys([*current["fields"], *planned["fields"], *base["fields"]]):
+        planned_value = planned["fields"].get(field)
+        base_value = base["fields"].get(field)
+        if planned_value != base_value:
+            continue  # this writer decided this field — it wins
+        current_value = current["fields"].get(field)
+        if current_value == base_value:
+            continue  # nobody else touched it either
+        if current_value is None:
+            rebased["fields"].pop(field, None)  # the other writer deleted it
+        else:
+            rebased["fields"][field] = current_value
+
+
 def _rebase_update_plan_against_current(
     current_records: list[NormalizedRecord],
     current_entries: list[BibtexEntry],
@@ -905,22 +984,31 @@ def _rebase_update_plan_against_current(
 
     A plan is built long before it is executed: `add_service` reads the library,
     resolves metadata over the network and downloads a PDF, and only then calls
-    `execute_write_plan`. The digest guard there is snapshotted on the line
-    before the lock, so it catches a race of microseconds and not the window
-    that actually matters. An edit landing in that window therefore passed every
-    check — `_validate_update_plan_against_current` compares the index and the
-    citekey, never field content — and `plan["entry"]`, projected from a record
-    read before the edit, was written verbatim over it.
+    `execute_write_plan`. Nothing before this point compares field content —
+    `_validate_update_plan_against_current` checks the index and the citekey and
+    nothing else — so without this rebase `plan["entry"]`, projected from a
+    record read before any concurrent edit, was written verbatim over it,
+    taking every unmodelled field (`volume`, `pages`, `publisher`, …) with it.
 
-    Re-running the merge is what `plan_bib_write` itself does to build an update
-    (`merge_entries` → project → `merge_projected_entry`), and what
-    `_rebase_insert_plan_against_current` does for an insert that turns out to
-    match. Merging only the projected *entry* is not enough: a record-owned
-    field the projection omits — `note` is the one that bites, since it is the
-    user's own prose — is authoritatively dropped by
-    :func:`merge_projected_entry`, so the user's newly added note would still
-    vanish. Re-merging at the record level first carries it through, while the
-    plan still wins every field it actually sets.
+    Merging at the *entry* level is the starting point, because `plan["entry"]`
+    is authoritative (`apply_write_plan` says so, and some callers build a plan
+    whose entry carries a change its record does not). That alone is not enough,
+    though: `plan["entry"]` is not a diff. `plan_bib_write` builds it by merging
+    onto the entry it read at plan time, so it carries *stale copies* of fields
+    this writer never touched, and letting those win silently reverted a
+    concurrent writer — a `keywords` value added meanwhile went back to its
+    plan-time value, and a record-owned field the projection omits (`journal`)
+    was deleted outright by :func:`merge_projected_entry`. Both were reproduced
+    against the released code, so this predates the removal of the pre-lock
+    digest guard rather than following from it; the guard never covered it.
+
+    So the plan is applied as a three-way merge against `plan["base_entry"]`
+    (see :func:`_apply_untouched_fields_from_current`): planned-differs-from-base
+    means this writer decided the field and it wins, planned-equals-base means it
+    is a carried copy and the current entry wins. A plan built by hand carries no
+    base — `promote --replace`'s preview is the one that matters — and keeps the
+    older entry-level behaviour, which is what its deliberate identity-field
+    stripping depends on.
     """
     index = plan.get("index")
     planned_record = plan.get("record")
@@ -945,6 +1033,16 @@ def _rebase_update_plan_against_current(
     # `@unpublished` to `@article` on purpose, and the plan is authoritative.
     rebased["entry_type"] = planned_entry["entry_type"]
 
+    # …but "the plan is authoritative" only holds for what the plan actually
+    # decided. Where a base is available, hand every other field back.
+    base_entry = plan.get("base_entry")
+    if isinstance(base_entry, dict):
+        _apply_untouched_fields_from_current(
+            rebased, base=base_entry, planned=planned_entry, current=current_entry
+        )
+        if planned_entry["entry_type"] == base_entry["entry_type"]:
+            rebased["entry_type"] = current_entry["entry_type"]
+
     # `merge_projected_entry` treats a record-owned field the projection omits
     # as a deletion, which is correct for `promote --replace` — it strips
     # `arxiv_id`, the arXiv DOI and the preprint URLs on purpose — but wrong for
@@ -965,7 +1063,7 @@ def _rebase_insert_plan_against_current(
 ) -> WritePlan:
     planned_record = plan.get("record")
     if not isinstance(planned_record, dict):
-        raise _stale_plan("it carries no record to write")
+        raise _malformed_plan("it carries no record to write")
     planned_citekey = planned_record.get("citekey")
     if not isinstance(planned_citekey, str) or not planned_citekey.strip():
         return plan
@@ -1493,19 +1591,27 @@ def plan_bib_write(
     # Only merge when the entry list is demonstrably the same snapshot as the
     # record list — a skewed snapshot (e.g. a re-read after a concurrent edit)
     # would merge onto the wrong entry, which is worse than the field loss.
+    base_entry: BibtexEntry | None = None
     if (
         existing_entries is not None
         and len(existing_entries) == len(existing_records)
         and existing_entries[match_index]["citekey"] == existing_record.get("citekey")
     ):
-        entry = merge_projected_entry(existing_entries[match_index], entry)
-    return {
+        base_entry = existing_entries[match_index]
+        entry = merge_projected_entry(base_entry, entry)
+    plan: WritePlan = {
         "action": "update",
         "index": match_index,
         "record": merged_record,
         "entry": entry,
         "changed_fields": merge_decision["changed_fields"],
     }
+    if base_entry is not None:
+        # Carried so a rebase can tell this plan's own edits from the copy of
+        # the entry it merged onto. `entry` above is the *whole* entry, not a
+        # diff, so without the base every stale field in it looks deliberate.
+        plan["base_entry"] = base_entry
+    return plan
 
 
 def merge_entries(existing: MergeableEntry, incoming: MergeableEntry) -> MergeDecision:

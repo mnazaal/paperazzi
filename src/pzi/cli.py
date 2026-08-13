@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from typing import Any, TextIO, TypedDict
 
 from pzi import cli_json, exit_codes
-from pzi.bib_repository import ConcurrentEditError
 from pzi.cli_parser import build_parser, set_error_stream
 from pzi.commands.add import run_add_command as _run_add
 from pzi.commands.check import run_check_command as _run_check
@@ -241,16 +240,6 @@ def run_cli(
             # A downstream reader (e.g. `| head`) closed the pipe — let main()
             # handle it quietly; never report it as a command error.
             raise
-        except ConcurrentEditError:
-            # Another process edited the bib between our pre-lock snapshot and
-            # acquiring the lock; the write was aborted to prevent data loss.
-            # A retry almost always succeeds (the race window is tiny).
-            return _fail(
-                "bib file was modified externally while writing — "
-                "retry the command",
-                [],
-                exit_codes.ENVIRONMENT,
-            )
         except PziError as exc:
             # Carries a message already phrased for the user (e.g. naming the
             # bib file that is not valid UTF-8) and the exit code to report.
@@ -265,8 +254,11 @@ def run_cli(
             # `RuntimeError` on a violated batch-state guard. Nothing caught it,
             # so a desync printed a traceback and — under `--json` — wrote
             # *nothing at all* to stdout, the two outcomes `--json` exists to
-            # rule out. `ConcurrentEditError` is itself a `RuntimeError` and is
-            # handled above, so it keeps its own message.
+            # rule out. `ConcurrentEditError` is also a `RuntimeError` and lands
+            # here, printing its own message: it had a dedicated arm above until
+            # that arm became both unreachable (`promote_service` converts it
+            # into a per-preprint failure and never lets it out) and identical
+            # to this one, which is two reasons not to keep it.
             return _fail(str(exc), [], exit_codes.ENVIRONMENT)
         except ValueError as exc:
             # Defence in depth, not a design: a write refusal is supposed to

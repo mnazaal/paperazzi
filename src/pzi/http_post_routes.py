@@ -18,7 +18,7 @@ from typing import Any, cast
 from urllib.parse import urlsplit
 
 from pzi.add_planning import error_result
-from pzi.bib_repository import ConcurrentEditError
+from pzi.bib_repository import ConcurrentEditError, StalePlanError
 from pzi.bib_service import delete_entry
 from pzi.bibtex import normalize_authors
 from pzi.capture_core import capture_to_bib
@@ -65,11 +65,24 @@ _MAX_INBOX_DELAY_SECONDS = 60.0
 ATTACH_SESSION_TTL_SECONDS = 600
 MAX_BROWSER_PDF_BYTES = DEFAULT_MAX_BODY_BYTES
 
-# A concurrent external edit aborts the write at the repository layer; report it
-# as 409 Conflict rather than letting it surface as an opaque 500.
+# A write another writer got in front of is refused at the repository layer;
+# report it as 409 Conflict rather than letting it surface as an opaque 500.
+# Only a fallback: both refusals carry a message phrased for a human that names
+# what moved, and `_conflict_message` prefers it.
 CONCURRENT_EDIT_MESSAGE = (
     "bib file was modified externally while writing — retry the request"
 )
+
+
+def _conflict_message(exc: Exception) -> str:
+    """The 409 body text for a refused write.
+
+    The exception's own message says which entry or citekey moved; the generic
+    line says only that something did. Reporting the generic one made the two
+    refusals indistinguishable to a client — the CLI prints the specific text
+    for exactly this reason, and the routes had no business disagreeing with it.
+    """
+    return str(exc).strip() or CONCURRENT_EDIT_MESSAGE
 
 # ---------------------------------------------------------------------------
 # Capture body helpers
@@ -638,11 +651,18 @@ def _handle_capture_post(
             home_dir=home_dir,
             service_kwargs=service_kwargs,
         )
-    except ConcurrentEditError:
+    except StalePlanError as exc:
+        # The refusal this path can actually raise, once `add_service`'s replan
+        # has also lost: the entry the plan targeted was deleted or renamed.
+        # It is a `PziError`, and nothing between the repository and here
+        # catches those, so without this arm it surfaced as a 500.
+        # `ConcurrentEditError` is deliberately not caught: only
+        # `promote_service` raises it, and capture cannot reach that code.
+        message = _conflict_message(exc)
         return 409, capture_payload(
             error_result(
-                message=CONCURRENT_EDIT_MESSAGE,
-                errors=[CONCURRENT_EDIT_MESSAGE],
+                message=message,
+                errors=[message],
                 dry_run=body_flag(body, "dry_run", default=False),
                 warnings=[],
             )
@@ -938,8 +958,12 @@ def _handle_update_post(
             bib_selector=body.get("bib") if isinstance(body.get("bib"), str) else None,
             dry_run=body_flag(body, "dry_run", default=True),
         )
-    except ConcurrentEditError:
-        return 409, {"error": CONCURRENT_EDIT_MESSAGE}
+    except StalePlanError as exc:
+        # `update --dry-run` previews through `preview_write_plan`, which
+        # refuses when the entry it targeted has moved. This arm named
+        # `ConcurrentEditError`, which the update path cannot raise, so that
+        # refusal — a `PziError` nothing else here catches — was a 500.
+        return 409, {"error": _conflict_message(exc)}
     status = status_for_service_result(result)
     return status, update_payload(
         result, include_diagnostics=body_flag(body, "verbose", default=False)
@@ -959,8 +983,13 @@ def _handle_promote_post(
             keep_preprint=not body_flag(body, "replace", default=False),
             dry_run=body_flag(body, "dry_run", default=True),
         )
-    except ConcurrentEditError:
-        return 409, {"error": CONCURRENT_EDIT_MESSAGE}
+    except (ConcurrentEditError, StalePlanError) as exc:
+        # Promote raises both — the fork's citekey turning up under the batch
+        # lock, and its preview finding the preprint moved — but both are
+        # raised inside its per-preprint `try` and reported as a failed item,
+        # so neither reaches here today. Kept as a boundary guard: if one ever
+        # escapes, 409 with the reason beats the catch-all's opaque 500.
+        return 409, {"error": _conflict_message(exc)}
     status = status_for_service_result(result)
     return status, promote_payload(
         result, include_diagnostics=body_flag(body, "verbose", default=False)
