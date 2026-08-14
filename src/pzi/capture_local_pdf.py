@@ -474,10 +474,21 @@ def plan_with_applied_record(
     if match_index is None:
         return plan
     applied_record = updated_records[match_index]
-    if applied_record.get("citekey") == plan["record"].get("citekey"):
-        return plan
+    # Unconditionally, not just when the citekey moved. `execute_write_plan`
+    # rebases a *local* copy of the plan onto the library it reads under the
+    # lock, and returns only the entries — so a concurrent writer's field that
+    # the rebase correctly preserved in the file was absent from the record this
+    # capture reports (`--json`, the HTTP capture payload), and only there.
+    # Merged rather than replaced: `updated_records` is the on-disk truth and
+    # wins every field it models, but `bibtex_entry_to_record` cannot carry
+    # `pdf_source`, `similarity_hint`, `duplicate_of`, `_citekey_renamed_from`
+    # or the `fallback_*` keys — and dropping the last of those is what silently
+    # swallowed the "requested citekey was already taken" warning whenever a
+    # collision made the swap fire.
     updated_plan = dict(plan)
-    updated_plan["record"] = applied_record
+    updated_plan["record"] = cast(
+        NormalizedRecord, {**plan["record"], **applied_record}
+    )
     updated_plan["entry"] = updated_entries[match_index]
     updated_plan["action"] = "update" if plan["action"] == "update" else plan["action"]
     return cast(WritePlan, updated_plan)

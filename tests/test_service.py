@@ -1521,6 +1521,74 @@ def test_plan_with_applied_record_keeps_the_force_new_citekey() -> None:
     assert result["record"]["citekey"] == "smith2024a"
 
 
+def test_plan_with_applied_record_reports_what_the_write_committed() -> None:
+    """The reported record must match the entry, even when the citekey held.
+
+    `execute_write_plan` rebases the plan onto the library it reads under the
+    lock, but it rebases a *local* copy and hands back only the entries — so a
+    concurrent writer's field that the rebase correctly preserved in the `.bib`
+    was missing from the record this capture reports (`--json`, the HTTP capture
+    payload) and from nowhere else. Reconciling only when the citekey moved left
+    exactly that case uncovered, which is the common one: an ordinary capture
+    onto an entry someone else just edited.
+    """
+    plan = {
+        "record": {"citekey": "a2020", "doi": "10.1234/a", "venue": None},
+        "action": "update",
+    }
+    # What the rebase actually wrote: the other writer's `journal` survived.
+    committed = record_to_bibtex_entry(
+        {
+            "citekey": "a2020",
+            "doi": "10.1234/a",
+            "title": "Paper",
+            "venue": "NeurIPS",
+        }
+    )
+
+    result = plan_with_applied_record(
+        plan,
+        {"doi": "10.1234/a"},  # type: ignore[arg-type]
+        [committed],
+    )
+
+    assert result["record"]["venue"] == "NeurIPS"
+
+
+def test_plan_with_applied_record_keeps_keys_the_entry_cannot_carry() -> None:
+    """Reconciling the record must not throw away what BibTeX does not model.
+
+    `bibtex_entry_to_record` can only recover what the entry holds, so replacing
+    the record wholesale dropped `pdf_source`, `similarity_hint`, `duplicate_of`,
+    the `fallback_*` keys — and `_citekey_renamed_from`, which
+    `build_add_record_result` reads to warn that the requested citekey was taken.
+    A citekey rebind is precisely when that warning is due, so the swap silently
+    swallowed it every time it fired.
+    """
+    plan = {
+        "record": {
+            "citekey": "old",
+            "doi": "10.1234/a",
+            "pdf_source": "unpaywall",
+            "_citekey_renamed_from": "wanted2020",
+        },
+        "action": "insert",
+    }
+    committed = record_to_bibtex_entry(
+        {"citekey": "new", "doi": "10.1234/a", "title": "Paper"}
+    )
+
+    result = plan_with_applied_record(
+        plan,
+        {"doi": "10.1234/a"},  # type: ignore[arg-type]
+        [committed],
+    )
+
+    assert result["record"]["citekey"] == "new"
+    assert result["record"]["pdf_source"] == "unpaywall"
+    assert result["record"]["_citekey_renamed_from"] == "wanted2020"
+
+
 def test_build_add_record_result_shapes_dry_run_message() -> None:
     plan = plan_bib_write(
         {"citekey": "smith2024paper", "title": "Paper"},

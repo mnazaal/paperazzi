@@ -929,8 +929,18 @@ def _validate_update_plan_against_current(
     if not isinstance(planned_record, dict):
         raise _malformed_plan("it carries no record to write")
     planned_citekey = planned_record.get("citekey")
+    # A falsy planned citekey used to skip the comparison below entirely, so the
+    # rebase went on to write onto whatever occupied `index` — the one thing this
+    # function exists to prevent. Malformed rather than stale, like the refusal
+    # above it: the bib has not moved, the plan is wrong in itself, and
+    # `add_service` replanning it would burn a lock cycle over a caller bug.
+    # Unreachable from any producer today (`record_to_bibtex_entry` refuses a
+    # keyless record at plan time), which is exactly why the guard should not
+    # depend on that refusal for its own precondition.
+    if not isinstance(planned_citekey, str) or not planned_citekey.strip():
+        raise _malformed_plan("its record has no citekey to check against")
     current_citekey = current_records[index].get("citekey")
-    if planned_citekey and current_citekey != planned_citekey:
+    if current_citekey != planned_citekey:
         raise _stale_plan("the entry it targets now has a different citekey")
 
 

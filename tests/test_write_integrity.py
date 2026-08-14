@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from pzi.bib_repository import (
+    StalePlanError,
     _write_bib_text_atomic,
     batch_write_session,
     delete_bib_entry,
@@ -606,6 +607,62 @@ def test_a_hand_built_plan_without_a_base_still_applies_its_deletions(
     written = bib.read_text()
     assert "arXiv preprint" not in written, "a deliberate strip was undone"
     assert "@article" in written, "the deliberate retype was undone"
+
+
+def test_an_update_plan_whose_record_has_no_citekey_is_refused(
+    tmp_path: Path,
+) -> None:
+    """The citekey guard must not be skippable by carrying no citekey.
+
+    `_validate_update_plan_against_current` is the one thing standing between a
+    write and the wrong entry, and it used to read
+    `if planned_citekey and current_citekey != planned_citekey` — so a plan whose
+    record has an empty or missing citekey skipped the comparison entirely and
+    the rebase wrote onto whatever occupied `plan["index"]`. Measured against the
+    unguarded code, this plan replaced `jones2021` outright: its citekey, title
+    and year gone, the second entry now `@article{keyless2099}`.
+
+    The planned entry's citekey is deliberately one the library does not already
+    hold. Reusing `smith2020` here made the write collide with the first entry
+    and get refused by the duplicate-citekey gate in `validate_bibtex_roundtrip`
+    instead — so the test passed identically with this guard removed, certifying
+    a downstream accident rather than the guard it names.
+
+    No producer can build such a plan today (`record_to_bibtex_entry` refuses a
+    keyless record at plan time), which is the reason to pin it: the guard should
+    not depend on an upstream refusal for its own precondition.
+
+    Refused as malformed, not stale, and that distinction is asserted: a
+    `StalePlanError` sends `add_service` back to replan under a second lock and,
+    when the replan does not help, deletes the downloaded PDF — an expensive
+    round trip for a plan that is wrong in itself rather than out of date.
+    """
+    bib = tmp_path / "lib.bib"
+    bib.write_text(TWO_ENTRIES)
+    before = bib.read_text()
+
+    keyless_record = {
+        key: value for key, value in read_bib_file(str(bib))["records"][0].items()
+        if key != "citekey"
+    }
+    plan = {
+        "action": "update",
+        "index": 1,  # the *other* entry
+        "record": keyless_record,
+        "entry": {
+            "entry_type": "article",
+            "citekey": "keyless2099",
+            "fields": {"title": "Rewritten By A Keyless Plan"},
+        },
+        "changed_fields": ["title"],
+    }
+
+    with pytest.raises(PziError) as excinfo:
+        execute_write_plan(str(bib), plan)
+
+    assert not isinstance(excinfo.value, StalePlanError)
+    assert bib.read_text() == before, "a refused plan still wrote"
+    assert "jones2021" in bib.read_text(), "the entry it targeted was overwritten"
 
 
 def _add_a_keyword(entry, record):

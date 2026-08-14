@@ -42,6 +42,21 @@ next to the diff it explains.
   it was built from: what this writer changed wins, what it merely carried
   defers to whoever else edited it. Predates this release (reproduced against
   the previous version), and is independent of the lock change above.
+- A capture now reports the entry it actually wrote. The rebase above re-projects
+  the write onto the library as read under the lock, but the record `--json` and
+  the HTTP capture payload were built from was still the plan-time one — so a
+  concurrent writer's `journal`, correctly preserved in the `.bib`, was absent
+  from the reported record. Nothing was ever written wrongly; the report
+  disagreed with the file. The same reconciliation also stops a citekey
+  collision from swallowing its own "requested citekey was already taken"
+  warning.
+- A write plan whose record carries no citekey is refused instead of writing
+  onto whatever entry sits at the plan's index. The guard that compares the
+  planned citekey against the one on disk treated a missing citekey as "nothing
+  to check" and waved the write through; against the unguarded code such a plan
+  replaced an unrelated entry outright. No command could produce one — a keyless
+  record is refused earlier, when the entry is projected — so this closes a hole
+  in the guard rather than a reachable failure.
 
 ## [0.1.0b6] - 2026-08-13
 
