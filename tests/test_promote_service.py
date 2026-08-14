@@ -147,6 +147,60 @@ def test_a_year_glued_to_the_venue_name_is_still_a_preprint_venue() -> None:
     assert _select_best_published_candidate(_PREPRINT, [real]) is not None
 
 
+def test_a_different_paper_by_the_same_authors_is_not_a_published_version() -> None:
+    """The composite gate cannot catch this; the title floor can.
+
+    Both of these are real: they survived the preprint filter and cleared the
+    confidence threshold of 60 on a 20-entry slice of the user's library,
+    because a perfect author match dragged a weak title over the line. Every one
+    of the 12 *correct* promotions in that run scored `title 100`; these scored
+    62 and 70.
+    """
+    from pzi.resolution_match import score_match
+
+    pairs = [
+        (
+            "Adaptivity and Confounding in Multi-Armed Bandit Experiments",
+            "On Adaptivity and Confounding in Contextual Bandit Experiments",
+        ),
+        (
+            "RecSim NG: Toward Principled Uncertainty Modeling for Recommender Ecosystems",
+            "Demonstrating Principled Uncertainty Modeling for Recommender "
+            "Ecosystems with RecSim NG",
+        ),
+    ]
+    authors = ["Chao Qin", "Daniel Russo"]
+    for preprint_title, other_paper in pairs:
+        match = score_match(
+            {"title": preprint_title, "authors": authors},
+            {"title": other_paper, "authors": authors},
+        )
+        assert match["author_similarity"] == 100, "the authors really do match"
+        assert match["title_similarity"] < promote_service._MIN_TITLE_SIMILARITY, (
+            f"{other_paper!r} would still be accepted as a published version"
+        )
+
+
+def test_the_real_published_version_still_clears_the_title_floor() -> None:
+    """The floor must not cost the promotions that were right all along.
+
+    A published version may retitle slightly — a subtitle appearing or a
+    capitalisation change — and that has to survive.
+    """
+    from pzi.resolution_match import score_match
+
+    authors = ["Li Jing", "Pascal Vincent"]
+    for published_title in (
+        "Understanding Dimensional Collapse in Contrastive Self-supervised Learning",
+        "Understanding dimensional collapse in contrastive self-supervised learning",
+    ):
+        match = score_match(
+            {"title": _PREPRINT["title"], "authors": authors},
+            {"title": published_title, "authors": authors},
+        )
+        assert match["title_similarity"] >= promote_service._MIN_TITLE_SIMILARITY
+
+
 def test_a_publisher_the_candidate_supplies_is_kept() -> None:
     """Only the *inherited* preprint values are dropped, never the real ones."""
     preprint = {**_PREPRINT, "publisher": "arXiv", "number": "arXiv:2110.09348"}
@@ -619,7 +673,13 @@ def test_promote_different_author_year_scoring(tmp_path):
             {
                 "item_type": "journalArticle",
                 "record": {
-                    "title": "Graph Parsers Extended",
+                    # Was "Graph Parsers Extended", which scores `title 67` —
+                    # squarely in the band of the two real false positives this
+                    # suite now pins (62 and 70). Titles are governed by
+                    # `_MIN_TITLE_SIMILARITY` and tested there; what this case
+                    # exists to exercise is the extra-author and year penalties,
+                    # so it keeps those and drops the incidental title drift.
+                    "title": "Graph Parsers",
                     "venue": "Journal of Parsing",
                     "year": 2025,
                     "authors": ["Smith, Jane", "Doe, John"],

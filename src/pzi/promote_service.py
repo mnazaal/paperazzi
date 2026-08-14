@@ -100,6 +100,20 @@ class PromoteResult(TypedDict):
     #: Structured failure reason (`pzi.errors.REASON_*`) — present only on
     #: failure. Both the exit-code and HTTP-status mappers read it.
     reason: NotRequired[str]
+#: A promotion must clear this on *title* similarity alone, on top of the
+#: composite confidence gate. The composite is not enough: a published version
+#: is the same paper, so the one thing that survives the preprint→published
+#: transition is the title, while identical authors are exactly what makes the
+#: dangerous case dangerous. Measured on 20 real preprints, every one of the 12
+#: correct promotions scored `title 100`; the two wrong ones scored `title 62`
+#: and `title 70` with `author 100`, and the composite was dragged over the
+#: threshold of 60 by that perfect author match. Both were a *different paper by
+#: the same authors* — "On Adaptivity and Confounding in **Contextual** Bandit
+#: Experiments" for a multi-armed-bandit preprint, and a conference *demo*
+#: paper for the system it demonstrates. 85 is `resolution_match`'s own mark for
+#: a title strong enough to anchor a decision, and it sits clear of both.
+_MIN_TITLE_SIMILARITY = 85
+
 # Tag written to a preprint by `--mark-resolved` so re-runs can skip it.
 _RESOLVED_TAG = "promoted"
 
@@ -234,12 +248,16 @@ def promote_bib(
         # anyway while the diagnostics printed `confidence 0/100`.
         match = score_match(record, candidate)
         score = match["score"]
-        if score < effective_confidence_threshold:
+        title_similarity = match["title_similarity"]
+        if score < effective_confidence_threshold or title_similarity < _MIN_TITLE_SIMILARITY:
             summary["skipped_low_confidence"] += 1
-            item = _skip_item(
-                preprint_ck,
-                f"low confidence ({score} < {effective_confidence_threshold})",
+            reason = (
+                f"low confidence ({score} < {effective_confidence_threshold})"
+                if score < effective_confidence_threshold
+                else f"title too different ({title_similarity} < {_MIN_TITLE_SIMILARITY}) "
+                "— looks like a related paper, not this one's published version"
             )
+            item = _skip_item(preprint_ck, reason)
             if metadata_diagnostics:
                 item["metadata_diagnostics"] = metadata_diagnostics
             metadata_warnings = _published_candidate_confidence_warnings(

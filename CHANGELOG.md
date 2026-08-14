@@ -17,6 +17,20 @@ next to the diff it explains.
 
 ### Fixed
 
+- `pzi update --promote` no longer accepts a *different paper by the same
+  authors* as a published version. The confidence gate scored title and author
+  agreement into one number, so a perfect author match — which is exactly what a
+  same-group follow-up paper has — could carry a weak title over the bar. On 20
+  real preprints that admitted two: a multi-armed-bandit preprint promoted to
+  "On Adaptivity and Confounding in **Contextual** Bandit Experiments", and a
+  system paper promoted to the conference *demo* paper about that system. A
+  promotion must now clear a title-similarity floor of its own; the two above
+  scored 62 and 70 against it, while all twelve correct promotions in the same
+  run scored 100. Refusals say which test failed. Note the trade-off: a
+  published version that is substantially retitled — an "extended version" with
+  a new title — is now refused rather than guessed at, and has to be linked by
+  hand.
+
 - `pzi update --promote` no longer relabels a preprint as its own published
   version. Three defects, all in the same place — the code knew what a preprint
   looked like and only ever applied that knowledge to the entry it was
