@@ -487,6 +487,10 @@ default = true
         "changed_fields": ["authors", "citekey", "doi", "title", "year"],
         "dry_run": True,
         "message": "would insert entry",
+        # A capture the translation server answered now says so, as a Crossref
+        # capture always did. The asymmetry is what made the live smoke job
+        # unable to tell a real translation-server capture from a fallback.
+        "metadata_diagnostics": ["metadata from translation_server"],
         "warnings": [],
         "errors": [],
     }

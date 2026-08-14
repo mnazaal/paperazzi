@@ -666,6 +666,64 @@ def test_a_candidate_that_agrees_or_is_silent_about_the_doi_is_still_taken() -> 
     assert record["doi"] == "10.1145/3372297"
 
 
+def test_the_translation_server_is_named_as_the_answering_provider() -> None:
+    """Both metadata paths must say which one answered, not just the cascade.
+
+    The cascade records `metadata_provider`; the translation-server branch
+    returned without it, so that path was identifiable only by the key being
+    *absent* — and "the translation server answered" was therefore
+    indistinguishable from "a provider answered and nobody recorded it". That is
+    what let the live smoke job pass on nothing but Crossref fallbacks while
+    claiming to cover the translation-server path, and it is why every capture
+    on record is a fallback (PLAN item 412).
+
+    Verified here rather than only in `tests/live/` because installing a real
+    translation-server is blocked on this machine (agent git guard, item 410),
+    so the live job cannot be the only thing pinning this.
+    """
+    from pzi.add_planning import fetch_record_for_input
+
+    def _search(_query, *, server_url):
+        return [
+            {"item_type": "journalArticle",
+             "record": {"title": "The Paper", "authors": ["A, B"], "year": 2020},
+             "attachments": []},
+        ]
+
+    record, _errors, _results = fetch_record_for_input(
+        raw_value="10.1145/3372297",
+        classified={"kind": "doi", "raw": "10.1145/3372297",
+                    "normalized": "10.1145/3372297"},
+        server_url="http://127.0.0.1:1969",
+        fetch_web=lambda *_a, **_k: [],
+        fetch_search=_search,
+    )
+
+    assert record["metadata_provider"] == "translation_server"
+
+
+def test_the_fallback_cascade_still_names_itself() -> None:
+    """The other half of the same contract: naming one path must not blank the
+    other. When the translation server returns nothing usable, the provider that
+    actually answered is still the one reported."""
+    from pzi.add_planning import fetch_record_for_input
+
+    record, _errors, _results = fetch_record_for_input(
+        raw_value="10.1145/3372297",
+        classified={"kind": "doi", "raw": "10.1145/3372297",
+                    "normalized": "10.1145/3372297"},
+        server_url="http://127.0.0.1:1969",
+        fetch_web=lambda *_a, **_k: [],
+        fetch_search=lambda *_a, **_k: [],
+        fetch_crossref=lambda *_a, **_k: {
+            "title": "The Paper That Was Asked For", "doi": "10.1145/3372297",
+            "authors": ["A, B"], "year": 2020,
+        },
+    )
+
+    assert record["metadata_provider"] == "crossref"
+
+
 # --- The provider cascade must reach its fallbacks ---------------------------
 
 

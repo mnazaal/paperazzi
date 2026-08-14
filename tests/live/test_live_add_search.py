@@ -1,9 +1,7 @@
 """Live smoke tests for end-to-end add, search, and tag workflows."""
 
 import os
-import sys
-from collections.abc import Iterator
-from pathlib import Path
+from collections.abc import Mapping
 
 import pytest
 
@@ -12,62 +10,11 @@ from pzi.bib_repository import read_bib_file
 from pzi.config import load_bib_target
 from pzi.search_service import search_bib
 from pzi.tag_service import list_tags
-from pzi.ts_backend import backend_session
 
 # Open-access DOI with PDF (PLOS ONE) — used by existing test_live_metadata.py
 OA_DOI = "10.1371/journal.pone.0000308"
 # Stable arXiv preprint
 ARXIV_ID = "2301.07041"
-
-
-def _write_config(bib_path: str, config_path: str) -> str:
-    """Write a minimal pzi config pointing at a temp bib."""
-    bib_path_abs = str(Path(bib_path).resolve())
-    config_dir = os.path.dirname(config_path)
-    papers_dir = os.path.join(config_dir, "papers")
-    config_text = f"""
-translation_server_url = "http://127.0.0.1:1969"
-api_listen_host = "127.0.0.1"
-api_listen_port = 8765
-
-[[bibs]]
-name = "smoke"
-path = "{bib_path_abs}"
-papers_dir = "{papers_dir}"
-default = true
-"""
-    config_dir_abs = os.path.dirname(config_path)
-    os.makedirs(config_dir_abs, exist_ok=True)
-    Path(config_path).write_text(config_text, encoding="utf-8")
-    return config_path
-
-
-@pytest.fixture(scope="module")
-def running_translation_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
-    """Start a real translation-server for this module's tests, shared to avoid
-    re-cloning/npm-installing per test. Skips (not fails) if it can't come up —
-    this is a network-dependent smoke job, not a gate.
-    """
-    data_home = tmp_path_factory.mktemp("ts-data")
-    config: dict[str, object] = {
-        "translation_server_url": "http://127.0.0.1:1969",
-        "pzi_data_home": str(data_home),
-    }
-    with backend_session(
-        config, home_dir=os.path.expanduser("~"),
-        interactive=False, stdout=sys.stdout, stderr=sys.stderr,
-    ) as backend:
-        if not backend["ready"]:
-            pytest.skip("translation-server could not be started for live tests")
-        yield
-
-
-@pytest.fixture
-def live_config_path(tmp_path: Path, running_translation_server: None) -> str:
-    bib_path = tmp_path / "smoke.bib"
-    config_path = tmp_path / "config.toml"
-    _write_config(str(bib_path), str(config_path))
-    return str(config_path)
 
 
 def _persisted_record(config_path: str, citekey: str) -> dict[str, object]:
@@ -90,6 +37,22 @@ def _persisted_record(config_path: str, citekey: str) -> dict[str, object]:
     raise AssertionError(f"citekey {citekey!r} not found in persisted bib")
 
 
+def _answering_provider(result: Mapping[str, object]) -> str | None:
+    """Which metadata path answered this capture, per `metadata_diagnostics`.
+
+    `add_planning` names its winner — `translation_server` for the translation
+    path, `crossref`/`openalex`/`semantic_scholar` for the fallback cascade —
+    and `add_service` lifts it onto `metadata_diagnostics` as `metadata from X`.
+    Without this the two are indistinguishable from the outside, which is how
+    the live job could pass on nothing but Crossref fallbacks while claiming to
+    cover the translation-server path.
+    """
+    for line in result.get("metadata_diagnostics") or []:
+        if isinstance(line, str) and line.startswith("metadata from "):
+            return line.removeprefix("metadata from ").strip()
+    return None
+
+
 def test_live_add_oa_doi_metadata(live_config_path: str) -> None:
     """Add an open-access DOI; verify persisted metadata fields are populated."""
     result = add_input_to_bib(
@@ -110,6 +73,14 @@ def test_live_add_oa_doi_metadata(live_config_path: str) -> None:
         pytest.skip("translation-server returned no metadata for the test DOI (third-party)")
     assert record.get("doi") == OA_DOI
     assert record.get("authors"), "expected authors"
+    # The point of this job. A capture the fallback answered is a fine capture
+    # and a useless observation: it says nothing about the path pzi actually
+    # leads with, which is the standing gap PLAN item 412 records.
+    provider = _answering_provider(result)
+    assert provider == "translation_server", (
+        f"capture succeeded but {provider or 'no provider'} answered, not the "
+        "translation server — the path this job exists to exercise did not run"
+    )
 
 
 def test_live_add_arxiv_url_metadata(live_config_path: str) -> None:
@@ -133,6 +104,11 @@ def test_live_add_arxiv_url_metadata(live_config_path: str) -> None:
     assert record.get("year"), "expected a year"
     assert record.get("arxiv_id") == ARXIV_ID or record.get("doi"), \
         "expected arXiv ID or DOI"
+    provider = _answering_provider(result)
+    assert provider == "translation_server", (
+        f"capture succeeded but {provider or 'no provider'} answered, not the "
+        "translation server — the path this job exists to exercise did not run"
+    )
 
 
 def test_live_tag_and_search(live_config_path: str) -> None:

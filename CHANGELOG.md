@@ -15,7 +15,28 @@ next to the diff it explains.
 
 ## [Unreleased]
 
+### Changed
+
+- A capture answered by the translation server now reports that, the way a
+  capture answered by Crossref/OpenAlex/Semantic Scholar always did:
+  `metadata from translation_server` appears in `--verbose` output and in
+  `--json`'s `metadata_diagnostics`. Previously only the fallback cascade named
+  its winner, so the primary metadata path was identifiable only by that line
+  being *absent* — which meant nothing could tell a real translation-server
+  capture from a silent fallback.
+
 ### Fixed
+
+- The live smoke job can no longer pass while capturing nothing. It skips when
+  the translation server cannot start (which skips every capture test at once),
+  skips again when a provider returns no metadata, and is `continue-on-error` by
+  design — so "nothing ran" and "everything passed" were the same green check.
+  The job now fails, visibly, when no real translation-server capture happened,
+  and says which of the three causes it was; every run writes a ran-vs-skipped
+  table with skip reasons to the GitHub step summary. The capture tests also
+  assert that the translation server, not a fallback provider, answered — with
+  no server running at all, both of them previously passed on Crossref and
+  OpenAlex fallbacks.
 
 - `pzi update --promote` no longer accepts a *different paper by the same
   authors* as a published version. The confidence gate scored title and author

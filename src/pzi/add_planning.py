@@ -659,6 +659,15 @@ def fetch_record_for_input(
             selected = select_best_metadata_result(usable, fallback)
             best = dict(merge_record_sources(fallback, selected["record"]))
             carry_item_type(best, selected)
+            # Named here as the cascade below names its own winner. Without it
+            # the translation-server path was identifiable only by this key's
+            # *absence*, so "the translation server answered" and "the fallback
+            # answered" were the same observation — which is why every capture
+            # on record is a Crossref fallback and the primary path has never
+            # been shown to run. `add_service` lifts the key off the record
+            # before any write, so it reaches `--verbose` and the result's
+            # `metadata_diagnostics`, never the `.bib`.
+            best["metadata_provider"] = "translation_server"
             return (
                 _with_pdf_discovery(
                     cast(NormalizedRecord, best),
