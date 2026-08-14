@@ -262,6 +262,94 @@ def test_write_plan_update_only_changes_target_entry(tmp_path: Path) -> None:
     assert smith_fields.get("journal") == "jmlr"
 
 
+def test_a_comment_flush_against_its_entry_stays_flush(tmp_path: Path) -> None:
+    """A file may separate entries by a blank line and *not* separate comments.
+
+    That is what a Better BibTeX export looks like: entries a blank line apart,
+    each followed by a `% ==` quality report flush against the closing brace.
+    `detect_bib_layout` sampled only entry→entry gaps (`_BLOCK_GAP_RE`'s
+    lookahead admits `@` and nothing else) while the writer applied one
+    separator at every boundary — so every comment gained a blank line before
+    it. Measured on the real 22,232-entry library: **one `tag add` inserted
+    18,650 blank lines**, one per comment block, against the 3,582 entry→entry
+    gaps that were the only evidence being read.
+
+    Lossless, and one-time rather than per-write, which is why nothing caught
+    it: the content survives, the diff does not.
+    """
+    bib_path = tmp_path / "bbt-shaped.bib"
+    source = (
+        "@article{a2020,\n"
+        "  title = {A},\n"
+        "  year = {2020},\n"
+        "}\n"
+        "% == BibTeX quality report for a2020:\n"
+        "% ? Title looks like it was stored in title-case in Zotero\n"
+        "\n"
+        "@article{b2021,\n"
+        "  title = {B},\n"
+        "  year = {2021},\n"
+        "}\n"
+        "% == BibTeX quality report for b2021:\n"
+        "% ? unused Library catalog\n"
+        "\n"
+        "@article{c2022,\n"
+        "  title = {C},\n"
+        "  year = {2022},\n"
+        "}\n"
+    )
+    bib_path.write_text(source)
+
+    layout = detect_bib_layout(source)
+    assert layout.block_separator == "\n", "entries are blank-line separated"
+    assert layout.comment_separator == "", "comments are flush against the entry"
+
+    # The whole file round-trips byte-for-byte, which is the property that
+    # makes a one-entry edit a one-entry diff.
+    assert serialize_library(parse_bib_library(source), layout=layout) == source
+
+    # And through a real write: only the targeted entry moves.
+    update_bib_entry(
+        str(bib_path),
+        "b2021",
+        lambda entry, record: {
+            **entry,
+            "fields": {**entry["fields"], "keywords": "tagged"},
+        },
+    )
+    after = bib_path.read_text()
+    assert "keywords = {tagged}" in after
+    assert after.count("\n\n") == source.count("\n\n"), (
+        f"blank lines were added or removed:\n{after}"
+    )
+    assert "}\n% == BibTeX quality report for b2021:" in after, (
+        f"a comment lost its flush position:\n{after}"
+    )
+
+
+def test_a_library_with_no_comments_is_written_exactly_as_before(
+    tmp_path: Path,
+) -> None:
+    """No comment boundary to learn from means follow the entry convention.
+
+    The comment separator is sniffed independently, so a file that offers no
+    evidence about it must not acquire some other default — otherwise splitting
+    the two separators would itself become a reformat for every library that
+    has no comments at all.
+    """
+    source = (
+        "@article{a2020,\n  title = {A},\n}\n\n@article{b2021,\n  title = {B},\n}\n"
+    )
+    layout = detect_bib_layout(source)
+    assert layout.comment_separator == layout.block_separator == "\n"
+    assert serialize_library(parse_bib_library(source), layout=layout) == source
+
+    compact = "@article{a2020,\n  title = {A},\n}\n@article{b2021,\n  title = {B},\n}\n"
+    compact_layout = detect_bib_layout(compact)
+    assert compact_layout.comment_separator == compact_layout.block_separator == ""
+    assert serialize_library(parse_bib_library(compact), layout=compact_layout) == compact
+
+
 def test_update_bib_entry_preserves_extras(tmp_path: Path) -> None:
     """update_bib_entry (the public API) preserves comments, strings, preamble."""
     bib_path = tmp_path / "test.bib"

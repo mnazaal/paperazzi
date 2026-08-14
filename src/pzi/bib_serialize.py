@@ -27,7 +27,13 @@ from bibtexparser.middlewares.enclosing import (
     AddEnclosingMiddleware,
     RemoveEnclosingMiddleware,
 )
-from bibtexparser.model import Block, DuplicateBlockKeyBlock, Field
+from bibtexparser.model import (
+    Block,
+    DuplicateBlockKeyBlock,
+    ExplicitComment,
+    Field,
+    ImplicitComment,
+)
 from bibtexparser.model import Entry as BibtexEntryV2
 from bibtexparser.writer import BibtexFormat
 
@@ -118,6 +124,13 @@ class BibLayout:
     #: One blank line between entries: the conventional BibTeX look, and what a
     #: file with nothing to sniff (new, or a single entry) is written as.
     block_separator: str = "\n"
+    #: The gap before a *comment* block, which is not always the gap before an
+    #: entry. A Better BibTeX export writes its `% ==` quality report flush
+    #: against the entry it describes while still separating entries by a blank
+    #: line — so one separator for both boundaries cannot reproduce the file.
+    #: Sniffed independently, and falls back to ``block_separator`` when the
+    #: source has no comment boundary to learn from.
+    comment_separator: str = "\n"
     indent: str = "  "
     trailing_comma: bool = False
 
@@ -133,6 +146,28 @@ _ENTRY_END_RE = re.compile(r"(,?)[ \t]*\n[ \t]*\}[ \t]*(?:\n|$)")
 #: lines, then the next block. Only matches between blocks, so the file's final
 #: entry cannot be mistaken for evidence about separation.
 _BLOCK_GAP_RE = re.compile(r"^\}[ \t]*\n(\n*)(?=[ \t]*@)", re.MULTILINE)
+
+#: The same gap, but before a *comment* rather than an entry. This boundary used
+#: to be invisible to the sniffer — the lookahead above admits only `@` — while
+#: the writer applied one separator at every boundary regardless. On a Better
+#: BibTeX export, where almost every entry is followed by a flush `% ==` quality
+#: report, that inserted a blank line before each one: measured at **18,650
+#: blank lines from a single `tag add`** on a real 22,232-entry library, against
+#: 3,582 entry→entry gaps that were the only ones being sampled.
+_COMMENT_GAP_RE = re.compile(r"^\}[ \t]*\n(\n*)(?=[ \t]*%)", re.MULTILINE)
+
+
+def _dominant_gap(source: str, pattern: re.Pattern[str], default: str) -> str:
+    """The blank-line convention *pattern* finds, or *default* with no evidence.
+
+    Dominant style wins, as everywhere else in this sniffer: one hand-edited
+    boundary in a 22k-entry file must not flip the whole rewrite.
+    """
+    gaps = [match.group(1) for match in pattern.finditer(source)]
+    if not gaps:
+        return default
+    blank_separated = sum(1 for gap in gaps if gap)
+    return "\n" if blank_separated * 2 >= len(gaps) else ""
 
 
 def detect_bib_layout(source: str) -> BibLayout:
@@ -160,15 +195,17 @@ def detect_bib_layout(source: str) -> BibLayout:
     # separated, so it keeps the default rather than inventing evidence: one
     # entry ends in `}` too, and counting that would read "compact" off every
     # single-entry library.
-    gaps = [match.group(1) for match in _BLOCK_GAP_RE.finditer(source)]
-    blank_separated = sum(1 for gap in gaps if gap)
-    if not gaps:
-        block_separator = BibLayout.block_separator
-    else:
-        block_separator = "\n" if blank_separated * 2 >= len(gaps) else ""
+    block_separator = _dominant_gap(source, _BLOCK_GAP_RE, BibLayout.block_separator)
+    # Comment boundaries are sniffed separately, and a file with none of them
+    # follows whatever the entry boundaries said — so a library without comments
+    # is written exactly as it was before this distinction existed.
+    comment_separator = _dominant_gap(source, _COMMENT_GAP_RE, block_separator)
 
     return BibLayout(
-        block_separator=block_separator, indent=indent, trailing_comma=trailing_comma
+        block_separator=block_separator,
+        comment_separator=comment_separator,
+        indent=indent,
+        trailing_comma=trailing_comma,
     )
 
 
@@ -522,18 +559,39 @@ def serialize_library(library: Library, *, layout: BibLayout | None) -> str:
     fmt = BibtexFormat()
     fmt.indent = layout.indent
     fmt.trailing_comma = layout.trailing_comma
-    fmt.block_separator = layout.block_separator
-    return write_string(
-        library,
-        unparse_stack=[
-            AddEnclosingMiddleware(
-                default_enclosing="{",
-                reuse_previous_enclosing=True,
-                enclose_integers=True,
+    # Blocks are joined here, not by the writer. bibtexparser appends
+    # `block_separator` after *every* block regardless of what follows, which
+    # cannot express a file that separates its entries by a blank line while
+    # keeping its `% ==` comments flush against the entry they describe — and
+    # that is what a Better BibTeX export looks like. Writing each block with no
+    # separator and joining by the *following* block's kind reproduces both.
+    # Safe to write per block because `value_column` is 0 (bibtexparser's
+    # default): no alignment is computed across the library, so a block's
+    # rendering does not depend on its neighbours.
+    fmt.block_separator = ""
+    unparse_stack = [
+        AddEnclosingMiddleware(
+            default_enclosing="{",
+            reuse_previous_enclosing=True,
+            enclose_integers=True,
+        )
+    ]
+    pieces: list[str] = []
+    for position, block in enumerate(library.blocks):
+        if position:
+            pieces.append(
+                layout.comment_separator
+                if isinstance(block, ImplicitComment | ExplicitComment)
+                else layout.block_separator
             )
-        ],
-        bibtex_format=fmt,
-    )
+        pieces.append(
+            write_string(
+                Library(blocks=[block]),
+                unparse_stack=unparse_stack,
+                bibtex_format=fmt,
+            )
+        )
+    return "".join(pieces)
 
 
 def validate_bibtex_roundtrip(entries: list[BibtexEntry]) -> None:

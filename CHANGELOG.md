@@ -17,6 +17,19 @@ next to the diff it explains.
 
 ### Fixed
 
+- Editing one entry no longer reformats the space around every comment. pzi
+  learned a file's block separation only from gaps between two *entries*, then
+  applied it at every block boundary — so a library that separates its entries
+  by a blank line while keeping each `% ==` comment flush against the entry it
+  describes (what Better BibTeX exports look like) gained a blank line before
+  every comment on the first write. On a real 22,232-entry library a single
+  `pzi tag add` inserted **18,650 blank lines** alongside the one field it was
+  asked to add; it is now a one-line diff. Nothing was ever lost — entries,
+  citekeys and comments all survived, and the reformat happened once rather
+  than per write — but the diff made the actual edit impossible to review.
+  The gap before a comment is now sniffed separately, and a file with no
+  comments is written exactly as before.
+
 - Concurrent writes no longer fail each other. `execute_write_plan` hashed the
   bib on the line before taking the lock and aborted with "bib file was modified
   externally" when the hash moved — so a second `pzi add` that had queued for
