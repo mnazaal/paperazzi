@@ -204,6 +204,50 @@ so it has to be copied. The clone contains your cookie database, is created
 mode 0700, and is removed when the session closes; abandoned ones (from a hook
 killed by its timeout) are swept on the next launch.
 
+### Recovering from a refused or interrupted write
+
+**Your library is never left half-written.** Every write goes to a sibling
+temporary file, is fsynced, and is then renamed over the target in one step, so
+a crash, a `kill`, or a full disk leaves the original file exactly as it was.
+A stray `.bib-*.tmp` beside the library is the remains of a killed write and is
+safe to delete. (One inherent limit: if your `.bib` has more than one hard link,
+only the name pzi wrote through points at the new content.)
+
+**A refused write is always exit 5, and always means nothing was written.**
+Exit 3 (`entry not found`) is a lookup that failed, not a write that was
+refused. What you may see:
+
+| Message | What happened | What to do |
+|---|---|---|
+| `timed out after 300s waiting for the lock on <bib> — another pzi process is still holding it` | Another pzi process has held the lock for five minutes. | Find that process. **Do not delete the `.lock` file** — see below. |
+| `the bib changed while this write was being prepared — …; retry the command` | Someone re-keyed or deleted the exact entry this command was about to write, while it was resolving metadata. Ordinary concurrent edits are absorbed and never reach this. | Retry. `pzi add` already retries once on its own before reporting it. |
+| `malformed BibTeX: refusing to rewrite the file — duplicate citekey 'x' at line N: only the first occurrence is read` | Two entries share a key, so a rewrite would silently drop one. | Rename one of them; the message names the line. |
+| `malformed BibTeX: refusing to rewrite the file — entry with no citekey at line N …` | An entry has no key. It cannot be cited, and it blocks every write to the library. | Give it a key. |
+| `cannot write this plan — …` | A bug in pzi, not a problem with your file. | Report it; retrying will not help. |
+
+**Never delete a `<bib>.lock` file to clear a jam.** The lock is `flock`-based,
+so the kernel releases it the moment the holding process exits — a lock file
+outliving a process means nothing, and is never stale. Deleting it while a
+holder is alive hands the next writer a fresh inode and lets two processes write
+at once, which is the one thing the lock exists to prevent. If a write really is
+wedged, find and kill the holding process; the lock goes with it.
+
+**What can be undone, and how.** Restore any of these by copying the file back
+over the original. Note that a `.bak` is a **whole-file snapshot**, not a diff:
+restoring one reverts *everything* that happened since it was taken, not just
+the command that made it.
+
+| Backup | Left by | Notes |
+|---|---|---|
+| `<bib>.<citekey>.bak` | `pzi delete`, `pzi fix merge` | The path is printed as `backup saved to …`. Repeats become `.bak2`, `.bak3`, … rather than overwriting. |
+| `<bib>.reindex.bak` | `pzi fix reindex --rename-citekeys` | Removed again if the run changed nothing. |
+| `<bib>.promote.bak` | `pzi update --promote --replace` | One per **run**, taken by the first write, not one per entry. |
+| `<data-home>/config-backups/config.toml.<UTC-timestamp>` | `pzi init --force` | Mode 0600, timestamped, so repeated `--force` runs keep a history instead of clobbering the first backup. |
+| `papers/.orphans/` | `pzi fix clean --fix` | PDFs no entry references are **moved here, not deleted**. `mv` one back to restore it. |
+
+**An ordinary `add` or `update` leaves no backup** — only the commands that
+destroy or replace a whole block do. Nothing ever cleans `.bak` files up, so
+they accumulate beside your library until you remove them.
 
 ### Config
 

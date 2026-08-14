@@ -58,6 +58,16 @@ next to the diff it explains.
   record is refused earlier, when the entry is projected — so this closes a hole
   in the guard rather than a reachable failure.
 
+### Documentation
+
+- `README.md` gains **Recovering from a refused or interrupted write**: what
+  each write refusal says and that every one of them means nothing was written,
+  which backups exist and how to restore each, and why a leftover `<bib>.lock`
+  must never be deleted to clear a jam (it is `flock`-based, so it is never
+  stale, and removing it lets two writers in). The section states which commands
+  leave no backup at all, and every claim in it was observed against a sandbox
+  library rather than read off the source.
+
 ## [0.1.0b6] - 2026-08-13
 
 ### Added
