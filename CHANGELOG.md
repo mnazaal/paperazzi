@@ -15,6 +15,19 @@ next to the diff it explains.
 
 ## [Unreleased]
 
+### Added
+
+- The CLI shape and the exit-code table are now pinned by tests, so neither can
+  change without a failure that says so. `tests/fixtures/cli_surface.txt`
+  records every command, subcommand, flag, positional, `nargs`, `choices` and
+  default across the whole parser tree — 185 lines covering 24 parsers — and
+  `tests/test_exit_code_table.py` checks the README's exit-code table against
+  `pzi.exit_codes` in both directions, that every documented code is reachable,
+  and that no two codes share a meaning. Nothing asserted any of this before: a
+  renamed flag, a dropped subcommand or a changed default passed every gate.
+  These are the first of the 1.0 freeze mechanisms — a frozen surface without a
+  test that fails when it changes is a promise with no mechanism.
+
 ### Changed
 
 - A capture answered by the translation server now reports that, the way a

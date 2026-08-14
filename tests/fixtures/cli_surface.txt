@@ -1,0 +1,185 @@
+pzi
+    --config dest=top_level_config
+    --version dest=version nargs=0
+
+pzi add
+    --citekey dest=citekey
+    --config dest=config
+    --cookie-file dest=cookie_file
+    --delay dest=delay
+    --dry-run dest=dry_run nargs=0
+    --failures-out dest=failures_out
+    --force-new dest=force_new nargs=0
+    --from-file dest=from_file
+    --json dest=json nargs=0
+    --metadata-json dest=metadata_json
+    --page-html dest=page_html
+    --pdf-candidate dest=pdf_candidate default=[]
+    --strict-metadata dest=strict_metadata nargs=0
+    --tags dest=tags
+    --target dest=target
+    --verbose dest=verbose nargs=0
+    <value> dest=value nargs='?'
+
+pzi check
+    --config dest=config
+    --force dest=force nargs=0
+    --json dest=json nargs=0
+    --jsonl dest=jsonl
+    --report dest=report
+    --strict dest=strict nargs=0
+    --target dest=target
+
+pzi delete
+    --config dest=config
+    --dry-run dest=dry_run nargs=0
+    --force dest=force nargs=0
+    --json dest=json nargs=0
+    --target dest=target
+    <citekey> dest=citekey required
+
+pzi doctor
+    --config dest=config
+    --config-only dest=config_only nargs=0
+    --json dest=json nargs=0
+    --reinstall-server dest=reinstall_server nargs=0
+
+pzi entries
+    --config dest=config
+    --json dest=json nargs=0
+    --limit dest=limit
+    --offset dest=offset
+    --sort dest=sort choices=['author', 'citekey', 'title', 'year']
+    --stats dest=stats nargs=0
+    --target dest=target
+    <citekey> dest=citekey nargs='?'
+
+pzi export
+    --config dest=config
+    --force dest=force nargs=0
+    --format dest=format choices=['bibtex', 'csv', 'json', 'ris'] default='bibtex'
+    --output -o dest=output
+    --target dest=target
+
+pzi fix
+
+pzi fix clean
+    --config dest=config
+    --dry-run dest=dry_run nargs=0
+    --fix dest=fix nargs=0
+    --json dest=json nargs=0
+    --target dest=target
+
+pzi fix dedupe
+    --config dest=config
+    --json dest=json nargs=0
+    --target dest=target
+
+pzi fix merge
+    --config dest=config
+    --dry-run dest=dry_run nargs=0
+    --json dest=json nargs=0
+    --target dest=target
+    <citekey_a> dest=citekey_a required
+    <citekey_b> dest=citekey_b required
+
+pzi fix reindex
+    --config dest=config
+    --dry-run dest=dry_run nargs=0
+    --force dest=force nargs=0
+    --json dest=json nargs=0
+    --rename-citekeys dest=rename_citekeys nargs=0
+    --target dest=target
+
+pzi import
+    --config dest=config
+    --dry-run dest=dry_run nargs=0
+    --force-new dest=force_new nargs=0
+    --json dest=json nargs=0
+    --target dest=target
+    <source> dest=source required
+
+pzi inbox
+    --config dest=config
+    --delay dest=delay default=1.0
+    --dry-run dest=dry_run nargs=0
+    --json dest=json nargs=0
+    --tags dest=tags
+    <file> dest=file required
+
+pzi init
+    --bib dest=bib
+    --browser dest=browser choices=['chromium', 'firefox']
+    --config dest=config
+    --force dest=force nargs=0
+    --name dest=name
+    --papers-dir dest=papers_dir
+    --rotate-token dest=rotate_token nargs=0
+    --setup dest=setup nargs=0
+
+pzi pdf
+
+pzi pdf attach
+    --config dest=config
+    --json dest=json nargs=0
+    --target dest=target
+    <citekey> dest=citekey required
+    <source> dest=source required
+
+pzi pdf retry
+    --config dest=config
+    --failed-only dest=failed_only nargs=0
+    --json dest=json nargs=0
+    --target dest=target
+    <citekey> dest=citekey nargs='?'
+
+pzi search
+    --author dest=author
+    --config dest=config
+    --json dest=json nargs=0
+    --query dest=query
+    --tag dest=tag
+    --target dest=target nargs='+'
+    --year dest=year
+
+pzi server
+    --config dest=config
+    --host dest=host
+    --log-requests dest=log_requests nargs=0
+    --no-auth dest=no_auth nargs=0
+    --port dest=port
+    --stop-after dest=stop_after
+
+pzi tag
+
+pzi tag add
+    --config dest=config
+    --dry-run dest=dry_run nargs=0
+    --json dest=json nargs=0
+    --target dest=target
+    <citekey> dest=citekey required
+    <tags> dest=tags nargs='+' required
+
+pzi tag list
+    --config dest=config
+    --json dest=json nargs=0
+    --target dest=target
+    <citekey> dest=citekey nargs='?'
+
+pzi tag remove
+    --config dest=config
+    --dry-run dest=dry_run nargs=0
+    --json dest=json nargs=0
+    --target dest=target
+    <citekey> dest=citekey required
+    <tags> dest=tags nargs='+' required
+
+pzi update
+    --config dest=config
+    --dry-run dest=dry_run nargs=0
+    --json dest=json nargs=0
+    --mark-resolved dest=mark_resolved nargs=0
+    --promote dest=promote nargs=0
+    --replace dest=replace nargs=0
+    --target dest=target nargs='+'
+    --verbose dest=verbose nargs=0
