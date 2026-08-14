@@ -1,6 +1,98 @@
 import pzi.promote_service as promote_service
 from pzi.add_service import add_record_to_bib
-from pzi.promote_service import _score_published_candidate, promote_bib
+from pzi.promote_service import (
+    _published_candidate_diagnostics,
+    _score_published_candidate,
+    _select_best_published_candidate,
+    promote_bib,
+)
+
+#: The real candidate set for `jing-understanding-2022`, taken from a
+#: `--verbose` run against the user's library on 2026-08-14. The arXiv record
+#: outscored the actual ICLR version 105 to 103 and was promoted in its place.
+_ARXIV_CANDIDATE = {
+    "title": "Understanding Dimensional Collapse in Contrastive Self-supervised Learning",
+    "authors": ["Li Jing", "Pascal Vincent", "Yann LeCun", "Yuandong Tian"],
+    "year": 2021,
+    "venue": "arXiv (Cornell University)",
+    "doi": "10.48550/arxiv.2110.09348",
+}
+_ICLR_CANDIDATE = {
+    "title": "Understanding Dimensional Collapse in Contrastive Self-supervised Learning",
+    "authors": ["Li Jing", "Pascal Vincent", "Yann LeCun", "Yuandong Tian"],
+    "year": 2022,
+    "venue": "ICLR 2022 Poster",
+}
+_PREPRINT = {
+    "citekey": "jing-understanding-2022",
+    "title": "Understanding Dimensional Collapse in Contrastive Self-supervised Learning",
+    "authors": ["Jing, Li", "Vincent, Pascal", "LeCun, Yann", "Tian, Yuandong"],
+    "year": 2022,
+    "arxiv_id": "2110.09348",
+}
+
+
+def test_an_arxiv_doi_does_not_earn_the_publisher_doi_bonus() -> None:
+    """The `+2` for a DOI is evidence of a *publisher* record, not any DOI.
+
+    arXiv mints its own DataCite DOI under `10.48550/`, so an arXiv candidate
+    collected the bonus while the real published version — which often carries
+    no DOI at all, because DBLP and OpenReview do not report one — did not. On
+    a real preprint that was the entire margin: 105 against 103.
+    """
+    with_arxiv_doi = _score_published_candidate(_PREPRINT, _ARXIV_CANDIDATE)
+    without_doi = _score_published_candidate(
+        _PREPRINT, {**_ARXIV_CANDIDATE, "doi": None}
+    )
+    assert with_arxiv_doi == without_doi, "an arXiv DOI still earns the bonus"
+
+    publisher_doi = _score_published_candidate(
+        _PREPRINT, {**_ARXIV_CANDIDATE, "doi": "10.1007/978-3-031-19809-0_38"}
+    )
+    assert publisher_doi > without_doi, "a real publisher DOI must still count"
+
+
+def test_the_published_version_wins_over_the_preprint_that_outscored_it() -> None:
+    """The regression in full: both defects, and the outcome that matters.
+
+    This is not "the arXiv record is refused" — it is that the *correct* answer
+    was in the candidate list all along and lost. Selection must now return the
+    ICLR record.
+    """
+    selected = _select_best_published_candidate(
+        _PREPRINT, [_ARXIV_CANDIDATE, _ICLR_CANDIDATE]
+    )
+    assert selected is not None
+    assert selected["venue"] == "ICLR 2022 Poster"
+
+
+def test_a_candidate_that_is_itself_a_preprint_is_never_selected() -> None:
+    """With no published version among the candidates, promote finds nothing.
+
+    The honest outcome for a paper that was never published: `no candidate`,
+    not the preprint relabelled as its own published version.
+    """
+    assert _select_best_published_candidate(_PREPRINT, [_ARXIV_CANDIDATE]) is None
+    # A venue alone is not publication: DBLP and Semantic Scholar report arXiv
+    # records as `CoRR`, with no DOI and no arXiv id to give them away.
+    corr = {**_ARXIV_CANDIDATE, "venue": "CoRR", "doi": None, "publisher": "arXiv"}
+    assert _select_best_published_candidate(_PREPRINT, [corr]) is None
+
+
+def test_a_rejected_preprint_candidate_is_reported_not_silently_dropped() -> None:
+    """A filter with no output is indistinguishable from a broken one."""
+    lines = _published_candidate_diagnostics(
+        _PREPRINT, [_ARXIV_CANDIDATE, _ICLR_CANDIDATE]
+    )
+    assert any(line.startswith("selected") and "ICLR" in line for line in lines)
+    assert any("rejected (preprint)" in line for line in lines), lines
+
+    # And when *everything* found was a preprint, the diagnostics still explain
+    # the empty result rather than leaving it unaccounted for.
+    only_preprints = _published_candidate_diagnostics(_PREPRINT, [_ARXIV_CANDIDATE])
+    assert only_preprints and all(
+        "rejected (preprint)" in line for line in only_preprints
+    )
 
 
 def test_candidate_scoring_matches_authors_across_name_formats() -> None:
@@ -18,6 +110,55 @@ def test_candidate_scoring_matches_authors_across_name_formats() -> None:
     assert _score_published_candidate(preprint, candidate) > _score_published_candidate(
         preprint, no_overlap
     )
+
+
+def test_the_published_entry_does_not_inherit_arxiv_as_its_publisher() -> None:
+    """A promoted paper must not keep the preprint's publisher and locator.
+
+    Better BibTeX writes `publisher = {arXiv}` and `number = {arXiv:2110.09348}`
+    onto its arXiv entries. The merge starts from the preprint, so both rode
+    into the published record — an ICLR paper published by arXiv, carrying the
+    preprint's identifier as its issue number. Invisible until the selection
+    fixes landed, because the "published" record used to *be* the arXiv one.
+    """
+    preprint = {
+        **_PREPRINT,
+        "publisher": "arXiv",
+        "number": "arXiv:2110.09348",
+        "volume": "abs/2110.09348",
+    }
+    merged = promote_service._merge_published_metadata(preprint, _ICLR_CANDIDATE)
+
+    assert "publisher" not in merged
+    assert "number" not in merged
+    assert "volume" not in merged
+    assert merged["venue"] == "ICLR 2022 Poster"
+
+
+def test_a_year_glued_to_the_venue_name_is_still_a_preprint_venue() -> None:
+    """DBLP writes `CoRR2019`, which a plain punctuation split leaves as one
+    token — so it matched neither `corr` nor `corr `, and it was the last arXiv
+    record to survive the filter on a real 20-entry slice. The split must not
+    over-fire on a real venue that happens to end in digits."""
+    glued = {**_ARXIV_CANDIDATE, "venue": "CoRR2019", "doi": None}
+    assert _select_best_published_candidate(_PREPRINT, [glued]) is None
+
+    real = {**_ICLR_CANDIDATE, "venue": "Nature2020"}
+    assert _select_best_published_candidate(_PREPRINT, [real]) is not None
+
+
+def test_a_publisher_the_candidate_supplies_is_kept() -> None:
+    """Only the *inherited* preprint values are dropped, never the real ones."""
+    preprint = {**_PREPRINT, "publisher": "arXiv", "number": "arXiv:2110.09348"}
+    candidate = {
+        **_ICLR_CANDIDATE,
+        "publisher": "Springer Nature Switzerland",
+        "number": "7",
+    }
+    merged = promote_service._merge_published_metadata(preprint, candidate)
+
+    assert merged["publisher"] == "Springer Nature Switzerland"
+    assert merged["number"] == "7"
 
 
 def _seed_bib_with_preprint(tmp_path, bib_path, config_path, **kwargs):

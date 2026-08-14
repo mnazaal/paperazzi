@@ -17,6 +17,36 @@ next to the diff it explains.
 
 ### Fixed
 
+- `pzi update --promote` no longer relabels a preprint as its own published
+  version. Three defects, all in the same place — the code knew what a preprint
+  looked like and only ever applied that knowledge to the entry it was
+  promoting *from*:
+  - "Has a venue" stood in for "is published", and an arXiv record has a venue
+    (`CoRR`, `arXiv (Cornell University)`, `CoRR2019`). The test was repeated at
+    each of six providers, so there was no single place to ask the better
+    question. A candidate is now rejected when it carries preprint identity, and
+    the rejection is reported rather than silent.
+  - The candidate score awarded `+2` for *any* DOI, so arXiv's own
+    `10.48550/…` DataCite DOI earned it while a real conference record — which
+    often has no DOI at all — did not. On a real preprint the arXiv record beat
+    the actual ICLR version 105 to 103 by exactly that bonus: the published
+    version was found and then rejected in favour of the preprint.
+  - The promoted entry inherited `publisher = {arXiv}` and
+    `number = {arXiv:2110.09348}` from the preprint it was built from, so a
+    paper promoted to ICLR claimed arXiv as its publisher.
+
+  Measured against 20 real preprints, before and after: **18 promotions of which
+  3 carried a real publication venue, against 14 of which all 14 do** — and 12
+  of those 14 are verifiably the same paper as the preprint. Promotions that
+  cannot be confirmed now stop at the confidence gate instead of writing a
+  relabelled preprint.
+
+- `citekey_format` is documented in the README, not just in the config template.
+  Unset, pzi uses its own scheme, so a library exported from Better BibTeX gains
+  keys in a second shape with every capture; the README now says so where a new
+  user meets the config, and gives the formula that matches a Better BibTeX
+  export key-for-key.
+
 - Editing one entry no longer reformats the space around every comment. pzi
   learned a file's block separation only from gaps between two *entries*, then
   applied it at every block boundary — so a library that separates its entries

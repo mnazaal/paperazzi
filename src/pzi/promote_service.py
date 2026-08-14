@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import re
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict, cast
@@ -39,7 +40,12 @@ from pzi.config import BibResolutionFailure, load_bib_target
 from pzi.errors import REASON_CONFIG
 from pzi.fetch_helpers import build_metadata_fetch_text
 from pzi.format_templates import format_citekey
-from pzi.identifiers import has_preprint_identity, is_preprint_doi, is_preprint_url
+from pzi.identifiers import (
+    has_preprint_identity,
+    is_preprint_doi,
+    is_preprint_url,
+    names_a_preprint_server,
+)
 from pzi.metadata_sources import (
     fetch_crossref_record_by_title,
     fetch_dblp_record_by_title,
@@ -465,47 +471,32 @@ def _find_published_candidate_with_diagnostics(
     if not isinstance(title, str) or not title.strip():
         return {"candidate": None, "provider_errors": provider_errors}
 
+    # One loop, not five near-identical blocks. The blocks differed only in the
+    # function called and the name reported, and each carried its own copy of
+    # the `candidate.get("venue")` test — six copies in this function once the
+    # translation-server path is counted. That repetition is why nothing ever
+    # asked whether a candidate was *itself a preprint*: there was no single
+    # place to ask it. Provider order is preserved (it is the tie-break in
+    # `_select_best_published_candidate`), and DBLP/OpenReview still follow the
+    # polite-pool providers as the CS-conference / ML-venue authorities that
+    # confirm proceedings versions the DOI-based sources leave unresolved.
     provider_candidates: list[NormalizedRecord] = []
-    crossref_fn = fetch_crossref or _default_provider_fn(
-        fetch_crossref_record_by_title, metadata_fetch_text
+    title_providers: tuple[tuple[str, MetadataRecordFetcher | None, Any], ...] = (
+        ("crossref", fetch_crossref, fetch_crossref_record_by_title),
+        ("openalex", fetch_openalex, fetch_openalex_record_by_title),
+        ("dblp", fetch_dblp, fetch_dblp_record_by_title),
+        ("openreview", fetch_openreview, fetch_openreview_record_by_title),
     )
-    candidate = _try_provider(
-        crossref_fn, title, name="crossref",
-        contact_email=contact_email, provider_errors=provider_errors,
-    )
-    if candidate is not None and candidate.get("venue"):
-        provider_candidates.append(cast(NormalizedRecord, dict(candidate)))
-
-    openalex_fn = fetch_openalex or _default_provider_fn(
-        fetch_openalex_record_by_title, metadata_fetch_text
-    )
-    candidate = _try_provider(
-        openalex_fn, title, name="openalex",
-        contact_email=contact_email, provider_errors=provider_errors,
-    )
-    if candidate is not None and candidate.get("venue"):
-        provider_candidates.append(cast(NormalizedRecord, dict(candidate)))
-
-    # DBLP and OpenReview are the CS-conference / ML-venue authorities; they
-    # confirm published proceedings versions that the DOI-based sources above
-    # often leave unresolved.  Queried after the polite-pool providers.
-    dblp_fn = fetch_dblp or _default_provider_fn(fetch_dblp_record_by_title, metadata_fetch_text)
-    candidate = _try_provider(
-        dblp_fn, title, name="dblp",
-        contact_email=contact_email, provider_errors=provider_errors,
-    )
-    if candidate is not None and candidate.get("venue"):
-        provider_candidates.append(cast(NormalizedRecord, dict(candidate)))
-
-    openreview_fn = fetch_openreview or _default_provider_fn(
-        fetch_openreview_record_by_title, metadata_fetch_text
-    )
-    candidate = _try_provider(
-        openreview_fn, title, name="openreview",
-        contact_email=contact_email, provider_errors=provider_errors,
-    )
-    if candidate is not None and candidate.get("venue"):
-        provider_candidates.append(cast(NormalizedRecord, dict(candidate)))
+    for name, override, base_fn in title_providers:
+        provider_fn = override or _default_provider_fn(base_fn, metadata_fetch_text)
+        candidate = _try_provider(
+            provider_fn, title, name=name,
+            contact_email=contact_email, provider_errors=provider_errors,
+        )
+        # No venue means there is nothing to promote *to*; such a result was
+        # never a candidate and is not reported as a rejection.
+        if candidate is not None and candidate.get("venue"):
+            provider_candidates.append(cast(NormalizedRecord, dict(candidate)))
 
     s2_fn: S2RecordWithErrorFetcher
     if fetch_s2 is not None:
@@ -558,6 +549,18 @@ def _find_published_candidate_with_diagnostics(
             "metadata_diagnostics": _published_candidate_diagnostics(record, provider_candidates),
         }
 
+    # Nothing publishable — but say *why* when candidates were seen and all of
+    # them were preprints. "no candidate" and "the only thing found was the
+    # preprint again" are different answers, and the second is the common one
+    # for a paper that genuinely was never published.
+    if provider_candidates:
+        return {
+            "candidate": None,
+            "provider_errors": provider_errors,
+            "metadata_diagnostics": _published_candidate_diagnostics(
+                record, provider_candidates
+            ),
+        }
     return {"candidate": None, "provider_errors": provider_errors}
 
 
@@ -648,14 +651,42 @@ def _translation_candidates(results: Any) -> list[NormalizedRecord]:
     return candidates
 
 
+def _is_publishable_candidate(candidate: NormalizedRecord) -> bool:
+    """Is this something a preprint can be promoted *to*?
+
+    Two conditions, and the second is the one that was missing. A candidate must
+    name a venue — there is nothing to promote to otherwise — and it must not
+    itself carry preprint identity. `promote` already tests its *source* records
+    with `has_preprint_identity` to decide what is worth promoting at all
+    (see `promote_bib`); applying the same test to the candidate is the whole
+    fix. Without it, "has a venue" stood in for "is published", and an arXiv
+    record has a venue: `CoRR`, or `arXiv (Cornell University)`. Against 20 real
+    preprints that produced 18 promotions of which only 3 were genuine
+    publications — the rest were the preprint, relabelled as its own published
+    version and cross-linked back to itself.
+    """
+    return bool(candidate.get("venue")) and not has_preprint_identity(candidate)
+
+
+def _partition_candidates(
+    candidates: list[NormalizedRecord],
+) -> tuple[list[NormalizedRecord], list[NormalizedRecord]]:
+    """Split into (promotable, preprints-that-cannot-be-a-published-version)."""
+    publishable = [c for c in candidates if _is_publishable_candidate(c)]
+    preprints = [c for c in candidates if not _is_publishable_candidate(c)]
+    return publishable, preprints
+
+
 def _select_best_published_candidate(
     preprint: NormalizedRecord,
     candidates: list[NormalizedRecord],
 ) -> NormalizedRecord | None:
-    if not candidates:
+    # Filtered here rather than at each provider, so no call site can forget.
+    publishable, _ = _partition_candidates(candidates)
+    if not publishable:
         return None
     return max(
-        enumerate(candidates),
+        enumerate(publishable),
         key=lambda item: (_score_published_candidate(preprint, item[1]), -item[0]),
     )[1]
 
@@ -671,7 +702,14 @@ def _score_published_candidate(
     score = score_match(preprint, candidate)["score"]
     if candidate.get("venue"):
         score += 2
-    if candidate.get("doi"):
+    # A DOI is evidence of a *publisher* record, which is the thing being looked
+    # for — so arXiv's own DataCite DOI must not earn it. Rewarding it inverted
+    # the comparison this function exists to make: for one real preprint the
+    # arXiv record scored 105 with `10.48550/arxiv.2110.09348` while the actual
+    # ICLR version, which carries no DOI at all, scored 103 and lost by exactly
+    # this bonus. The published version was found and then rejected in favour of
+    # the preprint it was supposed to replace.
+    if candidate.get("doi") and not is_preprint_doi(candidate.get("doi")):
         score += 2
     if candidate.get("pdf_url"):
         score += 1
@@ -682,27 +720,44 @@ def _published_candidate_diagnostics(
     preprint: NormalizedRecord,
     candidates: list[NormalizedRecord],
 ) -> list[str]:
+    publishable, preprints = _partition_candidates(candidates)
+    total = len(candidates)
+    # Preprint candidates are *reported*, not silently dropped. A filter with no
+    # output turns "we considered the arXiv record and declined it" into an
+    # unexplained absence, and this project's history is that a silent gate is
+    # indistinguishable from a broken one.
+    lines = [
+        _published_candidate_diagnostic_line(
+            "rejected (preprint)",
+            index,
+            total,
+            _score_published_candidate(preprint, candidate),
+            candidate,
+        )
+        for index, candidate in enumerate(preprints)
+    ]
+    if not publishable:
+        return lines
+
     scored = [
         (index, candidate, _score_published_candidate(preprint, candidate))
-        for index, candidate in enumerate(candidates)
+        for index, candidate in enumerate(publishable)
     ]
     best_index, best_candidate, best_score = max(
         scored,
         key=lambda item: (item[2], -item[0]),
     )
-    lines = [
+    return [
         _published_candidate_diagnostic_line(
-            "selected", best_index, len(candidates), best_score, best_candidate
-        )
+            "selected", best_index, total, best_score, best_candidate
+        ),
+        *(
+            _published_candidate_diagnostic_line("rejected", index, total, score, candidate)
+            for index, candidate, score in scored
+            if index != best_index
+        ),
+        *lines,
     ]
-    lines.extend(
-        _published_candidate_diagnostic_line(
-            "rejected", index, len(candidates), score, candidate
-        )
-        for index, candidate, score in scored
-        if index != best_index
-    )
-    return lines
 
 
 def _published_candidate_confidence_warnings(
@@ -1303,7 +1358,32 @@ def _merge_published_metadata(
             continue
         if is_preprint_url(merged.get(url_field)):
             merged.pop(url_field, None)
+    # Better BibTeX writes `publisher = {arXiv}` and `number = {arXiv:2110.09348}`
+    # onto its arXiv entries, and both rode the merge into the published record:
+    # a paper promoted to ICLR claimed arXiv as its publisher and kept the
+    # preprint's identifier as its issue number. Invisible until the rest of
+    # this was fixed, because the "published" record used to *be* the arXiv one,
+    # where those fields looked correct. Same rule as the DOI above — dropped
+    # only when the candidate offered nothing of its own.
+    if not candidate.get("publisher") and names_a_preprint_server(
+        merged.get("publisher")
+    ):
+        merged.pop("publisher", None)
+    for locator in ("number", "volume"):
+        if not candidate.get(locator) and _is_arxiv_locator(merged.get(locator)):
+            merged.pop(locator, None)
     return cast(NormalizedRecord, merged)
+
+
+#: `arXiv:2110.09348` in `number`, `abs/2112.15246` in `volume` — arXiv's own
+#: locators as Better BibTeX and DBLP write them. Anchored, so a real issue
+#: number or volume cannot match.
+_ARXIV_LOCATOR_RE = re.compile(r"^(?:arxiv:|abs/)", re.IGNORECASE)
+
+
+def _is_arxiv_locator(value: object) -> bool:
+    """True when a ``number``/``volume`` is really an arXiv identifier."""
+    return isinstance(value, str) and bool(_ARXIV_LOCATOR_RE.match(value.strip()))
 
 
 #: arXiv's DataCite prefix. Deliberately just this one: bioRxiv and medRxiv

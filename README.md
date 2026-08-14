@@ -253,6 +253,14 @@ they accumulate beside your library until you remove them.
 
 `pzi init --setup --bib ~/bibs/main.bib` writes `~/.config/pzi/config.toml` and an API token to `<data-home>/api_token` (mode 0600). Re-running `init` reuses the existing token so a paired browser extension keeps working; `--rotate-token` replaces it, which un-pairs the extension until you paste the new one in. `pzi add --force-new` inserts a second entry for a paper pzi considers a duplicate. Common options: `contact_email`, `unpaywall_email`, `browser_pdf_cmd`, `citekey_format`, `pdf_filename_format`, `papers_dir`, `browser_engine` (headless Playwright browser for automated capture, set in `config.toml`; `pzi init --browser` writes `browser_pdf_cmd`, not this, and it is not the same setting as `PZI_BROWSER` below), and multiple `[[bibs]]`. See `src/pzi/config.template.toml` for all options and comments. `papers_dir` defaults to `<bib-dir>/papers/`; use `_cmd` variants for secrets.
 
+**If your library came from Zotero/Better BibTeX, set `citekey_format` before your first capture.** Unset, pzi uses its own scheme, so new entries get keys shaped like `smith2024graph` while everything already in the file looks like `smith-graph-2024` — a divergence that widens with every capture and that you should *not* fix later by renaming keys, because renaming breaks every `\cite{}` that uses the old ones. To match a Better BibTeX export key-for-key:
+
+```toml
+citekey_format = 'auth.lower + "-" + shorttitle(1, 0).lower + "-" + year'
+```
+
+`src/pzi/config.template.toml` documents the supported formula language and the one known deviation (on a collision pzi appends `-2`, `-3` where Better BibTeX appends `a`, `b`).
+
 ### CLI reference
 
 Shared flags: every command accepts `[--config PATH]` to point at a config file other than the default; most library commands also accept `[--target <name|path>]` (`search`/`update` accept multiple: `--target a.bib b.bib`); commands that report a result accept `[--json]` (see below).

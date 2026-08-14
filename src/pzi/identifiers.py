@@ -352,10 +352,19 @@ def has_preprint_identity(record: Mapping[str, object]) -> bool:
     far too broad to gate a *write* on: `update` uses this to decide whether a
     DOI disagreement is the legitimate preprint-vs-published pairing, and
     `promote` needs the same narrow test to choose what to promote at all.
+
+    The venue/publisher test is what lets `promote` recognise a preprint
+    *candidate*: DBLP and Semantic Scholar return arXiv records carrying
+    `CoRR` or `arXiv (Cornell University)` and frequently no DOI at all, so the
+    identifier tests above see nothing to object to.
     """
     if record.get("arxiv_id"):
         return True
     if is_preprint_doi(_canonical_doi_for_identity(record.get("doi"))):
+        return True
+    if names_a_preprint_server(record.get("venue")) or names_a_preprint_server(
+        record.get("publisher")
+    ):
         return True
     return is_preprint_url(record.get("source_url")) or is_preprint_url(
         record.get("canonical_url")
@@ -399,6 +408,60 @@ _DOMAIN_TO_SOURCE: dict[str, str] = {
     "hal.science": "HAL",
     "peerj.com": "PeerJ",
 }
+
+#: Preprint servers that also publish a version of record, so their *name* in a
+#: `venue` says nothing about whether an item is a preprint. A PeerJ article and
+#: a PeerJ preprint share a venue string; so do Zenodo, OSF and HAL deposits.
+#: Excluded from the venue test below, and only from that one — a URL on these
+#: domains is still preprint evidence, which is what `_PREPRINT_DOMAINS` is for.
+_ALSO_PUBLISHES = frozenset({"PeerJ", "Zenodo", "OSF", "HAL"})
+
+#: Venue/publisher names that mean "this is a preprint", derived from the server
+#: names already in `_DOMAIN_TO_SOURCE` rather than re-listing them. `CoRR` is
+#: the exception that has no domain: it is what DBLP and Semantic Scholar call
+#: arXiv, and it is how an arXiv record reaches `promote` looking publishable.
+_PREPRINT_VENUE_NAMES = frozenset(
+    {name for name in _DOMAIN_TO_SOURCE.values() if name not in _ALSO_PUBLISHES}
+    | {"CoRR"}
+)
+
+
+def _normalized_venue(value: object) -> str:
+    """Lowercase *value*, punctuation flattened, letters split from digits.
+
+    The digit split is what catches DBLP's `CoRR2019`, which is one token to a
+    plain punctuation-flattener and so matched neither `corr` nor `corr `. It
+    was the last arXiv record to survive the promote filter on a real slice.
+    """
+    if not isinstance(value, str):
+        return ""
+    flattened = re.sub(r"[^0-9a-z]+", " ", value.lower())
+    return " ".join(re.sub(r"(?<=[a-z])(?=\d)", " ", flattened).split())
+
+
+#: The preprint venue names, normalized once at import rather than per call.
+_NORMALIZED_PREPRINT_VENUES = frozenset(
+    _normalized_venue(name) for name in _PREPRINT_VENUE_NAMES
+)
+
+
+def names_a_preprint_server(value: object) -> bool:
+    """True when a ``venue`` or ``publisher`` names a preprint server.
+
+    Matched as a *leading name*, not a substring: `arXiv (Cornell University)`
+    and `CoRR` are preprint venues, while a journal whose title merely begins
+    with the same letters (`Corrigendum...`) is not. Substring matching here
+    would reject real publications, which is the expensive direction to be wrong
+    in — a missed preprint is one bad promotion, a rejected publication is a
+    promotion that never happens at all and is never reported as missing.
+    """
+    venue = _normalized_venue(value)
+    if not venue:
+        return False
+    return any(
+        venue == name or venue.startswith(f"{name} ")
+        for name in _NORMALIZED_PREPRINT_VENUES
+    )
 
 
 def detect_preprint_source(record: Mapping[str, object]) -> str | None:
