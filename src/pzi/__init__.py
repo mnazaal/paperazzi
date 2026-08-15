@@ -1,9 +1,18 @@
 """pzi — Capture papers into local BibTeX libraries from DOI, URL, or PDF.
 
-This package is a CLI and a local HTTP API; it is not designed as a library.
-Only the version helpers are re-exported here. Import anything else from the
-module that defines it (``pzi.bib_repository``, ``pzi.bibtex``, …), which is
-what the codebase itself does.
+A CLI, a local HTTP API, and a small Python API. **``__all__`` is the whole of
+the public surface** and is frozen: parameter names, defaults and return shapes
+are a compatibility promise, checked by ``tests/test_public_api.py``.
+
+Everything else is internal, whatever its docstring says. The modules behind
+this (``pzi.bib_repository``, ``pzi.add_service``, …) are shaped for the CLI and
+for testing — several take injected fetcher parameters that exist so tests can
+replace the network — and they may change in any release. Import from them at
+your own risk; ``pzi.api`` is the supported way in.
+
+    import pzi
+    for match in pzi.search(query="dimensional collapse"):
+        print(match["citekey"])
 """
 
 import logging
@@ -53,7 +62,27 @@ def cli_version_text(
 
 __version__ = package_version()
 
+# Imported at the bottom: `pzi.api` imports the service modules, which import
+# back from `pzi` (`package_version` reaches `http_get_routes`), so binding the
+# version helpers first is what keeps that cycle resolvable.
+from pzi.api import (  # noqa: E402
+    add,
+    check,
+    dedupe,
+    entries,
+    export,
+    promote,
+    search,
+)
+
 __all__ = [
+    "add",
+    "check",
     "cli_version_text",
+    "dedupe",
+    "entries",
+    "export",
     "package_version",
+    "promote",
+    "search",
 ]

@@ -1,0 +1,9 @@
+pzi.add(source: 'str', *, tags: 'list[str] | None' = None, dry_run: 'bool' = False, force_new: 'bool' = False, config: 'str | None' = None, library: 'str | None' = None) -> 'dict[str, Any]'
+pzi.check(*, strict: 'bool' = False, config: 'str | None' = None, library: 'str | None' = None) -> 'dict[str, Any]'
+pzi.cli_version_text(package_name: str = 'pzi', *, distribution_name: str = 'paperazzi', version_text: str | None = None) -> str
+pzi.dedupe(*, config: 'str | None' = None, library: 'str | None' = None) -> 'dict[str, Any]'
+pzi.entries(*, offset: 'int' = 0, limit: 'int' = 50, sort: 'str' = 'citekey', config: 'str | None' = None, library: 'str | None' = None) -> 'list[dict[str, Any]]'
+pzi.export(fmt: 'str' = 'bibtex', *, config: 'str | None' = None, library: 'str | None' = None) -> 'str'
+pzi.package_version(distribution_name: str = 'paperazzi', *, lookup_version: collections.abc.Callable[[str], str] = <function version>) -> str
+pzi.promote(*, replace: 'bool' = False, dry_run: 'bool' = False, config: 'str | None' = None, library: 'str | None' = None) -> 'dict[str, Any]'
+pzi.search(query: 'str | None' = None, *, author: 'str | None' = None, year: 'int | None' = None, tag: 'str | None' = None, config: 'str | None' = None, library: 'str | None' = None) -> 'list[dict[str, Any]]'

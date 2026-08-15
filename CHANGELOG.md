@@ -17,6 +17,19 @@ next to the diff it explains.
 
 ### Added
 
+- **`import pzi` is now a supported Python API.** Seven functions — `search`,
+  `entries`, `export`, `add`, `check`, `dedupe`, `promote` — take an optional
+  config path and an optional library, and nothing else that is not their own
+  concern. `pzi.search(query="collapse")` works with no arguments at all.
+  This is a facade, not a set of re-exports: the service functions behind it
+  take `home_dir` and up to twelve injected fetcher parameters that exist as
+  test seams, and exporting those would have handed callers arguments they
+  cannot supply. Two conventions hold throughout — **failure raises `PziError`**
+  rather than returning `{"status": "error"}`, carrying the exit code the CLI
+  would have used, and **functions return the answer, not the envelope**.
+  `__all__` is the whole of the public surface and is frozen: everything else
+  is internal regardless of its docstring. `py.typed` still ships, and a test
+  fails if it stops.
 - The browser extension now tells you when it and the `pzi` server have drifted
   apart. `GET /health` reports the server's version, the extension compares it
   against its own, and a mismatch shows a banner in the popup naming both — but

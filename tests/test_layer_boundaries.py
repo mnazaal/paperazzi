@@ -123,6 +123,11 @@ SERVICE: frozenset[str] = frozenset(
 # Front-end / entrypoint layer.
 FRONTEND: frozenset[str] = frozenset(
     {
+        # The public Python API is a front end in exactly the sense the others
+        # are: it sits on top of the services and translates their results for
+        # one kind of caller. `cli` does it for a terminal, `http_api` for the
+        # extension, `api` for `import pzi`.
+        "api",
         "cli",
         "cli_json",
         "cli_parser",
