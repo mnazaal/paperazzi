@@ -27,9 +27,13 @@ Two conventions hold across every function:
 
 from __future__ import annotations
 
+import functools
 import os
+import warnings
+from collections.abc import Callable
 from typing import Any
 
+from pzi import exit_codes
 from pzi.add_service import add_input_to_bib
 from pzi.bib_service import list_entries
 from pzi.check_service import check_bib
@@ -59,6 +63,17 @@ _EXPORTERS = {
 }
 
 
+#: The sort fields `bib_service.list_entries` actually implements. It falls back
+#: to `citekey` for anything else *silently*, so an unvalidated typo returns
+#: plausible data in the wrong order. The CLI enforces the same set as argparse
+#: `choices` (`cli_parser.py:703`); this is that guard for the library.
+_SORT_FIELDS = ("author", "citekey", "title", "year")
+
+#: The bounds the other two front ends clamp to (`http_get_routes.py:150-151`,
+#: `commands/entries.py:67`). Clamped rather than rejected, matching them.
+_MIN_LIMIT, _MAX_LIMIT = 1, 500
+
+
 def _home() -> str:
     """The real home directory.
 
@@ -70,8 +85,64 @@ def _home() -> str:
     return os.path.expanduser("~")
 
 
-def _config_path(config: str | None) -> str:
-    return config if config is not None else default_config_path(_home())
+def _resolved_config_path(config_path: str | None) -> str:
+    """The config to read, following the CLI's documented precedence.
+
+    ``config_path`` argument, then ``$PZI_CONFIG``, then the XDG default —
+    `cli.py:166-172`. Honouring the environment variable here is what stops
+    ``pzi search`` and ``pzi.search()`` reading different files for anyone who
+    sets it.
+    """
+    if config_path is not None:
+        return config_path
+    return os.environ.get("PZI_CONFIG") or default_config_path(_home())
+
+
+def _emit_warnings(result: dict[str, Any]) -> None:
+    """Re-raise a service's read warnings through Python's own channel.
+
+    Reading a *missing* bib is a warning rather than an error on purpose
+    (`export_service.py:105-113`): a freshly ``pzi init``-ed config names a bib
+    that does not exist until the first ``add``. The CLI prints those warnings
+    and the HTTP envelope carries them — but a facade returning only the items
+    dropped them, so a typo'd ``path =`` or an unmounted share came back as an
+    empty list, indistinguishable from a library with nothing in it.
+
+    `warnings.warn` rather than a changed return type: it is the mechanism a
+    Python caller already has, it is visible by default, and ``-W error``
+    escalates it for a script that would rather stop.
+    """
+    for warning in result.get("warnings") or []:
+        warnings.warn(str(warning), UserWarning, stacklevel=3)
+
+
+def _public(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Make `except PziError` actually hold for a public function.
+
+    `_unwrap` only translates the services' own ``status == "error"``. Anything
+    raised *below* that — the whole I/O surface — escaped as a bare `OSError`,
+    so a caller following this module's documented idiom crashed on an
+    unreadable bib or a `path =` pointing at a directory, both of which the CLI
+    reports as exit 5.
+
+    A decorator rather than a `try` in each function: seven copies of the same
+    three lines is how one of them ends up missing it. `functools.wraps` keeps
+    `__wrapped__` set, so `inspect.signature` — and therefore the frozen public
+    API snapshot — still sees the real signature.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return fn(*args, **kwargs)
+        except PziError:
+            raise
+        except OSError as exc:
+            raise PziError(
+                f"{type(exc).__name__}: {exc}", code=exit_codes.ENVIRONMENT
+            ) from exc
+
+    return wrapper
 
 
 def _unwrap(result: dict[str, Any], key: str) -> Any:
@@ -90,14 +161,14 @@ def _unwrap(result: dict[str, Any], key: str) -> Any:
     return result[key]
 
 
-def _bib_path(config: str | None, library: str | None) -> str:
+def _bib_path(config_path: str | None, library: str | None) -> str:
     """Resolve which library to act on, for the services that take a path.
 
     `export` and `dedupe` take a `bib_path` rather than a selector, so the
     resolution the other services do internally has to happen here.
     """
     resolved = load_bib_target(
-        config_path=_config_path(config), home_dir=_home(), bib_selector=library
+        config_path=_resolved_config_path(config_path), home_dir=_home(), bib_selector=library
     )
     if isinstance(resolved, BibResolutionFailure):
         raise PziError(
@@ -108,13 +179,14 @@ def _bib_path(config: str | None, library: str | None) -> str:
     return bib["path"]
 
 
+@_public
 def search(
     query: str | None = None,
     *,
     author: str | None = None,
     year: int | None = None,
     tag: str | None = None,
-    config: str | None = None,
+    config_path: str | None = None,
     library: str | None = None,
 ) -> list[dict[str, Any]]:
     """Return entries matching the given filters, combined with AND.
@@ -131,7 +203,7 @@ def search(
             "search needs at least one of query, author, year or tag", code=2
         )
     result = search_bib(
-        config_path=_config_path(config),
+        config_path=_resolved_config_path(config_path),
         home_dir=_home(),
         bib_selector=library,
         query=query,
@@ -139,34 +211,48 @@ def search(
         year=year,
         tag=tag,
     )
-    return list(_unwrap(dict(result), "matches"))
+    typed = dict(result)
+    matches = list(_unwrap(typed, "matches"))
+    _emit_warnings(typed)
+    return matches
 
 
+@_public
 def entries(
     *,
     offset: int = 0,
     limit: int = 50,
     sort: str = "citekey",
-    config: str | None = None,
+    config_path: str | None = None,
     library: str | None = None,
 ) -> list[dict[str, Any]]:
     """Return a page of the library, sorted by ``citekey``, ``title``,
     ``author`` or ``year``."""
+    if sort not in _SORT_FIELDS:
+        raise PziError(
+            f"unknown sort field {sort!r} — expected one of "
+            f"{', '.join(_SORT_FIELDS)}",
+            code=2,
+        )
     result = list_entries(
-        config_path=_config_path(config),
+        config_path=_resolved_config_path(config_path),
         home_dir=_home(),
         bib_selector=library,
-        offset=offset,
-        limit=limit,
+        offset=max(0, offset),
+        limit=max(_MIN_LIMIT, min(limit, _MAX_LIMIT)),
         sort=sort,
     )
-    return list(_unwrap(dict(result), "items"))
+    typed = dict(result)
+    items = list(_unwrap(typed, "items"))
+    _emit_warnings(typed)
+    return items
 
 
+@_public
 def export(
     fmt: str = "bibtex",
     *,
-    config: str | None = None,
+    config_path: str | None = None,
     library: str | None = None,
 ) -> str:
     """Return the whole library serialized as ``bibtex``, ``json``, ``csv`` or
@@ -178,16 +264,17 @@ def export(
             f"{', '.join(sorted(_EXPORTERS))}",
             code=2,
         )
-    return str(_unwrap(dict(exporter(_bib_path(config, library))), "content"))
+    return str(_unwrap(dict(exporter(_bib_path(config_path, library))), "content"))
 
 
+@_public
 def add(
     source: str,
     *,
     tags: list[str] | None = None,
     dry_run: bool = False,
     force_new: bool = False,
-    config: str | None = None,
+    config_path: str | None = None,
     library: str | None = None,
 ) -> dict[str, Any]:
     """Capture a paper by DOI, URL or local PDF path.
@@ -198,7 +285,7 @@ def add(
     """
     overrides: dict[str, object] = {"tags": list(tags)} if tags else {}
     result = add_input_to_bib(
-        config_path=_config_path(config),
+        config_path=_resolved_config_path(config_path),
         home_dir=_home(),
         value=source,
         record_overrides=overrides,
@@ -211,15 +298,16 @@ def add(
     return typed
 
 
+@_public
 def check(
     *,
     strict: bool = False,
-    config: str | None = None,
+    config_path: str | None = None,
     library: str | None = None,
 ) -> dict[str, Any]:
     """Verify entries against metadata providers. Makes network requests."""
     result = check_bib(
-        config_path=_config_path(config),
+        config_path=_resolved_config_path(config_path),
         home_dir=_home(),
         bib_selector=library,
         strict=strict,
@@ -229,31 +317,39 @@ def check(
     return typed
 
 
+@_public
 def dedupe(
     *,
-    config: str | None = None,
+    config_path: str | None = None,
     library: str | None = None,
 ) -> dict[str, Any]:
     """Report exact duplicate clusters and fuzzy near-duplicates. Reads only."""
-    typed = dict(find_duplicates(bib_path=_bib_path(config, library)))
+    typed = dict(find_duplicates(bib_path=_bib_path(config_path, library)))
     _unwrap(typed, "status")
     return typed
 
 
+@_public
 def promote(
     *,
     replace: bool = False,
-    dry_run: bool = False,
-    config: str | None = None,
+    dry_run: bool = True,
+    config_path: str | None = None,
     library: str | None = None,
 ) -> dict[str, Any]:
     """Find published versions of preprints. Makes network requests.
+
+    **Previews by default** — pass ``dry_run=False`` to write. This sweeps the
+    whole library and queries a provider per preprint, so a zero-argument call
+    that wrote would rewrite thousands of entries over the network before the
+    caller saw anything. `promote_bib` and ``POST /promote`` both preview by
+    default for the same reason; the CLI writes because you typed the command.
 
     By default the preprint is kept and a published entry created beside it;
     ``replace=True`` updates the preprint in place instead.
     """
     result = promote_bib(
-        config_path=_config_path(config),
+        config_path=_resolved_config_path(config_path),
         home_dir=_home(),
         bib_selector=library,
         dry_run=dry_run,

@@ -17,6 +17,32 @@ next to the diff it explains.
 
 ### Added
 
+- **`import pzi` corrections, before the surface freezes.** A three-way review
+  of the API added earlier the same day found real defects; these are the fixes,
+  each with a test that fails without it.
+  - `search()` and `entries()` returned `[]` for a bib that is missing or
+    unreadable — indistinguishable from an empty library, while `export()`
+    raised on the same input. Reading a missing bib is a *warning* by design (a
+    freshly `pzi init`-ed config names one that does not exist yet), so the
+    warnings the CLI prints and the HTTP envelope carries are now re-raised
+    through `warnings.warn`, and the result type is unchanged.
+  - `PziError` is exported from `pzi`. The documented idiom is to catch it,
+    while everything outside `__all__` is declared internal — so catching it
+    required an unsupported import. Raw `OSError` from the I/O layer is also
+    translated now, so `except PziError` actually holds.
+  - **`promote()` previews by default** (`dry_run=True`), matching
+    `promote_bib` and `POST /promote`. It swept and rewrote the library over the
+    network on a zero-argument call.
+  - `PZI_CONFIG` is honoured, matching the CLI's documented precedence — the two
+    read different files before.
+  - `entries()` clamps `limit` to 1-500 and rejects an unknown `sort` instead of
+    silently returning citekey-ordered data, matching both other front ends.
+  - The `config` parameter is renamed **`config_path`** — it is a path, and
+    every service spells it that way.
+  - `cli_version_text` and `package_version` are no longer public: both carry
+    test seams (`version_text`, `lookup_version`) in their signatures. Use
+    `pzi.__version__`.
+
 - **`import pzi` is now a supported Python API.** Seven functions — `search`,
   `entries`, `export`, `add`, `check`, `dedupe`, `promote` — take an optional
   config path and an optional library, and nothing else that is not their own

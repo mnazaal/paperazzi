@@ -74,15 +74,24 @@ from pzi.api import (  # noqa: E402
     promote,
     search,
 )
+from pzi.errors import PziError  # noqa: E402
 
+# `PziError` is exported because this module's own documentation tells callers
+# to catch it, and everything outside `__all__` is declared internal — so
+# without it the documented idiom required an unsupported import.
+#
+# `cli_version_text` and `package_version` are deliberately *not* here. Both
+# carry pure test seams in their signatures (`version_text`, `lookup_version`),
+# and freezing a seam as public API is exactly what `api._home` argues against.
+# `__version__` is the idiomatic spelling and is what a caller wants.
 __all__ = [
+    "PziError",
+    "__version__",
     "add",
     "check",
-    "cli_version_text",
     "dedupe",
     "entries",
     "export",
-    "package_version",
     "promote",
     "search",
 ]
