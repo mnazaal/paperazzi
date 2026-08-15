@@ -8,7 +8,8 @@ from typing import TextIO
 from pzi import cli_json, exit_codes
 from pzi.cli_parser import load_text_arg
 from pzi.cli_render import error_lines
-from pzi.commands.common import batch_exit_code, exit_code_for_error, print_lines
+from pzi.commands.common import batch_exit_code, print_lines
+from pzi.errors import exit_code_for_error
 from pzi.import_service import import_from_bibtex
 
 

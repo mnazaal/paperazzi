@@ -57,6 +57,14 @@ def resolve_target(
     return config, target
 
 
+# Re-exported, not redefined. It moved to `pzi.errors` beside the `REASON_*`
+# vocabulary it maps: `pzi.api` needed it and importing it from here dragged in
+# `cli_parser`, which made `pzi.__init__ -> api -> commands.common -> cli_parser
+# -> pzi.__init__` a real import cycle and put argparse in the closure of a bare
+# `import pzi`. The command runners keep importing it from here.
+
+
+
 def target_list(target: Sequence[str] | None) -> list[str | None]:
     """Normalize optional repeated --target values for command loops."""
     return list(target) if target else [None]
@@ -215,34 +223,6 @@ def write_atomic(output_path: Path, content: str) -> None:
 #: including a missing ``reason`` — means "the command could not run", which is
 #: the safe default: it is never ``1``, so a script can still tell a failure to
 #: run from a successful run that found something.
-_EXIT_CODE_BY_REASON: dict[str, int] = {
-    errors.REASON_NOT_FOUND: exit_codes.NOT_FOUND,
-    errors.REASON_USAGE: exit_codes.USAGE,
-    errors.REASON_CONFIG: exit_codes.ENVIRONMENT,
-    errors.REASON_UNAVAILABLE: exit_codes.ENVIRONMENT,
-    errors.REASON_CONFLICT: exit_codes.ENVIRONMENT,
-}
-
-
-def exit_code_for_error(result: Mapping[str, object]) -> int:
-    """Exit code for a service result that failed.
-
-    Services report *why* they failed in a structured ``reason`` field rather
-    than in prose, so a runner never has to match on message text — and a
-    message reworded for humans cannot silently change a script's exit code.
-    The vocabulary is :mod:`pzi.errors`; ``pzi.http_status`` maps the same
-    values to HTTP statuses, so a service that classifies its failure once is
-    correct on both surfaces.
-
-    Callers must have already handled the success case: this always returns a
-    failure code.
-    """
-    reason = result.get("reason")
-    if isinstance(reason, str):
-        return _EXIT_CODE_BY_REASON.get(reason, exit_codes.ENVIRONMENT)
-    return exit_codes.ENVIRONMENT
-
-
 #: Sub-command attributes, in the order the CLI nests them. `pzi fix clean`
 #: parses as `command="fix"`, `fix_command="clean"`, and the runners label their
 #: envelopes with the joined form.

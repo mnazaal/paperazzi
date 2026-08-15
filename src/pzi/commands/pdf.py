@@ -7,7 +7,8 @@ from typing import Any, TextIO
 
 from pzi import cli_json, exit_codes
 from pzi.cli_render import error_lines, render_pdf_success
-from pzi.commands.common import emit_usage_error, exit_code_for_error, print_lines
+from pzi.commands.common import emit_usage_error, print_lines
+from pzi.errors import exit_code_for_error
 from pzi.pdf_service import attach_pdf, retry_failed_pdfs, retry_pdf
 
 Result = Mapping[str, Any]

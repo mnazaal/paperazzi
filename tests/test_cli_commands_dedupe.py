@@ -99,8 +99,8 @@ def test_fix_merge_unknown_citekey_is_not_found(tmp_path: Path) -> None:
 def test_fix_merge_self_merge_is_not_tagged_not_found(tmp_path: Path) -> None:
     """"Cannot merge an entry with itself" is a usage mistake, not a missing entry."""
     from pzi import exit_codes
-    from pzi.commands.common import exit_code_for_error
     from pzi.dedupe_service import merge_duplicates
+    from pzi.errors import exit_code_for_error
 
     bib_path = tmp_path / "ml.bib"
     bib_path.write_text("@article{real2024, title = {Real}}\n")

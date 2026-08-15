@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from pzi import errors, exit_codes
-from pzi.commands.common import exit_code_for_error
 from pzi.config import AppConfig, BibResolutionFailure, load_bib_target
+from pzi.errors import exit_code_for_error
 from pzi.http_status import status_for_service_result
 
 
@@ -222,8 +222,8 @@ def test_the_three_usage_refusals_exit_2_not_5(tmp_path: Path, write_app_config)
     that are unambiguously the invocation's fault.
     """
     from pzi import exit_codes
-    from pzi.commands.common import exit_code_for_error
     from pzi.dedupe_service import merge_duplicates
+    from pzi.errors import exit_code_for_error
     from pzi.search_service import search_bib
     from pzi.tag_service import add_tags
 

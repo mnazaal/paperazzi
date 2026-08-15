@@ -19,6 +19,7 @@ import logging
 from collections.abc import Callable
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as metadata_version
+from typing import TYPE_CHECKING
 
 # bibtexparser logs `Unknown block type <class '...DuplicateBlockKeyBlock'>` at
 # WARNING for every failed block its middlewares walk past. pzi configures no
@@ -62,28 +63,55 @@ def cli_version_text(
 
 __version__ = package_version()
 
-# Imported at the bottom: `pzi.api` imports the service modules, which import
-# back from `pzi` (`package_version` reaches `http_get_routes`), so binding the
-# version helpers first is what keeps that cycle resolvable.
-from pzi.api import (  # noqa: E402
-    add,
-    check,
-    dedupe,
-    entries,
-    export,
-    promote,
-    search,
-)
-from pzi.errors import PziError  # noqa: E402
-
-# `PziError` is exported because this module's own documentation tells callers
-# to catch it, and everything outside `__all__` is declared internal — so
-# without it the documented idiom required an unsupported import.
+# The public API is bound *lazily*, and that is structural rather than a
+# micro-optimisation. Importing `pzi.api` here creates a real edge from the
+# package root to every service module — while dozens of leaf modules do
+# `from pzi import exit_codes`, which executes this file. Eagerly, that is a
+# genuine cycle (`pzi -> api -> capture_core -> add_service -> pzi`, and a dozen
+# more), resolved at runtime only by the accident that the version helpers above
+# are bound before the import ran. It also put argparse, http.client and the
+# whole capture stack in the closure of a bare `import pzi`, so a script calling
+# only `pzi.search()` paid for all of it.
 #
-# `cli_version_text` and `package_version` are deliberately *not* here. Both
-# carry pure test seams in their signatures (`version_text`, `lookup_version`),
-# and freezing a seam as public API is exactly what `api._home` argues against.
-# `__version__` is the idiomatic spelling and is what a caller wants.
+# PEP 562: `pzi.search` resolves on first attribute access, and
+# `from pzi import search` works unchanged.
+# Statically visible, never imported at runtime. `py.typed` ships, so the whole
+# point of these annotations is that a downstream type checker resolves them —
+# and a name bound only through `__getattr__` is invisible to one. This block
+# gives the checker the real symbols while the runtime keeps the lazy binding.
+if TYPE_CHECKING:
+    from pzi.api import (
+        add,
+        check,
+        dedupe,
+        entries,
+        export,
+        promote,
+        search,
+    )
+    from pzi.errors import PziError
+
+_PUBLIC_API = frozenset(
+    {"add", "check", "dedupe", "entries", "export", "promote", "search"}
+)
+
+
+def __getattr__(name: str) -> object:
+    if name in _PUBLIC_API:
+        from pzi import api
+
+        return getattr(api, name)
+    if name == "PziError":
+        from pzi.errors import PziError
+
+        return PziError
+    raise AttributeError(f"module 'pzi' has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    return sorted({*globals(), *__all__})
+
+
 __all__ = [
     "PziError",
     "__version__",

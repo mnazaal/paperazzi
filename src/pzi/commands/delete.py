@@ -9,7 +9,8 @@ from typing import TextIO
 from pzi import cli_json, exit_codes
 from pzi.bib_service import delete_entry
 from pzi.cli_render import error_lines, render_delete_success
-from pzi.commands.common import emit_usage_error, exit_code_for_error, print_lines, resolve_target
+from pzi.commands.common import emit_usage_error, print_lines, resolve_target
+from pzi.errors import exit_code_for_error
 
 
 def _render_errors(title: str, errors: Sequence[str], stderr: TextIO, code: int) -> int:

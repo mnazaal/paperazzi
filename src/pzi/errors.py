@@ -9,6 +9,8 @@ a human (include the offending path, no tracebacks, no jargon).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from pzi import exit_codes
 
 # ---------------------------------------------------------------------------
@@ -64,3 +66,31 @@ class PziError(Exception):
         #: `None` where the raiser genuinely does not know, and rendered with a
         #: documented coarse fallback rather than a guess dressed as fact.
         self.reason = reason
+
+
+_EXIT_CODE_BY_REASON: dict[str, int] = {
+    REASON_NOT_FOUND: exit_codes.NOT_FOUND,
+    REASON_USAGE: exit_codes.USAGE,
+    REASON_CONFIG: exit_codes.ENVIRONMENT,
+    REASON_UNAVAILABLE: exit_codes.ENVIRONMENT,
+    REASON_CONFLICT: exit_codes.ENVIRONMENT,
+}
+
+
+def exit_code_for_error(result: Mapping[str, object]) -> int:
+    """Exit code for a service result that failed.
+
+    Services report *why* they failed in a structured ``reason`` field rather
+    than in prose, so a runner never has to match on message text — and a
+    message reworded for humans cannot silently change a script's exit code.
+    The vocabulary is :mod:`pzi.errors`; ``pzi.http_status`` maps the same
+    values to HTTP statuses, so a service that classifies its failure once is
+    correct on both surfaces.
+
+    Callers must have already handled the success case: this always returns a
+    failure code.
+    """
+    reason = result.get("reason")
+    if isinstance(reason, str):
+        return _EXIT_CODE_BY_REASON.get(reason, exit_codes.ENVIRONMENT)
+    return exit_codes.ENVIRONMENT

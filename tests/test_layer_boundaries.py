@@ -74,6 +74,11 @@ CORE: frozenset[str] = frozenset(
         "capture_context",
         "html_metadata",
         "metadata_sources",
+        # The package root. It re-exports the public API, but *lazily* — nothing
+        # is imported at module scope, so at load time it is a leaf, which is
+        # what this graph measures. Eager re-export made it a front end that
+        # every service transitively imported, i.e. a cycle.
+        "__init__",
         # Pure planning helpers with no pzi deps
         "page_metadata_cmd",
         "pdf_acquisition_plan",
@@ -128,6 +133,7 @@ FRONTEND: frozenset[str] = frozenset(
         # one kind of caller. `cli` does it for a terminal, `http_api` for the
         # extension, `api` for `import pzi`.
         "api",
+        "commands.__init__",
         "cli",
         "cli_json",
         "cli_parser",
@@ -180,6 +186,51 @@ BROWSER: frozenset[str] = frozenset(
 # ---------------------------------------------------------------------------
 
 
+class _ModuleLevel(ast.Module):
+    """A view of *tree* with function bodies removed.
+
+    Class bodies are kept: they execute at import time, so an import written
+    there is a real load-time edge.
+    """
+
+    def __init__(self, tree: ast.Module) -> None:
+        super().__init__(body=[*_module_level_nodes(tree.body)], type_ignores=[])
+
+
+def _is_type_checking_guard(node: ast.stmt) -> bool:
+    """``if TYPE_CHECKING:`` — a block that never runs.
+
+    It is module level, so the plain body filter keeps it, but the runtime
+    never executes it: that is the entire reason the guard exists. Counting its
+    imports as load-time edges reported cycles that cannot happen — and would
+    have condemned the lazy public API, whose whole point is that the edge is
+    not there at runtime.
+    """
+    if not isinstance(node, ast.If):
+        return False
+    test = node.test
+    if isinstance(test, ast.Name):
+        return test.id == "TYPE_CHECKING"
+    return isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING"
+
+
+def _module_level_nodes(body: list[ast.stmt]) -> list[ast.stmt]:
+    kept: list[ast.stmt] = []
+    for node in body:
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        if _is_type_checking_guard(node):
+            continue
+        if isinstance(node, ast.ClassDef):
+            kept.append(ast.ClassDef(
+                name=node.name, bases=[], keywords=[],
+                body=_module_level_nodes(node.body), decorator_list=[],
+            ))
+            continue
+        kept.append(node)
+    return kept
+
+
 def _package_of(path: Path) -> tuple[str, ...]:
     """The dotted package parts containing *path*, relative to the pzi package."""
     return path.relative_to(_SRC).parent.parts
@@ -199,7 +250,13 @@ def _imported_pzi_modules(path: Path) -> set[str]:
     """
     tree = ast.parse(path.read_text(encoding="utf-8"))
     names: set[str] = set()
-    for node in ast.walk(tree):
+    # Module level only. An import inside a function body runs on *call*, not on
+    # import, so it cannot take part in an import cycle — which is exactly why
+    # several modules already use one deliberately to break one (see
+    # `format_templates.describe_bbt_formula_error`, and `pzi.__init__`'s lazy
+    # public API). Walking every node counted those as load-time edges and
+    # reported cycles that cannot happen.
+    for node in ast.walk(_ModuleLevel(tree)):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 if alias.name.startswith("pzi."):
@@ -212,6 +269,14 @@ def _imported_pzi_modules(path: Path) -> set[str]:
                     # ``from pzi import foo`` — the names *are* the stems.
                     for alias in node.names:
                         names.add(alias.name)
+                    # …and the package root itself, always. Importing *any*
+                    # name from `pzi` executes `pzi/__init__.py`, so this is a
+                    # real edge whether or not the name is also a module. Only
+                    # the names were recorded, so `from pzi import
+                    # cli_version_text` — a re-exported function — produced no
+                    # edge at all, and the cycle back through `__init__` was
+                    # invisible even once `__init__` became a node.
+                    names.add("__init__")
             elif node.level > 0:
                 # A relative import inside the pzi package. Resolved against the
                 # *importing module's* package, which is what makes it comparable
@@ -248,10 +313,15 @@ def _all_module_paths() -> list[Path]:
     unclassified and unchecked, so a command reaching straight past the service
     layer would have passed silently.
     """
+    # `__init__` is included. Excluding it made this file blind to the one
+    # cycle the package actually had — `pzi.__init__ -> pzi.api ->
+    # pzi.commands.common -> pzi.cli_parser -> pzi.__init__` — because the
+    # module at one end of it was not a node in the graph. It is also a
+    # front-end module now that it re-exports the public API, so it needs
+    # classifying like any other. `__main__` stays out: it is the `python -m`
+    # shim, imports `cli` and nothing imports it.
     return sorted(
-        path
-        for path in _SRC.rglob("*.py")
-        if path.stem not in ("__init__", "__main__")
+        path for path in _SRC.rglob("*.py") if path.stem != "__main__"
     )
 
 
@@ -408,7 +478,32 @@ def test_extractor_sees_package_level_import(tmp_path: Path) -> None:
     """
     module = tmp_path / "sample.py"
     module.write_text("from pzi import http_api, exit_codes\n", encoding="utf-8")
-    assert _imported_pzi_modules(module) == {"http_api", "exit_codes"}
+    # `__init__` too: importing any name from `pzi` executes `pzi/__init__.py`,
+    # so the package root is a real edge whether or not the name is a module.
+    # Recording only the names meant `from pzi import cli_version_text` — a
+    # re-exported function — produced no edge at all, and a cycle back through
+    # the package root was invisible.
+    assert _imported_pzi_modules(module) == {"http_api", "exit_codes", "__init__"}
+
+
+def test_the_extractor_ignores_imports_inside_functions(tmp_path: Path) -> None:
+    """A deferred import is not a load-time edge, and treating it as one lies.
+
+    An import inside a function runs on call, so it cannot take part in an
+    import cycle — which is why several modules use one deliberately to break
+    one. Counting them reported cycles that cannot happen and would have forced
+    a real fix to be reverted.
+    """
+    module = tmp_path / "sample.py"
+    module.write_text(
+        "from pzi import exit_codes\n"
+        "\n"
+        "def later():\n"
+        "    from pzi import http_api\n"
+        "    return http_api\n",
+        encoding="utf-8",
+    )
+    assert _imported_pzi_modules(module) == {"exit_codes", "__init__"}
 
 
 def test_graph_contains_package_level_edges() -> None:
@@ -453,3 +548,23 @@ def test_a_relative_import_resolves_to_the_module_it_names(tmp_path: Path) -> No
         }
     finally:
         module.unlink()
+
+
+def test_the_extractor_ignores_a_type_checking_block(tmp_path: Path) -> None:
+    """`if TYPE_CHECKING:` is module level but never executes.
+
+    Keeping it made the lazily-bound public API look like an eager one and
+    reported cycles that cannot happen at runtime — which would have argued for
+    reverting the fix that removed the real ones.
+    """
+    module = tmp_path / "sample.py"
+    module.write_text(
+        "from typing import TYPE_CHECKING\n"
+        "\n"
+        "from pzi import exit_codes\n"
+        "\n"
+        "if TYPE_CHECKING:\n"
+        "    from pzi.http_api import serve\n",
+        encoding="utf-8",
+    )
+    assert _imported_pzi_modules(module) == {"exit_codes", "__init__"}

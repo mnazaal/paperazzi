@@ -5,12 +5,12 @@ from __future__ import annotations
 from pzi import cli_json, exit_codes
 from pzi.cli_render import error_lines, render_dedupe_result
 from pzi.commands.common import (
-    exit_code_for_error,
     print_lines,
     print_read_warnings,
     resolve_target,
 )
 from pzi.dedupe_service import find_duplicates, merge_duplicates
+from pzi.errors import exit_code_for_error
 
 
 def run_dedupe_command(args, *, home_dir, config_path, stdout, stderr, bib_selector) -> int:

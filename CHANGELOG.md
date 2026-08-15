@@ -91,6 +91,18 @@ next to the diff it explains.
 
 ### Changed
 
+- **`import pzi` costs one module again, not forty-four.** The public API is
+  bound lazily (PEP 562), so a script calling `pzi.search()` no longer pays for
+  argparse, `http.client` and the entire capture stack at import time. This is
+  structural rather than a micro-optimisation: importing the API eagerly from
+  the package root created real import cycles, because dozens of leaf modules do
+  `from pzi import exit_codes`, which executes that same file. Type checkers
+  still see the full API — the names are declared under `TYPE_CHECKING`.
+- The reason→exit-code mapping moved from `pzi.commands.common` to `pzi.errors`,
+  beside the `REASON_*` vocabulary it maps. `pzi.api` needed it, and reaching
+  into a CLI module for it dragged the argument parser into the library's
+  dependency graph.
+
 - **`--target` names one library, and several are spelled by repeating the
   flag.** `search` and `update` accepted `--target a b` as two libraries while
   the other twelve commands handed `b` to the command's own positional —

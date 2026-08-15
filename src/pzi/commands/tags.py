@@ -7,7 +7,8 @@ from typing import Any, TextIO
 
 from pzi import cli_json, exit_codes
 from pzi.cli_render import error_lines, render_tag_mutation_success
-from pzi.commands.common import exit_code_for_error, print_lines, print_read_warnings
+from pzi.commands.common import print_lines, print_read_warnings
+from pzi.errors import exit_code_for_error
 from pzi.tag_service import add_tags, list_tags, parse_tag_csv, remove_tags
 
 TagService = Callable[..., Mapping[str, Any]]

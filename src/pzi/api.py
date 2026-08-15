@@ -34,13 +34,13 @@ from collections.abc import Callable
 from typing import Any
 
 from pzi import exit_codes
-from pzi.add_service import add_input_to_bib
 from pzi.bib_service import list_entries
+from pzi.capture_core import capture_to_bib
+from pzi.capture_models import CaptureInput, CaptureOptions
 from pzi.check_service import check_bib
-from pzi.commands.common import exit_code_for_error
 from pzi.config import BibResolutionFailure, default_config_path, load_bib_target
 from pzi.dedupe_service import find_duplicates
-from pzi.errors import PziError
+from pzi.errors import PziError, exit_code_for_error
 from pzi.export_service import export_bibtex, export_csv, export_json, export_ris
 from pzi.promote_service import promote_bib
 from pzi.search_service import search_bib
@@ -282,16 +282,28 @@ def add(
     Returns the write result: the citekey, whether it was an insert or an
     update, the PDF path if one was attached, and any warnings. Makes network
     requests.
+
+    **Requires a running translation server** — start one with ``pzi server``.
+    Unlike the CLI, this does not install or start one for you: downloading a
+    Node runtime and leaving a process behind is a lot of hidden behaviour for
+    one function call. Without it, capture falls back to the DOI-based metadata
+    providers, which cannot resolve a publisher URL.
     """
     overrides: dict[str, object] = {"tags": list(tags)} if tags else {}
-    result = add_input_to_bib(
+    # Through `capture_to_bib`, the seam the CLI and the HTTP API both use —
+    # not straight to `add_input_to_bib`. It carries the shared capture policy
+    # (PDF-candidate ranking, the SSRF check on a page-supplied PDF URL), so a
+    # policy added there applies to this front end too. Bypassing it meant the
+    # newest surface silently had the oldest behaviour.
+    result = capture_to_bib(
+        CaptureInput(
+            value=source,
+            record_overrides=overrides,
+            bib_selector=library,
+        ),
+        CaptureOptions(dry_run=dry_run, force_new=force_new),
         config_path=_resolved_config_path(config_path),
         home_dir=_home(),
-        value=source,
-        record_overrides=overrides,
-        bib_selector=library,
-        dry_run=dry_run,
-        force_new=force_new,
     )
     typed = dict(result)
     _unwrap(typed, "status")

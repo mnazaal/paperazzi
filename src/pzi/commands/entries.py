@@ -7,11 +7,11 @@ from pzi.bib_service import bib_stats, entry_detail, list_entries
 from pzi.cli_render import error_lines, render_bib_stats, render_cell
 from pzi.commands.common import (
     emit_usage_error,
-    exit_code_for_error,
     print_lines,
     print_read_warnings,
     resolve_target,
 )
+from pzi.errors import exit_code_for_error
 
 #: Flags that describe *which page of a list* to show. `entries <citekey>` and
 #: `entries --stats` produce no list, so they parsed these and did nothing —

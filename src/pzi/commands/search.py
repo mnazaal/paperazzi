@@ -9,11 +9,11 @@ from pzi import cli_json, exit_codes
 from pzi.cli_render import error_lines, render_search_matches
 from pzi.commands.common import (
     emit_usage_error,
-    exit_code_for_error,
     print_lines,
     print_read_warnings,
     target_list,
 )
+from pzi.errors import exit_code_for_error
 from pzi.search_service import SearchResult, search_bib
 
 SearchService = Callable[..., SearchResult]

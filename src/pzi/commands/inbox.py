@@ -10,14 +10,13 @@ from typing import TextIO
 from pzi import cli_json, exit_codes
 from pzi.commands.common import (
     batch_exit_code,
-    exit_code_for_error,
     first_error,
     print_capture_stream_line,
     print_capture_summary,
     print_dry_run_banner,
 )
 from pzi.config import load_config_file
-from pzi.errors import REASON_CONFIG, REASON_UNAVAILABLE
+from pzi.errors import REASON_CONFIG, REASON_UNAVAILABLE, exit_code_for_error
 from pzi.inbox_service import DrainItem, DrainResult, drain_inbox, parse_inbox_line
 from pzi.tag_service import parse_tag_csv
 
