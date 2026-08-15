@@ -1,0 +1,208 @@
+pzi add [error]
+    bib_name
+    command
+    errors
+    items
+    message
+    status
+
+pzi check [error]
+    bib_name
+    command
+    counts
+    errors
+    items
+    status
+    strict
+    total
+    warnings
+
+pzi delete [ok]
+    backup_path
+    bib_name
+    bib_path
+    citekey
+    command
+    dry_run
+    errors
+    items
+    message
+    pdf_path
+    status
+    title
+
+pzi doctor [ok]
+    bib_name
+    command
+    config_ok
+    config_path
+    errors
+    items
+    status
+    warnings
+
+pzi entries [ok]
+    bib_name
+    bib_path
+    command
+    errors
+    items
+    limit
+    offset
+    papers_dir
+    sort
+    status
+    total
+    warnings
+
+pzi fix clean [ok]
+    bib_name
+    bib_path
+    command
+    duplicate_citekeys
+    errors
+    issues
+    items
+    missing_pdfs
+    orphan_pdfs
+    papers_dir
+    partial_parse
+    status
+    total_entries
+    warnings
+
+pzi fix dedupe [ok]
+    bib_name
+    bib_path
+    command
+    errors
+    exact_duplicates
+    fuzzy_candidates
+    items
+    status
+    total_clusters
+    total_entries
+    warnings
+
+pzi fix merge [error]
+    bib_name
+    citekey_a
+    citekey_b
+    command
+    dry_run
+    errors
+    items
+    message
+    reason
+    status
+
+pzi fix reindex [ok]
+    applied
+    backup_path
+    bib_name
+    bib_path
+    changed
+    command
+    errors
+    items
+    status
+    total_entries
+    warnings
+
+pzi import [error]
+    bib_name
+    command
+    errors
+    items
+    message
+    status
+
+pzi inbox [error]
+    bib_name
+    command
+    counts
+    dry_run
+    errors
+    inbox_file
+    items
+    reason
+    status
+    total
+
+pzi pdf attach [error]
+    bib_name
+    citekey
+    command
+    errors
+    items
+    local_pdf_path
+    message
+    source
+    status
+    warnings
+
+pzi pdf retry [error]
+    bib_name
+    citekey
+    command
+    errors
+    items
+    local_pdf_path
+    message
+    reason
+    status
+    warnings
+
+pzi search [ok]
+    bib_name
+    command
+    errors
+    items
+    searched_bibs
+    status
+    warnings
+
+pzi tag add [ok]
+    bib_name
+    changed
+    citekey
+    command
+    dry_run
+    errors
+    items
+    message
+    status
+    tags
+
+pzi tag list [ok]
+    bib_name
+    citekey
+    command
+    errors
+    items
+    status
+    tags
+    warnings
+
+pzi tag remove [ok]
+    bib_name
+    changed
+    citekey
+    command
+    dry_run
+    errors
+    items
+    message
+    status
+    tags
+
+pzi update [error]
+    bib_name
+    command
+    dry_run
+    errors
+    items
+    promote
+    reason
+    searched_bibs
+    status

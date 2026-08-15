@@ -17,6 +17,18 @@ next to the diff it explains.
 
 ### Added
 
+- The `--json` envelope, the config key set and the HTTP route inventory are now
+  pinned by tests, alongside the CLI shape and exit codes. Every command that
+  offers `--json` is checked to emit exactly one document carrying `command`,
+  `status`, `bib_name`, `items` and `errors` with the right types — on failure
+  as well as success, which is what the README promises a script can rely on —
+  and the per-command fields are snapshotted so none can silently change name.
+  `config.template.toml` and the loader's accepted key set are checked to
+  describe the same options, with `rate_limit_rpm` pinned as a retired key that
+  still loads with an explanation. All 21 HTTP routes are pinned, including the
+  two binary `GET`s that live in inline conditionals rather than a route table,
+  and the fact that authentication is one gate in front of every route rather
+  than a per-route flag.
 - The CLI shape and the exit-code table are now pinned by tests, so neither can
   change without a failure that says so. `tests/fixtures/cli_surface.txt`
   records every command, subcommand, flag, positional, `nargs`, `choices` and
