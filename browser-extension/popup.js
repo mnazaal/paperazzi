@@ -4,6 +4,7 @@
 // copy — and one right-click issued a `POST /capture` per open page.
 import {
   EXTENSION_VERSION,
+  describeVersionMismatch,
   fetchBibs,
   getEndpoint,
   getAuthHeaders,
@@ -177,6 +178,32 @@ async function _initRecent() {
   _renderRecent(items);
 }
 _initRecent();
+
+// ── Warn when the extension and the server have drifted ───────────────────
+// The extension outlives a `pzi` upgrade, and nothing used to tell either side.
+// A warning, never a refusal: an extension that silently stops capturing is a
+// worse outcome than one running against a slightly different server. Every
+// failure here is swallowed — an unreachable server is the popup's existing
+// problem to report, not this check's.
+async function _initVersionCheck() {
+  const banner = document.getElementById("version-warning");
+  if (!banner) return;
+  try {
+    const endpoint = await getEndpoint();
+    const healthUrl = endpointFor(endpoint, "/health");
+    const authHeaders = await getAuthHeaders();
+    const response = await fetch(healthUrl, { headers: authHeaders });
+    if (!response.ok) return;
+    const health = await response.json();
+    const mismatch = describeVersionMismatch(EXTENSION_VERSION, health.version);
+    if (!mismatch) return;
+    banner.textContent = `⚠ ${mismatch}`;
+    banner.style.display = "";
+  } catch (_error) {
+    /* server down or unparseable: not a version problem */
+  }
+}
+_initVersionCheck();
 
 async function initSearchDetection() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });

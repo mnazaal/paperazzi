@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from pzi import package_version
 from pzi.bib_repository import read_bib_file
 from pzi.bib_service import list_bibs, list_entries
 from pzi.config import BibResolutionFailure, load_bib_target, load_config_file
@@ -249,6 +250,12 @@ def _health_payload(config_path: str, home_dir: str) -> dict[str, Any]:
     )
     return {
         "status": result["status"],
+        # The extension compares this against its own `version_name` (the real
+        # project version, stamped by `tools/build_extension.py`) so a browser
+        # extension left installed across a `pzi` upgrade can say so. Reported
+        # here because `/health` is the one endpoint the extension already calls
+        # and the only one whose whole job is "what am I talking to".
+        "version": package_version(),
         "config_ok": result["config_ok"],
         "config_errors": result["config_errors"],
         "translation_server_url": result["translation_server_url"],

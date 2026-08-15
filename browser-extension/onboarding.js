@@ -1,7 +1,7 @@
 // From `background/config.js`, not `background.js`: importing the service
 // worker registers its context-menu and webRequest listeners a second time,
 // so an open onboarding tab doubled every right-click capture.
-import { fetchBibs, getEndpoint, getAuthHeaders, isLoopbackEndpoint } from "./background/config.js";
+import { fetchBibs, getEndpoint, getAuthHeaders, isLoopbackEndpoint, describeVersionMismatch, EXTENSION_VERSION } from "./background/config.js";
 
 const endpointInput = document.getElementById("endpoint");
 const tokenInput = document.getElementById("token");
@@ -99,7 +99,20 @@ testBtn.addEventListener("click", async () => {
 
     const resp = await fetch(healthUrl, { headers: authHeaders });
     if (resp.ok) {
-      setStatus("✓ pzi server is running and reachable.", true);
+      // The connection test is the natural place to notice drift: it is the
+      // one action whose whole purpose is "tell me what I am talking to".
+      let mismatch = null;
+      try {
+        const health = await resp.json();
+        mismatch = describeVersionMismatch(EXTENSION_VERSION, health.version);
+      } catch (_error) {
+        mismatch = null;  // a body that will not parse is not a version problem
+      }
+      if (mismatch) {
+        setStatus(`✓ pzi server is running and reachable.\n⚠ ${mismatch}`, true);
+      } else {
+        setStatus("✓ pzi server is running and reachable.", true);
+      }
     } else {
       setStatus(`✗ Server returned HTTP ${resp.status}. Check token or server logs.`, false);
     }

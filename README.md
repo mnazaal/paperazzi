@@ -525,6 +525,21 @@ Checklist:
 6. For PDFs, check `file = {...}` in the entry and the configured `papers/` dir.
 7. If direct PDF fetch is blocked, open the PDF tab and capture again, or attach manually with `pzi pdf attach <citekey> <url-or-path>`.
 
+### Extension and server versions
+
+The extension and the server ship from one tag and are meant to run as a pair,
+but an installed extension outlives a `pzi` upgrade. The extension therefore
+compares its own version against the one `GET /health` reports, and **warns
+without refusing**: the popup shows a banner naming both versions and every
+route keeps working.
+
+That choice is deliberate. Refusing on a mismatch would turn a routine `pzi`
+upgrade into a broken capture flow until you remembered to reload the
+extension, and an extension that silently stops capturing is a worse failure
+than one talking to a slightly newer server. **The fix is to rebuild and reload
+the extension** (`python tools/build_extension.py`, then reload it in the
+browser). A server too old to report a version produces no warning at all.
+
 ## Development install
 
 Use dev extras for hacking on paperazzi itself:

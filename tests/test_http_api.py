@@ -134,6 +134,29 @@ def test_get_health_includes_config_status(tmp_path: Path) -> None:
     assert payload["config_ok"] is True
 
 
+def test_get_health_reports_the_server_version(tmp_path: Path) -> None:
+    """Item 425: the extension compares this against its own `version_name`.
+
+    Asserted against `package_version()` rather than a literal, so cutting a
+    release does not break the test — what must hold is that the field is there
+    and says what this server actually is. Without it the extension cannot tell
+    a version mismatch from a healthy server, which is the whole handshake.
+    """
+    from pzi import package_version
+
+    config_path, _ = _seed(tmp_path)
+    port, _thread, server = _serve_once(config_path, tmp_path)
+    try:
+        response = urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/health", timeout=10
+        )
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert payload["version"] == package_version()
+
+
 def test_get_rejects_dns_rebinding_host_header(tmp_path: Path) -> None:
     # Loopback bind (default): a request whose Host header names a foreign
     # domain — as a DNS-rebinding page pointing its own domain at 127.0.0.1

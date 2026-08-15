@@ -17,6 +17,16 @@ next to the diff it explains.
 
 ### Added
 
+- The browser extension now tells you when it and the `pzi` server have drifted
+  apart. `GET /health` reports the server's version, the extension compares it
+  against its own, and a mismatch shows a banner in the popup naming both — but
+  **nothing is refused and every route keeps working**. Refusing would turn a
+  routine `pzi` upgrade into a broken capture flow until the extension was
+  reloaded, and an extension that silently stops capturing is the worse failure.
+  A server too old to report a version produces no warning at all. The fix for a
+  mismatch, and the reasoning, are in the README under "Extension and server
+  versions". Note that the popup now issues one local `/health` request when it
+  opens.
 - The `--json` envelope, the config key set and the HTTP route inventory are now
   pinned by tests, alongside the CLI shape and exit codes. Every command that
   offers `--json` is checked to emit exactly one document carrying `command`,

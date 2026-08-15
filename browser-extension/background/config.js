@@ -21,6 +21,27 @@ export const EXTENSION_VERSION = (() => {
   }
 })();
 
+// Pure, and takes both versions rather than reading `EXTENSION_VERSION` itself,
+// so it is testable without a `chrome.runtime` realm.
+//
+// Exact-string comparison, not semver ordering: the extension and the server
+// ship from one tag, so "different" is the only question worth asking, and
+// deciding which side is *older* would be inventing a policy nothing needs.
+//
+// Returns null for the three non-mismatches, and the middle one matters most:
+// a server too old to report a version must not produce a permanent warning
+// that nothing can clear.
+export function describeVersionMismatch(extensionVersion, serverVersion) {
+  if (!serverVersion || typeof serverVersion !== "string") return null;
+  if (!extensionVersion || extensionVersion === "unknown") return null;
+  if (extensionVersion === serverVersion) return null;
+  return (
+    `extension ${extensionVersion} vs pzi server ${serverVersion} — ` +
+    "these ship together; capture still works, but rebuild and reload the " +
+    "extension to be sure (see README, “Extension and server versions”)"
+  );
+}
+
 // The ID of the tab currently being captured (set by captureCurrentTab).
 export let _captureTabId = null;
 export function setCaptureTabId(val) {

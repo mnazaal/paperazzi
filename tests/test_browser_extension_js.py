@@ -159,7 +159,12 @@ console.log(JSON.stringify({ requests: globalThis.requests }));
     )
 
     # Resolved against the origin, with the citekey's colon percent-encoded.
-    assert [r["url"] for r in result["requests"]] == [
+    # `/health` filtered out, not asserted away: the popup checks the server's
+    # version on open (item 425), so it issues one health request per popup
+    # before anything is clicked. This test is about how a *PDF* URL resolves,
+    # so it looks at those and lets the rest alone.
+    pdf_requests = [r["url"] for r in result["requests"] if "/health" not in r["url"]]
+    assert pdf_requests == [
         "http://127.0.0.1:8765/pdf/smith%3A2024?bib=ml",
         "http://127.0.0.1:8765/pdf/jones2023",
     ], result["requests"]
@@ -1060,8 +1065,10 @@ _MOCK_CONFIG_MODULE = (
     'export const EXTENSION_VERSION = "1.2.3-test";\n'
     "export async function getAuthHeaders() { return globalThis.__authHeaders || {}; }\n"
     "export function endpointFor(rawEndpoint, path) { const base = new URL(rawEndpoint); const target = new URL(path, base); target.search = ''; return target.href.replace(/\\/$/, ''); }\n"
-    # The real rule, not a restatement of it.
-    'export { isLoopbackEndpoint } from "./config_real.mjs";\n'
+    # The real rules, not restatements of them. `describeVersionMismatch` in
+    # particular: a stub that always answered "no mismatch" would let the popup
+    # pass while the comparison it gates on had drifted.
+    'export { isLoopbackEndpoint, describeVersionMismatch } from "./config_real.mjs";\n'
 )
 
 _MOCK_SEARCH_MODULE = (
@@ -1585,7 +1592,13 @@ console.log(JSON.stringify({ events: globalThis.events }));
         tmp_path,
     )
 
-    fetch_event = next(e for e in result["events"] if e["type"] == "fetch")
+    # The *PDF* fetch, not merely the first one: importing `popup.js` starts the
+    # version check (item 425), which fetches `/health` before this test clicks
+    # anything.
+    fetch_event = next(
+        e for e in result["events"]
+        if e["type"] == "fetch" and "/health" not in e["url"]
+    )
     assert fetch_event["url"] == "http://127.0.0.1:8765/pdf/smith2024paper"
     assert fetch_event["headers"] == {"X-Pzi-Token": "tok"}
     assert {"type": "open", "url": "blob:pzi-pdf", "target": "_blank"} in result["events"]
@@ -4352,3 +4365,40 @@ console.log(JSON.stringify({ bodies }));
     assert bodies[0]["cookies"]
     # A different domain the user is not on: none.
     assert not bodies[1]["cookies"]
+
+
+def test_a_version_mismatch_is_described_and_the_three_non_mismatches_are_not(
+    tmp_path: Path,
+) -> None:
+    """Item 425: the extension outlives a `pzi` upgrade and nothing said so.
+
+    The three silent cases matter as much as the loud one. A server too old to
+    report a version, and a realm where the extension cannot read its own,
+    must not produce a warning that nothing can ever clear — a permanent
+    warning is one the user learns to ignore, which costs the real one its
+    meaning.
+    """
+    result = _run_background_module(
+        r'''
+const { describeVersionMismatch } = await import("./background/config.mjs");
+console.log(JSON.stringify({
+  mismatch: describeVersionMismatch("0.1.0b6", "0.1.0b7"),
+  same: describeVersionMismatch("0.1.0b6", "0.1.0b6"),
+  serverTooOldToSay: describeVersionMismatch("0.1.0b6", undefined),
+  extensionCannotTell: describeVersionMismatch("unknown", "0.1.0b7"),
+}));
+''',
+        tmp_path,
+    )
+
+    assert result["same"] is None
+    assert result["serverTooOldToSay"] is None
+    assert result["extensionCannotTell"] is None
+
+    warning = result["mismatch"]
+    assert warning is not None
+    # Both versions named: "something is wrong" without saying what is worse
+    # than silence, because it cannot be acted on.
+    assert "0.1.0b6" in warning and "0.1.0b7" in warning
+    # And it says capture still works — this is a warning, not a refusal.
+    assert "still works" in warning
