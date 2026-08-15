@@ -365,7 +365,7 @@ eval "$(register-python-argcomplete pzi)"   # add to ~/.bashrc or ~/.zshrc
 For external `.bib` files managed by Zotero, Paperpile, LaTeX projects, or hand edits, use `--dry-run` first and keep a backup or Git history. paperazzi rewrites entries it touches; known source-preservation limitations:
 
 - Malformed BibTeX (unbalanced braces, unterminated strings, a `%` comment inside an entry) is rejected and must be fixed manually
-- **The first write reformats the whole file**, not only the entry it touches: indentation and whitespace are normalized throughout, and entry types are lowercased (`@Article` → `@article`). This happens once — the result is stable, so later writes only change the entries they touch. Citekeys, field names' capitalization, field order within an entry, line endings, a byte-order mark and the file's permissions are all preserved
+- **A write changes the entry it touches, and lowercases entry types everywhere.** `@Article` becomes `@article` throughout the file, including in entries the write never looked at — that is the one file-wide change. Everything else is left alone: your indentation (tabs or spaces, whatever the file uses), blank lines, citekey capitalization, field names' capitalization, field order within an entry, line endings, a byte-order mark, and the file's permissions all survive. Measured on a real 22,232-entry Better BibTeX export: adding one tag is a **one-line diff**
 - Comments, `@string` macros, and `@preamble` blocks are preserved across insert, update, tag, delete, merge, and reindex (which keeps entry order); `fix clean --fix` never rewrites the `.bib` (it only relocates orphan PDFs)
 - BibTeX `@string` macros are kept as-is but not expanded or validated
 
