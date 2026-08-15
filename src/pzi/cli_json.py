@@ -21,6 +21,8 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any, TextIO
 
+from pzi.errors import REASON_USAGE
+
 # Service result keys that hold "the list of things this command produced".
 # They are normalized to `items` so consumers do not need a per-command jq path.
 _ITEM_KEYS: tuple[str, ...] = ("items", "matches", "results", "bibs")
@@ -106,10 +108,36 @@ def emit_result(
     _emit(build_envelope(result, command=command, items=items, bib_name=bib_name), stdout)
 
 
-def emit_error(message: str, errors: Sequence[str], stdout: TextIO, *, command: str) -> None:
-    """Write a failure as the standard envelope."""
+def emit_error(
+    message: str,
+    errors: Sequence[str],
+    stdout: TextIO,
+    *,
+    command: str,
+    reason: str = REASON_USAGE,
+) -> None:
+    """Write a failure as the standard envelope.
+
+    *reason* is the structured discriminator a consumer branches on — the same
+    vocabulary `exit_code_for_error` and `http_status` both key off. It used to
+    be absent here, so `reason` appeared on service-reported failures and
+    vanished on every boundary failure: `pzi entries --json --target nosuch`
+    carried one and `pzi entries --stats --json --target nosuch` did not, for
+    the identical error. A key present on some failures and not others is worse
+    than one that is always absent, because a consumer writes the branch and
+    then meets the case where it is missing.
+
+    `REASON_USAGE` is the default because `emit_usage_error` — the bad-invocation
+    path — is the caller that does not pass one. `cli._fail` passes what the
+    `PziError` carried, falling back to a coarse map from the exit code.
+    """
     emit_result(
-        {"status": "error", "message": message, "errors": list(errors)},
+        {
+            "status": "error",
+            "message": message,
+            "errors": list(errors),
+            "reason": reason,
+        },
         stdout,
         command=command,
     )

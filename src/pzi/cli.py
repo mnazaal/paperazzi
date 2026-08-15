@@ -8,7 +8,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, TextIO, TypedDict
 
-from pzi import cli_json, exit_codes
+from pzi import cli_json, errors, exit_codes
 from pzi.cli_parser import build_parser, set_error_stream
 from pzi.commands.add import run_add_command as _run_add
 from pzi.commands.check import run_check_command as _run_check
@@ -28,6 +28,16 @@ from pzi.commands.tags import run_tag_command as _run_tag
 from pzi.commands.update import run_update_command as _run_update
 from pzi.config import default_config_path
 from pzi.errors import PziError
+
+#: The inverse of `commands.common._EXIT_CODE_BY_REASON`, for a `PziError` that
+#: carried no `reason`. Coarse on purpose and only where nothing better exists:
+#: `ENVIRONMENT` covers config, unavailable and conflict, so it maps to the one
+#: that claims least — reporting `config` for a service outage would be a guess
+#: presented as a fact.
+_REASON_BY_EXIT_CODE: dict[int, str] = {
+    exit_codes.USAGE: errors.REASON_USAGE,
+    exit_codes.NOT_FOUND: errors.REASON_NOT_FOUND,
+}
 
 BibSelector = str | Sequence[str] | None
 
@@ -216,7 +226,12 @@ def run_cli(
         # `--target` produced no JSON for any of them.
         as_json = getattr(args, "json", False)
 
-        def _fail(message: str, details: Sequence[str], code: int) -> int:
+        def _fail(
+            message: str,
+            details: Sequence[str],
+            code: int,
+            reason: str = errors.REASON_UNAVAILABLE,
+        ) -> int:
             if as_json:
                 # `.errors[]` is the documented failure channel, so it must say
                 # something on every failure. Most `PziError`s carry details
@@ -227,6 +242,7 @@ def run_cli(
                     list(details) or [message],
                     out,
                     command=command_label(args),
+                    reason=reason,
                 )
                 return code
             print(f"error: {message}", file=err)
@@ -243,7 +259,17 @@ def run_cli(
         except PziError as exc:
             # Carries a message already phrased for the user (e.g. naming the
             # bib file that is not valid UTF-8) and the exit code to report.
-            return _fail(exc.message, exc.details, exc.code)
+            # `exc.reason` where the raiser knew it; otherwise the coarse map
+            # below. Never absent: a `reason` key present on some failure
+            # envelopes and missing on others is worse than one that is always
+            # there, because a consumer writes the branch and then meets the
+            # case that lacks it.
+            return _fail(
+                exc.message,
+                exc.details,
+                exc.code,
+                exc.reason or _REASON_BY_EXIT_CODE.get(exc.code, errors.REASON_UNAVAILABLE),
+            )
         except (OSError, UnicodeDecodeError) as exc:
             # Expected environmental failures (permission denied, disk full, a
             # file that is not valid UTF-8, …) become a clean diagnostic

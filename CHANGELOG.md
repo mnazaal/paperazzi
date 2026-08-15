@@ -91,6 +91,25 @@ next to the diff it explains.
 
 ### Changed
 
+- **`--target` names one library, and several are spelled by repeating the
+  flag.** `search` and `update` accepted `--target a b` as two libraries while
+  the other twelve commands handed `b` to the command's own positional —
+  `pzi entries --target main main` reported "no entry with citekey main". Same
+  spelling, opposite meanings, no error either way. The greedy form is removed
+  rather than made uniform, because it also swallows a command's positional
+  (`pzi add --target lib 10.1234/x` would lose the DOI); `--target a --target b`
+  is now the one way to name several, and `--target a b` is a plain
+  "unrecognized arguments" error.
+- **Every `--json` failure carries `reason`.** It reached 4 of 18 error
+  envelopes: failures reported by a service had it, failures raised at the
+  command boundary did not, so the *same* user error carried it through one code
+  path and not another. `PziError` now carries the structured reason where the
+  raiser knows it, with a documented coarse fallback from the exit code where
+  nothing better exists.
+- `pzi check --force` is refused when neither `--report` nor `--jsonl` is given.
+  It was accepted and did nothing — on the longest-running command, where a
+  silently ignored flag costs a whole network run to discover.
+
 - A capture answered by the translation server now reports that, the way a
   capture answered by Crossref/OpenAlex/Semantic Scholar always did:
   `metadata from translation_server` appears in `--verbose` output and in

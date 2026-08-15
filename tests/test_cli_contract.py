@@ -891,3 +891,88 @@ def test_the_reindex_prompt_names_the_scheme_it_would_use(
     assert "using the built-in scheme" in err
     assert "no citekey_format is configured" in err
     assert "cancelled" in err
+
+
+# --- Remediation after the 2026-08-15 API review -----------------------------
+
+ARTICLE = "@article{a1,\n  title = {An Article},\n}\n"
+
+
+def test_no_command_reads_a_bare_second_target_as_a_second_library(
+    tmp_path: Path,
+) -> None:
+    """`--target a b` must not mean two different things on two commands.
+
+    `search` and `update` declared `nargs="+"`, so `--target a b` named two
+    libraries; the other twelve declared a scalar, so argparse handed `b` to the
+    command's *positional* — `pzi entries --target main main` reported "no entry
+    with citekey main". Same spelling, opposite meanings, and no error either
+    way.
+
+    The greedy form is gone rather than made uniform: `nargs="+"` also swallows
+    a command's own positional, so `pzi add --target lib 10.1234/x` would lose
+    the DOI. Several libraries are now spelled by repeating the flag.
+    """
+    config_path, _ = _library(tmp_path, ARTICLE)
+
+    # On a command with no positional, the second bare value is simply rejected.
+    code, _out, err = _run(
+        ["search", "--query", "Article", "--target", "ml", "ml",
+         "--config", str(config_path)],
+        tmp_path,
+    )
+    assert code == exit_codes.USAGE
+    assert "unrecognized arguments: ml" in err, err
+
+    # Repeating the flag is the one spelling that names several libraries.
+    code, _out, _err = _run(
+        ["search", "--query", "Article", "--target", "ml", "--target", "ml",
+         "--config", str(config_path)],
+        tmp_path,
+    )
+    assert code == exit_codes.OK
+
+    # And a command's own positional still reaches it — the regression the
+    # greedy form would have introduced.
+    code, _out, err = _run(
+        ["entries", "a1", "--target", "ml", "--config", str(config_path)], tmp_path
+    )
+    assert code == exit_codes.OK, err
+
+
+def test_check_force_without_a_report_destination_is_refused(tmp_path: Path) -> None:
+    """A flag that is accepted and ignored reads as applied.
+
+    `--force` on `check` means "overwrite the file at --report/--jsonl"; with
+    neither given it was consulted only inside a loop that never ran. This CLI
+    refuses the same pattern in six other places, and `check` is the longest
+    network-bound command — the worst one to discover a no-op flag on.
+    """
+    config_path, _ = _library(tmp_path, ARTICLE)
+    code, _out, err = _run(["check", "--force", "--config", str(config_path)], tmp_path)
+    assert code == exit_codes.USAGE
+    assert "--force applies to --report/--jsonl" in err, err
+
+
+def test_every_json_failure_carries_a_reason(tmp_path: Path) -> None:
+    """`reason` present on some failures and absent on others is the worst case.
+
+    A consumer writes the branch against the failures that have it, then meets
+    one that does not. The same user error reported `config` through the service
+    path and nothing at all through the boundary path.
+    """
+    import json
+
+    config_path, _ = _library(tmp_path, ARTICLE)
+    missing = str(tmp_path / "nope.bib")
+
+    for argv in (
+        ["entries", "--target", missing],
+        ["entries", "--stats", "--target", missing],
+        ["search", "--query", "x", "--target", missing],
+    ):
+        code, out, _err = _run([*argv, "--json", "--config", str(config_path)], tmp_path)
+        envelope = json.loads(out)
+        assert envelope["status"] == "error"
+        assert envelope.get("reason") == "config", (argv, envelope)
+        assert code == exit_codes.ENVIRONMENT

@@ -1,4 +1,4 @@
-pzi.PziError(message: 'str', *, code: 'int' = 5, details: 'list[str] | None' = None) -> 'None'
+pzi.PziError(message: 'str', *, code: 'int' = 5, details: 'list[str] | None' = None, reason: 'str | None' = None) -> 'None'
 pzi.__version__: str
 pzi.add(source: 'str', *, tags: 'list[str] | None' = None, dry_run: 'bool' = False, force_new: 'bool' = False, config_path: 'str | None' = None, library: 'str | None' = None) -> 'dict[str, Any]'
 pzi.check(*, strict: 'bool' = False, config_path: 'str | None' = None, library: 'str | None' = None) -> 'dict[str, Any]'

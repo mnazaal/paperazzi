@@ -86,6 +86,20 @@ def run_check_command(
             stdout=stdout,
             stderr=stderr,
         )
+    if getattr(args, "force", False) and not report_path and not jsonl_path:
+        # `--force` here means only "overwrite the file at --report/--jsonl", and
+        # with neither given it was accepted and did nothing. This CLI refuses
+        # that pattern in six other places (`export -o`, `fix clean`, `fix
+        # reindex`, `update`, `entries`, `add --failures-out`); `check` was the
+        # one miss, on the longest-running command, where a silently ignored
+        # flag costs a whole network run to discover.
+        return emit_usage_error(
+            args,
+            "--force applies to --report/--jsonl and has no effect without one",
+            command_path=("check",),
+            stdout=stdout,
+            stderr=stderr,
+        )
     # Both output paths are checked *before* the audit, not after it. `check`
     # is the long, network-bound command — a whole run against every entry — and
     # opening the destination at the end meant an unwritable path threw the

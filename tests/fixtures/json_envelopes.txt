@@ -4,6 +4,7 @@ pzi add [error]
     errors
     items
     message
+    reason
     status
 
 pzi check [error]
@@ -115,6 +116,7 @@ pzi import [error]
     errors
     items
     message
+    reason
     status
 
 pzi inbox [error]

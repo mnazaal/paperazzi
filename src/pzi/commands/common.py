@@ -47,6 +47,11 @@ def resolve_target(
             resolved.errors[0] if resolved.errors else "failed to resolve bib",
             code=exit_codes.ENVIRONMENT,
             details=list(resolved.errors),
+            # The same `reason` the service path reports for this exact failure.
+            # Without it `pzi entries --target nosuch` said `config` while
+            # `pzi entries --stats --target nosuch` said something else, for one
+            # user error.
+            reason=errors.REASON_CONFIG,
         )
     config, target = resolved
     return config, target

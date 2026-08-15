@@ -51,8 +51,16 @@ class PziError(Exception):
         *,
         code: int = exit_codes.ENVIRONMENT,
         details: list[str] | None = None,
+        reason: str | None = None,
     ) -> None:
         super().__init__(message)
         self.message = message
         self.code = code
         self.details = details or []
+        #: The structured `REASON_*` discriminator, when the raiser knows it.
+        #: The exit code alone cannot stand in for it: `ENVIRONMENT` covers
+        #: config, unavailable *and* conflict, so a consumer branching on the
+        #: code cannot tell a broken config from a service that is down. Left
+        #: `None` where the raiser genuinely does not know, and rendered with a
+        #: documented coarse fallback rather than a guess dressed as fact.
+        self.reason = reason

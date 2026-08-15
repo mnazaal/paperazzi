@@ -52,6 +52,13 @@ def _describe_action(action: argparse.Action) -> str | None:
     else:
         name = f"<{action.dest}>"
     parts = [name, f"dest={action.dest}"]
+    # The action class, when it is not argparse's default `store`. Omitted
+    # before, which made a `store` -> `append` change invisible to this
+    # snapshot — and that is a semantic change to how a flag may be spelled,
+    # exactly what the file exists to catch. Found by making one.
+    action_name = type(action).__name__
+    if action_name not in ("_StoreAction", "_StoreTrueAction"):
+        parts.append(f"action={action_name.removeprefix('_').removesuffix('Action').lower()}")
     if action.nargs is not None:
         parts.append(f"nargs={action.nargs!r}")
     if action.choices is not None:

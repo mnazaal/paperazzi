@@ -1,6 +1,6 @@
 pzi
     --config dest=top_level_config
-    --version dest=version nargs=0
+    --version dest=version action=version nargs=0
 
 pzi add
     --citekey dest=citekey
@@ -14,7 +14,7 @@ pzi add
     --json dest=json nargs=0
     --metadata-json dest=metadata_json
     --page-html dest=page_html
-    --pdf-candidate dest=pdf_candidate default=[]
+    --pdf-candidate dest=pdf_candidate action=append default=[]
     --strict-metadata dest=strict_metadata nargs=0
     --tags dest=tags
     --target dest=target
@@ -139,7 +139,7 @@ pzi search
     --json dest=json nargs=0
     --query dest=query
     --tag dest=tag
-    --target dest=target nargs='+'
+    --target dest=target action=append
     --year dest=year
 
 pzi server
@@ -181,5 +181,5 @@ pzi update
     --mark-resolved dest=mark_resolved nargs=0
     --promote dest=promote nargs=0
     --replace dest=replace nargs=0
-    --target dest=target nargs='+'
+    --target dest=target action=append
     --verbose dest=verbose nargs=0

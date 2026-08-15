@@ -278,16 +278,24 @@ def build_parser() -> argparse.ArgumentParser:
     def add_multi_target(p: argparse.ArgumentParser) -> None:
         p.add_argument(
             "--target",
-            nargs="+",
-            # `extend`, not the default `store`: with `store`, a repeated
-            # `--target a --target b` kept only `b`. On `search` that quietly
-            # halved the results; on `update`, which writes, it meant the user
-            # asked for two libraries to be updated and one of them was.
-            # Default stays `None` rather than `[]`, so "no --target given" keeps
-            # the shape every caller already tests for; `extend` treats a `None`
-            # default as empty.
-            action="extend",
-            help="one or more configured library names/paths or direct .bib paths",
+            # `append`, not `nargs="+"`. Repeating the flag — `--target a
+            # --target b` — is now the *only* way to name several libraries, and
+            # that is the point: with `nargs="+"`, `--target a b` meant "two
+            # libraries" on these two commands and "one library, and `b` is the
+            # positional" on the other twelve, silently and with no error on
+            # either path. `pzi entries --target main main` reported "no entry
+            # with citekey main".
+            #
+            # The greedy form cannot be kept and made safe: it also swallows a
+            # command's own positional, so `pzi add --target lib 10.1234/x`
+            # would lose the DOI. Removing it leaves one spelling that means the
+            # same thing everywhere; `--target a b` is now a plain
+            # "unrecognized arguments: b" on a command with no positional.
+            #
+            # `store` alone is not enough either: it kept only the last of a
+            # repeated flag, so `update` asked to write two libraries wrote one.
+            action="append",
+            help="configured library name/path or direct .bib path (repeatable)",
         )
 
     # ── add ─────────────────────────────────────────────────────────────
