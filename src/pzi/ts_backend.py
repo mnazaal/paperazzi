@@ -86,7 +86,7 @@ def _cookie_patch_fingerprint() -> str:
     """A digest of the patch logic pzi applies to the upstream sources.
 
     The sentinel used to record pzi's *version*, so every release — a CLI
-    wording change, a docs fix, anything — re-cloned three repositories and
+    wording change, a docs fix, anything — re-cloned all five repositories and
     re-ran `npm install`. The per-repo `ref` comparison already covers upstream
     changes, so the version check existed only to re-apply the cookie patches
     when *they* changed. This is that condition stated directly: it changes when

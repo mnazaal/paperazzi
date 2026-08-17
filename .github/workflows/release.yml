@@ -163,8 +163,9 @@ jobs:
           # Marking a beta as the latest release tells every visitor — and any
           # tool reading /releases/latest — that it is the recommended one.
           # Paired with the README pointing at the releases *list* rather than
-          # /releases/latest, which returns nothing once every release is a
-          # pre-release.
+          # /releases/latest, which skips pre-releases and walks back to the
+          # newest release without that flag — for this repo, a beta from
+          # before the flag was applied. It resolves, and to the wrong thing.
           prerelease=""
           if printf '%s' "$version" | grep -Eq '(a|b|rc)[0-9]+$'; then
             prerelease="--prerelease"

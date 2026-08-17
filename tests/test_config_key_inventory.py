@@ -77,6 +77,19 @@ def test_a_retired_key_is_documented_as_retired_and_not_reaccepted() -> None:
         )
 
 
+#: Identifiers the README legitimately backticks that end in a config-key-shaped
+#: suffix without being config keys. The suffix heuristic below cannot tell them
+#: apart, and the alternative — not formatting a real identifier as code — makes
+#: the README worse to protect a test. Each entry needs a reason, so the list
+#: stays a short set of known non-keys rather than a place to silence failures.
+NOT_CONFIG_KEYS = frozenset(
+    {
+        "config_path",  # the Python API's keyword argument (`pzi.search(config_path=…)`)
+        "safe_public_http_url",  # the SSRF-validation function in `pzi.url_safety`
+    }
+)
+
+
 def test_the_readme_names_no_config_key_that_does_not_exist() -> None:
     """The README may cover a subset; it may not invent one.
 
@@ -95,6 +108,7 @@ def test_the_readme_names_no_config_key_that_does_not_exist() -> None:
         name
         for name in mentioned - known
         if name.endswith(("_cmd", "_url", "_dirs", "_path", "_format", "_host"))
+        and name not in NOT_CONFIG_KEYS
     }
     assert not suspicious, (
         f"the README documents config keys the loader does not accept: "
