@@ -132,6 +132,28 @@ next to the diff it explains.
 
 ### Fixed
 
+- **`pzi check` and `pzi.check()` now agree about whether a library was
+  verified.** An audit that reached no metadata source at all exited 5 from the
+  CLI while returning `"status": "ok"` from Python and raising nothing — the
+  rule lived in the CLI runner and nowhere else. It is part of the audit now, so
+  the report file, the `--json` envelope, the exit code and the Python API all
+  say the same thing. `pzi.check()` raises `PziError` for it.
+
+- **Capture failures say why they failed.** `pzi.add("garbage input")` was exit
+  5, "could not run", for a malformed argument the CLI's own parser calls a
+  usage error; it is 2 now. Provider and translation-server failures are
+  classified as unavailable, which over HTTP is 503 rather than 400, and
+  config/target failures as config. "No metadata found" stays unclassified —
+  none of the documented codes fits it.
+
+- Errors that named `--target` no longer do. Three front ends read those
+  strings, so `pzi.export(library="nope")` reported a CLI flag the caller never
+  typed. `pzi.entries(library="nope")` also said only "failed to resolve bib"
+  where every other command named the library and listed the configured ones.
+
+- The prose error renderers no longer print the same sentence twice when a
+  service sets its message and its single error to the same string.
+
 - `pzi pdf retry --failed-only` now exits **5** when every retry failed, not 4.
   Exit code 4 means a batch partly succeeded; this command open-coded its own
   rule instead of using the shared one, so a retry that fetched nothing reported
@@ -254,6 +276,11 @@ next to the diff it explains.
   in the guard rather than a reachable failure.
 
 ### Documentation
+
+- The README now says what `pzi export` writes where: a bare JSON array for
+  `--format json` (not the `--json` envelope — the array *is* the document), one
+  prose line for `-o PATH`, and nothing at all on failure. Three cases, one
+  table, and a test that runs all three.
 
 - `README.md` gains **Recovering from a refused or interrupted write**: what
   each write refusal says and that every one of them means nothing was written,
