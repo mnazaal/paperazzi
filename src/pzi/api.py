@@ -65,9 +65,11 @@ from pzi.errors import PziError, exit_code_for_error
 from pzi.export_service import export_bibtex, export_csv, export_json, export_ris
 from pzi.promote_service import PromoteItem, PromoteResult, promote_bib
 from pzi.search_service import SearchMatch, search_bib
-from pzi.tag_service import TagChangeResult
+from pzi.tag_service import TagChangeResult, TagListResult
 from pzi.tag_service import add_tags as _add_tags_service
+from pzi.tag_service import list_tags as _list_tags_service
 from pzi.tag_service import remove_tags as _remove_tags_service
+from pzi.update_service import UpdateBibResult, UpdatePlanItem, update_bib
 
 __all__ = [
     "AddResult",
@@ -82,6 +84,9 @@ __all__ = [
     "PromoteResult",
     "SearchMatch",
     "TagChangeResult",
+    "TagListResult",
+    "UpdateBibResult",
+    "UpdatePlanItem",
     "add",
     "add_tags",
     "check",
@@ -91,10 +96,12 @@ __all__ = [
     "export",
     "get",
     "list_bibs",
+    "list_tags",
     "merge",
     "promote",
     "remove_tags",
     "search",
+    "update",
 ]
 
 _EXPORTERS = {
@@ -597,6 +604,60 @@ def merge(
         # `absolute` here would rewrite a relative-path library's `file =`
         # fields to absolute ones on an unrelated merge.
         file_path_style=config.get("pdf_file_path_style", "absolute"),
+    ).copy()
+    _unwrap(typed, "status")
+    return typed
+
+
+@_public
+def list_tags(
+    citekey: str | None = None,
+    *,
+    config_path: str | None = None,
+    library: str | None = None,
+) -> TagListResult:
+    """List tags — one entry's, or the whole library's vocabulary.
+
+    With *citekey*, the tags on that entry. Without one, every distinct tag in
+    the library, which is what makes `search(tag=...)` usable: a caller can
+    discover the vocabulary instead of guessing at it.
+    """
+    typed = _list_tags_service(
+        config_path=_resolved_config_path(config_path),
+        home_dir=_home(),
+        bib_selector=library,
+        citekey=citekey,
+    ).copy()
+    tags = _unwrap(typed, "tags")
+    _emit_warnings(typed)
+    typed["tags"] = list(tags)
+    return typed
+
+
+@_public
+def update(
+    *,
+    dry_run: bool = True,
+    config_path: str | None = None,
+    library: str | None = None,
+) -> UpdateBibResult:
+    """Fill missing metadata on entries that have gaps. Makes network requests.
+
+    **Previews by default** — pass ``dry_run=False`` to write, the same split as
+    :func:`promote`. A zero-argument call sweeps the whole library and queries a
+    provider per incomplete entry, so on a large library that is thousands of
+    requests and a rewrite before the caller sees anything. `update_bib` and the
+    CLI's `--dry-run` agree; the CLI writes by default because you typed the
+    command.
+
+    Conservative by construction: it fills gaps and never replaces a preprint
+    with its published version. That is :func:`promote`.
+    """
+    typed = update_bib(
+        config_path=_resolved_config_path(config_path),
+        home_dir=_home(),
+        bib_selector=library,
+        dry_run=dry_run,
     ).copy()
     _unwrap(typed, "status")
     return typed

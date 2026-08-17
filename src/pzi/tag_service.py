@@ -57,6 +57,12 @@ def parse_tag_csv(value: str) -> list[str]:
 
 
 class TagListResult(TypedDict):
+    """Tags — what `pzi.list_tags()` returns.
+
+    With a citekey, that entry's tags and `citekey` set; without one, every
+    tag in the library and `citekey` None.
+    """
+
     status: str
     bib_name: str | None
     citekey: str | None

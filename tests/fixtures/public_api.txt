@@ -150,6 +150,34 @@ pzi.TagChangeResult {
     status: str
     tags: list[str]
 }
+pzi.TagListResult {
+    bib_name: str | None
+    citekey: str | None
+    errors: list[str]
+    reason: NotRequired[str]
+    status: str
+    tags: list[str]
+    warnings: NotRequired[list[str]]
+}
+pzi.UpdateBibResult {
+    bib_name: str | None
+    dry_run: bool
+    errors: list[str]
+    items: list[UpdatePlanItem]
+    reason: NotRequired[str]
+    status: str
+}
+pzi.UpdatePlanItem {
+    applied: bool
+    changed_fields: list[str]
+    citekey: str
+    diff: NotRequired[str]
+    failed: NotRequired[bool]
+    metadata_diagnostics: NotRequired[list[str]]
+    metadata_warnings: NotRequired[list[str]]
+    note: str | None
+    skipped: NotRequired[bool]
+}
 pzi.__version__: str
 pzi.add(source: 'str', *, tags: 'list[str] | None' = None, dry_run: 'bool' = False, force_new: 'bool' = False, config_path: 'str | None' = None, library: 'str | None' = None) -> 'AddResult'
 pzi.add_tags(citekey: 'str', tags: 'list[str]', *, dry_run: 'bool' = False, config_path: 'str | None' = None, library: 'str | None' = None) -> 'TagChangeResult'
@@ -160,7 +188,9 @@ pzi.entries(*, offset: 'int' = 0, limit: 'int' = 50, sort: 'str' = 'citekey', co
 pzi.export(fmt: 'str' = 'bibtex', *, config_path: 'str | None' = None, library: 'str | None' = None) -> 'str'
 pzi.get(citekey: 'str', *, config_path: 'str | None' = None, library: 'str | None' = None) -> 'EntryRecord'
 pzi.list_bibs(*, config_path: 'str | None' = None) -> 'list[BibInfo]'
+pzi.list_tags(citekey: 'str | None' = None, *, config_path: 'str | None' = None, library: 'str | None' = None) -> 'TagListResult'
 pzi.merge(citekey_a: 'str', citekey_b: 'str', *, dry_run: 'bool' = True, config_path: 'str | None' = None, library: 'str | None' = None) -> 'MergeResult'
 pzi.promote(*, replace: 'bool' = False, dry_run: 'bool' = True, config_path: 'str | None' = None, library: 'str | None' = None) -> 'PromoteResult'
 pzi.remove_tags(citekey: 'str', tags: 'list[str]', *, dry_run: 'bool' = False, config_path: 'str | None' = None, library: 'str | None' = None) -> 'TagChangeResult'
 pzi.search(query: 'str | None' = None, *, author: 'str | None' = None, year: 'int | None' = None, tag: 'str | None' = None, config_path: 'str | None' = None, library: 'str | None' = None) -> 'list[SearchMatch]'
+pzi.update(*, dry_run: 'bool' = True, config_path: 'str | None' = None, library: 'str | None' = None) -> 'UpdateBibResult'

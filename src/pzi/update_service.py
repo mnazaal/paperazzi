@@ -36,6 +36,12 @@ from pzi.translation_server import fetch_search_translations
 
 
 class UpdatePlanItem(TypedDict):
+    """One entry considered by an update, inside an `UpdateBibResult`.
+
+    `applied` is False for every item of a dry run, so it is not a failure
+    predicate — `failed` and `skipped` are.
+    """
+
     citekey: str
     changed_fields: list[str]
     applied: bool
@@ -55,6 +61,12 @@ class UpdatePlanItem(TypedDict):
 
 
 class UpdateBibResult(TypedDict):
+    """An enrichment sweep — what `pzi.update()` returns.
+
+    One `UpdatePlanItem` per entry the sweep considered. Previews by
+    default; `dry_run` says which this was.
+    """
+
     status: str
     bib_name: str | None
     dry_run: bool

@@ -93,6 +93,9 @@ if TYPE_CHECKING:
         PromoteResult,
         SearchMatch,
         TagChangeResult,
+        TagListResult,
+        UpdateBibResult,
+        UpdatePlanItem,
         add,
         add_tags,
         check,
@@ -102,10 +105,12 @@ if TYPE_CHECKING:
         export,
         get,
         list_bibs,
+        list_tags,
         merge,
         promote,
         remove_tags,
         search,
+        update,
     )
     from pzi.errors import PziError
 
@@ -127,6 +132,9 @@ _PUBLIC_TYPES = frozenset(
         "PromoteResult",
         "SearchMatch",
         "TagChangeResult",
+        "TagListResult",
+        "UpdateBibResult",
+        "UpdatePlanItem",
     }
 )
 
@@ -141,10 +149,12 @@ _PUBLIC_API = frozenset(
         "export",
         "get",
         "list_bibs",
+        "list_tags",
         "merge",
         "promote",
         "remove_tags",
         "search",
+        "update",
     }
 )
 
@@ -179,6 +189,9 @@ __all__ = [
     "PziError",
     "SearchMatch",
     "TagChangeResult",
+    "TagListResult",
+    "UpdateBibResult",
+    "UpdatePlanItem",
     "__version__",
     "add",
     "add_tags",
@@ -189,8 +202,10 @@ __all__ = [
     "export",
     "get",
     "list_bibs",
+    "list_tags",
     "merge",
     "promote",
     "remove_tags",
     "search",
+    "update",
 ]

@@ -325,6 +325,11 @@ def test_every_declared_type_matches_a_real_call(tmp_path: Path) -> None:
             pzi.DeleteEntryResult,
         ),
     ]
+    # `list_tags` is read-only but runs last: `delete` above empties the
+    # library, and an empty tag list is still a valid `TagListResult`.
+    cases.append(
+        ("list_tags", pzi.list_tags(config_path=config), pzi.TagListResult)
+    )
 
     failures = [
         f"{label}: {'; '.join(complaints)}"
