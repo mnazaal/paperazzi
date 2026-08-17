@@ -45,7 +45,7 @@ def _rotate_token_only(dest: Path, *, home_dir: str, stdout: TextIO) -> int:
     return exit_codes.OK
 
 
-def _backup_config(dest: Path, home_dir: str) -> str:
+def _backup_config(dest: Path, data_home: Path) -> str:
     """Copy the config being replaced somewhere it cannot be clobbered.
 
     Two properties the previous ``{dest}.bak`` had neither of. It was a fixed
@@ -58,8 +58,14 @@ def _backup_config(dest: Path, home_dir: str) -> str:
 
     The data home is neither: pzi's own, never tracked, and the timestamp means
     a rotation history rather than a single overwritable slot.
+
+    *data_home* is passed in already resolved rather than re-derived here. This
+    resolved it with ``default_data_home`` while the caller used
+    ``_configured_data_home``, so with a ``pzi_data_home`` set the token went to
+    the configured directory and the backup to the XDG default — the undo copy
+    landing outside the only directory the README tells you to keep.
     """
-    backups = Path(default_data_home(home_dir)) / "config-backups"
+    backups = data_home / "config-backups"
     backups.mkdir(parents=True, exist_ok=True, mode=0o700)
     stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
     backup = backups / f"{dest.name}.{stamp}"
@@ -179,7 +185,7 @@ def run_init_command(
     # file that also carries `api_auth_token` and `*_cmd` hooks.
     backup: str | None = None
     if os.path.exists(dest):
-        backup = _backup_config(dest, home_dir)
+        backup = _backup_config(dest, data_home)
     _write_config_atomically(dest, content)
     if backup is not None:
         print(f"overwrote {dest} (mode 0600); previous config saved to {backup}", file=stdout)

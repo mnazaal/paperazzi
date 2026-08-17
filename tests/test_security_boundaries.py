@@ -250,6 +250,49 @@ def test_init_writes_the_token_where_the_reader_looks(tmp_path: Path) -> None:
     )
 
 
+def test_init_force_backs_the_config_up_into_the_configured_data_home(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The backup has to follow `pzi_data_home` for the same reason the token
+    does — more so, since it is the undo.
+
+    `_backup_config` resolved the directory with `default_data_home` while the
+    rest of `init` used `_configured_data_home`, so with that key set the token
+    went to the configured directory and the only copy of the replaced config
+    went to the XDG default: outside the one directory the README says holds
+    non-rebuildable files, and not where a user who set the key would look.
+    """
+    import sys
+
+    from pzi.commands.init import run_init_command
+
+    xdg_data = tmp_path / "xdg" / "share"
+    monkeypatch.setenv("XDG_DATA_HOME", str(xdg_data))
+    custom_data_home = tmp_path / "custom-data"
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'pzi_data_home = "{custom_data_home}"\n'
+        "\n[[bibs]]\n"
+        'name = "main"\n'
+        f'path = "{tmp_path / "main.bib"}"\n'
+        "default = true\n",
+        encoding="utf-8",
+    )
+
+    run_init_command(
+        _init_args(force=True),
+        home_dir=str(tmp_path),
+        config_path=str(config_path),
+        stdout=sys.stdout,
+        stderr=sys.stderr,
+    )
+
+    backups = sorted((custom_data_home / "config-backups").iterdir())
+    assert len(backups) == 1, backups
+    assert "pzi_data_home" in backups[0].read_text()
+    assert not (xdg_data / "pzi" / "config-backups").exists()
+
+
 # ---------------------------------------------------------------------------
 # Credentials
 # ---------------------------------------------------------------------------
