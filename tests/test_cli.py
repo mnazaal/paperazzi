@@ -66,6 +66,31 @@ def test_cli_dispatch_registry_covers_all_parser_commands() -> None:
     assert not (removed & set(cli._DISPATCH))
 
 
+def test_the_help_listing_names_every_command_and_no_others() -> None:
+    """`_COMMAND_GROUPS` is the only command inventory a user ever sees.
+
+    `_PziHelpFormatter` suppresses argparse's own subparser section, so the
+    hand-written groups in `cli_parser` are the whole of `pzi --help`. Nothing
+    checked them against the parser: a command could be added, dispatched and
+    tested while being invisible to anyone reading the help — and a removed one
+    could keep being advertised. This is the `_DISPATCH` check above applied to
+    the surface a person actually reads.
+    """
+    from pzi.cli_parser import _COMMAND_GROUPS
+
+    listed = [name for _title, cmds in _COMMAND_GROUPS for name, _desc in cmds]
+
+    assert len(listed) == len(set(listed)), (
+        f"a command is listed in two groups: {sorted({n for n in listed if listed.count(n) > 1})}"
+    )
+    assert set(listed) == _parser_command_names(build_parser()), (
+        "pzi --help and the parser disagree about which commands exist"
+    )
+    assert all(desc.strip() for _t, cmds in _COMMAND_GROUPS for _n, desc in cmds), (
+        "every listed command needs a description; the help renders it beside the name"
+    )
+
+
 def test_pdf_runner_name_matches_command_scope() -> None:
     assert hasattr(cli, "_run_pdf")
     assert not hasattr(cli, "_run_pdf_retry")
