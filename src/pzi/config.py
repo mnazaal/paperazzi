@@ -944,6 +944,15 @@ def _unresolved_target_error(
     selection with no default. Those need three different actions from the user,
     and the config is loaded and in hand, so it can also list what *would* have
     worked instead of making them go read the file.
+
+    **Names no flag.** These strings said `--target`, and three front ends read
+    them: `pzi.export(library="nope")` raised "`--target` 'nope' is not a
+    configured library", naming a CLI flag the caller never typed and cannot
+    pass, and the HTTP API would do the same for its own field. The failure is
+    the same everywhere, so the wording describes the *thing* — which library
+    was asked for, and which exist — and leaves the spelling to whoever is
+    reading. The `--target` hint is not lost to CLI users: `pzi <cmd> --help`
+    documents the flag, and what a failing run has to say is what went wrong.
     """
     names = [bib["name"] for bib in bibs]
     configured = ", ".join(names) if names else "none"
@@ -952,14 +961,14 @@ def _unresolved_target_error(
         if not bibs:
             return "config declares no libraries; add a [[bibs]] table to config.toml"
         return (
-            f"no default library and no --target given "
+            f"no library selected and none is marked default "
             f"(configured: {configured}; mark one `default = true`)"
         )
 
     normalized = selector.strip()
     if normalized.endswith(".bib"):
         return (
-            f"--target {selector!r} is a .bib path that does not exist "
+            f"{selector!r} is a .bib path that does not exist "
             f"(a direct path must already exist; configured libraries: {configured})"
         )
-    return f"--target {selector!r} is not a configured library (configured: {configured})"
+    return f"{selector!r} is not a configured library (configured: {configured})"

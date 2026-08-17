@@ -782,8 +782,16 @@ def test_an_unresolved_target_says_which_of_the_three_ways_it_failed(tmp_path: P
         encoding="utf-8",
     )
     _code3, _out3, ambiguous = _run(["entries", "--config", str(no_default)], tmp_path)
-    assert "no default library" in ambiguous
+    assert "none is marked default" in ambiguous
     assert "configured: one, two" in ambiguous
+
+    # None of the three names a CLI flag. Three front ends read these strings,
+    # and `pzi.export(library="nope")` used to raise "`--target` 'nope' is not a
+    # configured library" — naming a flag the caller never typed and cannot
+    # pass. The failure is the same everywhere; only the spelling differs, so
+    # the message describes the thing and leaves the spelling to the reader.
+    for text in (unknown, missing_path, ambiguous):
+        assert "--target" not in text
 
 
 def test_check_report_dash_is_not_corrupted_by_the_human_table(tmp_path: Path) -> None:

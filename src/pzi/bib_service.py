@@ -150,7 +150,14 @@ def list_entries(
     if isinstance(resolved, BibResolutionFailure):
         return {
             "status": "error",
-            "message": "failed to resolve bib",
+            # The specific reason, not "failed to resolve bib": the facade
+            # surfaces `message` and only `message`, so a `pzi.entries(
+            # library="nope")` said nothing about which library or which exist,
+            # while every other read command named both. `commands/common.py`
+            # already picks the first error this way.
+            "message": (
+                resolved.errors[0] if resolved.errors else "failed to resolve bib"
+            ),
             "reason": REASON_CONFIG,
             "errors": resolved.errors,
         }
@@ -251,7 +258,14 @@ def entry_detail(
     if isinstance(resolved, BibResolutionFailure):
         return {
             "status": "error",
-            "message": "failed to resolve bib",
+            # The specific reason, not "failed to resolve bib": the facade
+            # surfaces `message` and only `message`, so a `pzi.entries(
+            # library="nope")` said nothing about which library or which exist,
+            # while every other read command named both. `commands/common.py`
+            # already picks the first error this way.
+            "message": (
+                resolved.errors[0] if resolved.errors else "failed to resolve bib"
+            ),
             "reason": REASON_CONFIG,
             "errors": resolved.errors,
             "citekey": citekey,
