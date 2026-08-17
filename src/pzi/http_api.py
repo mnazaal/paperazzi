@@ -15,7 +15,11 @@ from pzi.http_binary_routes import (
     build_export_bytes_response,
     build_pdf_file_response,
 )
-from pzi.http_get_routes import decode_path_segment, process_get_request
+from pzi.http_get_routes import (
+    BINARY_GET_ROUTES,
+    decode_path_segment,
+    process_get_request,
+)
 from pzi.http_post_routes import process_post_request
 from pzi.http_security import (
     AUTH_HEADER,
@@ -344,31 +348,34 @@ def _handle_get(
     except ValueError:
         _respond(request, 400, {"error": "invalid request target"}, security)
         return
-    if p.startswith("/pdf/"):
-        citekey = decode_path_segment(p[len("/pdf/"):])
+    # The binary GETs, from the same registry as the JSON ones
+    # (`BINARY_GET_ROUTES`). Only the plumbing is here: these write bytes to the
+    # socket instead of returning `(status, dict)`, so their handlers cannot
+    # live in a module with no server dependency — but the *surface* is declared
+    # beside the other routes rather than hidden in this dispatcher.
+    for route in BINARY_GET_ROUTES:
+        if not route.matches(p):
+            continue
         qs_raw = parse_qs(urlsplit(request.path).query)
         bib = qs_raw.get("bib", [None])[0] if qs_raw.get("bib") else None
-        _serve_pdf(
-            request,
-            config_path,
-            home_dir,
-            citekey,
-            bib,
-            security,
-        )
-        return
-    if p == "/export/raw":
-        qs_raw = parse_qs(urlsplit(request.path).query)
-        fmt = qs_raw.get("format", ["bibtex"])[0] or "bibtex"
-        bib = qs_raw.get("bib", [None])[0] if qs_raw.get("bib") else None
-        _serve_export_raw(
-            request,
-            config_path,
-            home_dir,
-            fmt,
-            bib,
-            security,
-        )
+        if route.name == "pdf":
+            _serve_pdf(
+                request,
+                config_path,
+                home_dir,
+                decode_path_segment(p[len(route.path):]),
+                bib,
+                security,
+            )
+        else:
+            _serve_export_raw(
+                request,
+                config_path,
+                home_dir,
+                qs_raw.get("format", ["bibtex"])[0] or "bibtex",
+                bib,
+                security,
+            )
         return
 
     status, body = process_get_request(request.path, config_path, home_dir)

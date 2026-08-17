@@ -161,7 +161,23 @@ def test_process_get_health(tmp_path: Path) -> None:
         "/health", str(cpath), str(tmp_path)
     )
     assert status == 200
-    assert "config_ok" in body
+    # The exact key set, not just one key. `/health` is the handshake the
+    # browser extension performs on every popup open — it reads `version` to
+    # detect drift and `translation_server_reachable` for its status line — so a
+    # key silently disappearing breaks the extension against a server that looks
+    # healthy. It is also the only route with no envelope to pin it.
+    assert set(body) == {
+        "status",
+        "version",
+        "config_ok",
+        "config_errors",
+        "translation_server_url",
+        "translation_server_reachable",
+    }
+    assert isinstance(body["config_ok"], bool)
+    assert isinstance(body["translation_server_reachable"], bool)
+    assert isinstance(body["config_errors"], list)
+    assert isinstance(body["version"], str) and body["version"]
 
 
 def test_process_get_bibs(tmp_path: Path) -> None:

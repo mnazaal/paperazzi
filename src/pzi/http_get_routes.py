@@ -48,6 +48,41 @@ class GetPrefixRoute:
     handler: PrefixGetHandler
 
 
+@dataclass(frozen=True)
+class BinaryGetRoute:
+    """A GET whose body is bytes rather than a JSON document.
+
+    Declared here, with the other two tables, so the served route inventory is
+    derivable from one registry. These two were matched by `if` statements in
+    `http_api`'s dispatcher instead — no introspection could find them, so
+    `test_http_route_inventory` hand-maintained a copy of the pair and
+    `docs/security.md`'s "twenty-one routes" was a number nothing could check
+    (counting the tables gives nineteen).
+
+    The *handler* stays in `http_api`: unlike a `GetRoute`, it writes status,
+    headers and a body straight to the socket rather than returning
+    `(status, dict)`, so it cannot live in a module with no server dependency.
+    `name` is what the dispatcher keys on, so this table declares the surface
+    and `http_api` owns the plumbing.
+    """
+
+    #: Exact path, or the prefix a citekey follows when *is_prefix*.
+    path: str
+    #: Dispatch key, matched against `http_api`'s own handler table.
+    name: str
+    is_prefix: bool = False
+
+    def matches(self, path: str) -> bool:
+        return path.startswith(self.path) if self.is_prefix else path == self.path
+
+
+#: The binary GETs, in dispatch order.
+BINARY_GET_ROUTES: tuple[BinaryGetRoute, ...] = (
+    BinaryGetRoute("/pdf/", "pdf", is_prefix=True),
+    BinaryGetRoute("/export/raw", "export_raw"),
+)
+
+
 def process_get_request(
     path: str,
     config_path: str,

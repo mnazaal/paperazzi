@@ -13,17 +13,16 @@ from __future__ import annotations
 
 import inspect
 
-from pzi import http_api, http_security
-from pzi.http_get_routes import GET_PREFIX_ROUTES, GET_ROUTES
+from pzi import http_security
+from pzi.http_get_routes import BINARY_GET_ROUTES, GET_PREFIX_ROUTES, GET_ROUTES
 from pzi.http_post_routes import POST_ROUTES
 
-#: The two binary GETs are matched by inline conditionals in `http_api`
-#: (`if p.startswith("/pdf/")`, `if p == "/export/raw"`) rather than declared in
-#: a table, so no amount of introspection finds them — they are named here, and
-#: `test_the_untabled_binary_routes_are_still_dispatched` is what keeps this
-#: hand-written pair honest. Unifying the registry is its own change; see the
-#: follow-up item in PLAN.md.
-UNTABLED_BINARY_GETS = ("/pdf/", "/export/raw")
+#: Derived, not hand-written. The two binary GETs used to be matched by inline
+#: conditionals in `http_api`'s dispatcher, so no introspection could find them
+#: and this file kept its own copy of the pair — the one part of the inventory
+#: that could rot, guarded by grepping the dispatcher's source for the literals.
+#: They are declared in `BINARY_GET_ROUTES` now, beside the other two tables.
+BINARY_GETS = tuple(route.path for route in BINARY_GET_ROUTES)
 
 #: Every route pzi serves. Frozen at 1.0: the extension is built against this
 #: set, and a route that quietly appears is new attack surface for a caller
@@ -41,7 +40,7 @@ EXPECTED_ROUTES = {
         "/detail/",
         "/tags/",
     ),
-    "GET (binary, untabled)": UNTABLED_BINARY_GETS,
+    "GET (binary)": BINARY_GETS,
     "POST": (
         "/capture",
         "/attach-pdf-bytes",
@@ -77,26 +76,28 @@ def test_the_documented_route_count_is_the_real_one() -> None:
         f"{DOCUMENTED_TOTAL}. Update the doc and the security review that rests "
         "on it — the count is the claim about what a token holder can reach."
     )
-    tabled = len(GET_ROUTES) + len(GET_PREFIX_ROUTES) + len(POST_ROUTES)
-    assert tabled + len(UNTABLED_BINARY_GETS) == DOCUMENTED_TOTAL
+    tabled = (
+        len(GET_ROUTES) + len(GET_PREFIX_ROUTES) + len(POST_ROUTES)
+        + len(BINARY_GET_ROUTES)
+    )
+    # Every route pzi serves is now in one of four tables, so the count is
+    # derived end to end rather than partly transcribed.
+    assert tabled == DOCUMENTED_TOTAL
 
 
-def test_the_untabled_binary_routes_are_still_dispatched() -> None:
-    """The hand-written half of the inventory, kept honest.
+def test_each_binary_route_declares_how_it_matches() -> None:
+    """`/pdf/` takes a citekey after it; `/export/raw` is exact.
 
-    `UNTABLED_BINARY_GETS` is the one part of this file that introspection
-    cannot derive, so it is the part that can rot. Reading the dispatcher's
-    source for the literals is crude, and it is the only thing that fails if
-    `/pdf/` or `/export/raw` is renamed or dropped.
+    The dispatcher reads `is_prefix` from the table rather than knowing which
+    is which, so getting this wrong would make `/export/rawXYZ` a valid export
+    or `/pdf/smith2020` a 404.
     """
-    source = inspect.getsource(http_api)
-    for path in UNTABLED_BINARY_GETS:
-        assert f'"{path}"' in source, (
-            f"{path} is in the route inventory but no longer appears in "
-            "http_api's dispatcher — either it moved into a route table (good: "
-            "derive it there and delete it here) or it is gone (a contract "
-            "change)."
-        )
+    by_name = {route.name: route for route in BINARY_GET_ROUTES}
+    assert by_name["pdf"].is_prefix is True
+    assert by_name["export_raw"].is_prefix is False
+    assert by_name["pdf"].matches("/pdf/smith2020")
+    assert not by_name["export_raw"].matches("/export/rawXYZ")
+    assert by_name["export_raw"].matches("/export/raw")
 
 
 def test_authentication_is_one_gate_in_front_of_every_route() -> None:
