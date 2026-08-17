@@ -11,8 +11,24 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 
+def distinct_details(message: str, details: Sequence[str]) -> list[str]:
+    """*details* with anything that merely repeats *message* removed.
+
+    Plenty of services set ``message`` and ``errors`` to the same string — there
+    is only one thing to say — and a renderer that prints the headline and then
+    bullets every error shows that sentence twice, which reads as two separate
+    failures. `pzi export` against a missing `--target` did exactly that.
+
+    One function because there are two such renderers: `error_lines` here and
+    the `--json`-aware `_fail` in `pzi.cli`, which print different shapes but
+    need the same rule.
+    """
+    return [detail for detail in details if detail.strip() != message.strip()]
+
+
 def error_lines(message: str, errors: Sequence[str]) -> list[str]:
-    return [message, *(f"- {error}" for error in errors)]
+    """A headline followed by one bullet per error that adds something."""
+    return [message, *(f"- {error}" for error in distinct_details(message, errors))]
 
 
 def render_add_success(result: Mapping[str, Any]) -> str:

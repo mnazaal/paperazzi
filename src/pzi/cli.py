@@ -10,6 +10,7 @@ from typing import Any, TextIO, TypedDict
 
 from pzi import cli_json, errors, exit_codes
 from pzi.cli_parser import build_parser, set_error_stream
+from pzi.cli_render import distinct_details
 from pzi.commands.add import run_add_command as _run_add
 from pzi.commands.check import run_check_command as _run_check
 from pzi.commands.common import command_label
@@ -246,7 +247,7 @@ def run_cli(
                 )
                 return code
             print(f"error: {message}", file=err)
-            for detail in details:
+            for detail in distinct_details(message, details):
                 print(f"  - {detail}", file=err)
             return code
 

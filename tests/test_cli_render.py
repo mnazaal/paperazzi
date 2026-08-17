@@ -17,6 +17,20 @@ def test_error_lines_prefixes_each_error() -> None:
     ]
 
 
+def test_error_lines_does_not_say_the_same_thing_twice() -> None:
+    """Many services set `message` and `errors[0]` to the same sentence.
+
+    `pzi export --target <missing>` printed that sentence, then printed it again
+    as a bullet — which reads as two failures. The bullets exist to add detail
+    the headline does not have.
+    """
+    assert error_lines("no such library", ["no such library"]) == ["no such library"]
+    assert error_lines("failed", ["failed", "and here is why"]) == [
+        "failed",
+        "- and here is why",
+    ]
+
+
 def test_render_add_success_includes_dry_run_prefix() -> None:
     assert (
         render_add_success(
