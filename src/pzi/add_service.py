@@ -53,7 +53,12 @@ from pzi.capture_local_pdf import (
     plan_with_applied_record,
 )
 from pzi.config import BibConfig, BibResolutionFailure, load_bib_target
-from pzi.errors import PziError
+from pzi.errors import (
+    REASON_CONFIG,
+    REASON_UNAVAILABLE,
+    REASON_USAGE,
+    PziError,
+)
 from pzi.fetch_helpers import build_metadata_fetch_text
 from pzi.format_templates import format_citekey
 from pzi.identifiers import classify_input
@@ -181,7 +186,14 @@ def add_input_to_bib(
         # Reject unrecognized input here too (not just at the CLI) so the HTTP
         # API and `--from-file` batch path never write a junk placeholder entry.
         return _error_result(
-            message="invalid input", errors=[invalid_input], dry_run=dry_run, warnings=[]
+            message="invalid input",
+            errors=[invalid_input],
+            dry_run=dry_run,
+            warnings=[],
+            # The argument itself is malformed — nothing was attempted. This is
+            # the case item 435 named: it exited 5, "could not run", for what is
+            # plainly a usage error.
+            reason=REASON_USAGE,
         )
     metadata_diagnostics: list[str] = []
     metadata_warnings: list[str] = []
@@ -411,6 +423,7 @@ def add_input_to_bib(
                 errors=list(provider_errors),
                 dry_run=dry_run,
                 warnings=[],
+                reason=REASON_UNAVAILABLE,
             )
         manual_record = _manual_record_from_overrides(record_overrides)
         if classified["kind"] in {"doi", "url", "pdf_url"} and has_minimum_metadata(manual_record):
@@ -477,6 +490,10 @@ def add_input_to_bib(
             errors=[err_msg],
             dry_run=dry_run,
             warnings=fallback_warnings,
+            # A dependency is not answering; retrying later is reasonable, which
+            # is exactly what `unavailable` means. On HTTP this becomes 503
+            # rather than the unclassified 400.
+            reason=REASON_UNAVAILABLE,
         )
 
     merged_record = _merge_fetched_record_with_overrides(fetched_record, record_overrides)
@@ -522,6 +539,10 @@ def add_record_to_bib(
             ),
             dry_run=dry_run,
             warnings=[],
+            # Both halves are the configuration failing to name what was asked
+            # for, which is what `config` means. Still exit 5 — now by decision
+            # rather than by default.
+            reason=REASON_CONFIG,
         )
     config, bib = resolved
 
@@ -564,6 +585,7 @@ def _resolve_capture_context(
             errors=["no matching bib found"] if ambiguous else resolved.errors,
             dry_run=dry_run,
             warnings=[],
+            reason=REASON_CONFIG,
         )
     config, bib = resolved
 

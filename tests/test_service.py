@@ -16,6 +16,8 @@ from pzi.add_service import (
 from pzi.bib_repository import StalePlanError, plan_bib_write
 from pzi.bibtex import record_to_bibtex_entry
 from pzi.capture_local_pdf import build_add_record_result, plan_with_applied_record
+from pzi.errors import REASON_USAGE, exit_code_for_error
+from pzi.exit_codes import USAGE as _USAGE
 
 
 def test_add_record_to_bib_inserts_new_entry(tmp_path: Path) -> None:
@@ -229,6 +231,9 @@ def test_add_record_to_bib_reports_config_errors(tmp_path: Path) -> None:
         "message": "failed to load config",
         "warnings": [],
         "errors": ["bibs must be a non-empty list"],
+        # Classified rather than left to default: the config did not name what
+        # was asked for. Read by `exit_code_for_error` and `pzi.http_status`.
+        "reason": "config",
     }
 
 
@@ -266,6 +271,7 @@ path = "/tmp/systems.bib"
         "message": "could not resolve target bib",
         "warnings": [],
         "errors": ["no matching bib found or selection is ambiguous"],
+        "reason": "config",
     }
 
 
@@ -606,6 +612,12 @@ default = true
     assert result["message"] == "invalid input"
     assert result["errors"] == ["'l' is not a DOI, URL, or local PDF path"]
     assert not bib_path.exists()  # nothing was written
+    # A malformed argument is a usage error. `error_result` set no `reason` at
+    # all, so every capture failure defaulted to ENVIRONMENT and `pzi.add("l")`
+    # was a 5 where the CLI — which validates the same input in the parser —
+    # was a 2. The one writing command had the least usable classification.
+    assert result["reason"] == REASON_USAGE
+    assert exit_code_for_error(result) == _USAGE
 
 
 def test_describe_invalid_add_input_classifies_inputs(tmp_path: Path) -> None:

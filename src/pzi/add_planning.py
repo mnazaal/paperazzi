@@ -274,8 +274,23 @@ def error_result(
     dry_run: bool,
     warnings: list[str],
     bib: Mapping[str, Any] | None = None,
+    reason: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    """One failure shape for the whole capture path.
+
+    *reason* is the structured classification from :mod:`pzi.errors`, read by
+    `exit_code_for_error` and `pzi.http_status`. It was absent entirely, so the
+    one *writing* command had the least usable classification of any of them:
+    every failure defaulted to ENVIRONMENT, and `pzi.add("garbage")` — a
+    malformed argument — came back as 5 where `pzi.export("yaml")` is 2.
+
+    Omitted deliberately where no reason fits. "no metadata found for this
+    input" is not a usage error (the input parsed), not a missing entry (the
+    caller named no entry) and not a transport failure (the providers answered);
+    it stays unclassified, which is ENVIRONMENT, and that is the honest answer
+    from the documented set rather than a code stretched to cover it.
+    """
+    result = {
         "status": "error",
         "bib_name": bib["name"] if bib is not None else None,
         "bib_path": bib["path"] if bib is not None else None,
@@ -288,6 +303,9 @@ def error_result(
         "warnings": warnings,
         "errors": errors,
     }
+    if reason is not None:
+        result["reason"] = reason
+    return result
 
 
 def attach_similarity_hint(
