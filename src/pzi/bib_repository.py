@@ -92,6 +92,21 @@ class WritePlan(TypedDict):
     index: int | None
     record: NormalizedRecord
     entry: BibtexEntry
+    #: The fields **this write decided**, in `merge_entries`' record vocabulary
+    #: (`tags`, `authors`, `canonical_url`, …) — *not* a description of what the
+    #: file gained. The two answers differ after
+    #: :func:`_rebase_update_plan_against_current` hands a field back to a
+    #: concurrent writer: this writer did decide that field, and lost it.
+    #:
+    #: Which of the two questions this answers was left undecided (item 406);
+    #: it is the decided-fields one, for two reasons. The vocabulary cannot
+    #: express the other — `source_payload`, `pdf_url` and `source_name` have no
+    #: BibTeX field to have changed. And the file-level answer is not reachable
+    #: from here anyway: `execute_write_plan` rebases a *local* copy of the plan
+    #: and returns only the entries, so the caller that reports `changed_fields`
+    #: never sees the rebased plan. Making it file-level therefore means
+    #: changing that function's return type, which is not worth doing for a
+    #: field that drives one `--json` key and one message and never a write.
     changed_fields: list[str]
     force_new: NotRequired[bool]
     #: The entry ``entry`` was merged onto when this plan was built, for update
@@ -1063,6 +1078,10 @@ def _rebase_update_plan_against_current(
         if field not in rebased["fields"] and field in current_entry["fields"]:
             rebased["fields"][field] = current_entry["fields"][field]
 
+    # `changed_fields` is deliberately *not* recomputed here. It names the
+    # fields this write decided, and this rebase does not change what was
+    # decided — only which of those decisions the file ends up keeping. See the
+    # field's own note on `WritePlan`.
     return cast(WritePlan, {**plan, "entry": rebased})
 
 
