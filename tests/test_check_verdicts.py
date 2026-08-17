@@ -10,7 +10,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from pzi import exit_codes
 from pzi.check_service import check_bib
+from pzi.errors import exit_code_for_error
 from pzi.resolution_match import score_match
 
 MINIMAL_CONFIG = """
@@ -250,6 +252,84 @@ def test_entries_the_parser_dropped_are_reported_not_ignored(tmp_path: Path) -> 
     assert result["total"] == 1
 
 
+def test_an_audit_that_reached_no_source_is_an_error_from_the_service(
+    tmp_path: Path,
+) -> None:
+    """The "audited nothing" verdict belongs to the audit, not to the CLI.
+
+    It was computed in `commands/check.py` and nowhere else, so the runner
+    exited 5 while `pzi.check()` returned the very same run as a clean `ok` and
+    did not raise — the two front ends disagreeing about whether a library had
+    been verified. Asserted here, against the real `check_bib`, because the
+    runner tests stub it: a rule that only a stub carries is a rule the service
+    does not have.
+    """
+    config_path, _bib_path = _config(
+        tmp_path,
+        "@article{smith2020,\n"
+        "  title = {A Paper About Things},\n"
+        "  author = {Smith, Jane},\n"
+        "  year = {2020},\n"
+        "}\n",
+    )
+
+    def _unreachable(title: str, *_args, **_kwargs):
+        raise OSError("connection refused")
+
+    result = check_bib(
+        config_path=config_path,
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        fetch_crossref=_unreachable,
+        fetch_openalex=_unreachable,
+        fetch_dblp=_unreachable,
+        fetch_openreview=_unreachable,
+        fetch_s2=_unreachable,
+    )
+
+    assert result["items"], "the entry should still be reported, not dropped"
+    assert result["items"][0]["sources_checked"] == []
+    assert result["status"] == "error"
+    assert result["reason"] == "unavailable"
+    assert exit_code_for_error(result) == exit_codes.ENVIRONMENT
+
+
+def test_an_audit_that_reached_a_source_stays_ok(tmp_path: Path) -> None:
+    """The counterpart: one source answering is a run that happened.
+
+    Without this, "status is error whenever anything failed" would satisfy the
+    test above and turn every partial outage into a failed audit.
+    """
+    config_path, _bib_path = _config(
+        tmp_path,
+        "@article{smith2020,\n"
+        "  title = {A Paper About Things},\n"
+        "  author = {Smith, Jane},\n"
+        "  year = {2020},\n"
+        "}\n",
+    )
+
+    def _unreachable(title: str, *_args, **_kwargs):
+        raise OSError("connection refused")
+
+    def _answers(title: str, *_args, **_kwargs):
+        return {"title": "A Paper About Things", "authors": ["Smith, Jane"], "year": 2020}
+
+    result = check_bib(
+        config_path=config_path,
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        fetch_crossref=_answers,
+        fetch_openalex=_unreachable,
+        fetch_dblp=_unreachable,
+        fetch_openreview=_unreachable,
+        fetch_s2=_unreachable,
+    )
+
+    assert result["status"] == "ok"
+    assert "reason" not in result
+
+
 # ---------------------------------------------------------------------------
 # The report file is the artifact CI archives
 # ---------------------------------------------------------------------------
@@ -269,8 +349,11 @@ def test_the_report_file_records_the_same_status_as_the_run(tmp_path: Path) -> N
         report = report_path
 
     def _check_bib(**_kwargs):
+        # The service's own shape for a run that reached nothing — see
+        # `test_an_audit_that_reached_no_source_is_an_error_from_the_service`.
         return {
-            "status": "ok",
+            "status": "error",
+            "reason": "unavailable",
             "bib_name": "main",
             "strict": False,
             "total": 1,

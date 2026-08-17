@@ -143,9 +143,16 @@ def test_check_service_error_exits_environment(tmp_path: Path) -> None:
 
 
 def _offline_result():
-    """What `check_bib` returns when no metadata source could be reached."""
+    """What `check_bib` returns when no metadata source could be reached.
+
+    `status` is `error` with a `reason`, decided by the service — the runner
+    used to re-derive that from the items, which is why `pzi.check()` reported
+    the same run as clean. `test_check_verdicts` asserts the real `check_bib`
+    produces this shape; here it is a stub, so keep the two in step.
+    """
     return {
-        "status": "ok",
+        "status": "error",
+        "reason": "unavailable",
         "bib_name": "main",
         "strict": False,
         "total": 1,
@@ -181,8 +188,14 @@ def test_check_reports_findings_not_failure_when_some_source_answered(tmp_path):
 
     The entry it could not verify is a finding, which is `1`.
     """
+    # Built from the offline shape but with the *service's* verdict for a run
+    # that did reach something: `ok`, no `reason`. Patching only
+    # `sources_checked` and leaving the error verdict behind would test a
+    # result the service cannot produce.
     result = _offline_result()
     result["items"][0]["sources_checked"] = ["openalex"]
+    result["status"] = "ok"
+    del result["reason"]
 
     code, _stdout, stderr = _run(_args(), lambda **_kw: result, tmp_path)
 

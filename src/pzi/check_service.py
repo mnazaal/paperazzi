@@ -26,6 +26,7 @@ from pzi.bib_repository import read_bib_file_with_notices
 from pzi.bibtex import NormalizedRecord
 from pzi.capture_context import resolve_contact_email, resolve_optional_value
 from pzi.config import BibResolutionFailure, load_bib_target
+from pzi.errors import REASON_UNAVAILABLE
 from pzi.fetch_helpers import build_metadata_fetch_text
 from pzi.metadata_sources import (
     fetch_crossref_record_by_title,
@@ -87,6 +88,10 @@ class CheckResult(TypedDict):
     #: uses for them. Not `errors`: the audit ran and these say what it could
     #: not cover.
     warnings: list[str]
+    #: Structured failure reason (`pzi.errors.REASON_*`) — present only when
+    #: `status` is `error`, which for a completed run means the audit reached no
+    #: source at all. Read by `exit_code_for_error` and `pzi.http_status`.
+    reason: NotRequired[str]
 
 
 # Title-search providers in throughput-aware order: polite-pool DOI sources
@@ -450,7 +455,16 @@ def check_bib(
     run_errors = [
         f"{name}: unreachable for some or all entries" for name in failed_sources
     ]
-    return {
+    # An audit that reached no source at all audited nothing, so it cannot wear
+    # an `ok`. This lived in `commands/check.py` and nowhere else, which made it
+    # a property of the CLI rather than of the audit: the runner exited 5 while
+    # `pzi.check()` returned the same run as a clean `ok` and did not raise, and
+    # `POST`-side callers would have agreed with the API. Decided here, once, so
+    # every front end reports the same run the same way.
+    audited_nothing = bool(
+        items and run_errors and not any(item.get("sources_checked") for item in items)
+    )
+    result: CheckResult = {
         # A dropped block is not a failure to run. `error` here meant the runner
         # threw the whole audit away — no report file, nothing printed, exit 5 —
         # after every network lookup had already been made, because one entry in
@@ -458,7 +472,7 @@ def check_bib(
         # all show what they could read and say what they lost; `check` is the
         # read command that did not, and the parametrized test covering exactly
         # that behaviour is the one it was left out of.
-        "status": "ok",
+        "status": "error" if audited_nothing else "ok",
         "bib_name": bib["name"],
         "strict": strict,
         "total": len(items),
@@ -468,6 +482,13 @@ def check_bib(
         # The shared read-notice channel, rendered by `print_read_warnings`.
         "warnings": [f"not audited: {message}" for message in dropped_blocks],
     }
+    if audited_nothing:
+        # `unavailable`, not `config`: the library was read and the entries were
+        # there — the providers were not. `exit_code_for_error` and
+        # `pzi.http_status` both map it, so the CLI keeps exiting 5 without
+        # recomputing anything.
+        result["reason"] = REASON_UNAVAILABLE
+    return result
 
 
 def _error_result(strict: bool, errors: list[str]) -> CheckResult:

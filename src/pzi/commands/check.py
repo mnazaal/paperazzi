@@ -17,7 +17,7 @@ from pzi.commands.common import (
     print_read_warnings,
     write_atomic,
 )
-from pzi.errors import REASON_UNAVAILABLE
+from pzi.errors import REASON_UNAVAILABLE, exit_code_for_error
 
 
 def _describe_unwritable(path: str) -> str | None:
@@ -155,7 +155,11 @@ def run_check_command(
         strict=strict,
     )
 
-    if result["status"] != "ok":
+    # The audit never ran: no config, no library, nothing to report. An audit
+    # that *did* run and reached no source is also `error` now (the service
+    # decides that — see `check_bib`), but it has items, a report to write and a
+    # table to print, so it must not take this branch.
+    if result["status"] != "ok" and not result["items"]:
         if getattr(args, "json", False):
             cli_json.emit_result(result, stdout, command="check")
         else:
@@ -174,19 +178,6 @@ def run_check_command(
         print_lines(
             error_lines("metadata sources unavailable", result["errors"]), stderr
         )
-
-    # An audit that reached no source audited nothing, and the run exits 5 for
-    # it below — so the envelope must not report a clean `ok`. Decided *before*
-    # anything is written or printed: the report file is the artifact CI
-    # archives, and it used to persist `"status": "ok"` for a run whose stdout
-    # envelope said `"error"` and whose exit code was 5.
-    audited_nothing = bool(
-        result["items"]
-        and result["errors"]
-        and not any(item.get("sources_checked") for item in result["items"])
-    )
-    if audited_nothing:
-        result = {**result, "status": "error"}
 
     if report_path == "-":
         # `-` is stdout, the marker this CLI already uses in six other places
@@ -221,8 +212,10 @@ def run_check_command(
 
     # An audit that reached no source at all audited nothing. Exiting 0 there
     # reports a clean library, which is precisely the claim the run cannot make.
-    if audited_nothing:
-        return exit_codes.ENVIRONMENT
+    # The verdict and its `reason` come from the service, so the report file, the
+    # `--json` envelope, the exit code and `pzi.check()` cannot disagree.
+    if result["status"] != "ok":
+        return exit_code_for_error(result)
 
     # Anything other than "verified" is something to report, in both modes.
     # `FINDINGS` is documented — in `exit_codes` and in the README's table — as
