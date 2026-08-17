@@ -34,24 +34,39 @@ from collections.abc import Callable
 from typing import Any
 
 from pzi import exit_codes
-from pzi.bib_service import list_entries
+from pzi.bib_service import delete_entry, entry_detail, list_entries
+from pzi.bib_service import list_bibs as _list_bibs_service
 from pzi.capture_core import capture_to_bib
 from pzi.capture_models import CaptureInput, CaptureOptions
 from pzi.check_service import check_bib
-from pzi.config import BibResolutionFailure, default_config_path, load_bib_target
-from pzi.dedupe_service import find_duplicates
+from pzi.config import (
+    AppConfig,
+    BibConfig,
+    BibResolutionFailure,
+    default_config_path,
+    load_bib_target,
+)
+from pzi.dedupe_service import find_duplicates, merge_duplicates
 from pzi.errors import PziError, exit_code_for_error
 from pzi.export_service import export_bibtex, export_csv, export_json, export_ris
 from pzi.promote_service import promote_bib
 from pzi.search_service import search_bib
+from pzi.tag_service import add_tags as _add_tags_service
+from pzi.tag_service import remove_tags as _remove_tags_service
 
 __all__ = [
     "add",
+    "add_tags",
     "check",
     "dedupe",
+    "delete",
     "entries",
     "export",
+    "get",
+    "list_bibs",
+    "merge",
     "promote",
+    "remove_tags",
     "search",
 ]
 
@@ -161,11 +176,20 @@ def _unwrap(result: dict[str, Any], key: str) -> Any:
     return result[key]
 
 
-def _bib_path(config_path: str | None, library: str | None) -> str:
+def _bib_target(
+    config_path: str | None, library: str | None
+) -> tuple[AppConfig, BibConfig]:
     """Resolve which library to act on, for the services that take a path.
 
-    `export` and `dedupe` take a `bib_path` rather than a selector, so the
-    resolution the other services do internally has to happen here.
+    `export`, `dedupe`, `delete` and `merge` take a `bib_path` rather than a
+    selector, so the resolution the other services do internally has to happen
+    here.
+
+    Returns the *config* as well as the library, because a path is not always
+    enough: `merge_duplicates` also needs `pdf_file_path_style`, and both other
+    front ends read it from the config (`commands/dedupe.py`). A facade that
+    resolved only the path would silently write absolute PDF paths into a
+    library configured for relative ones.
     """
     resolved = load_bib_target(
         config_path=_resolved_config_path(config_path), home_dir=_home(), bib_selector=library
@@ -175,7 +199,12 @@ def _bib_path(config_path: str | None, library: str | None) -> str:
             "; ".join(resolved.errors) or "could not resolve a library",
             details=list(resolved.errors),
         )
-    _config, bib = resolved
+    return resolved
+
+
+def _bib_path(config_path: str | None, library: str | None) -> str:
+    """The resolved library's path, for the services that need only that."""
+    _config, bib = _bib_target(config_path, library)
     return bib["path"]
 
 
@@ -195,9 +224,9 @@ def search(
     """
     # Checked here rather than left to the service, which words the same refusal
     # as "provide at least one of --query, --author, --year, --tag" — flag names
-    # a caller of this function never typed. Everything *below* the facade still
-    # speaks CLI, and that is a known wart rather than a solved problem: an
-    # unresolvable `library=` still reports itself as `--target`.
+    # a caller of this function never typed. This is the last such wording below
+    # the facade: the unresolved-library messages named `--target` until they
+    # were made flag-neutral in `config._unresolved_target_error`.
     if query is None and author is None and year is None and tag is None:
         raise PziError(
             "search needs at least one of query, author, year or tag", code=2
@@ -265,6 +294,54 @@ def export(
             code=2,
         )
     return str(_unwrap(dict(exporter(_bib_path(config_path, library))), "content"))
+
+
+@_public
+def get(
+    citekey: str,
+    *,
+    config_path: str | None = None,
+    library: str | None = None,
+) -> dict[str, Any]:
+    """Return one entry's full record by citekey.
+
+    This is where a script finds a paper's PDF: ``local_pdf_path`` is the path
+    recorded in the entry's ``file`` field, which the summaries from
+    :func:`entries` and :func:`search` cannot carry — they report only
+    ``has_pdf``.
+
+    Raises :class:`pzi.errors.PziError` with ``code == 3`` if no entry has that
+    citekey, following this module's convention that failure raises. A caller
+    who wants a soft lookup can catch it.
+    """
+    result = entry_detail(
+        config_path=_resolved_config_path(config_path),
+        home_dir=_home(),
+        citekey=citekey,
+        bib_selector=library,
+    )
+    typed = dict(result)
+    record = dict(_unwrap(typed, "record"))
+    _emit_warnings(typed)
+    return record
+
+
+@_public
+def list_bibs(*, config_path: str | None = None) -> list[dict[str, Any]]:
+    """Return the configured libraries: name, path, papers dir, and default.
+
+    Every other function takes ``library=`` by name, and without this there was
+    no supported way to discover what those names are — the config file is not
+    part of the API.
+
+    Takes no ``library``: it is the function that tells you what the valid
+    values are.
+    """
+    result = _list_bibs_service(
+        config_path=_resolved_config_path(config_path), home_dir=_home()
+    )
+    typed = dict(result)
+    return list(_unwrap(typed, "bibs"))
 
 
 @_public
@@ -368,5 +445,131 @@ def promote(
         keep_preprint=not replace,
     )
     typed = dict(result)
+    _unwrap(typed, "status")
+    return typed
+
+
+@_public
+def delete(
+    citekey: str,
+    *,
+    dry_run: bool = False,
+    config_path: str | None = None,
+    library: str | None = None,
+) -> dict[str, Any]:
+    """Delete one entry by citekey. Writes.
+
+    A timestamped copy of the pre-delete library is made first, and its path is
+    in the returned ``backup_path``. The entry's PDF is left on disk — the
+    result reports it as ``pdf_path`` so a caller can remove it deliberately.
+
+    Writes by default, unlike :func:`promote`. This deletes exactly the entry
+    named in the call, where ``promote`` sweeps the whole library; the CLI's
+    ``--force`` prompt guards a human typing at a terminal, not a script that
+    wrote the citekey out.
+    """
+    typed = dict(
+        delete_entry(
+            bib_path=_bib_path(config_path, library),
+            citekey=citekey,
+            dry_run=dry_run,
+        )
+    )
+    _unwrap(typed, "status")
+    return typed
+
+
+@_public
+def add_tags(
+    citekey: str,
+    tags: list[str],
+    *,
+    dry_run: bool = False,
+    config_path: str | None = None,
+    library: str | None = None,
+) -> dict[str, Any]:
+    """Add tags to one entry, keeping the tags it already has. Writes.
+
+    Tags are normalized the way every other front end normalizes them, and the
+    result's ``tags`` is the entry's full tag list afterwards, not the argument.
+    ``changed`` says whether the entry was actually rewritten — adding a tag it
+    already carries is a no-op, not an error.
+    """
+    typed = dict(
+        _add_tags_service(
+            config_path=_resolved_config_path(config_path),
+            home_dir=_home(),
+            bib_selector=library,
+            citekey=citekey,
+            tags=list(tags),
+            dry_run=dry_run,
+        )
+    )
+    _unwrap(typed, "status")
+    return typed
+
+
+@_public
+def remove_tags(
+    citekey: str,
+    tags: list[str],
+    *,
+    dry_run: bool = False,
+    config_path: str | None = None,
+    library: str | None = None,
+) -> dict[str, Any]:
+    """Remove tags from one entry. Writes.
+
+    The counterpart of :func:`add_tags`, with the same result shape. Removing a
+    tag the entry does not have leaves ``changed`` false.
+    """
+    typed = dict(
+        _remove_tags_service(
+            config_path=_resolved_config_path(config_path),
+            home_dir=_home(),
+            bib_selector=library,
+            citekey=citekey,
+            tags=list(tags),
+            dry_run=dry_run,
+        )
+    )
+    _unwrap(typed, "status")
+    return typed
+
+
+@_public
+def merge(
+    citekey_a: str,
+    citekey_b: str,
+    *,
+    dry_run: bool = True,
+    config_path: str | None = None,
+    library: str | None = None,
+) -> dict[str, Any]:
+    """Merge entry *citekey_a* into *citekey_b*, keeping b's citekey.
+
+    This is what makes :func:`dedupe` actionable: it reports duplicate clusters,
+    and this acts on a pair.
+
+    **Previews by default** — pass ``dry_run=False`` to write. A merge drops one
+    of the two entries, and the preview names exactly what happens: the fields
+    the survivor takes over (``carried_fields``), the ones it loses to the
+    dropped entry (``overwritten_fields``), and the PDF left orphaned if the
+    survivor keeps its own (``orphaned_pdf``). The CLI writes because you typed
+    the command; the same split as :func:`promote`.
+    """
+    config, bib = _bib_target(config_path, library)
+    typed = dict(
+        merge_duplicates(
+            bib_path=bib["path"],
+            citekey_a=citekey_a,
+            citekey_b=citekey_b,
+            dry_run=dry_run,
+            # Read from the config, as both other front ends do. Defaulting to
+            # `absolute` here would rewrite a relative-path library's `file =`
+            # fields to absolute ones on an unrelated merge.
+            file_path_style=config.get("pdf_file_path_style", "absolute"),
+        )
+    )
     _unwrap(typed, "status")
     return typed

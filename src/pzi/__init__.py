@@ -82,17 +82,37 @@ __version__ = package_version()
 if TYPE_CHECKING:
     from pzi.api import (
         add,
+        add_tags,
         check,
         dedupe,
+        delete,
         entries,
         export,
+        get,
+        list_bibs,
+        merge,
         promote,
+        remove_tags,
         search,
     )
     from pzi.errors import PziError
 
 _PUBLIC_API = frozenset(
-    {"add", "check", "dedupe", "entries", "export", "promote", "search"}
+    {
+        "add",
+        "add_tags",
+        "check",
+        "dedupe",
+        "delete",
+        "entries",
+        "export",
+        "get",
+        "list_bibs",
+        "merge",
+        "promote",
+        "remove_tags",
+        "search",
+    }
 )
 
 
@@ -116,10 +136,16 @@ __all__ = [
     "PziError",
     "__version__",
     "add",
+    "add_tags",
     "check",
     "dedupe",
+    "delete",
     "entries",
     "export",
+    "get",
+    "list_bibs",
+    "merge",
     "promote",
+    "remove_tags",
     "search",
 ]

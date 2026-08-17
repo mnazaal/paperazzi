@@ -159,17 +159,197 @@ def test_failure_raises_with_the_exit_code_the_cli_would_have_used(
     assert excinfo.value.code == expected_code
 
 
-def test_search_refuses_without_a_filter_in_its_own_words(tmp_path: Path) -> None:
-    """The refusal must not name CLI flags a library caller never typed.
+def test_no_public_failure_names_a_cli_flag(tmp_path: Path) -> None:
+    """A library caller cannot type a flag, so no message may name one.
 
-    The service words this as "provide at least one of --query, --author,
-    --year, --tag". Everything below the facade still speaks CLI — an
-    unresolvable `library=` still reports itself as `--target` — which is a
-    known wart, but this one is the facade's own precondition to state.
+    Two separate sources used to. `search_bib` words its own precondition as
+    "provide at least one of --query, --author, --year, --tag", which the facade
+    restates itself; and every unresolved-library failure said `--target` until
+    `config._unresolved_target_error` was made flag-neutral. Both are checked
+    here, because fixing one and not the other is what happened the first time.
+    """
+    config = _library(tmp_path)
+
+    with pytest.raises(PziError) as no_filter:
+        pzi.search(config_path=config)
+    assert "--" not in str(no_filter.value), str(no_filter.value)
+
+    for call in (
+        lambda: pzi.entries(config_path=config, library="nope"),
+        lambda: pzi.search(query="x", config_path=config, library="nope"),
+        lambda: pzi.export(config_path=config, library="nope"),
+        lambda: pzi.get("smith2020", config_path=config, library="nope"),
+    ):
+        with pytest.raises(PziError) as unresolved:
+            call()
+        assert "--target" not in str(unresolved.value), str(unresolved.value)
+
+
+# --- The six functions added for item 427 ------------------------------------
+
+
+def test_get_returns_the_record_including_the_pdf_path(tmp_path: Path) -> None:
+    """The gap item 427 named: `entries` carries `has_pdf` and no path.
+
+    A script that wants to open, hash or move a paper's PDF had no supported way
+    to find it — the whole record was reachable only through `pzi.bib_service`,
+    which the README declares internal.
+    """
+    bib_path = tmp_path / "ml.bib"
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    (papers / "smith2020.pdf").write_bytes(b"%PDF-1.4\n")
+    bib_path.write_text(
+        "@article{smith2020,\n"
+        "  title = {A Title},\n"
+        "  author = {Smith, Jane},\n"
+        "  year = {2020},\n"
+        "  keywords = {ml},\n"
+        f"  file = {{{papers / 'smith2020.pdf'}}},\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\npapers_dir = "{papers}"\n'
+        "default = true\n",
+        encoding="utf-8",
+    )
+
+    record = pzi.get("smith2020", config_path=str(config_path))
+
+    assert record["citekey"] == "smith2020"
+    assert record["local_pdf_path"] == str(papers / "smith2020.pdf")
+    assert record["tags"] == ["ml"]
+
+
+def test_get_raises_not_found_rather_than_returning_none(tmp_path: Path) -> None:
+    """Decision 24. Failure raises here, as it does everywhere else in the API.
+
+    `dict | None` would make this the one function where forgetting to check
+    surfaces later as `None['title']`, at a line that has nothing to do with the
+    lookup.
     """
     with pytest.raises(PziError) as excinfo:
-        pzi.search(config_path=_library(tmp_path))
-    assert "--" not in str(excinfo.value), str(excinfo.value)
+        pzi.get("nosuchkey", config_path=_library(tmp_path))
+    assert excinfo.value.code == 3
+
+
+def test_list_bibs_names_what_library_accepts(tmp_path: Path) -> None:
+    """Every other function takes `library=` by name.
+
+    Without this there was no supported way to learn those names: the config
+    file is not part of the API, and `pzi.bib_service` is internal.
+    """
+    listed = pzi.list_bibs(config_path=_library(tmp_path))
+
+    assert [bib["name"] for bib in listed] == ["ml"]
+    assert listed[0]["default"] is True
+    # The name it reports is a name the other functions accept.
+    assert pzi.entries(config_path=_library(tmp_path), library="ml")
+
+
+def test_tags_round_trip_through_the_api(tmp_path: Path) -> None:
+    config = _library(tmp_path)
+
+    added = pzi.add_tags("smith2020", ["nlp"], config_path=config)
+    assert added["tags"] == ["nlp"]
+    assert added["changed"] is True
+
+    # Adding a tag the entry already has is a no-op, not a failure.
+    again = pzi.add_tags("smith2020", ["nlp"], config_path=config)
+    assert again["changed"] is False
+
+    removed = pzi.remove_tags("smith2020", ["nlp"], config_path=config)
+    assert removed["tags"] == []
+    assert removed["changed"] is True
+
+
+def test_delete_writes_by_default_and_reports_its_backup(tmp_path: Path) -> None:
+    """Decision 23: `delete` names its target, so it acts.
+
+    `promote` previews because a zero-argument call sweeps the whole library;
+    this one deletes exactly the citekey in the call.
+    """
+    config = _library(tmp_path)
+
+    preview = pzi.delete("smith2020", dry_run=True, config_path=config)
+    assert preview["dry_run"] is True
+    assert pzi.entries(config_path=config), "a dry run must not delete"
+
+    result = pzi.delete("smith2020", config_path=config)
+    assert result["dry_run"] is False
+    assert Path(result["backup_path"]).exists()
+    assert pzi.entries(config_path=config) == []
+
+
+def test_merge_previews_by_default_and_makes_dedupe_actionable(tmp_path: Path) -> None:
+    """`dedupe()` reported clusters the API could not act on.
+
+    Previewing by default is the `promote` split: the CLI writes because you
+    typed the command, and the preview names what the merge costs before it
+    happens.
+    """
+    bib_path = tmp_path / "ml.bib"
+    # One DOI, two entries: an *exact* duplicate cluster, which is what
+    # `dedupe` reports and this merge then resolves.
+    bib_path.write_text(
+        "@article{a2020,\n  title = {A Title},\n  author = {Smith, Jane},\n"
+        "  year = {2020},\n  doi = {10.1000/dup},\n}\n\n"
+        "@article{b2020,\n  title = {A Title},\n  author = {Smith, Jane},\n"
+        "  year = {2020},\n  doi = {10.1000/dup},\n  volume = {12},\n}\n",
+        encoding="utf-8",
+    )
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\ndefault = true\n', encoding="utf-8"
+    )
+    config = str(config_path)
+
+    assert pzi.dedupe(config_path=config)["total_clusters"] == 1
+
+    preview = pzi.merge("b2020", "a2020", config_path=config)
+    assert preview["dry_run"] is True
+    assert preview["carried_fields"] == ["volume"]
+    assert len(pzi.entries(config_path=config)) == 2, "a preview must not write"
+
+    merged = pzi.merge("b2020", "a2020", dry_run=False, config_path=config)
+    assert merged["dropped_citekey"] == "b2020"
+    assert [e["citekey"] for e in pzi.entries(config_path=config)] == ["a2020"]
+
+
+def test_merge_honours_the_configured_pdf_path_style(tmp_path: Path) -> None:
+    """`merge_duplicates` takes `file_path_style`, and both other front ends
+    read it from the config (`commands/dedupe.py`).
+
+    The facade resolves a *path* for the services that take one, so passing the
+    default here instead of the configured value rewrote a relative-path
+    library's `file = {...}` to an absolute path — on a merge the user ran for
+    an unrelated reason. Reproduced: the survivor's field came back as
+    `/tmp/.../papers/b2020.pdf` where the library uses `papers/b2020.pdf`.
+    """
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    (papers / "b2020.pdf").write_bytes(b"%PDF-1.4\n")
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text(
+        "@article{a2020,\n  title = {A Title},\n  author = {Smith, Jane},\n"
+        "  year = {2020},\n}\n\n"
+        "@article{b2020,\n  title = {A Title},\n  author = {Smith, Jane},\n"
+        "  year = {2020},\n  file = {papers/b2020.pdf},\n}\n",
+        encoding="utf-8",
+    )
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        'pdf_file_path_style = "relative"\n\n'
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\npapers_dir = "{papers}"\n'
+        "default = true\n",
+        encoding="utf-8",
+    )
+
+    pzi.merge("b2020", "a2020", dry_run=False, config_path=str(config_path))
+
+    assert "file = {papers/b2020.pdf}" in bib_path.read_text(encoding="utf-8")
 
 
 # --- Remediation after the 2026-08-15 API review -----------------------------
