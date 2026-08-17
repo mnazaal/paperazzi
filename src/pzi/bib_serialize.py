@@ -131,6 +131,11 @@ class BibLayout:
     #: Sniffed independently, and falls back to ``block_separator`` when the
     #: source has no comment boundary to learn from.
     comment_separator: str = "\n"
+    #: The gap *after* a comment block. Distinct again: a Better BibTeX export
+    #: writes `% ==` flush *below* an entry and still leaves a blank line before
+    #: the next one, so the two comment boundaries have opposite conventions in
+    #: the same file. Falls back to ``block_separator`` on no evidence.
+    after_comment_separator: str = "\n"
     indent: str = "  "
     trailing_comma: bool = False
 
@@ -156,6 +161,18 @@ _BLOCK_GAP_RE = re.compile(r"^\}[ \t]*\n(\n*)(?=[ \t]*@)", re.MULTILINE)
 #: 3,582 entry→entry gaps that were the only ones being sampled.
 _COMMENT_GAP_RE = re.compile(r"^\}[ \t]*\n(\n*)(?=[ \t]*%)", re.MULTILINE)
 
+#: The gap *after* a comment block, before the next `@`. The mirror of the one
+#: above, and invisible to both of them: they anchor on an entry's closing brace,
+#: so a boundary whose left side is a comment was never sampled. The writer then
+#: applied `block_separator` there, so a comment sitting flush above the entry it
+#: describes gained a blank line on the first write — anywhere in the file,
+#: whether or not that entry was the one being edited.
+#:
+#: A comment block's last line is the one followed by `@`; a multi-line comment
+#: paragraph is a single `ImplicitComment` whose internal newlines are its own
+#: text, so this cannot match inside one.
+_AFTER_COMMENT_GAP_RE = re.compile(r"^%[^\n]*\n(\n*)(?=[ \t]*@)", re.MULTILINE)
+
 
 def _dominant_gap(source: str, pattern: re.Pattern[str], default: str) -> str:
     """The blank-line convention *pattern* finds, or *default* with no evidence.
@@ -166,8 +183,13 @@ def _dominant_gap(source: str, pattern: re.Pattern[str], default: str) -> str:
     gaps = [match.group(1) for match in pattern.finditer(source)]
     if not gaps:
         return default
-    blank_separated = sum(1 for gap in gaps if gap)
-    return "\n" if blank_separated * 2 >= len(gaps) else ""
+    # The dominant gap *as written*, not "blank-separated or not". This used to
+    # collapse every gap to `""` or `"\n"`, which cannot reproduce a file that
+    # separates entries by two blank lines: each boundary lost one, so a
+    # five-entry file went 25 lines to 20 on a write that was asked to add one
+    # tag. `indent` above has always used this rule; the docstring here claimed
+    # it while the code counted a boolean.
+    return Counter(gaps).most_common(1)[0][0]
 
 
 def detect_bib_layout(source: str) -> BibLayout:
@@ -200,10 +222,14 @@ def detect_bib_layout(source: str) -> BibLayout:
     # follows whatever the entry boundaries said — so a library without comments
     # is written exactly as it was before this distinction existed.
     comment_separator = _dominant_gap(source, _COMMENT_GAP_RE, block_separator)
+    after_comment_separator = _dominant_gap(
+        source, _AFTER_COMMENT_GAP_RE, block_separator
+    )
 
     return BibLayout(
         block_separator=block_separator,
         comment_separator=comment_separator,
+        after_comment_separator=after_comment_separator,
         indent=indent,
         trailing_comma=trailing_comma,
     )
@@ -577,13 +603,20 @@ def serialize_library(library: Library, *, layout: BibLayout | None) -> str:
         )
     ]
     pieces: list[str] = []
+    previous: Block | None = None
     for position, block in enumerate(library.blocks):
         if position:
-            pieces.append(
-                layout.comment_separator
-                if isinstance(block, ImplicitComment | ExplicitComment)
-                else layout.block_separator
-            )
+            # Three boundaries, not two. Which separator applies depends on
+            # *both* sides: a comment below an entry and a comment above one are
+            # different conventions in the same file, and only the first was
+            # modelled — so the gap after a comment fell through to
+            # `block_separator` and a flush comment gained a blank line.
+            if isinstance(block, ImplicitComment | ExplicitComment):
+                pieces.append(layout.comment_separator)
+            elif isinstance(previous, ImplicitComment | ExplicitComment):
+                pieces.append(layout.after_comment_separator)
+            else:
+                pieces.append(layout.block_separator)
         pieces.append(
             write_string(
                 Library(blocks=[block]),
@@ -591,6 +624,7 @@ def serialize_library(library: Library, *, layout: BibLayout | None) -> str:
                 bibtex_format=fmt,
             )
         )
+        previous = block
     return "".join(pieces)
 
 

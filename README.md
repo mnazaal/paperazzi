@@ -380,7 +380,7 @@ envelope:
 |---|---|---|
 | `pzi export --format json` | a bare JSON **array** of entries — not the `--json` envelope, since the array *is* the answer | 0 |
 | `pzi export -o PATH` | one prose line, `exported N entries to PATH`; the document went to the file | 0 |
-| any failure | nothing; the reason goes to stderr as prose | 5 (or 2 for a bad `--format`) |
+| any failure | nothing; the reason goes to stderr as prose | 5, or 2 for a usage error (a bad `--format`, or `-o` over an existing file without `--force`) |
 
 So a JSON consumer reads stdout on success and branches on the exit code, and
 never has to distinguish a partial document from a complete one — a failed
@@ -397,12 +397,6 @@ For external `.bib` files managed by Zotero, Paperpile, LaTeX projects, or hand 
 - Malformed BibTeX (unbalanced braces, unterminated strings, a `%` comment inside an entry) is rejected and must be fixed manually
 - **A write reproduces your file's own layout, and makes two file-wide changes.** Entry types are lowercased (`@Article` → `@article`) everywhere, including in entries the write never looked at. And indentation and trailing-comma style are normalized to whichever the file uses *most* — so a consistently formatted file is untouched outside the edited entry, while one that mixes tabs and spaces is unified on the majority style. Everything else survives: blank lines, citekey capitalization, field names' capitalization, field order within an entry, line endings, a byte-order mark, and the file's permissions. On a consistently formatted 22,232-entry Better BibTeX export, adding one tag is a **one-line diff**
 - Comments, `@string` macros, and `@preamble` blocks are preserved across insert, update, tag, delete, merge, and reindex (which keeps entry order); `library clean --fix` never rewrites the `.bib` (it only relocates orphan PDFs)
-- **A comment sitting flush *above* a block gains one blank line under it** on
-  the first write — anywhere in the file, whether or not that block is the one
-  being edited. A comment already followed by a blank line is untouched, and so
-  is a comment flush *below* an entry (the `% ==` quality reports a Better
-  BibTeX export writes under each entry keep their position). It happens once:
-  the second write adds nothing further
 - BibTeX `@string` macros are kept as-is but not expanded or validated
 
 ### External services and rate limits
@@ -481,8 +475,8 @@ The token is resolved in this order: `api_auth_token_cmd` (a command whose stdou
 
 `import pzi` is a supported surface, frozen at 1.0 and pinned by
 `tests/fixtures/public_api.txt`. Fifteen functions, each taking an optional
-`config_path` and an optional `library` and nothing else that is not its own
-concern:
+`config_path`, all but `list_bibs` taking an optional `library`, and nothing
+else that is not its own concern:
 
 ```python
 import pzi
@@ -510,9 +504,9 @@ pzi.promote(dry_run=True)               # replace preprints; previews by default
 Three conventions hold throughout. **Failure raises `pzi.PziError`** (carrying
 `code`, the exit code the CLI would have used) rather than returning an error
 dict — including `pzi.get()` on an unknown citekey, which is `code == 3`.
-**Functions return the answer, not the envelope.** And **the two sweeping
-commands preview by default** — `merge` and `promote` take `dry_run=False` to
-write, while the ones that name their target act.
+**Functions return the answer, not the envelope.** And **everything that sweeps
+the library or destroys an entry previews by default** — `update`, `promote`,
+`merge` and `delete` all take `dry_run=False` to write.
 
 Every return value is a `TypedDict` exported alongside the functions
 (`pzi.EntryRecord`, `pzi.SearchMatch`, …), so a type checker sees the keys and

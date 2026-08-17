@@ -327,6 +327,102 @@ def test_a_comment_flush_against_its_entry_stays_flush(tmp_path: Path) -> None:
     )
 
 
+def test_a_comment_flush_above_its_entry_stays_flush(tmp_path: Path) -> None:
+    """The mirror of the test above, and the half it did not cover.
+
+    `_BLOCK_GAP_RE` and `_COMMENT_GAP_RE` both anchor on an entry's closing
+    brace, so they can only describe a boundary whose *left* side is an entry. A
+    boundary whose left side is a comment was invisible to the sniffer, and the
+    writer fell through to `block_separator` there — so a comment sitting flush
+    above the entry it describes gained a blank line on the first write,
+    anywhere in the file, whether or not that entry was the one being edited.
+
+    Not caught by the flush-*below* test because a Better BibTeX export has no
+    flush-above comments: its `% ==` reports sit under the entry they describe.
+    """
+    bib_path = tmp_path / "flush-above.bib"
+    source = (
+        "% a header comment for the file\n"
+        "@article{a2020,\n"
+        "  title = {A},\n"
+        "}\n"
+        "\n"
+        "% describes b2021, flush against it\n"
+        "@article{b2021,\n"
+        "  title = {B},\n"
+        "}\n"
+    )
+    bib_path.write_text(source)
+
+    layout = detect_bib_layout(source)
+    assert layout.after_comment_separator == "", "comments are flush above entries"
+
+    assert serialize_library(parse_bib_library(source), layout=layout) == source
+
+    # Through a real write, editing the entry whose comment is *not* adjacent:
+    # the untouched comment must not move either.
+    update_bib_entry(
+        str(bib_path),
+        "a2020",
+        lambda entry, record: {
+            **entry,
+            "fields": {**entry["fields"], "keywords": "tagged"},
+        },
+    )
+    after = bib_path.read_text()
+    assert "keywords = {tagged}" in after
+    assert "% a header comment for the file\n@article{a2020," in after
+    assert "% describes b2021, flush against it\n@article{b2021," in after
+    assert after.count("\n\n") == source.count("\n\n"), (
+        f"blank lines were added or removed:\n{after}"
+    )
+
+
+def test_a_file_separated_by_two_blank_lines_keeps_both(tmp_path: Path) -> None:
+    """`_dominant_gap` collapsed every gap to "blank-separated or not".
+
+    So a file using two blank lines between entries lost one at *every*
+    boundary: five entries went from 25 lines to 20 on a write asked to add a
+    single tag. The sniffer's own docstring said "dominant style wins, as
+    everywhere else" — which is what `indent` does — while the code counted a
+    boolean and rebuilt the gap from it.
+
+    Any convention has to round-trip, not just the two that happened to be
+    representable.
+    """
+    bib_path = tmp_path / "airy.bib"
+    source = (
+        "@article{a2020,\n  title = {A},\n}\n"
+        "\n\n"
+        "@article{b2021,\n  title = {B},\n}\n"
+        "\n\n"
+        "@article{c2022,\n  title = {C},\n}\n"
+    )
+    bib_path.write_text(source)
+
+    layout = detect_bib_layout(source)
+    assert layout.block_separator == "\n\n", "two blank lines is the file's style"
+
+    assert serialize_library(parse_bib_library(source), layout=layout) == source
+
+    update_bib_entry(
+        str(bib_path),
+        "b2021",
+        lambda entry, record: {
+            **entry,
+            "fields": {**entry["fields"], "keywords": "tagged"},
+        },
+    )
+    after = bib_path.read_text()
+    assert "keywords = {tagged}" in after
+    assert after.count("\n\n\n") == source.count("\n\n\n"), (
+        f"the two-blank convention was not reproduced:\n{after}"
+    )
+    assert len(after.splitlines()) == len(source.splitlines()) + 1, (
+        f"the write changed more than the one field it was asked to:\n{after}"
+    )
+
+
 def test_a_library_with_no_comments_is_written_exactly_as_before(
     tmp_path: Path,
 ) -> None:
