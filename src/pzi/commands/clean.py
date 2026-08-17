@@ -37,7 +37,7 @@ def run_clean_command(args, *, home_dir, config_path, stdout, stderr, bib_select
         return emit_usage_error(
             args,
             "--dry-run previews --fix; without it the run is already read-only",
-            command_path=("fix", "clean"),
+            command_path=("library", "clean"),
             stdout=stdout,
             stderr=stderr,
         )
@@ -55,7 +55,7 @@ def run_clean_command(args, *, home_dir, config_path, stdout, stderr, bib_select
         )
 
     if getattr(args, "json", False):
-        cli_json.emit_result(result, stdout, command="fix clean", bib_name=target["name"])
+        cli_json.emit_result(result, stdout, command="library clean", bib_name=target["name"])
         if result["status"] != "ok":
             return exit_codes.ENVIRONMENT
         return exit_codes.OK if not result.get("issues") else exit_codes.FINDINGS

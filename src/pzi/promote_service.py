@@ -198,7 +198,7 @@ def promote_bib(
     # against the 15.8 MB library configured here, promoting 100 preprints wrote
     # roughly 1.6 GB of `.bak` files that nothing ever cleans up. The first write
     # takes it — under its lock, immediately before writing, as `delete` and
-    # `fix merge` do — and the rest pass None.
+    # `library merge` do — and the rest pass None.
     run_backup = _RunBackup(bib["path"])
 
     for record in records:
@@ -209,7 +209,7 @@ def promote_bib(
         # record without a `venue` a preprint, which is a large share of an
         # ordinary library, so promotion forked a second entry out of plain
         # @articles that merely lacked a `journal` field — manufacturing the
-        # duplicates `pzi fix dedupe` exists to report. `update_service` refuses
+        # duplicates `pzi library dedupe` exists to report. `update_service` refuses
         # `is_preprint` here for exactly this reason and says so at its own call
         # site; the two commands now agree.
         if not has_preprint_identity(record):
@@ -1252,7 +1252,7 @@ def _handle_update_in_place(
         # `--replace` overwrites the preprint entry with a *different* paper's
         # metadata and deliberately strips its identity (`eprint`, the arXiv
         # DOI, the preprint URL). That is destruction of the same kind `delete`
-        # and `fix merge` back up, and it had no undo at all.
+        # and `library merge` back up, and it had no undo at all.
         #
         # One backup for the whole run — see `_RunBackup`. This was
         # `backup_path_for(bib_path, preprint_ck)`, i.e. a full copy of the
@@ -1374,7 +1374,7 @@ def _merge_published_metadata(
     merged.pop("arxiv_id", None)
     # `10.48550/arXiv.…` is arXiv's own DataCite DOI: it identifies the
     # *preprint*, so keeping it labels the published entry with the version it
-    # just stopped being — and a later `pzi check` resolves it straight back to
+    # just stopped being — and a later `pzi library check` resolves it straight back to
     # the preprint. Only dropped when the candidate offered no DOI of its own;
     # when it did, the loop above has already overwritten this.
     if is_preprint_doi(merged.get("doi")):

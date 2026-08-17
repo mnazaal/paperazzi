@@ -443,21 +443,21 @@ def test_exit_code_partial_is_reachable_for_promote() -> None:
 def test_an_error_envelope_without_errors_falls_back_to_its_message() -> None:
     """`errors[]` is the documented failure channel and must say something.
 
-    `fix merge` reported every failure as `status: error` plus a `message` and
+    `library merge` reported every failure as `status: error` plus a `message` and
     no `errors` at all, so a consumer branching on the documented channel saw a
     failed command with nothing wrong. Any service that forgets is covered here
     rather than one command at a time.
     """
     envelope = cli_json.build_envelope(
         {"status": "error", "message": "entry not found: smith2020", "errors": []},
-        command="fix merge",
+        command="library merge",
     )
 
     assert envelope["errors"] == ["entry not found: smith2020"]
 
 
 def test_an_error_envelope_with_no_message_at_all_still_says_something() -> None:
-    envelope = cli_json.build_envelope({"status": "error"}, command="fix merge")
+    envelope = cli_json.build_envelope({"status": "error"}, command="library merge")
 
     assert envelope["errors"] and envelope["errors"][0]
 
@@ -465,7 +465,7 @@ def test_an_error_envelope_with_no_message_at_all_still_says_something() -> None
 def test_a_successful_envelope_keeps_its_empty_error_list() -> None:
     envelope = cli_json.build_envelope(
         {"status": "ok", "message": "merged a into b", "errors": []},
-        command="fix merge",
+        command="library merge",
     )
 
     assert envelope["errors"] == []
@@ -474,7 +474,7 @@ def test_a_successful_envelope_keeps_its_empty_error_list() -> None:
 def test_errors_a_service_did_report_are_left_alone() -> None:
     envelope = cli_json.build_envelope(
         {"status": "error", "message": "summary", "errors": ["the real reason"]},
-        command="fix merge",
+        command="library merge",
     )
 
     assert envelope["errors"] == ["the real reason"]
@@ -569,10 +569,10 @@ def test_a_violated_internal_invariant_still_emits_a_json_document(tmp_path: Pat
         pytest.param(["entries"], id="entries"),
         pytest.param(["search", "--query", "x"], id="search"),
         pytest.param(["tag", "list"], id="tag-list"),
-        pytest.param(["check"], id="check"),
-        pytest.param(["fix", "clean"], id="fix-clean"),
-        pytest.param(["fix", "dedupe"], id="fix-dedupe"),
-        pytest.param(["fix", "reindex"], id="fix-reindex"),
+        pytest.param(["library", "check"], id="check"),
+        pytest.param(["library", "clean"], id="fix-clean"),
+        pytest.param(["library", "dedupe"], id="fix-dedupe"),
+        pytest.param(["library", "reindex"], id="fix-reindex"),
     ],
 )
 def test_a_read_command_says_the_configured_bib_does_not_exist(

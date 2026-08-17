@@ -149,6 +149,7 @@ FRONTEND: frozenset[str] = frozenset(
         # Every CLI command runner. These were invisible to this guard until the
         # module scan became recursive.
         "commands.add",
+        "commands.bibs",
         "commands.check",
         "commands.clean",
         "commands.common",
@@ -157,10 +158,10 @@ FRONTEND: frozenset[str] = frozenset(
         "commands.doctor",
         "commands.entries",
         "commands.export",
-        "commands.fix",
         "commands.import_",
         "commands.inbox",
         "commands.init",
+        "commands.library",
         "commands.pdf",
         "commands.reindex",
         "commands.search",

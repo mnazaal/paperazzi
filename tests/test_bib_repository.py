@@ -892,7 +892,7 @@ def test_merge_bib_entries_refuses_to_merge_an_entry_with_itself(tmp_path: Path)
 
     `dedupe_service` guards its own call, but the repository owns the data and
     takes the lock, so the precondition belongs here too. It is not reachable
-    from `pzi fix merge` today; that is what makes it worth pinning.
+    from `pzi library merge` today; that is what makes it worth pinning.
     """
     bib = tmp_path / "lib.bib"
     bib.write_text(

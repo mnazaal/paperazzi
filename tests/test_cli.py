@@ -59,10 +59,13 @@ def test_cli_dispatch_registry_covers_all_parser_commands() -> None:
     parser_commands = _parser_command_names(build_parser())
 
     assert parser_commands == set(cli._DISPATCH)
-    assert "fix" in cli._DISPATCH
+    assert "library" in cli._DISPATCH
     # Removed top-level commands must not linger in the dispatch registry.
-    removed = {"list", "set-default", "version", "clean", "dedupe", "merge",
-               "reindex", "services"}
+    # `fix` was renamed to `library` and `check` moved inside it (item 432), so
+    # both are subcommands now and neither may still be dispatchable at the top
+    # level — a stale entry there would keep the old spelling silently working.
+    removed = {"fix", "check", "list", "set-default", "version", "clean",
+               "dedupe", "merge", "reindex", "services"}
     assert not (removed & set(cli._DISPATCH))
 
 
@@ -106,17 +109,27 @@ def test_import_runner_lives_in_command_module() -> None:
     assert cli._run_import is import_command.run_import_command
 
 
-def test_fix_runner_lives_in_command_module() -> None:
-    fix_command = importlib.import_module("pzi.commands.fix")
-    assert cli._run_fix is fix_command.run_fix_command
+def test_library_runner_lives_in_command_module() -> None:
+    library_command = importlib.import_module("pzi.commands.library")
+    assert cli._run_library is library_command.run_library_command
 
 
-def test_fix_dispatches_to_maintenance_runners() -> None:
-    fix_command = importlib.import_module("pzi.commands.fix")
+def test_library_dispatches_to_every_subcommand() -> None:
+    """The group's table, pinned — including `check`, which moved into it.
+
+    `check` was top-level while three of the four maintenance subcommands were
+    also read-only, so "does this inspect a library" and "where do I type it"
+    disagreed (item 432).
+    """
+    library_command = importlib.import_module("pzi.commands.library")
+    check_command = importlib.import_module("pzi.commands.check")
     clean_command = importlib.import_module("pzi.commands.clean")
     dedupe_command = importlib.import_module("pzi.commands.dedupe")
+    bibs_command = importlib.import_module("pzi.commands.bibs")
     reindex_command = importlib.import_module("pzi.commands.reindex")
-    assert fix_command._SUBCOMMANDS == {
+    assert library_command._SUBCOMMANDS == {
+        "list": bibs_command.run_list_command,
+        "check": check_command.run_check_command,
         "clean": clean_command.run_clean_command,
         "dedupe": dedupe_command.run_dedupe_command,
         "merge": dedupe_command.run_merge_command,
@@ -158,7 +171,7 @@ def test_top_level_help_is_grouped_with_examples() -> None:
     # Examples lead the listing, commands are grouped, and every command appears.
     assert "EXAMPLES" in help_text
     assert "CAPTURE" in help_text and "MAINTAIN" in help_text
-    for command in ("add", "search", "fix", "doctor"):
+    for command in ("add", "search", "library", "doctor"):
         assert f"\n  {command} " in help_text or f"\n  {command}\n" in help_text
 
 
@@ -936,8 +949,8 @@ _ENVELOPE_KEYS = frozenset({"command", "status", "bib_name", "items", "errors"})
         ["entries"],
         ["search", "--query", "graph"],
         ["tag", "list"],
-        ["fix", "dedupe"],
-        ["fix", "clean"],
+        ["library", "dedupe"],
+        ["library", "clean"],
         ["doctor", "--config-only"],
     ],
 )
@@ -1225,7 +1238,7 @@ def test_reindex_default_is_read_only_audit(tmp_path: Path) -> None:
     before = bib_path.read_text()
     stdout = StringIO()
     exit_code = run_cli(
-        ["fix", "reindex", "--config", str(config_path)],
+        ["library", "reindex", "--config", str(config_path)],
         home_dir=str(tmp_path), stdout=stdout, stderr=StringIO(),
     )
     # A read-only audit that found renames to make has something to report.
@@ -1239,7 +1252,7 @@ def test_reindex_rename_citekeys_applies_with_warning(tmp_path: Path) -> None:
     config_path, bib_path = _reindex_config(tmp_path)
     stderr = StringIO()
     exit_code = run_cli(
-        ["fix", "reindex", "--rename-citekeys", "--force", "--config", str(config_path)],
+        ["library", "reindex", "--rename-citekeys", "--force", "--config", str(config_path)],
         home_dir=str(tmp_path), stdout=StringIO(), stderr=stderr,
     )
     assert exit_code == 0
@@ -1700,9 +1713,9 @@ def test_add_from_file_unreadable_is_environment(tmp_path: Path) -> None:
     [
         # Unknown --target: raised as PziError from `resolve_target`, which is
         # the first statement of seven runners.
-        ["fix", "clean", "--target", "nosuchbib"],
-        ["fix", "dedupe", "--target", "nosuchbib"],
-        ["fix", "reindex", "--target", "nosuchbib"],
+        ["library", "clean", "--target", "nosuchbib"],
+        ["library", "dedupe", "--target", "nosuchbib"],
+        ["library", "reindex", "--target", "nosuchbib"],
         ["entries", "--stats", "--target", "nosuchbib"],
         # `export` is deliberately absent: it has no `--json` flag (it uses
         # `--format json`), so argparse rejects the invocation before dispatch.
@@ -1716,7 +1729,7 @@ def test_add_from_file_unreadable_is_environment(tmp_path: Path) -> None:
         ["search"],
         ["update", "--replace"],
         ["pdf", "retry"],
-        ["check", "--jsonl", "-"],
+        ["library", "check", "--jsonl", "-"],
         # Missing input file.
         ["import", "/nonexistent/source.bib"],
     ],
@@ -1836,7 +1849,7 @@ def _dup_library(tmp_path: Path) -> Path:
         ["entries", "--stats"],
         ["entries", "smith2024"],
         ["search", "--query", "first"],
-        ["fix", "dedupe"],
+        ["library", "dedupe"],
     ],
 )
 def test_read_commands_report_a_dropped_duplicate(tmp_path: Path, argv) -> None:
@@ -1867,7 +1880,7 @@ def test_read_commands_report_a_dropped_duplicate(tmp_path: Path, argv) -> None:
 def test_fix_clean_json_populates_errors_on_an_unreadable_library(tmp_path: Path) -> None:
     """`errors[]` is the documented failure channel and must not be empty.
 
-    `fix clean` reported `"status": "error"` with `"errors": []`, stranding the
+    `library clean` reported `"status": "error"` with `"errors": []`, stranding the
     detail in `issues[]` — the same defect the doctor command had. It is not
     covered by the parametrized envelope test above, which shares one valid
     library and so never reaches this path.
@@ -1883,7 +1896,7 @@ def test_fix_clean_json_populates_errors_on_an_unreadable_library(tmp_path: Path
     stdout = StringIO()
 
     exit_code = run_cli(
-        ["fix", "clean", "--json", "--config", str(config_path)],
+        ["library", "clean", "--json", "--config", str(config_path)],
         home_dir=str(tmp_path),
         stdout=stdout,
         stderr=StringIO(),
@@ -1899,7 +1912,7 @@ def test_fix_clean_json_populates_errors_on_an_unreadable_library(tmp_path: Path
 def test_fix_clean_exits_environment_on_an_unreadable_library(tmp_path: Path) -> None:
     """1 never means failure — the exit-code contract says so explicitly.
 
-    `fix clean` returned bare 1 both for "could not read the library" and for
+    `library clean` returned bare 1 both for "could not read the library" and for
     "found some orphan PDFs", so a script could not tell a broken library from
     a healthy one with findings.
     """
@@ -1911,13 +1924,13 @@ def test_fix_clean_exits_environment_on_an_unreadable_library(tmp_path: Path) ->
     )
 
     exit_code = run_cli(
-        ["fix", "clean", "--config", str(config_path)],
+        ["library", "clean", "--config", str(config_path)],
         home_dir=str(tmp_path), stdout=StringIO(), stderr=StringIO(),
     )
     assert exit_code == exit_codes.ENVIRONMENT
 
     json_exit = run_cli(
-        ["fix", "clean", "--json", "--config", str(config_path)],
+        ["library", "clean", "--json", "--config", str(config_path)],
         home_dir=str(tmp_path), stdout=StringIO(), stderr=StringIO(),
     )
     assert json_exit == exit_codes.ENVIRONMENT, "the exit code must not depend on --json"
@@ -1928,7 +1941,7 @@ def test_fix_clean_exits_findings_for_a_duplicate_citekey(tmp_path: Path) -> Non
     config_path = _dup_library(tmp_path)
 
     exit_code = run_cli(
-        ["fix", "clean", "--config", str(config_path)],
+        ["library", "clean", "--config", str(config_path)],
         home_dir=str(tmp_path), stdout=StringIO(), stderr=StringIO(),
     )
 

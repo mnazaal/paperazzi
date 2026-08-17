@@ -1583,7 +1583,7 @@ def test_promote_does_not_fork_an_entry_that_merely_lacks_a_venue(tmp_path):
     `is_preprint` returns True for *any* record with no `venue`, which is a
     large share of an ordinary library. Selecting on it meant promotion forked
     a second entry out of a plain @article that happened to have no `journal`
-    field — creating exactly the duplicate `pzi fix dedupe` exists to report.
+    field — creating exactly the duplicate `pzi library dedupe` exists to report.
 
     `update_service` documents this hazard and refuses to use `is_preprint` for
     the same reason; this pins that `promote` agrees.

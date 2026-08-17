@@ -300,7 +300,7 @@ def test_a_placeholder_doi_is_not_an_identity() -> None:
 
     The canonical form fell back to a case-folded strip whenever the value was
     not DOI-shaped, so every entry carrying the same placeholder shared one
-    identity — and `fix dedupe` reported them as exact duplicates of each other.
+    identity — and `library dedupe` reported them as exact duplicates of each other.
     """
     from pzi.similarity import build_identity_index, find_exact_match
 

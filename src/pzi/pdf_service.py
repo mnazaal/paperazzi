@@ -49,7 +49,7 @@ def _update_entry_keeping_pdf_consistent(
     outcome `update_bib_entry` reports by returning — and not when it raised.
     So a refused write (a duplicate citekey elsewhere in the file, a library
     that no longer round-trips, a full disk) left the downloaded file on disk
-    with nothing referring to it, and a later `fix clean --fix` quarantined it:
+    with nothing referring to it, and a later `library clean --fix` quarantined it:
     a second command tidying up after the first.
 
     Only files this operation created are removed; *existing_pdf_paths* is the

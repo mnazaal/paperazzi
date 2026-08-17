@@ -69,7 +69,7 @@ class MergeResult(TypedDict):
     carried_fields: NotRequired[list[str]]
     dropped_fields: NotRequired[list[str]]
     #: The dropped entry's PDF when the merge does not keep it — left on disk
-    #: with nothing referring to it, for a later `fix clean --fix` to quarantine.
+    #: with nothing referring to it, for a later `library clean --fix` to quarantine.
     orphaned_pdf: NotRequired[str]
     #: Fields the survivor *loses*: present in both entries with different
     #: values, and resolved in the dropped entry's favour (title, venue and
@@ -329,7 +329,7 @@ def merge_duplicates(
     )
 
     # The dropped entry's PDF, when the merge does not keep it. The file stays
-    # on disk with nothing referring to it, and a later `fix clean --fix`
+    # on disk with nothing referring to it, and a later `library clean --fix`
     # quarantines it — a second command undoing what this one caused. The dry
     # run is where the user decides whether to accept that, and it reported
     # carried and dropped *fields* while never mentioning the file.

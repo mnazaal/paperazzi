@@ -77,7 +77,7 @@ class CheckItem(TypedDict):
 
 
 class CheckResult(TypedDict):
-    """A whole audit run — what `pzi.check()` and `pzi check --report` return.
+    """A whole audit run — what `pzi.check()` and `pzi library check --report` return.
 
     `status` is `error` only when the run reached no source at all; an audit
     that ran and found problems is `ok` with the verdicts in `items`.
@@ -474,7 +474,7 @@ def check_bib(
         # A dropped block is not a failure to run. `error` here meant the runner
         # threw the whole audit away — no report file, nothing printed, exit 5 —
         # after every network lookup had already been made, because one entry in
-        # the file had a duplicate citekey. `entries`, `search` and `fix dedupe`
+        # the file had a duplicate citekey. `entries`, `search` and `library dedupe`
         # all show what they could read and say what they lost; `check` is the
         # read command that did not, and the parametrized test covering exactly
         # that behaviour is the one it was left out of.

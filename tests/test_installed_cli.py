@@ -39,8 +39,8 @@ pytestmark = pytest.mark.skipif(
 #: imported so that a command silently disappearing from the dispatch table is a
 #: failure here rather than an empty parametrization that passes.
 _COMMANDS = [
-    "add", "inbox", "pdf", "tag", "search", "check", "update", "doctor",
-    "server", "init", "delete", "entries", "fix", "export", "import",
+    "add", "inbox", "pdf", "tag", "search", "library", "update", "doctor",
+    "server", "init", "delete", "entries", "export", "import",
 ]
 
 
@@ -140,8 +140,8 @@ def test_documented_exit_codes_through_the_installed_script(
         ["entries", "--stats"],
         ["search", "--query", "graph"],
         ["tag", "list"],
-        ["fix", "dedupe"],
-        ["fix", "clean"],
+        ["library", "dedupe"],
+        ["library", "clean"],
     ],
 )
 def test_json_mode_emits_exactly_one_document(

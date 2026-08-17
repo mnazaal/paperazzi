@@ -183,7 +183,7 @@ def test_clean_library_move_orphans_dry_run() -> None:
 
 def test_quarantined_pdfs_are_not_reported_as_orphans_again() -> None:
     # Files already moved into papers_dir/.orphans are quarantined, not loose
-    # orphans.  Re-detecting them makes `pzi fix clean` exit non-zero forever
+    # orphans.  Re-detecting them makes `pzi library clean` exit non-zero forever
     # once anything has been quarantined.
     with tempfile.TemporaryDirectory() as td:
         bib = os.path.join(td, "requarantine.bib")
@@ -359,7 +359,7 @@ def test_a_pdf_referenced_by_a_sibling_library_is_not_an_orphan() -> None:
 
     Checking one library therefore saw the *other* library's PDFs as unreferenced
     and `--fix` quarantined them, silently breaking that library's `file =`
-    fields — for a user who ran `pzi fix clean` on the wrong target.
+    fields — for a user who ran `pzi library clean` on the wrong target.
     """
     with tempfile.TemporaryDirectory() as td:
         papers = os.path.join(td, "papers")

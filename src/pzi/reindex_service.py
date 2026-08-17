@@ -162,7 +162,7 @@ def _rename_planned_pdfs(
             # Silently skipping this left the entry pointing at a path an
             # earlier change in the same batch had already renamed away — two
             # entries sharing one PDF produced a dangling `file =` with
-            # `errors: []`, and a later `fix clean` reported it as missing with
+            # `errors: []`, and a later `library clean` reported it as missing with
             # no explanation.
             moved_to = already_renamed.get(os.path.abspath(old_pdf))
             if moved_to is not None:
@@ -293,7 +293,7 @@ def reindex_library(
             renamed = _rename_planned_pdfs(changes, entries, errors)
             # Every citekey in the library is about to change, breaking any
             # `\cite{}` that used the old ones, and there is no undo. `delete`
-            # and `fix merge` — the other two commands that destroy something
+            # and `library merge` — the other two commands that destroy something
             # the user cannot reconstruct — both leave a `.bak`, and both write
             # it under the lock immediately before the write so it is exactly
             # the content being replaced.

@@ -1,4 +1,4 @@
-"""CLI runner for `pzi fix reindex`."""
+"""CLI runner for `pzi library reindex`."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
                 args,
                 f"{flag} applies to --rename-citekeys; without it the run is "
                 f"already a read-only audit",
-                command_path=("fix", "reindex"),
+                command_path=("library", "reindex"),
                 stdout=stdout,
                 stderr=stderr,
             )
@@ -76,7 +76,7 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
                     if no_format
                     else ""
                 ),
-                command_path=("fix", "reindex"),
+                command_path=("library", "reindex"),
                 stdout=stdout,
                 stderr=stderr,
             )
@@ -90,7 +90,7 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
             if as_json:
                 cli_json.emit_result(
                     {"status": "ok", "bib_path": target["path"], "message": "cancelled"},
-                    stdout, command="fix reindex", items=[], bib_name=target["name"],
+                    stdout, command="library reindex", items=[], bib_name=target["name"],
                 )
             else:
                 print("cancelled", file=stderr)
@@ -105,7 +105,7 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
         file_path_style=config.get("pdf_file_path_style", "absolute"),
     )
 
-    # Computed once above the format branch, as `fix dedupe` does. Keying only
+    # Computed once above the format branch, as `library dedupe` does. Keying only
     # off `errors` meant a read-only audit that found renames to make exited 0
     # while simultaneously printing "run with --rename-citekeys to apply" —
     # nothing to report, according to the exit code. Renames only count as a
@@ -118,7 +118,7 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
         # audit reported a populated `changed[]` next to `backup_path: null`,
         # which reads as "these renames happened, and nothing was backed up".
         cli_json.emit_result(
-            {**result, "applied": apply}, stdout, command="fix reindex",
+            {**result, "applied": apply}, stdout, command="library reindex",
             items=result.get("changed") or [], bib_name=target["name"],
         )
         if result["status"] != "ok":
@@ -138,7 +138,7 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
     if not rename and result.get("changed"):
         print(
             "run with --rename-citekeys to apply "
-            "(this rewrites citekeys; see 'pzi fix reindex --help')",
+            "(this rewrites citekeys; see 'pzi library reindex --help')",
             file=stdout,
         )
     return exit_codes.FINDINGS if findings else exit_codes.OK

@@ -98,7 +98,7 @@ def canonical_doi(value: object) -> str | None:
     that a malformed field would at least match itself. But the values that
     reach this are overwhelmingly *placeholders* — `n/a`, `-`, `TODO` — and a
     placeholder is the absence of a DOI, not a shared one: every entry carrying
-    the same filler collapsed into a single identity and `fix dedupe` offered to
+    the same filler collapsed into a single identity and `library dedupe` offered to
     merge unrelated papers.
 
     Dropping the fallback costs a malformed-but-unique DOI its identity, so
@@ -161,7 +161,7 @@ def find_exact_match(
             # insert into an update, and the existing entry took the incoming
             # paper's title, DOI and abstract. Same reasoning `canonical_doi`
             # applies to placeholder DOIs, and the same trade-off: a missed
-            # match costs a duplicate, which `fix dedupe` can undo, while a
+            # match costs a duplicate, which `library dedupe` can undo, while a
             # wrong merge cannot be undone.
             matches = [
                 position

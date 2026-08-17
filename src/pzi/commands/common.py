@@ -223,10 +223,10 @@ def write_atomic(output_path: Path, content: str) -> None:
 #: including a missing ``reason`` — means "the command could not run", which is
 #: the safe default: it is never ``1``, so a script can still tell a failure to
 #: run from a successful run that found something.
-#: Sub-command attributes, in the order the CLI nests them. `pzi fix clean`
-#: parses as `command="fix"`, `fix_command="clean"`, and the runners label their
-#: envelopes with the joined form.
-_SUBCOMMAND_ATTRS = ("fix_command", "tag_command", "pdf_command")
+#: Sub-command attributes, in the order the CLI nests them. `pzi library clean`
+#: parses as `command="library"`, `library_command="clean"`, and the runners
+#: label their envelopes with the joined form.
+_SUBCOMMAND_ATTRS = ("library_command", "tag_command", "pdf_command")
 
 
 def batch_exit_code(*, succeeded: int, failed: int) -> int:
@@ -257,7 +257,7 @@ def batch_exit_code(*, succeeded: int, failed: int) -> int:
 def command_label(args: object) -> str:
     """The envelope ``command`` label for an invocation.
 
-    The runners pass string literals (``"fix clean"``, ``"entries --stats"``).
+    The runners pass string literals (``"library clean"``, ``"entries --stats"``).
     The CLI boundary has only ``args``, so it reconstructs the same label here —
     otherwise a command's failure document would name itself differently from
     its success document, and `.command` would stop being a reliable key.

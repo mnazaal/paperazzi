@@ -139,7 +139,7 @@ def test_every_command_and_subcommand_appears_in_the_snapshot() -> None:
         assert f"\npzi {command}\n" in recorded, f"`pzi {command}` is not pinned"
 
     # And the nested ones, which are the easiest to lose in a refactor.
-    for parent in ("pdf", "tag", "fix"):
+    for parent in ("pdf", "tag", "library"):
         for child in _subparsers(_subparsers(parser)[parent]):
             assert f"\npzi {parent} {child}\n" in recorded, (
                 f"`pzi {parent} {child}` is not pinned"

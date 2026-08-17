@@ -1,4 +1,4 @@
-"""CLI runner for `pzi check` — validate references against authoritative sources."""
+"""CLI runner for `pzi library check` — validate references against authoritative sources."""
 
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ def run_check_command(
     bib_selector: str | None,
     check_bib_fn: Callable[..., CheckResult] = check_bib,
 ) -> int:
-    """Run `pzi check`: audit each entry, report verdicts, never write the bib.
+    """Run `pzi library check`: audit each entry, report verdicts, never write the bib.
 
     Exit codes: 5 when the service could not run or no source could be reached;
     2 for a conflicting invocation; 1 when any entry is problematic or could not
@@ -68,7 +68,7 @@ def run_check_command(
         return emit_usage_error(
             args,
             "--report - writes the report to stdout and cannot be combined with --json",
-            command_path=("check",),
+            command_path=("library", "check"),
             stdout=stdout,
             stderr=stderr,
         )
@@ -82,21 +82,21 @@ def run_check_command(
         return emit_usage_error(
             args,
             "--jsonl - writes NDJSON to stdout and cannot be combined with --json",
-            command_path=("check",),
+            command_path=("library", "check"),
             stdout=stdout,
             stderr=stderr,
         )
     if getattr(args, "force", False) and not report_path and not jsonl_path:
         # `--force` here means only "overwrite the file at --report/--jsonl", and
         # with neither given it was accepted and did nothing. This CLI refuses
-        # that pattern in six other places (`export -o`, `fix clean`, `fix
+        # that pattern in six other places (`export -o`, `library clean`, `fix
         # reindex`, `update`, `entries`, `add --failures-out`); `check` was the
         # one miss, on the longest-running command, where a silently ignored
         # flag costs a whole network run to discover.
         return emit_usage_error(
             args,
             "--force applies to --report/--jsonl and has no effect without one",
-            command_path=("check",),
+            command_path=("library", "check"),
             stdout=stdout,
             stderr=stderr,
         )
@@ -116,7 +116,7 @@ def run_check_command(
             return emit_usage_error(
                 args,
                 f"{flag} {path} already exists (use --force to overwrite)",
-                command_path=("check",),
+                command_path=("library", "check"),
                 stdout=stdout,
                 stderr=stderr,
             )
@@ -142,7 +142,7 @@ def run_check_command(
                         "reason": REASON_UNAVAILABLE,
                     },
                     stdout,
-                    command="check",
+                    command="library check",
                     items=[],
                 )
             return exit_codes.ENVIRONMENT
@@ -161,7 +161,7 @@ def run_check_command(
     # table to print, so it must not take this branch.
     if result["status"] != "ok" and not result["items"]:
         if getattr(args, "json", False):
-            cli_json.emit_result(result, stdout, command="check")
+            cli_json.emit_result(result, stdout, command="library check")
         else:
             print_lines(error_lines("check failed", result["errors"]), stderr)
         return exit_codes.ENVIRONMENT
@@ -202,11 +202,11 @@ def run_check_command(
             write_atomic(Path(jsonl_path), "".join(line + "\n" for line in lines))
 
     if getattr(args, "json", False):
-        cli_json.emit_result(result, stdout, command="check")
+        cli_json.emit_result(result, stdout, command="library check")
     elif jsonl_path != "-" and report_path != "-":
         # Streaming to stdout already occupied it; adding the human table would
         # corrupt the stream. `--jsonl -` was guarded and `--report -` was not,
-        # so `pzi check --report - | jq .` — the only reason `--report -` exists
+        # so `pzi library check --report - | jq .` — the only reason `--report -` exists
         # — got the report with a plain-text table appended to it.
         print_lines(render_check_items(result), stdout)
 

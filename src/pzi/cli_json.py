@@ -63,7 +63,7 @@ def build_envelope(
     errors = list(result.get("errors", []) or [])
     if status == "error" and not errors:
         # `errors[]` is the documented failure channel, so a failure has to say
-        # something in it. `fix merge` reported every one of its refusals as
+        # something in it. `library merge` reported every one of its refusals as
         # `status: error` with a `message` and no errors at all, leaving a
         # consumer that branches on the channel looking at a failed command with
         # nothing wrong. Doing it here rather than per command means the next

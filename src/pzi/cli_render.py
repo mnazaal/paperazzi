@@ -270,10 +270,10 @@ def render_reindex_result(result: Mapping[str, Any], dry_run: bool) -> list[str]
 
 
 def reindex_error_lines(result: Mapping[str, Any]) -> list[str]:
-    """`fix reindex`'s per-PDF rename errors, for stderr.
+    """`library reindex`'s per-PDF rename errors, for stderr.
 
     They used to be appended to the rendered table and printed to stdout, alone
-    among the runners — so `pzi fix reindex > report.txt` put the errors in the
+    among the runners — so `pzi library reindex > report.txt` put the errors in the
     report and left the terminal clean, the opposite of every other command.
     """
     return [f"error: {err}" for err in result.get("errors", [])]

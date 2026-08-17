@@ -12,16 +12,15 @@ from pzi import cli_json, errors, exit_codes
 from pzi.cli_parser import build_parser, set_error_stream
 from pzi.cli_render import distinct_details
 from pzi.commands.add import run_add_command as _run_add
-from pzi.commands.check import run_check_command as _run_check
 from pzi.commands.common import command_label
 from pzi.commands.delete import run_delete_command as _run_delete
 from pzi.commands.doctor import run_doctor_command as _run_doctor
 from pzi.commands.entries import run_entries_command as _run_entries
 from pzi.commands.export import run_export_command as _run_export
-from pzi.commands.fix import run_fix_command as _run_fix
 from pzi.commands.import_ import run_import_command as _run_import
 from pzi.commands.inbox import run_inbox_command as _run_inbox
 from pzi.commands.init import run_init_command as _run_init
+from pzi.commands.library import run_library_command as _run_library
 from pzi.commands.pdf import run_pdf_command as _run_pdf
 from pzi.commands.search import run_search_command as _run_search
 from pzi.commands.server import run_server_command as _run_server
@@ -80,9 +79,6 @@ _DISPATCH: dict[str, Callable[[_DispatchContext], int]] = {
         stdout=c.out, stderr=c.err, bib_selector=c.single_selector,
         fetch_web=c.fetch_web, fetch_search=c.fetch_search,
     ),
-    "check": lambda c: _run_check(
-        c.args, **c.cfg, stdout=c.out, stderr=c.err, bib_selector=c.single_selector,
-    ),
     "delete": lambda c: _run_delete(
         c.args, **c.cfg, stdout=c.out, stderr=c.err, bib_selector=c.bib_selector,
     ),
@@ -96,7 +92,7 @@ _DISPATCH: dict[str, Callable[[_DispatchContext], int]] = {
     "export": lambda c: _run_export(
         c.args, **c.cfg, stdout=c.out, stderr=c.err, bib_selector=c.bib_selector,
     ),
-    "fix": lambda c: _run_fix(
+    "library": lambda c: _run_library(
         c.args, **c.cfg, stdout=c.out, stderr=c.err, bib_selector=c.single_selector,
     ),
     "inbox": lambda c: _run_inbox(c.args, **c.cfg, stdout=c.out, stderr=c.err),
@@ -188,14 +184,15 @@ def run_cli(
         parser.print_help(file=out)
         return 0
 
-    # A bare group — `pzi fix`, `pzi tag`, `pzi pdf`. argparse's own message for
-    # this named the internal dest (`error: the following arguments are
-    # required: fix_command`), a string that appears in no documentation and
+    # A bare group — `pzi library`, `pzi tag`, `pzi pdf`. argparse's own message
+    # for this named the internal dest (`error: the following arguments are
+    # required: library_command`), a string that appears in no documentation and
     # tells the user nothing about what the group contains. Print that group's
     # help, which lists the subcommands they were reaching for.
     #
     # To stderr and exit 2, not stdout and 0: a bare group is an incomplete
-    # invocation. `pzi fix && deploy` must not run `deploy` having done nothing.
+    # invocation. `pzi library && deploy` must not run `deploy` having done
+    # nothing.
     group_parsers = getattr(parser, "pzi_group_parsers", {})
     if args.command in group_parsers:
         group = group_parsers[args.command]

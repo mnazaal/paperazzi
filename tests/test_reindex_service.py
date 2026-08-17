@@ -343,7 +343,7 @@ def test_reindex_dry_run_matches_what_the_real_run_will_do() -> None:
 def test_reindex_writes_a_backup_before_rewriting_the_library() -> None:
     """`--rename-citekeys` rewrites every entry key and has no undo otherwise.
 
-    `delete` and `fix merge` — the other two commands that destroy something a
+    `delete` and `library merge` — the other two commands that destroy something a
     user cannot reconstruct — both leave a `.bak` under the lock. This one
     rewrote the whole library with none.
     """

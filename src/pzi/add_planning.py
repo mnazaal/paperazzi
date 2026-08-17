@@ -420,7 +420,7 @@ def similarity_hint_warnings(record: Mapping[str, object]) -> list[str]:
 
     :func:`attach_similarity_hint` only writes the match into the entry's
     ``note`` field, so a near-duplicate was discoverable solely by reading the
-    ``.bib`` afterwards or running ``pzi fix dedupe`` — a capture that quietly
+    ``.bib`` afterwards or running ``pzi library dedupe`` — a capture that quietly
     doubled an entry looked identical to a clean one.
 
     An exact identity match under ``--force-new`` gets its own, stronger line:
@@ -431,12 +431,12 @@ def similarity_hint_warnings(record: Mapping[str, object]) -> list[str]:
     if isinstance(duplicate, str) and duplicate.strip():
         return [
             f"inserted a second entry for a paper already in the library as "
-            f"{duplicate} (--force-new); merge them with `pzi fix merge`"
+            f"{duplicate} (--force-new); merge them with `pzi library merge`"
         ]
     hint = record.get("similarity_hint")
     if not isinstance(hint, str) or not hint.strip():
         return []
-    return [f"possibly a duplicate of {hint} — compare them with `pzi fix dedupe`"]
+    return [f"possibly a duplicate of {hint} — compare them with `pzi library dedupe`"]
 
 
 # ---------------------------------------------------------------------------

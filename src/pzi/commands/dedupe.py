@@ -26,7 +26,7 @@ def run_dedupe_command(args, *, home_dir, config_path, stdout, stderr, bib_selec
     # near-duplicate still owes the caller exit 1.
     findings = result.get("total_clusters", 0) + len(result.get("fuzzy_candidates", []))
     if getattr(args, "json", False):
-        cli_json.emit_result(result, stdout, command="fix dedupe", bib_name=target["name"])
+        cli_json.emit_result(result, stdout, command="library dedupe", bib_name=target["name"])
         return exit_codes.OK if findings == 0 else exit_codes.FINDINGS
     print_lines(render_dedupe_result(result), stdout)
     # A duplicate citekey never reaches the identity index -- the parser keeps
@@ -52,7 +52,7 @@ def run_merge_command(args, *, home_dir, config_path, stdout, stderr, bib_select
     )
     if getattr(args, "json", False):
         cli_json.emit_result(
-            result, stdout, command="fix merge", items=[], bib_name=target["name"]
+            result, stdout, command="library merge", items=[], bib_name=target["name"]
         )
         return exit_codes.OK if result["status"] == "ok" else exit_code_for_error(result)
     if result["status"] != "ok":
@@ -87,7 +87,7 @@ def run_merge_command(args, *, home_dir, config_path, stdout, stderr, bib_select
     orphaned = result.get("orphaned_pdf")
     if orphaned:
         # The dropped entry's PDF, which the merge does not keep. It stays on
-        # disk with nothing pointing at it until a later `fix clean --fix`
+        # disk with nothing pointing at it until a later `library clean --fix`
         # quarantines it, and the dry run is where the user decides.
         print(
             f"  PDF orphaned (kept by neither entry): {orphaned}",

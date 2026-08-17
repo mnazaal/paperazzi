@@ -153,7 +153,7 @@ def _adopt_title_search_hit(
     paper's* identifier to the user's file, which then dedupes against that
     paper and resolves to it on every later `update` and `check`.
 
-    Judged by the same comparison `pzi check` uses to decide whether a source
+    Judged by the same comparison `pzi library check` uses to decide whether a source
     identified the work at all: a `title_mismatch` flag means it did not.
     """
     selected = select_best_metadata_result(results, fallback)

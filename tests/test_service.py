@@ -1995,7 +1995,7 @@ def test_near_duplicate_insert_warns_and_notes_the_existing_entry(tmp_path: Path
     assert result["status"] == "ok"
     assert result["action"] == "insert", "no shared identifier — cannot exact-match"
     assert result["warnings"] == [
-        "possibly a duplicate of smith2024graph — compare them with `pzi fix dedupe`"
+        "possibly a duplicate of smith2024graph — compare them with `pzi library dedupe`"
     ]
 
     text = bib_path.read_text()

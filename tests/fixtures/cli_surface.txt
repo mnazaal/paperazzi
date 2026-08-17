@@ -21,15 +21,6 @@ pzi add
     --verbose dest=verbose nargs=0
     <value> dest=value nargs='?'
 
-pzi check
-    --config dest=config
-    --force dest=force nargs=0
-    --json dest=json nargs=0
-    --jsonl dest=jsonl
-    --report dest=report
-    --strict dest=strict nargs=0
-    --target dest=target
-
 pzi delete
     --config dest=config
     --dry-run dest=dry_run nargs=0
@@ -61,36 +52,6 @@ pzi export
     --output -o dest=output
     --target dest=target
 
-pzi fix
-
-pzi fix clean
-    --config dest=config
-    --dry-run dest=dry_run nargs=0
-    --fix dest=fix nargs=0
-    --json dest=json nargs=0
-    --target dest=target
-
-pzi fix dedupe
-    --config dest=config
-    --json dest=json nargs=0
-    --target dest=target
-
-pzi fix merge
-    --config dest=config
-    --dry-run dest=dry_run nargs=0
-    --json dest=json nargs=0
-    --target dest=target
-    <citekey_a> dest=citekey_a required
-    <citekey_b> dest=citekey_b required
-
-pzi fix reindex
-    --config dest=config
-    --dry-run dest=dry_run nargs=0
-    --force dest=force nargs=0
-    --json dest=json nargs=0
-    --rename-citekeys dest=rename_citekeys nargs=0
-    --target dest=target
-
 pzi import
     --config dest=config
     --dry-run dest=dry_run nargs=0
@@ -116,6 +77,49 @@ pzi init
     --papers-dir dest=papers_dir
     --rotate-token dest=rotate_token nargs=0
     --setup dest=setup nargs=0
+
+pzi library
+
+pzi library check
+    --config dest=config
+    --force dest=force nargs=0
+    --json dest=json nargs=0
+    --jsonl dest=jsonl
+    --report dest=report
+    --strict dest=strict nargs=0
+    --target dest=target
+
+pzi library clean
+    --config dest=config
+    --dry-run dest=dry_run nargs=0
+    --fix dest=fix nargs=0
+    --json dest=json nargs=0
+    --target dest=target
+
+pzi library dedupe
+    --config dest=config
+    --json dest=json nargs=0
+    --target dest=target
+
+pzi library list
+    --config dest=config
+    --json dest=json nargs=0
+
+pzi library merge
+    --config dest=config
+    --dry-run dest=dry_run nargs=0
+    --json dest=json nargs=0
+    --target dest=target
+    <citekey_a> dest=citekey_a required
+    <citekey_b> dest=citekey_b required
+
+pzi library reindex
+    --config dest=config
+    --dry-run dest=dry_run nargs=0
+    --force dest=force nargs=0
+    --json dest=json nargs=0
+    --rename-citekeys dest=rename_citekeys nargs=0
+    --target dest=target
 
 pzi pdf
 

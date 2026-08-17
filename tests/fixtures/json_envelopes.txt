@@ -7,17 +7,6 @@ pzi add [error]
     reason
     status
 
-pzi check [error]
-    bib_name
-    command
-    counts
-    errors
-    items
-    status
-    strict
-    total
-    warnings
-
 pzi delete [ok]
     backup_path
     bib_name
@@ -56,60 +45,6 @@ pzi entries [ok]
     total
     warnings
 
-pzi fix clean [ok]
-    bib_name
-    bib_path
-    command
-    duplicate_citekeys
-    errors
-    issues
-    items
-    missing_pdfs
-    orphan_pdfs
-    papers_dir
-    partial_parse
-    status
-    total_entries
-    warnings
-
-pzi fix dedupe [ok]
-    bib_name
-    bib_path
-    command
-    errors
-    exact_duplicates
-    fuzzy_candidates
-    items
-    status
-    total_clusters
-    total_entries
-    warnings
-
-pzi fix merge [error]
-    bib_name
-    citekey_a
-    citekey_b
-    command
-    dry_run
-    errors
-    items
-    message
-    reason
-    status
-
-pzi fix reindex [ok]
-    applied
-    backup_path
-    bib_name
-    bib_path
-    changed
-    command
-    errors
-    items
-    status
-    total_entries
-    warnings
-
 pzi import [error]
     bib_name
     command
@@ -130,6 +65,79 @@ pzi inbox [error]
     reason
     status
     total
+
+pzi library check [error]
+    bib_name
+    command
+    counts
+    errors
+    items
+    status
+    strict
+    total
+    warnings
+
+pzi library clean [ok]
+    bib_name
+    bib_path
+    command
+    duplicate_citekeys
+    errors
+    issues
+    items
+    missing_pdfs
+    orphan_pdfs
+    papers_dir
+    partial_parse
+    status
+    total_entries
+    warnings
+
+pzi library dedupe [ok]
+    bib_name
+    bib_path
+    command
+    errors
+    exact_duplicates
+    fuzzy_candidates
+    items
+    status
+    total_clusters
+    total_entries
+    warnings
+
+pzi library list [ok]
+    bib_name
+    bibs
+    command
+    errors
+    items
+    status
+
+pzi library merge [error]
+    bib_name
+    citekey_a
+    citekey_b
+    command
+    dry_run
+    errors
+    items
+    message
+    reason
+    status
+
+pzi library reindex [ok]
+    applied
+    backup_path
+    bib_name
+    bib_path
+    changed
+    command
+    errors
+    items
+    status
+    total_entries
+    warnings
 
 pzi pdf attach [error]
     bib_name

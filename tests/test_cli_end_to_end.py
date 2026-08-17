@@ -224,7 +224,7 @@ def test_check_exits_environment_with_no_network(tmp_path: Path) -> None:
     )
 
     proc = _run_cli(
-        ["check", "--config", str(config_path)],
+        ["library", "check", "--config", str(config_path)],
         home=tmp_path,
         prefix=["unshare", "-rn"],
         timeout=240,

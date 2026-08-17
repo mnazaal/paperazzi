@@ -483,7 +483,7 @@ def test_a_dropped_block_does_not_discard_the_whole_audit(tmp_path):
     the runner reads any non-ok status as "could not run": no report file,
     nothing printed, exit 5 — after every lookup had already been made. The
     dropped block belongs in the read-notice channel `entries`, `search` and
-    `fix dedupe` all use, beside the results.
+    `library dedupe` all use, beside the results.
     """
     bib_path = tmp_path / "ml.bib"
     bib_path.write_text(

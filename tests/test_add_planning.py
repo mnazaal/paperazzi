@@ -257,7 +257,7 @@ def test_similarity_hint_warnings_surfaces_the_citekey() -> None:
     )
 
     assert similarity_hint_warnings(hinted) == [
-        "possibly a duplicate of smith2024graph — compare them with `pzi fix dedupe`"
+        "possibly a duplicate of smith2024graph — compare them with `pzi library dedupe`"
     ]
 
 

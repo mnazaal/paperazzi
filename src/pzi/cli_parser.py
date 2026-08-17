@@ -175,12 +175,11 @@ _COMMAND_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
     ("Browse & search", (
         ("entries", "List entries, show one by citekey, or --stats"),
         ("search", "Search by query, author, year, or tag"),
-        ("check", "Validate references against authoritative sources"),
         ("tag", "Add, remove, or list tags"),
     )),
     ("Maintain", (
         ("update", "Fill missing metadata; --promote replaces preprints"),
-        ("fix", "Clean, dedupe, merge, or reindex a library"),
+        ("library", "Inspect and repair a library: list, check, clean, dedupe, merge, reindex"),
         ("delete", "Delete an entry by citekey"),
         ("import", "Import entries from a .bib file"),
         ("export", "Export to BibTeX, CSV, JSON, or RIS"),
@@ -507,43 +506,6 @@ def build_parser() -> argparse.ArgumentParser:
     add_multi_target(search_parser)
     search_parser.add_argument("--json", action="store_true", help="output matches as JSON")
 
-    # ── check ────────────────────────────────────────────────────────────
-    check_parser = subparsers.add_parser(
-        "check",
-        help="Validate references against authoritative metadata sources",
-        description=(
-            "Read-only audit: verify each entry exists with the claimed metadata "
-            "across Crossref/OpenAlex/DBLP/OpenReview/Semantic Scholar, flagging "
-            "fabricated or mismatched references. Never writes the library."
-        ),
-        formatter_class=_PziHelpFormatter,
-        epilog=_subcommand_epilog((
-            "pzi check",
-            "pzi check --report audit.json",
-            "pzi check --strict --jsonl audit.jsonl",
-        )),
-    )
-    check_parser.add_argument(
-        "--strict",
-        action="store_true",
-        help="tighten the verdict gate and add the single-edit title / truncated author checks",
-    )
-    check_parser.add_argument(
-        "--report", metavar="PATH", help="write the full result as JSON to PATH"
-    )
-    check_parser.add_argument(
-        "--jsonl", metavar="PATH",
-        help="write one JSON object per entry to PATH ('-' for stdout)",
-    )
-    check_parser.add_argument(
-        "--force",
-        action="store_true",
-        help="overwrite an existing --report / --jsonl file",
-    )
-    add_config(check_parser)
-    add_single_target(check_parser)
-    check_parser.add_argument("--json", action="store_true", help="output the result as JSON")
-
     # ── update ───────────────────────────────────────────────────────────
     update_parser = subparsers.add_parser(
         "update",
@@ -717,27 +679,82 @@ def build_parser() -> argparse.ArgumentParser:
         "--json", action="store_true", help="output entries, the record, or stats as JSON"
     )
 
-    # ── fix (maintenance: clean / dedupe / merge / reindex) ──────────────
-    fix_parser = subparsers.add_parser(
-        "fix",
-        help="Library maintenance: clean, dedupe, merge, reindex",
-        description="Library integrity and maintenance operations.",
+    # ── library (list / check / clean / dedupe / merge / reindex) ────────
+    library_parser = subparsers.add_parser(
+        "library",
+        help="Inspect and repair a library: list, check, clean, dedupe, merge, reindex",
+        description=(
+            "Everything that inspects or repairs a library. `list` and `check` are "
+            "read-only, `clean` and `dedupe` are read-only unless asked to act, and "
+            "`merge` and `reindex` write."
+        ),
         formatter_class=_PziHelpFormatter,
         epilog=_subcommand_epilog((
-            "pzi fix clean --fix",
-            "pzi fix dedupe --json",
-            "pzi fix merge smith2024 smith2024dup",
-            "pzi fix reindex --rename-citekeys --dry-run",
+            "pzi library list",
+            "pzi library check --strict",
+            "pzi library clean --fix",
+            "pzi library merge smith2024 smith2024dup",
+            "pzi library reindex --rename-citekeys --dry-run",
         )),
     )
-    fix_sub = fix_parser.add_subparsers(
+    library_sub = library_parser.add_subparsers(
         # Not `required=True`: argparse's message for a missing one names
-        # the internal dest (`fix_command`), which appears in no
+        # the internal dest (`library_command`), which appears in no
         # documentation. `pzi.cli` prints this group's help instead.
-        dest="fix_command", required=False, parser_class=_PziParser,
+        #
+        # The dest must stay `<command>_command`: `cli.py`'s bare-group handler
+        # looks it up as `f"{args.command}_command"`.
+        dest="library_command", required=False, parser_class=_PziParser,
     )
 
-    clean_parser = fix_sub.add_parser(
+    list_parser = library_sub.add_parser(
+        "list",
+        help="List the configured libraries",
+        description=(
+            "Print each [[bibs]] entry: its name — the value --target and the "
+            "Python API's library= accept — its path, and which one is the "
+            "default. `pzi doctor` reports the same set alongside health checks."
+        ),
+        formatter_class=_PziHelpFormatter,
+    )
+    add_config(list_parser)
+    list_parser.add_argument(
+        "--json", action="store_true", help="output the libraries as JSON"
+    )
+
+    check_parser = library_sub.add_parser(
+        "check",
+        help="Validate references against authoritative metadata sources",
+        description=(
+            "Read-only audit: verify each entry exists with the claimed metadata "
+            "across Crossref/OpenAlex/DBLP/OpenReview/Semantic Scholar, flagging "
+            "fabricated or mismatched references. Never writes the library."
+        ),
+        formatter_class=_PziHelpFormatter,
+    )
+    check_parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="tighten the verdict gate and add the single-edit title / truncated author checks",
+    )
+    check_parser.add_argument(
+        "--report", metavar="PATH", help="write the full result as JSON to PATH"
+    )
+    check_parser.add_argument(
+        "--jsonl", metavar="PATH",
+        help="write one JSON object per entry to PATH ('-' for stdout)",
+    )
+    check_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="overwrite an existing --report / --jsonl file",
+    )
+    add_config(check_parser)
+    add_single_target(check_parser)
+    check_parser.add_argument("--json", action="store_true", help="output the result as JSON")
+
+
+    clean_parser = library_sub.add_parser(
         "clean", help="Check and clean a BibTeX library for integrity issues"
     )
     add_config(clean_parser)
@@ -748,14 +765,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     clean_parser.add_argument("--json", action="store_true", help="output report as JSON")
 
-    dedupe_parser = fix_sub.add_parser(
+    dedupe_parser = library_sub.add_parser(
         "dedupe", help="Find duplicate entries in a BibTeX library"
     )
     add_config(dedupe_parser)
     add_single_target(dedupe_parser)
     dedupe_parser.add_argument("--json", action="store_true", help="output duplicates as JSON")
 
-    merge_parser = fix_sub.add_parser("merge", help="Merge two BibTeX entries by citekey")
+    merge_parser = library_sub.add_parser("merge", help="Merge two BibTeX entries by citekey")
     merge_parser.add_argument("citekey_a", help="source citekey (will be merged into citekey_b)")
     merge_parser.add_argument("citekey_b", help="target citekey (will receive merged fields)")
     add_config(merge_parser)
@@ -765,7 +782,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--json", action="store_true", help="emit the result as a JSON envelope",
     )
 
-    reindex_parser = fix_sub.add_parser(
+    reindex_parser = library_sub.add_parser(
         "reindex",
         help="Audit citekeys against citekey_format (rename only with --rename-citekeys)",
         description=(
@@ -828,12 +845,12 @@ def build_parser() -> argparse.ArgumentParser:
     import_parser.add_argument(
         "--json", action="store_true", help="emit the result as a JSON envelope",
     )
-    # The three group parsers, so a bare `pzi fix` / `pzi tag` / `pzi pdf` can be
+    # The three group parsers, so a bare `pzi library` / `pzi tag` / `pzi pdf` can be
     # answered with that group's own help rather than an argparse message naming
     # an internal dest. Reaching them through `parser._subparsers` would mean
     # depending on argparse internals; handing them over explicitly does not.
     parser.pzi_group_parsers = {  # type: ignore[attr-defined]
-        "fix": fix_parser,
+        "library": library_parser,
         "tag": tag_parser,
         "pdf": pdf_parser,
     }

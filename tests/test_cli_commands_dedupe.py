@@ -1,4 +1,4 @@
-"""Exit-code contract for `pzi fix dedupe`."""
+"""Exit-code contract for `pzi library dedupe`."""
 
 from __future__ import annotations
 

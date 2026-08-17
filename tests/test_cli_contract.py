@@ -352,13 +352,13 @@ def test_reindex_rename_without_force_refuses_when_stdin_is_not_a_terminal(
 ) -> None:
     """It rewrites every citekey in the library, breaking `\\cite{}` outside pzi.
 
-    `delete` and `fix merge` both confirm first; this one applied straight away,
+    `delete` and `library merge` both confirm first; this one applied straight away,
     so a mistyped command was unrecoverable.
     """
     config_path, bib = _library(tmp_path, _RENAMEABLE)
 
     code, _stdout, stderr = _run(
-        ["fix", "reindex", "--rename-citekeys", "--config", str(config_path)], tmp_path
+        ["library", "reindex", "--rename-citekeys", "--config", str(config_path)], tmp_path
     )
 
     assert code == exit_codes.USAGE
@@ -370,7 +370,7 @@ def test_reindex_rename_with_force_rewrites_and_leaves_a_backup(tmp_path: Path) 
     config_path, bib = _library(tmp_path, _RENAMEABLE)
 
     code, _stdout, stderr = _run(
-        ["fix", "reindex", "--rename-citekeys", "--force", "--config", str(config_path)],
+        ["library", "reindex", "--rename-citekeys", "--force", "--config", str(config_path)],
         tmp_path,
     )
 
@@ -387,7 +387,7 @@ def test_reindex_audit_needs_no_confirmation(tmp_path: Path) -> None:
     config_path, bib = _library(tmp_path, _RENAMEABLE)
 
     code, stdout, _stderr = _run(
-        ["fix", "reindex", "--config", str(config_path)], tmp_path
+        ["library", "reindex", "--config", str(config_path)], tmp_path
     )
 
     assert code == exit_codes.FINDINGS
@@ -398,7 +398,7 @@ def test_reindex_audit_needs_no_confirmation(tmp_path: Path) -> None:
 def test_fix_clean_does_not_quarantine_a_sibling_librarys_pdf(tmp_path: Path) -> None:
     """The default layout points every configured bib at one `papers_dir`.
 
-    `pzi fix clean --fix` on one target moved the other library's PDFs into
+    `pzi library clean --fix` on one target moved the other library's PDFs into
     `.orphans/`, leaving that library's `file =` fields dangling — for a user who
     simply ran the command against the wrong `--target`.
     """
@@ -422,7 +422,7 @@ def test_fix_clean_does_not_quarantine_a_sibling_librarys_pdf(tmp_path: Path) ->
     )
 
     code, _stdout, _stderr = _run(
-        ["fix", "clean", "--fix", "--target", "ml", "--config", str(config_path)],
+        ["library", "clean", "--fix", "--target", "ml", "--config", str(config_path)],
         tmp_path,
     )
 
@@ -502,7 +502,7 @@ def test_check_report_to_stdout_conflicts_with_json(tmp_path: Path) -> None:
     config_path, _bib = _library(tmp_path, "@article{a1,\n  title = {A},\n}\n")
 
     code, stdout, stderr = _run(
-        ["check", "--report", "-", "--json", "--config", str(config_path)], tmp_path
+        ["library", "check", "--report", "-", "--json", "--config", str(config_path)], tmp_path
     )
 
     assert code == exit_codes.USAGE
@@ -622,7 +622,7 @@ def test_delete_of_a_missing_citekey_is_not_found(tmp_path: Path) -> None:
 
 
 def test_fix_merge_folds_one_entry_into_the_other(tmp_path: Path) -> None:
-    """`pzi fix merge` had no command-level test either, and it destroys a block."""
+    """`pzi library merge` had no command-level test either, and it destroys a block."""
     config_path, bib = _library(
         tmp_path,
         "@article{a2020,\n  title = {Same Paper},\n  year = {2020},\n"
@@ -632,7 +632,7 @@ def test_fix_merge_folds_one_entry_into_the_other(tmp_path: Path) -> None:
     )
 
     code, stdout, _stderr = _run(
-        ["fix", "merge", "a2020", "b2020", "--config", str(config_path)], tmp_path
+        ["library", "merge", "a2020", "b2020", "--config", str(config_path)], tmp_path
     )
 
     assert code == exit_codes.OK
@@ -653,7 +653,7 @@ def test_fix_merge_dry_run_writes_nothing(tmp_path: Path) -> None:
     config_path, bib = _library(tmp_path, before)
 
     code, stdout, _stderr = _run(
-        ["fix", "merge", "a2020", "b2020", "--dry-run", "--config", str(config_path)],
+        ["library", "merge", "a2020", "b2020", "--dry-run", "--config", str(config_path)],
         tmp_path,
     )
 
@@ -667,7 +667,7 @@ def test_fix_merge_of_a_missing_citekey_is_not_found(tmp_path: Path) -> None:
     config_path, bib = _library(tmp_path, _TWO_ENTRIES)
 
     code, _stdout, _stderr = _run(
-        ["fix", "merge", "nosuch2024", "keep2019", "--config", str(config_path)],
+        ["library", "merge", "nosuch2024", "keep2019", "--config", str(config_path)],
         tmp_path,
     )
 
@@ -712,7 +712,7 @@ def test_reindex_force_and_dry_run_without_rename_are_refused(tmp_path: Path) ->
     config_path, _bib = _library(tmp_path, "@article{a1,\n  title = {A},\n}\n")
     for flag in ("--force", "--dry-run"):
         code, _out, err = _run(
-            ["fix", "reindex", "--config", str(config_path), flag], tmp_path
+            ["library", "reindex", "--config", str(config_path), flag], tmp_path
         )
         assert code == exit_codes.USAGE, flag
         assert "already a read-only audit" in err, flag
@@ -722,7 +722,7 @@ def test_clean_dry_run_without_fix_is_refused(tmp_path: Path) -> None:
     """`--dry-run` reads as "I have made this safe" when it changed nothing."""
     config_path, _bib = _library(tmp_path, "@article{a1,\n  title = {A},\n}\n")
     code, _out, err = _run(
-        ["fix", "clean", "--config", str(config_path), "--dry-run"], tmp_path
+        ["library", "clean", "--config", str(config_path), "--dry-run"], tmp_path
     )
     assert code == exit_codes.USAGE
     assert "--dry-run previews --fix" in err
@@ -762,7 +762,7 @@ def test_reindex_json_says_whether_it_applied_anything(tmp_path: Path) -> None:
     import json
 
     config_path, _bib = _library(tmp_path, "@article{a1,\n  title = {A},\n  year = {2020},\n}\n")
-    code, out, _err = _run(["fix", "reindex", "--config", str(config_path), "--json"], tmp_path)
+    code, out, _err = _run(["library", "reindex", "--config", str(config_path), "--json"], tmp_path)
     assert code in (exit_codes.OK, exit_codes.FINDINGS)
     envelope = json.loads(out)
     assert envelope["applied"] is False
@@ -784,10 +784,10 @@ def test_the_six_envelopes_that_never_named_their_library(tmp_path: Path) -> Non
     source.write_text("@article{b2,\n  title = {B},\n  year = {2021},\n}\n", encoding="utf-8")
 
     invocations = [
-        ["fix", "dedupe", "--config", str(config_path), "--json"],
-        ["fix", "clean", "--config", str(config_path), "--json"],
-        ["fix", "reindex", "--config", str(config_path), "--json"],
-        ["fix", "merge", "a1", "a1", "--config", str(config_path), "--json"],
+        ["library", "dedupe", "--config", str(config_path), "--json"],
+        ["library", "clean", "--config", str(config_path), "--json"],
+        ["library", "reindex", "--config", str(config_path), "--json"],
+        ["library", "merge", "a1", "a1", "--config", str(config_path), "--json"],
         ["delete", "nosuch", "--config", str(config_path), "--json", "--force"],
         ["import", str(source), "--config", str(config_path), "--json", "--dry-run"],
     ]
@@ -846,7 +846,7 @@ def test_check_report_dash_is_not_corrupted_by_the_human_table(tmp_path: Path) -
     import json
 
     config_path, _bib = _library(tmp_path, "")
-    code, out, _err = _run(["check", "--config", str(config_path), "--report", "-"], tmp_path)
+    code, out, _err = _run(["library", "check", "--config", str(config_path), "--report", "-"], tmp_path)
     assert code in (exit_codes.OK, exit_codes.FINDINGS)
     assert json.loads(out)["status"] == "ok"
 
@@ -863,14 +863,14 @@ def test_check_will_not_clobber_an_existing_report_without_force(tmp_path: Path)
     report.write_text('{"previous": "audit"}', encoding="utf-8")
 
     code, _out, err = _run(
-        ["check", "--config", str(config_path), "--report", str(report)], tmp_path
+        ["library", "check", "--config", str(config_path), "--report", str(report)], tmp_path
     )
     assert code == exit_codes.USAGE
     assert "already exists" in err
     assert report.read_text(encoding="utf-8") == '{"previous": "audit"}'
 
     forced, _out2, _err2 = _run(
-        ["check", "--config", str(config_path), "--report", str(report), "--force"], tmp_path
+        ["library", "check", "--config", str(config_path), "--report", str(report), "--force"], tmp_path
     )
     assert forced in (exit_codes.OK, exit_codes.FINDINGS)
     assert "previous" not in report.read_text(encoding="utf-8")
@@ -885,25 +885,25 @@ def test_reindex_says_which_scheme_it_would_use(tmp_path: Path) -> None:
     # stdin is not a tty under pytest, so this takes the refusal path — which is
     # the one that cannot prompt, and therefore most needs to say it.
     code, _out, err = _run(
-        ["fix", "reindex", "--rename-citekeys", "--config", str(config_path)], tmp_path
+        ["library", "reindex", "--rename-citekeys", "--config", str(config_path)], tmp_path
     )
     assert code == exit_codes.USAGE
     assert "no citekey_format is configured" in err
 
 
 def test_a_bare_subcommand_group_prints_its_own_help(tmp_path: Path) -> None:
-    """`pzi fix` said `error: the following arguments are required: fix_command`.
+    """`pzi library` said `error: the following arguments are required: library_command`.
 
     That names an internal argparse dest, appears in no documentation, and
     tells the user nothing about what the group contains. The group's help
     lists exactly the subcommands they were reaching for.
 
     Still exit 2 and still stderr: a bare group is an incomplete invocation, so
-    `pzi fix && deploy` must not run `deploy` having done nothing, and stdout
+    `pzi library && deploy` must not run `deploy` having done nothing, and stdout
     stays clean for whatever is being piped.
     """
     expected = {
-        "fix": ("clean", "dedupe", "merge", "reindex"),
+        "library": ("list", "check", "clean", "dedupe", "merge", "reindex"),
         "tag": ("add", "remove", "list"),
         "pdf": ("retry", "attach"),
     }
@@ -934,7 +934,7 @@ def test_the_reindex_prompt_names_the_scheme_it_would_use(
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True, raising=False)
 
     code, _out, err = _run(
-        ["fix", "reindex", "--rename-citekeys", "--config", str(config_path)], tmp_path
+        ["library", "reindex", "--rename-citekeys", "--config", str(config_path)], tmp_path
     )
 
     assert code == exit_codes.OK  # answered "n"
@@ -1000,7 +1000,7 @@ def test_check_force_without_a_report_destination_is_refused(tmp_path: Path) -> 
     network-bound command — the worst one to discover a no-op flag on.
     """
     config_path, _ = _library(tmp_path, ARTICLE)
-    code, _out, err = _run(["check", "--force", "--config", str(config_path)], tmp_path)
+    code, _out, err = _run(["library", "check", "--force", "--config", str(config_path)], tmp_path)
     assert code == exit_codes.USAGE
     assert "--force applies to --report/--jsonl" in err, err
 

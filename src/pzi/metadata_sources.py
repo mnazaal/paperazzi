@@ -90,7 +90,7 @@ def _crossref_author_name(author: dict[str, object]) -> str:
 
     Only ``given`` + ``family`` used to be read, so three kinds of contributor
     were dropped entirely — the entry was captured with no author at all, and
-    ``pzi check`` then flagged it ``author_unknown``:
+    ``pzi library check`` then flagged it ``author_unknown``:
 
     * an **organizational** author (a consortium, standards body or working
       group) is given as ``name`` with no personal-name parts;
@@ -152,7 +152,7 @@ def _crossref_normalize_work(work: dict[str, object]) -> NormalizedRecord:
     year: int | None = None
     # `created` is the *deposit* date — when the DOI record was made — so a 1998
     # paper back-deposited in 2015 was captured as `year = {2015}` and then
-    # failed `pzi check` against every other source. `issued` is Crossref's
+    # failed `pzi library check` against every other source. `issued` is Crossref's
     # publication date and `posted` is its equivalent for posted content; both
     # belong ahead of the deposit date, which stays only as a last resort.
     for date_field in ("published-print", "published-online", "issued", "posted", "created"):

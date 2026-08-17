@@ -362,7 +362,7 @@ def clean_library(
         # issue list is built by `validate_library` *before* the move, so a
         # successful `--fix` kept reporting every orphan it had just filed away
         # — and the runner turns a non-empty issue list into exit 1, so
-        # `pzi fix clean --fix && next-step` could never proceed on success.
+        # `pzi library clean --fix && next-step` could never proceed on success.
         moved = {action["source"] for action in actions if action.get("done")}
         if moved:
             moved_names = {Path(source).name for source in moved}

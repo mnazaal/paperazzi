@@ -1197,7 +1197,7 @@ def test_attach_pdf_removes_new_pdf_when_the_write_raises(
     Cleanup ran when `update_bib_entry` *returned* `found: False` and not when
     it raised — so a refused write (a duplicate citekey elsewhere in the file, a
     library that no longer round-trips, a full disk) left the downloaded PDF on
-    disk with nothing referring to it, and a later `fix clean --fix` quarantined
+    disk with nothing referring to it, and a later `library clean --fix` quarantined
     it: a second command tidying up after the first.
     """
     from pzi.errors import PziError

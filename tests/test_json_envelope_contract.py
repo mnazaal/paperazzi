@@ -72,10 +72,10 @@ def _assert_envelope(envelope: dict, *, command: str) -> None:
         ("entries", []),
         ("search", ["--query", "Deep"]),
         ("tag list", []),
-        ("check", []),
-        ("fix dedupe", []),
-        ("fix clean", []),
-        ("fix reindex", []),
+        ("library check", []),
+        ("library dedupe", []),
+        ("library clean", []),
+        ("library reindex", []),
     ],
 )
 def test_read_only_runners_emit_the_envelope(
@@ -152,10 +152,10 @@ def test_fix_merge_emits_the_envelope(library, tmp_path: Path) -> None:
         encoding="utf-8",
     )
     envelope = _envelope(
-        ["fix", "merge", "smith2024b", "smith2024", "--config", config_path, "--json"],
+        ["library", "merge", "smith2024b", "smith2024", "--config", config_path, "--json"],
         tmp_path,
     )
-    _assert_envelope(envelope, command="fix merge")
+    _assert_envelope(envelope, command="library merge")
     assert envelope["bib_name"] == "ml"
 
 

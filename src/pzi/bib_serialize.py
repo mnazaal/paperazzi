@@ -824,7 +824,7 @@ def library_entry_to_bibtex_entry(entry: BibtexEntryV2) -> BibtexEntry:
     not the keys, so a JabRef/IEEE-style ``Author =`` / ``Title =`` / ``Doi =``
     / ``File =`` was invisible to the whole record model: dedup missed the DOI
     and added a second copy, an update wrote lowercase twins *alongside* the
-    capitalized originals, ``fix clean`` quarantined a referenced PDF, and
+    capitalized originals, ``library clean`` quarantined a referenced PDF, and
     ``pzi entries`` rendered the entry blank.
 
     The user's own spelling is not lost — it is restored on write by

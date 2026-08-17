@@ -371,7 +371,7 @@ def test_pdf_attach_preserves_fields_the_record_model_does_not_carry() -> None:
 
 
 def test_merge_preserves_surviving_entrys_unmodelled_fields() -> None:
-    """`pzi fix dedupe --merge` rebuilt the surviving entry from the merged
+    """`pzi library dedupe --merge` rebuilt the surviving entry from the merged
     record, so B's volume/pages/publisher vanished on merge."""
     with tempfile.TemporaryDirectory() as td:
         _cp, bib, _ = _config(td)
