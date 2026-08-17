@@ -198,10 +198,10 @@ and `pzi init --force`'s undo is gone.
 | `config-backups/` | Timestamped copies of a config replaced by `pzi init --force`. **Not rebuildable.** | tiny |
 
 Beside the library itself, writes leave: `<bib>.lock` and `<inbox>.lock` while a
-command holds them, `<bib>.<citekey>.bak` from `delete`/`fix merge`,
+command holds them, `<bib>.<citekey>.bak` from `delete`/`library merge`,
 `<bib>.promote.bak` from one `update --promote --replace` run, the
 `--failures-out` file from a bulk `add`, and `papers/.orphans/` from
-`fix clean --fix`.
+`library clean --fix`.
 
 Outside the data directory, PDF acquisition may briefly write a clone of your
 browser profile to `$TMPDIR` (`pzi-chrome-*`) when `browser_pdf_cmd` uses a
@@ -245,11 +245,11 @@ the command that made it.
 
 | Backup | Left by | Notes |
 |---|---|---|
-| `<bib>.<citekey>.bak` | `pzi delete`, `pzi fix merge` | The path is printed as `backup saved to …`. Repeats become `.bak2`, `.bak3`, … rather than overwriting. |
-| `<bib>.reindex.bak` | `pzi fix reindex --rename-citekeys` | Removed again if the run changed nothing. |
+| `<bib>.<citekey>.bak` | `pzi delete`, `pzi library merge` | The path is printed as `backup saved to …`. Repeats become `.bak2`, `.bak3`, … rather than overwriting. |
+| `<bib>.reindex.bak` | `pzi library reindex --rename-citekeys` | Removed again if the run changed nothing. |
 | `<bib>.promote.bak` | `pzi update --promote --replace` | One per **run**, taken by the first write, not one per entry. |
 | `<data-home>/config-backups/config.toml.<UTC-timestamp>` | `pzi init --force` | Mode 0600, timestamped, so repeated `--force` runs keep a history instead of clobbering the first backup. |
-| `papers/.orphans/` | `pzi fix clean --fix` | PDFs no entry references are **moved here, not deleted**. `mv` one back to restore it. |
+| `papers/.orphans/` | `pzi library clean --fix` | PDFs no entry references are **moved here, not deleted**. `mv` one back to restore it. |
 
 **An ordinary `add` or `update` leaves no backup** — only the commands that
 destroy or replace a whole block do. Nothing ever cleans `.bak` files up, so
@@ -327,17 +327,18 @@ pzi pdf attach <citekey> <url-or-path>
 pzi tag add|remove <citekey> <tag...> [--dry-run]
 pzi tag list [citekey] [--json]
 pzi search [--query <text>] [--author <name>] [--year <int>] [--tag <tag>]
-pzi check [--strict] [--report PATH] [--jsonl PATH] [--force] [--json]   # validate references; --force overwrites an existing report
+pzi library check [--strict] [--report PATH] [--jsonl PATH] [--force] [--json]   # validate references; --force overwrites an existing report
 pzi update [--dry-run]                        # fill missing metadata
 pzi update --promote [--dry-run] [--replace] [--mark-resolved]  # replace preprints with published versions
 pzi entries [--offset N] [--limit N] [--sort citekey|title|year|author]
 pzi entries <citekey>                         # show the full record for one entry
 pzi entries --stats                           # library statistics
 pzi delete <citekey> [--dry-run] [--force]
-pzi fix clean [--dry-run] [--fix]            # check integrity; --fix relocates orphan PDFs
-pzi fix dedupe
-pzi fix merge <citekey_a> <citekey_b> [--dry-run]
-pzi fix reindex [--rename-citekeys [--dry-run] [--force]]  # audit citekeys; rename only on explicit opt-in
+pzi library list                              # the configured libraries and which is default
+pzi library clean [--dry-run] [--fix]         # check integrity; --fix relocates orphan PDFs
+pzi library dedupe
+pzi library merge <citekey_a> <citekey_b> [--dry-run]
+pzi library reindex [--rename-citekeys [--dry-run] [--force]]  # audit citekeys; rename only on explicit opt-in
 pzi export [--format bibtex|csv|json|ris] [-o <output>] [--force]
 pzi import <source.bib> [--dry-run] [--force-new]
 pzi doctor [--config-only] [--reinstall-server]  # health check; --reinstall-server reinstalls the translation-server
@@ -363,7 +364,7 @@ Configured libraries live in your config file (`[[bibs]]` blocks). Choose the de
 
 Without `--target`, commands operate on the configured default library. `--target` may be a configured library name, configured bib path, or direct `.bib` path. A direct `.bib` path must **already exist** — pzi will not create one, so `pzi export --target a | pzi import - --target new.bib` needs `new.bib` to be there first (`: > new.bib`), or declared in `config.toml`, where a not-yet-created file does resolve. Direct `.bib` targets use `<bib-dir>/papers/` for PDFs. Multiple targets are supported only for `search` and `update` (including `update --promote`), and only by repeating the flag: `--target a.bib --target b.bib`. One `--target` never takes two values — on every other command a second bare word is the positional argument, so accepting it here would mean the same spelling meant different things depending on the command.
 
-`--json` is accepted by the commands that report a result — including the mutating ones (`add`, `update`, `update --promote`, `tag`, `delete`, `import`, `inbox`, `pdf`, `fix clean|dedupe|merge|reindex`) — and always emits one envelope. Three commands do not accept it: `export` (whose output *is* the document), `server`, and `init` (see the CLI reference above). For `search` and `update`, which accept several `--target` values at once, the run still produces a single document: each item carries the `bib_name` it came from rather than the output splitting per library.
+`--json` is accepted by the commands that report a result — including the mutating ones (`add`, `update`, `update --promote`, `tag`, `delete`, `import`, `inbox`, `pdf`, `library check|clean|dedupe|list|merge|reindex`) — and always emits one envelope. Three commands do not accept it: `export` (whose output *is* the document), `server`, and `init` (see the CLI reference above). For `search` and `update`, which accept several `--target` values at once, the run still produces a single document: each item carries the `bib_name` it came from rather than the output splitting per library.
 
 **What `pzi export` writes where.** It is the one command whose stdout is a
 document rather than a report, so it has three cases and they are not the
@@ -389,7 +390,7 @@ For external `.bib` files managed by Zotero, Paperpile, LaTeX projects, or hand 
 
 - Malformed BibTeX (unbalanced braces, unterminated strings, a `%` comment inside an entry) is rejected and must be fixed manually
 - **A write reproduces your file's own layout, and makes two file-wide changes.** Entry types are lowercased (`@Article` → `@article`) everywhere, including in entries the write never looked at. And indentation and trailing-comma style are normalized to whichever the file uses *most* — so a consistently formatted file is untouched outside the edited entry, while one that mixes tabs and spaces is unified on the majority style. Everything else survives: blank lines, citekey capitalization, field names' capitalization, field order within an entry, line endings, a byte-order mark, and the file's permissions. On a consistently formatted 22,232-entry Better BibTeX export, adding one tag is a **one-line diff**
-- Comments, `@string` macros, and `@preamble` blocks are preserved across insert, update, tag, delete, merge, and reindex (which keeps entry order); `fix clean --fix` never rewrites the `.bib` (it only relocates orphan PDFs)
+- Comments, `@string` macros, and `@preamble` blocks are preserved across insert, update, tag, delete, merge, and reindex (which keeps entry order); `library clean --fix` never rewrites the `.bib` (it only relocates orphan PDFs)
 - BibTeX `@string` macros are kept as-is but not expanded or validated
 
 ### External services and rate limits
@@ -418,9 +419,9 @@ paperazzi treats citekeys as stable external handles and never renames existing 
 - Promotion keeps the preprint key by default; `--replace` updates in place.
 - `--mark-resolved` tags each promoted preprint (`promoted`) and skips already-tagged entries on later runs, so re-running promotion over a large library only revisits what is new.
 
-### Validate references (`pzi check`)
+### Validate references (`pzi library check`)
 
-`pzi check` audits a library against authoritative metadata sources
+`pzi library check` audits a library against authoritative metadata sources
 (Crossref → OpenAlex → DBLP → OpenReview → Semantic Scholar), flagging
 fabricated or mismatched references — useful before submitting a paper given
 arXiv's 2026 hallucinated-reference policy. It is **read-only** (never writes the
@@ -435,13 +436,13 @@ Each entry gets one of three verdicts:
   chimeric citation, fabricated author, implausible year)
 
 ```sh
-pzi check                              # human-readable, problematic entries first
-pzi check --report audit.json          # full JSON report
-pzi check --strict --jsonl audit.jsonl # one JSON object per entry; CI-friendly
+pzi library check                      # human-readable, problematic entries first
+pzi library check --report audit.json  # full JSON report
+pzi library check --strict --jsonl a.jsonl # one JSON object per entry; CI-friendly
 ```
 
-`pzi check` **exits 1 whenever any entry is problematic or could not be
-verified**, in either mode, so `pzi check || alert` gates on the result without
+`pzi library check` **exits 1 whenever any entry is problematic or could not be
+verified**, in either mode, so `pzi library check || alert` gates on the result without
 extra flags (exit `5` still means the audit could not run — see the exit-code
 table above).
 
@@ -467,7 +468,7 @@ The token is resolved in this order: `api_auth_token_cmd` (a command whose stdou
 ### Python API
 
 `import pzi` is a supported surface, frozen at 1.0 and pinned by
-`tests/fixtures/public_api.txt`. Thirteen functions, each taking an optional
+`tests/fixtures/public_api.txt`. Fifteen functions, each taking an optional
 `config_path` and an optional `library` and nothing else that is not its own
 concern:
 
@@ -479,6 +480,7 @@ pzi.search(query="collapse")            # -> list[SearchMatch]
 pzi.entries(offset=0, limit=50, sort="citekey")   # -> list[EntrySummary]
 pzi.get("smith2020")                    # -> EntryRecord, incl. local_pdf_path
 pzi.list_bibs()                         # -> list[BibInfo]; the names `library=` takes
+pzi.list_tags()                         # -> TagListResult; the library's tag vocabulary
 pzi.export("bibtex")                    # -> str
 pzi.check(strict=False)                 # network
 pzi.dedupe()
@@ -489,7 +491,8 @@ pzi.add_tags("smith2020", ["ml"])
 pzi.remove_tags("smith2020", ["ml"])
 pzi.delete("smith2020")                 # backs the library up first
 pzi.merge("dup2020", "smith2020")       # previews by default
-pzi.promote(dry_run=True)               # previews by default; network
+pzi.update(dry_run=True)                # fill gaps; previews by default; network
+pzi.promote(dry_run=True)               # replace preprints; previews by default; network
 ```
 
 Three conventions hold throughout. **Failure raises `pzi.PziError`** (carrying
@@ -667,7 +670,7 @@ are not. Each spawns a subprocess, so they are slower than the rest:
 |---|---|
 | `pzi server` binds, enforces auth, serves | `PZI_SKIP_AUTO_START=1` makes the backend session a no-op, so it never clones translation-server |
 | `add --from-file` exits `4` on a partly-failed batch | `tests/stub_translation_server.py` — a loopback stand-in that resolves chosen inputs and refuses the rest, so a *mixed* batch is reproducible |
-| `pzi check` exits `5` when nothing is reachable | `unshare -rn` gives a network namespace with no route out and needs no root; skipped where unavailable |
+| `pzi library check` exits `5` when nothing is reachable | `unshare -rn` gives a network namespace with no route out and needs no root; skipped where unavailable |
 
 Prefer these over manual checks: anything verified only by hand stops being
 verified. If you add a behaviour that seems to need real network or the real

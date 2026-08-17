@@ -17,6 +17,10 @@ next to the diff it explains.
 
 ### Added
 
+- **`pzi.update()` and `pzi.list_tags()`**, completing the Python API's coverage
+  of the read and write paths. `update` previews by default like `promote`;
+  `list_tags` with no citekey returns the library's whole tag vocabulary.
+
 - **Six more functions in `import pzi`, and every return value is now typed.**
   The API covered seven of ~20 commands, and the gaps were the ones a script
   reaches for first.
@@ -107,6 +111,29 @@ next to the diff it explains.
   test that fails when it changes is a promise with no mechanism.
 
 ### Changed
+
+- **`pzi fix` is now `pzi library`, and `pzi check` moved into it.** The group
+  was a verb among nouns (`pzi tag add`, `pzi pdf attach`) while three of its
+  four subcommands were read-only, and `check` — also pure validation — sat at
+  the top level, so where a command lived said nothing about what it did.
+
+  | before | after |
+  |---|---|
+  | `pzi check` | `pzi library check` |
+  | `pzi fix clean` | `pzi library clean` |
+  | `pzi fix dedupe` | `pzi library dedupe` |
+  | `pzi fix merge` | `pzi library merge` |
+  | `pzi fix reindex` | `pzi library reindex` |
+
+  No aliases: there are no external users, and a shim would freeze the old
+  spelling into the surface this is tidying. **The `--json` envelope's `command`
+  field changes with it** — `"fix clean"` becomes `"library clean"` and
+  `"check"` becomes `"library check"` — which is a breaking change for anything
+  branching on `.command`.
+
+- `pzi library list` prints the configured libraries and which is the default.
+  `GET /bibs` and `pzi.list_bibs()` already answered this; on the CLI it was
+  only available inside `pzi doctor`'s health output.
 
 - **`import pzi` costs one module again, not forty-four.** The public API is
   bound lazily (PEP 562), so a script calling `pzi.search()` no longer pays for
