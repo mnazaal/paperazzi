@@ -321,6 +321,26 @@ next to the diff it explains.
 
 ### Documentation
 
+- **A compatibility policy**, in the README under "Versioning and
+  compatibility". Seven surfaces are frozen at 1.0 and each already had a test
+  that fails when it changes; what was missing was what "frozen" obliges.
+  Breaking one is a major version, additive change is a minor. A deprecated
+  thing keeps working, with a notice, until the next major — `rate_limit_rpm`
+  is the worked example, and the notice appears in `pzi doctor`, which the
+  section says rather than implying every command reports it. A data clause
+  states what pzi promises about the `.bib` itself, which is the surface that
+  actually matters.
+
+- **`pip install paperazzi` installs someone else's package.** The README said
+  paperazzi was "not yet on PyPI"; in fact the name is taken by an unrelated
+  project. The install section now says so, next to the `git+https` commands
+  that are the correct way in.
+
+- One more known source-preservation limitation, found while checking the data
+  clause against a real write: a comment sitting flush *above* a block gains a
+  blank line under it on the first write. The mirror of the flush-*below* case
+  fixed earlier; a Better BibTeX export's `% ==` reports are unaffected.
+
 - The README now says what `pzi export` writes where: a bare JSON array for
   `--format json` (not the `--json` envelope — the array *is* the document), one
   prose line for `-o PATH`, and nothing at all on failure. Three cases, one

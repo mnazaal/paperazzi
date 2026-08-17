@@ -36,7 +36,7 @@ paperazzi is NOT for those who need:
 
 ### 1. Install
 
-paperazzi is not yet on PyPI. Install from GitHub for now:
+paperazzi is not published on PyPI. Install from GitHub:
 
 ```sh
 # uv (recommended):
@@ -46,6 +46,12 @@ pipx install 'git+https://github.com/mnazaal/paperazzi.git'
 # or plain pip (some systems may need `pip3`):
 pip install --user 'paperazzi @ git+https://github.com/mnazaal/paperazzi.git'
 ```
+
+> **Do not run `pip install paperazzi`.** That name on PyPI belongs to an
+> unrelated project — "LLM-Based Paper Query System with Evaluation Framework",
+> by a different author — so it installs someone else's package, not this one.
+> Every command above names the repository explicitly, which is what makes them
+> the right ones.
 
 This installs the `pzi` command. To enable the optional browser-profile PDF
 fallback, add the `[playwright]` extra (this installs the `playwright` Python
@@ -391,6 +397,12 @@ For external `.bib` files managed by Zotero, Paperpile, LaTeX projects, or hand 
 - Malformed BibTeX (unbalanced braces, unterminated strings, a `%` comment inside an entry) is rejected and must be fixed manually
 - **A write reproduces your file's own layout, and makes two file-wide changes.** Entry types are lowercased (`@Article` → `@article`) everywhere, including in entries the write never looked at. And indentation and trailing-comma style are normalized to whichever the file uses *most* — so a consistently formatted file is untouched outside the edited entry, while one that mixes tabs and spaces is unified on the majority style. Everything else survives: blank lines, citekey capitalization, field names' capitalization, field order within an entry, line endings, a byte-order mark, and the file's permissions. On a consistently formatted 22,232-entry Better BibTeX export, adding one tag is a **one-line diff**
 - Comments, `@string` macros, and `@preamble` blocks are preserved across insert, update, tag, delete, merge, and reindex (which keeps entry order); `library clean --fix` never rewrites the `.bib` (it only relocates orphan PDFs)
+- **A comment sitting flush *above* a block gains one blank line under it** on
+  the first write — anywhere in the file, whether or not that block is the one
+  being edited. A comment already followed by a blank line is untouched, and so
+  is a comment flush *below* an entry (the `% ==` quality reports a Better
+  BibTeX export writes under each entry keep their position). It happens once:
+  the second write adds nothing further
 - BibTeX `@string` macros are kept as-is but not expanded or validated
 
 ### External services and rate limits
@@ -518,9 +530,103 @@ paperazzi is local-first and BibTeX-native. Internally, it keeps pure planning l
 
 Three front-ends — the CLI (`pzi.cli` → `pzi.commands.*`), the local HTTP API (`pzi.http_api`, used by the browser extension), and the Python API (`pzi.api`, what `import pzi` gives you) — all converge on one function, `pzi.capture_core.capture_to_bib`, each building the same two frozen request models (`CaptureInput`/`CaptureOptions` in `pzi.capture_models`). The browser extension is a client of the HTTP front end, not a fourth one. Everything below that point, including the `pzi.add_service` core, is shared verbatim, so capture behaves identically however it is triggered. Differences stay above the seam: only the CLI starts the translation-server, and only the HTTP path enforces the request gate (host, origin, token) and refuses bibs that are not configured libraries. SSRF validation is *not* one of those differences — `safe_public_http_url` is applied in shared code (`capture_core`, `safe_http`, `pdf_discovery`, `flaresolverr`, `browser_session`), so every front end gets it. Network access goes through dependency-injected fetcher seams typed in `pzi.protocols` (translation-server, Crossref/OpenAlex/S2, Unpaywall, PDF/binary), which is what lets the test suite run hermetically without hitting the network. Every module is classified into exactly one of five tiers, enforced by `tests/test_layer_boundaries.py`: **CORE** (`bibtex`, `similarity`, `url_safety`, `pdf_planning`, …) imports no front-end and no browser module even transitively; **PIPELINE** is exactly `pdf`, `pdf_discovery` and `pdf_download`, which may reach the browser hooks they need to find a PDF but never a front-end; **SERVICE** (`add_service`, `capture_core`, `bib_repository`, …) may reach both but no front-end; **FRONTEND** is the CLI, the HTTP API and `api`; **BROWSER** is the browser and server-browser drivers. So "pure modules never import the browser layer" is true of CORE and not of PIPELINE — `pdf_discovery` imports `server_browser` and `browser_pdf` deliberately, and the test permits it. Writes are funneled through `pzi.bib_repository`, which holds a `portalocker` lock across the whole read-modify-write and replaces the file atomically. A write prepared before someone else's edit landed is re-projected onto the library as read under the lock; one whose target entry was deleted or renamed meanwhile is refused (exit 5) rather than applied to whatever now sits at that position.
 
-## Compatibility
+## Versioning and compatibility
 
-Expected coverage for common sources. ✅ = works out-of-box. ⚠️ = needs config (browser profile / FlareSolverr / extension). ❌ = metadata only.
+paperazzi follows [SemVer](https://semver.org/). This section says what that
+covers — which is not everything, and the boundary is the useful part.
+
+**The freeze takes effect at 1.0.** Until then the version is `0.1.0bN` and the
+surfaces below still move; several of them moved in the current beta, and the
+`CHANGELOG` says which. What is already true is that each one has a test that
+fails when it changes, so a break is a decision rather than an accident.
+
+### The frozen surfaces
+
+Seven things are frozen, each with a test that fails when it changes. The
+mechanism is named so you can check the claim rather than take it:
+
+| Surface | Pinned by |
+|---|---|
+| CLI commands, subcommands, flags and their defaults | `tests/fixtures/cli_surface.txt` |
+| Exit codes | `tests/test_exit_code_table.py` — against the table above, in both directions |
+| `--json` envelope keys, per command | `tests/fixtures/json_envelopes.txt` |
+| Config keys | `tests/test_config_key_inventory.py` — the template and the loader must describe the same set |
+| HTTP routes | `tests/test_http_route_inventory.py` — all twenty-one |
+| `pzi.__all__`, its signatures and its return types | `tests/fixtures/public_api.txt` |
+| Which of the three front ends offers what | `tests/test_surface_parity.py` |
+
+**Breaking any of them is a major version.** A removed command, a renamed flag,
+a changed default, a dropped envelope key, a retired config key finally deleted,
+a removed HTTP route, a renamed public function or a renamed key in what one
+returns — all major.
+
+Additive change is a minor: a new command, a new optional flag, a new key
+*alongside* the existing ones, a new function. Everything else — a fix that
+makes a command do what it already documented — is a patch.
+
+The HTTP routes carry the same promise as the other two front ends, even though
+their only client is the browser extension shipped from this repository. The
+extension also compares its version against `GET /health` and shows a banner on
+a mismatch, but that is a second line of defence for an extension left loaded
+across an upgrade, not a substitute for the promise.
+
+### How something is retired
+
+Nothing frozen is deleted without notice. A retired config key keeps loading —
+your config does not break — and pzi explains it rather than calling it a typo:
+
+```toml
+rate_limit_rpm = 60   # retired
+```
+
+```console
+$ pzi doctor
+warning: config key 'rate_limit_rpm' is retired and ignored: the inbound HTTP
+rate limiter was removed. …
+```
+
+**`pzi doctor` is where that is reported.** Ordinary commands ignore the key
+without saying so, so a retired key in a config nobody runs `doctor` against is
+silent. Worth knowing before relying on the notice; `doctor` is the command that
+reads your configuration back to you.
+
+That is the whole mechanism — `pzi.config.RETIRED_CONFIG_KEYS`, one entry today,
+with a test holding all three properties at once: out of the loader (it does
+nothing), out of the template (nobody should newly write it), and in the
+registry (so it is explained rather than reported as unknown).
+
+**A deprecated thing lives until the next major version.** It is removed there,
+not before.
+
+### Your library
+
+The compatibility promise that matters most is not about the software:
+
+- Your library is a `.bib` file and a `papers/` directory. There is no database,
+  no index and no sidecar; delete pzi and everything you captured is still
+  there, readable by every other BibTeX tool.
+- Everything pzi keeps for itself lives in one directory you can delete —
+  see [What pzi writes to disk](#what-pzi-writes-to-disk), which also lists the
+  few files a write leaves beside the library and which of them are backups.
+- A write preserves your file: comments, `@string`, `@preamble`, blank lines,
+  field order, field-name capitalization, citekey case, line endings, a BOM and
+  the file's permissions. The two file-wide changes it *does* make are named
+  under "known source-preservation limitations" above, and are the only ones.
+
+These hold across versions. Changing them is a major version and would be
+described as a data-format change, not a bug fix.
+
+### What 1.0 does not promise
+
+1.0 means this is trusted with a real library and that the surfaces above stop
+moving. It does not mean a support commitment, a release cadence, or a
+maintenance branch for older majors. Native Windows stays unsupported; WSL2
+works.
+
+## Source coverage
+
+Which publishers pzi handles — a different question from the section above,
+which is about versions. Expected coverage for common sources. ✅ = works out-of-box. ⚠️ = needs config (browser profile / FlareSolverr / extension). ❌ = metadata only.
 
 | Source | Type | Meta | PDF |
 |--------|------|------|-----|
