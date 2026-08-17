@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 
 from pzi import add_planning as _add_planning
 from pzi.add_planning import (
+    AddResult,
     build_discovery_context,
     fallback_record_for_input,
     fetch_record_for_input,
@@ -86,7 +87,10 @@ from pzi.translation_server import (
     fetch_web_translations,
 )
 
-AddRecordResult: TypeAlias = dict[str, Any]
+#: One definition, in `add_planning`, beside one of the two functions that
+#: build it. This module and `capture_local_pdf` each declared their own
+#: `dict[str, Any]` under this name.
+AddRecordResult: TypeAlias = AddResult
 
 _error_result = _add_planning.error_result
 _manual_record_from_overrides = _add_planning.manual_record_from_overrides

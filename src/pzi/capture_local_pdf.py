@@ -8,6 +8,7 @@ from typing import Any, TypeAlias, cast
 
 from pzi import add_planning as _add_planning
 from pzi.add_planning import (
+    AddResult,
     carry_item_type,
     fetch_record_for_input,
     merge_record_sources,
@@ -37,7 +38,11 @@ from pzi.resolution_match import score_match
 from pzi.similarity import find_exact_match
 from pzi.translation_server import fetch_web_translations
 
-AddRecordResult: TypeAlias = dict[str, Any]
+#: The capture result shape, defined once in `add_planning` beside the other
+#: builder of it. This module and `add_service` each declared their own
+#: `dict[str, Any]` alias under this name, so nothing checked that the two
+#: builders agreed on a single key.
+AddRecordResult: TypeAlias = AddResult
 FetchPdf = Callable[..., tuple[str | None, str | None, str | None]]
 FetchRecord = Callable[..., tuple[NormalizedRecord, list[str], list[dict]]]
 FetchSearch = Callable[..., list[dict[str, object]]]
@@ -527,19 +532,26 @@ def build_add_record_result(
         message = f"{prefix}entry unchanged (already captured)"
     else:
         message = f"{prefix}{plan['action']} entry"
-    return {
+    result: AddResult = {
         "status": "ok",
         "bib_name": bib["name"],
         "bib_path": bib["path"],
         "action": plan["action"],
         "citekey": citekey if isinstance(citekey, str) else None,
         "pdf_path": pdf_path if isinstance(pdf_path, str) else None,
-        **pdf_fields,
         "changed_fields": plan["changed_fields"],
         "dry_run": dry_run,
         "message": message,
         "warnings": warnings,
         "errors": [],
     }
+    # Merged rather than spread into the literal above: `pdf_result_fields`
+    # returns its four keys as a block or an empty dict, and a `**` spread of a
+    # plain dict makes the whole literal uncheckable against `AddResult`. The
+    # cast is the one place that block's shape is asserted; `pdf_result_fields`
+    # is four lines away and returns exactly those keys.
+    if pdf_fields:
+        result.update(cast("AddResult", pdf_fields))
+    return result
 
 

@@ -21,7 +21,20 @@ from pzi.errors import REASON_CONFIG
 from pzi.identifiers import is_preprint
 from pzi.pdf_planning import pdf_file_present
 
-BibInfo: TypeAlias = dict[str, Any]
+class BibInfo(TypedDict):
+    """One configured library, as `list_bibs` reports it.
+
+    Public: `pzi.list_bibs()` returns these, so a caller can discover the names
+    `library=` accepts. It was `dict[str, Any]`, which froze nothing — renaming
+    a key here would have broken every caller with the snapshot still green.
+    """
+
+    #: The `[[bibs]]` name, and the value `library=` / `--target` accepts.
+    name: str
+    path: str
+    papers_dir: str
+    #: Whether this is the library used when no selector is given.
+    default: bool
 
 
 class BibListResult(TypedDict):
@@ -130,6 +143,70 @@ def bib_stats(*, bib_path: str, papers_dir: str) -> BibStatsResult:
     }
 
 
+class EntrySummary(TypedDict):
+    """One row of a library listing — what `list_entries` puts in `items`.
+
+    Public: `pzi.entries()` and the `GET /entries` payload both return these.
+    A *summary*, deliberately: it says whether a PDF is attached but not where
+    it is, because a listing of 500 entries should not stat 500 files. Use
+    `pzi.get(citekey)` for the full record, which carries `local_pdf_path`.
+    """
+
+    citekey: str
+    #: Empty string, never None, for an entry with no title — the two other
+    #: front ends render this straight into a column.
+    title: str
+    year: int | None
+    #: `Family, Given` per author, normalized from the BibTeX `author` field.
+    authors: list[str]
+    #: The BibTeX entry type (`article`, `inproceedings`, …), or `unknown`.
+    entry_type: str
+    #: Whether the entry's `file` field points at a PDF that is actually there.
+    has_pdf: bool
+    doi: str | None
+
+
+class EntryRecord(TypedDict):
+    """A record parsed out of a `.bib`, as `pzi.get()` returns it.
+
+    Every key is always present; absent BibTeX fields come back as None (or an
+    empty list). That is a property of `bibtex.bibtex_entry_to_record`, which
+    builds this from an entry's fields, and the conformance test in
+    `tests/test_public_api.py` is what keeps the two in step.
+
+    Narrower than `bibtex.NormalizedRecord` on purpose. That type is
+    `total=False` and carries ~45 keys, including the `fallback_*` set that only
+    exists mid-capture and the `similarity_hint`/`duplicate_of` pair that only a
+    fresh insert sets. None of them can appear in a record read back from a
+    file, and publishing the wide type would freeze that vocabulary as API.
+    """
+
+    citekey: str
+    title: str | None
+    authors: list[str]
+    year: int | None
+    #: `journal` or `booktitle`, whichever the entry has.
+    venue: str | None
+    doi: str | None
+    arxiv_id: str | None
+    canonical_url: str | None
+    source_url: str | None
+    pdf_url: str | None
+    abstract_url: str | None
+    tags: list[str]
+    note: str | None
+    #: The path in the entry's `file` field. Not checked for existence — see
+    #: `EntrySummary.has_pdf` for that question.
+    local_pdf_path: str | None
+    abstract: str | None
+    volume: str | None
+    number: str | None
+    pages: str | None
+    publisher: str | None
+    issn: str | None
+    isbn: str | None
+
+
 EntriesResult: TypeAlias = dict[str, Any]
 DetailResult: TypeAlias = dict[str, Any]
 
@@ -212,7 +289,7 @@ def list_entries(
         )
 
     page = sorted_records[offset : offset + limit]
-    items = [
+    items: list[EntrySummary] = [
         {
             "citekey": str(r.get("citekey", "")),
             # `or ""`, not a `.get` default: the key is present with value

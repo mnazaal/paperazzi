@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import urllib.error
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any, cast
+from typing import Any, NotRequired, TypedDict, cast
 from urllib.parse import urlsplit
 
 from pzi.bibtex import NormalizedRecord
@@ -267,6 +267,55 @@ def minimum_metadata_diagnostics(record: Mapping[str, object]) -> list[str]:
     return lines
 
 
+class AddResult(TypedDict):
+    """What a capture reports — success or failure, one shape.
+
+    Public: `pzi.add()` returns this, and it is the body of the `--json`
+    envelope for `pzi add` and of `POST /capture`. Built in exactly two places,
+    :func:`error_result` below and `capture_local_pdf.build_add_record_result`,
+    which is why it is defined here — the module both import — rather than
+    being restated at either.
+
+    It was `dict[str, Any]`, aliased under that name twice (`add_service` and
+    `capture_local_pdf` each declared their own), so nothing checked that the
+    two builders agreed on a single key.
+    """
+
+    status: str
+    bib_name: str | None
+    bib_path: str | None
+    #: `insert`, `update`, or None when nothing was written.
+    action: str | None
+    citekey: str | None
+    #: Where the PDF was stored, if one was attached on this run.
+    pdf_path: str | None
+    #: The fields this write *decided*, in the record vocabulary — see
+    #: `bib_repository.WritePlan.changed_fields` for why that is not the same
+    #: as what the file gained.
+    changed_fields: list[str]
+    dry_run: bool
+    message: str
+    warnings: list[str]
+    errors: list[str]
+    #: Structured failure reason (`pzi.errors.REASON_*`) — present only on
+    #: failure, and not on every failure: see :func:`error_result`.
+    reason: NotRequired[str]
+    #: The four PDF-acquisition fields, present together or not at all — they
+    #: come from :func:`pdf_result_fields` as a block.
+    pdf_url: NotRequired[str | None]
+    pdf_status: NotRequired[str | None]
+    pdf_error: NotRequired[str | None]
+    pdf_suggestion: NotRequired[str | None]
+    #: Why the metadata came out the way it did — added by `add_service` when a
+    #: provider disagreed or a field could not be filled. Both of these last two
+    #: were found by giving this shape a type: they are set on the result after
+    #: it is built, and nothing had enumerated them.
+    metadata_diagnostics: NotRequired[list[str]]
+    #: The unified diff a `dry_run` would apply, from `preview_write_plan`.
+    #: Present only on a dry run.
+    diff: NotRequired[str]
+
+
 def error_result(
     *,
     message: str,
@@ -275,7 +324,7 @@ def error_result(
     warnings: list[str],
     bib: Mapping[str, Any] | None = None,
     reason: str | None = None,
-) -> dict[str, Any]:
+) -> AddResult:
     """One failure shape for the whole capture path.
 
     *reason* is the structured classification from :mod:`pzi.errors`, read by
@@ -290,7 +339,7 @@ def error_result(
     it stays unclassified, which is ENVIRONMENT, and that is the honest answer
     from the documented set rather than a code stretched to cover it.
     """
-    result = {
+    result: AddResult = {
         "status": "error",
         "bib_name": bib["name"] if bib is not None else None,
         "bib_path": bib["path"] if bib is not None else None,
