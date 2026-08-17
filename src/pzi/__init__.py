@@ -81,6 +81,18 @@ __version__ = package_version()
 # gives the checker the real symbols while the runtime keeps the lazy binding.
 if TYPE_CHECKING:
     from pzi.api import (
+        AddResult,
+        BibInfo,
+        CheckResult,
+        DedupeResult,
+        DeleteEntryResult,
+        EntryRecord,
+        EntrySummary,
+        MergeResult,
+        PromoteItem,
+        PromoteResult,
+        SearchMatch,
+        TagChangeResult,
         add,
         add_tags,
         check,
@@ -96,6 +108,27 @@ if TYPE_CHECKING:
         search,
     )
     from pzi.errors import PziError
+
+#: The return types, re-exported so a caller can annotate against them. They go
+#: through the same lazy path as the functions: binding them eagerly would make
+#: the package root import `pzi.api`, which imports every service, which
+#: imports `pzi` — the cycle the lazy binding exists to avoid.
+_PUBLIC_TYPES = frozenset(
+    {
+        "AddResult",
+        "BibInfo",
+        "CheckResult",
+        "DedupeResult",
+        "DeleteEntryResult",
+        "EntryRecord",
+        "EntrySummary",
+        "MergeResult",
+        "PromoteItem",
+        "PromoteResult",
+        "SearchMatch",
+        "TagChangeResult",
+    }
+)
 
 _PUBLIC_API = frozenset(
     {
@@ -117,7 +150,7 @@ _PUBLIC_API = frozenset(
 
 
 def __getattr__(name: str) -> object:
-    if name in _PUBLIC_API:
+    if name in _PUBLIC_API or name in _PUBLIC_TYPES:
         from pzi import api
 
         return getattr(api, name)
@@ -133,7 +166,19 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
+    "AddResult",
+    "BibInfo",
+    "CheckResult",
+    "DedupeResult",
+    "DeleteEntryResult",
+    "EntryRecord",
+    "EntrySummary",
+    "MergeResult",
+    "PromoteItem",
+    "PromoteResult",
     "PziError",
+    "SearchMatch",
+    "TagChangeResult",
     "__version__",
     "add",
     "add_tags",

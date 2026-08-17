@@ -30,15 +30,24 @@ from __future__ import annotations
 import functools
 import os
 import warnings
-from collections.abc import Callable
-from typing import Any
+from collections.abc import Callable, Mapping
+from typing import Any, cast
 
 from pzi import exit_codes
-from pzi.bib_service import delete_entry, entry_detail, list_entries
+from pzi.add_planning import AddResult
+from pzi.bib_service import (
+    BibInfo,
+    DeleteEntryResult,
+    EntryRecord,
+    EntrySummary,
+    delete_entry,
+    entry_detail,
+    list_entries,
+)
 from pzi.bib_service import list_bibs as _list_bibs_service
 from pzi.capture_core import capture_to_bib
 from pzi.capture_models import CaptureInput, CaptureOptions
-from pzi.check_service import check_bib
+from pzi.check_service import CheckResult, check_bib
 from pzi.config import (
     AppConfig,
     BibConfig,
@@ -46,15 +55,33 @@ from pzi.config import (
     default_config_path,
     load_bib_target,
 )
-from pzi.dedupe_service import find_duplicates, merge_duplicates
+from pzi.dedupe_service import (
+    DedupeResult,
+    MergeResult,
+    find_duplicates,
+    merge_duplicates,
+)
 from pzi.errors import PziError, exit_code_for_error
 from pzi.export_service import export_bibtex, export_csv, export_json, export_ris
-from pzi.promote_service import promote_bib
-from pzi.search_service import search_bib
+from pzi.promote_service import PromoteItem, PromoteResult, promote_bib
+from pzi.search_service import SearchMatch, search_bib
+from pzi.tag_service import TagChangeResult
 from pzi.tag_service import add_tags as _add_tags_service
 from pzi.tag_service import remove_tags as _remove_tags_service
 
 __all__ = [
+    "AddResult",
+    "BibInfo",
+    "CheckResult",
+    "DedupeResult",
+    "DeleteEntryResult",
+    "EntryRecord",
+    "EntrySummary",
+    "MergeResult",
+    "PromoteItem",
+    "PromoteResult",
+    "SearchMatch",
+    "TagChangeResult",
     "add",
     "add_tags",
     "check",
@@ -113,7 +140,7 @@ def _resolved_config_path(config_path: str | None) -> str:
     return os.environ.get("PZI_CONFIG") or default_config_path(_home())
 
 
-def _emit_warnings(result: dict[str, Any]) -> None:
+def _emit_warnings(result: Mapping[str, Any]) -> None:
     """Re-raise a service's read warnings through Python's own channel.
 
     Reading a *missing* bib is a warning rather than an error on purpose
@@ -160,7 +187,7 @@ def _public(fn: Callable[..., Any]) -> Callable[..., Any]:
     return wrapper
 
 
-def _unwrap(result: dict[str, Any], key: str) -> Any:
+def _unwrap(result: Mapping[str, Any], key: str) -> Any:
     """Return ``result[key]``, or raise what the CLI would have reported.
 
     `exit_code_for_error` is the CLI's own mapping from a service's structured
@@ -217,7 +244,7 @@ def search(
     tag: str | None = None,
     config_path: str | None = None,
     library: str | None = None,
-) -> list[dict[str, Any]]:
+) -> list[SearchMatch]:
     """Return entries matching the given filters, combined with AND.
 
     At least one filter is required. Matching is case-insensitive.
@@ -254,7 +281,7 @@ def entries(
     sort: str = "citekey",
     config_path: str | None = None,
     library: str | None = None,
-) -> list[dict[str, Any]]:
+) -> list[EntrySummary]:
     """Return a page of the library, sorted by ``citekey``, ``title``,
     ``author`` or ``year``."""
     if sort not in _SORT_FIELDS:
@@ -302,7 +329,7 @@ def get(
     *,
     config_path: str | None = None,
     library: str | None = None,
-) -> dict[str, Any]:
+) -> EntryRecord:
     """Return one entry's full record by citekey.
 
     This is where a script finds a paper's PDF: ``local_pdf_path`` is the path
@@ -320,14 +347,18 @@ def get(
         citekey=citekey,
         bib_selector=library,
     )
-    typed = dict(result)
-    record = dict(_unwrap(typed, "record"))
-    _emit_warnings(typed)
-    return record
+    record = _unwrap(result, "record")
+    _emit_warnings(result)
+    # `entry_detail` is typed `dict[str, Any]`, so the cast is where the claim
+    # "this is an `EntryRecord`" is actually made. What backs it is
+    # `bibtex_entry_to_record`, which sets exactly these keys on every record it
+    # parses, and the conformance test in `tests/test_public_api.py`, which
+    # compares a real call's keys against the declaration.
+    return cast("EntryRecord", dict(record))
 
 
 @_public
-def list_bibs(*, config_path: str | None = None) -> list[dict[str, Any]]:
+def list_bibs(*, config_path: str | None = None) -> list[BibInfo]:
     """Return the configured libraries: name, path, papers dir, and default.
 
     Every other function takes ``library=`` by name, and without this there was
@@ -353,7 +384,7 @@ def add(
     force_new: bool = False,
     config_path: str | None = None,
     library: str | None = None,
-) -> dict[str, Any]:
+) -> AddResult:
     """Capture a paper by DOI, URL or local PDF path.
 
     Returns the write result: the citekey, whether it was an insert or an
@@ -382,7 +413,11 @@ def add(
         config_path=_resolved_config_path(config_path),
         home_dir=_home(),
     )
-    typed = dict(result)
+    # `capture_to_bib` is typed as a bare `Mapping`, so this is the cast that
+    # claims the capture shape. Both of its builders — `add_planning
+    # .error_result` and `capture_local_pdf.build_add_record_result` — are
+    # annotated `AddResult`, and the conformance test checks a real call.
+    typed = cast("AddResult", dict(result))
     _unwrap(typed, "status")
     return typed
 
@@ -393,7 +428,7 @@ def check(
     strict: bool = False,
     config_path: str | None = None,
     library: str | None = None,
-) -> dict[str, Any]:
+) -> CheckResult:
     """Verify entries against metadata providers. Makes network requests."""
     result = check_bib(
         config_path=_resolved_config_path(config_path),
@@ -401,7 +436,7 @@ def check(
         bib_selector=library,
         strict=strict,
     )
-    typed = dict(result)
+    typed = result.copy()
     _unwrap(typed, "status")
     return typed
 
@@ -411,9 +446,9 @@ def dedupe(
     *,
     config_path: str | None = None,
     library: str | None = None,
-) -> dict[str, Any]:
+) -> DedupeResult:
     """Report exact duplicate clusters and fuzzy near-duplicates. Reads only."""
-    typed = dict(find_duplicates(bib_path=_bib_path(config_path, library)))
+    typed = find_duplicates(bib_path=_bib_path(config_path, library)).copy()
     _unwrap(typed, "status")
     return typed
 
@@ -425,7 +460,7 @@ def promote(
     dry_run: bool = True,
     config_path: str | None = None,
     library: str | None = None,
-) -> dict[str, Any]:
+) -> PromoteResult:
     """Find published versions of preprints. Makes network requests.
 
     **Previews by default** — pass ``dry_run=False`` to write. This sweeps the
@@ -444,7 +479,7 @@ def promote(
         dry_run=dry_run,
         keep_preprint=not replace,
     )
-    typed = dict(result)
+    typed = result.copy()
     _unwrap(typed, "status")
     return typed
 
@@ -456,7 +491,7 @@ def delete(
     dry_run: bool = False,
     config_path: str | None = None,
     library: str | None = None,
-) -> dict[str, Any]:
+) -> DeleteEntryResult:
     """Delete one entry by citekey. Writes.
 
     A timestamped copy of the pre-delete library is made first, and its path is
@@ -468,13 +503,11 @@ def delete(
     ``--force`` prompt guards a human typing at a terminal, not a script that
     wrote the citekey out.
     """
-    typed = dict(
-        delete_entry(
-            bib_path=_bib_path(config_path, library),
-            citekey=citekey,
-            dry_run=dry_run,
-        )
-    )
+    typed = delete_entry(
+        bib_path=_bib_path(config_path, library),
+        citekey=citekey,
+        dry_run=dry_run,
+    ).copy()
     _unwrap(typed, "status")
     return typed
 
@@ -487,7 +520,7 @@ def add_tags(
     dry_run: bool = False,
     config_path: str | None = None,
     library: str | None = None,
-) -> dict[str, Any]:
+) -> TagChangeResult:
     """Add tags to one entry, keeping the tags it already has. Writes.
 
     Tags are normalized the way every other front end normalizes them, and the
@@ -495,16 +528,14 @@ def add_tags(
     ``changed`` says whether the entry was actually rewritten — adding a tag it
     already carries is a no-op, not an error.
     """
-    typed = dict(
-        _add_tags_service(
-            config_path=_resolved_config_path(config_path),
-            home_dir=_home(),
-            bib_selector=library,
-            citekey=citekey,
-            tags=list(tags),
-            dry_run=dry_run,
-        )
-    )
+    typed = _add_tags_service(
+        config_path=_resolved_config_path(config_path),
+        home_dir=_home(),
+        bib_selector=library,
+        citekey=citekey,
+        tags=list(tags),
+        dry_run=dry_run,
+    ).copy()
     _unwrap(typed, "status")
     return typed
 
@@ -517,22 +548,20 @@ def remove_tags(
     dry_run: bool = False,
     config_path: str | None = None,
     library: str | None = None,
-) -> dict[str, Any]:
+) -> TagChangeResult:
     """Remove tags from one entry. Writes.
 
     The counterpart of :func:`add_tags`, with the same result shape. Removing a
     tag the entry does not have leaves ``changed`` false.
     """
-    typed = dict(
-        _remove_tags_service(
-            config_path=_resolved_config_path(config_path),
-            home_dir=_home(),
-            bib_selector=library,
-            citekey=citekey,
-            tags=list(tags),
-            dry_run=dry_run,
-        )
-    )
+    typed = _remove_tags_service(
+        config_path=_resolved_config_path(config_path),
+        home_dir=_home(),
+        bib_selector=library,
+        citekey=citekey,
+        tags=list(tags),
+        dry_run=dry_run,
+    ).copy()
     _unwrap(typed, "status")
     return typed
 
@@ -545,7 +574,7 @@ def merge(
     dry_run: bool = True,
     config_path: str | None = None,
     library: str | None = None,
-) -> dict[str, Any]:
+) -> MergeResult:
     """Merge entry *citekey_a* into *citekey_b*, keeping b's citekey.
 
     This is what makes :func:`dedupe` actionable: it reports duplicate clusters,
@@ -559,17 +588,15 @@ def merge(
     the command; the same split as :func:`promote`.
     """
     config, bib = _bib_target(config_path, library)
-    typed = dict(
-        merge_duplicates(
-            bib_path=bib["path"],
-            citekey_a=citekey_a,
-            citekey_b=citekey_b,
-            dry_run=dry_run,
-            # Read from the config, as both other front ends do. Defaulting to
-            # `absolute` here would rewrite a relative-path library's `file =`
-            # fields to absolute ones on an unrelated merge.
-            file_path_style=config.get("pdf_file_path_style", "absolute"),
-        )
-    )
+    typed = merge_duplicates(
+        bib_path=bib["path"],
+        citekey_a=citekey_a,
+        citekey_b=citekey_b,
+        dry_run=dry_run,
+        # Read from the config, as both other front ends do. Defaulting to
+        # `absolute` here would rewrite a relative-path library's `file =`
+        # fields to absolute ones on an unrelated merge.
+        file_path_style=config.get("pdf_file_path_style", "absolute"),
+    ).copy()
     _unwrap(typed, "status")
     return typed

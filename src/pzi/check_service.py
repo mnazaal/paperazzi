@@ -77,6 +77,12 @@ class CheckItem(TypedDict):
 
 
 class CheckResult(TypedDict):
+    """A whole audit run — what `pzi.check()` and `pzi check --report` return.
+
+    `status` is `error` only when the run reached no source at all; an audit
+    that ran and found problems is `ok` with the verdicts in `items`.
+    """
+
     status: str
     bib_name: str | None
     strict: bool

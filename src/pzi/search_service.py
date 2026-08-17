@@ -12,6 +12,12 @@ from pzi.tag_service import normalize_tags
 
 
 class SearchMatch(TypedDict):
+    """One search hit — what `pzi.search()` returns per match.
+
+    `matched_fields` names which filters this entry matched, so a caller can
+    tell a title hit from a tag hit.
+    """
+
     citekey: str
     title: str | None
     authors: list[str]

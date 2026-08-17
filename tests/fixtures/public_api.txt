@@ -1,15 +1,166 @@
+pzi.AddResult {
+    action: str | None
+    bib_name: str | None
+    bib_path: str | None
+    changed_fields: list[str]
+    citekey: str | None
+    diff: NotRequired[str]
+    dry_run: bool
+    errors: list[str]
+    message: str
+    metadata_diagnostics: NotRequired[list[str]]
+    pdf_error: NotRequired[str | None]
+    pdf_path: str | None
+    pdf_status: NotRequired[str | None]
+    pdf_suggestion: NotRequired[str | None]
+    pdf_url: NotRequired[str | None]
+    reason: NotRequired[str]
+    status: str
+    warnings: list[str]
+}
+pzi.BibInfo {
+    default: bool
+    name: str
+    papers_dir: str
+    path: str
+}
+pzi.CheckResult {
+    bib_name: str | None
+    counts: dict[str, int]
+    errors: list[str]
+    items: list[CheckItem]
+    reason: NotRequired[str]
+    status: str
+    strict: bool
+    total: int
+    warnings: list[str]
+}
+pzi.DedupeResult {
+    bib_path: str
+    errors: list[str]
+    exact_duplicates: list[dict[str, Any]]
+    fuzzy_candidates: list[dict[str, Any]]
+    status: str
+    total_clusters: int
+    total_entries: int
+    warnings: NotRequired[list[str]]
+}
+pzi.DeleteEntryResult {
+    backup_path: NotRequired[str]
+    bib_path: str
+    citekey: str
+    dry_run: NotRequired[bool]
+    errors: list[str]
+    message: str
+    pdf_path: NotRequired[str | None]
+    reason: NotRequired[str]
+    status: str
+    title: NotRequired[str]
+}
+pzi.EntryRecord {
+    abstract: str | None
+    abstract_url: str | None
+    arxiv_id: str | None
+    authors: list[str]
+    canonical_url: str | None
+    citekey: str
+    doi: str | None
+    isbn: str | None
+    issn: str | None
+    local_pdf_path: str | None
+    note: str | None
+    number: str | None
+    pages: str | None
+    pdf_url: str | None
+    publisher: str | None
+    source_url: str | None
+    tags: list[str]
+    title: str | None
+    venue: str | None
+    volume: str | None
+    year: int | None
+}
+pzi.EntrySummary {
+    authors: list[str]
+    citekey: str
+    doi: str | None
+    entry_type: str
+    has_pdf: bool
+    title: str
+    year: int | None
+}
+pzi.MergeResult {
+    backup_path: NotRequired[str]
+    carried_fields: NotRequired[list[str]]
+    changed_fields: NotRequired[list[str]]
+    citekey_a: str
+    citekey_b: str
+    dropped_citekey: NotRequired[str]
+    dropped_fields: NotRequired[list[str]]
+    dry_run: bool
+    errors: list[str]
+    merged_record: NotRequired[dict[str, Any]]
+    merged_title: NotRequired[str]
+    message: str
+    orphaned_pdf: NotRequired[str]
+    overwritten_fields: NotRequired[list[str]]
+    reason: NotRequired[str]
+    status: str
+}
+pzi.PromoteItem {
+    action: str
+    backup_path: NotRequired[str]
+    changed_fields: list[str]
+    diff: NotRequired[str]
+    failed: NotRequired[bool]
+    metadata_diagnostics: NotRequired[list[str]]
+    metadata_warnings: NotRequired[list[str]]
+    note: str | None
+    pdf_attached: bool | None
+    preprint_citekey: str
+    published_citekey: str | None
+}
+pzi.PromoteResult {
+    bib_name: str | None
+    dry_run: bool
+    errors: list[str]
+    items: list[PromoteItem]
+    keep_preprint: bool
+    reason: NotRequired[str]
+    status: str
+    summary: NotRequired[dict[str, Any]]
+}
 pzi.PziError(message: 'str', *, code: 'int' = 5, details: 'list[str] | None' = None, reason: 'str | None' = None) -> 'None'
+pzi.SearchMatch {
+    authors: list[str]
+    citekey: str
+    matched_fields: list[str]
+    tags: list[str]
+    title: str | None
+    year: int | None
+}
+pzi.TagChangeResult {
+    bib_name: str | None
+    changed: bool
+    citekey: str | None
+    dry_run: bool
+    errors: list[str]
+    message: str
+    reason: NotRequired[str]
+    status: str
+    tags: list[str]
+}
 pzi.__version__: str
-pzi.add(source: 'str', *, tags: 'list[str] | None' = None, dry_run: 'bool' = False, force_new: 'bool' = False, config_path: 'str | None' = None, library: 'str | None' = None) -> 'dict[str, Any]'
-pzi.add_tags(citekey: 'str', tags: 'list[str]', *, dry_run: 'bool' = False, config_path: 'str | None' = None, library: 'str | None' = None) -> 'dict[str, Any]'
-pzi.check(*, strict: 'bool' = False, config_path: 'str | None' = None, library: 'str | None' = None) -> 'dict[str, Any]'
-pzi.dedupe(*, config_path: 'str | None' = None, library: 'str | None' = None) -> 'dict[str, Any]'
-pzi.delete(citekey: 'str', *, dry_run: 'bool' = False, config_path: 'str | None' = None, library: 'str | None' = None) -> 'dict[str, Any]'
-pzi.entries(*, offset: 'int' = 0, limit: 'int' = 50, sort: 'str' = 'citekey', config_path: 'str | None' = None, library: 'str | None' = None) -> 'list[dict[str, Any]]'
+pzi.add(source: 'str', *, tags: 'list[str] | None' = None, dry_run: 'bool' = False, force_new: 'bool' = False, config_path: 'str | None' = None, library: 'str | None' = None) -> 'AddResult'
+pzi.add_tags(citekey: 'str', tags: 'list[str]', *, dry_run: 'bool' = False, config_path: 'str | None' = None, library: 'str | None' = None) -> 'TagChangeResult'
+pzi.check(*, strict: 'bool' = False, config_path: 'str | None' = None, library: 'str | None' = None) -> 'CheckResult'
+pzi.dedupe(*, config_path: 'str | None' = None, library: 'str | None' = None) -> 'DedupeResult'
+pzi.delete(citekey: 'str', *, dry_run: 'bool' = False, config_path: 'str | None' = None, library: 'str | None' = None) -> 'DeleteEntryResult'
+pzi.entries(*, offset: 'int' = 0, limit: 'int' = 50, sort: 'str' = 'citekey', config_path: 'str | None' = None, library: 'str | None' = None) -> 'list[EntrySummary]'
 pzi.export(fmt: 'str' = 'bibtex', *, config_path: 'str | None' = None, library: 'str | None' = None) -> 'str'
-pzi.get(citekey: 'str', *, config_path: 'str | None' = None, library: 'str | None' = None) -> 'dict[str, Any]'
-pzi.list_bibs(*, config_path: 'str | None' = None) -> 'list[dict[str, Any]]'
-pzi.merge(citekey_a: 'str', citekey_b: 'str', *, dry_run: 'bool' = True, config_path: 'str | None' = None, library: 'str | None' = None) -> 'dict[str, Any]'
-pzi.promote(*, replace: 'bool' = False, dry_run: 'bool' = True, config_path: 'str | None' = None, library: 'str | None' = None) -> 'dict[str, Any]'
-pzi.remove_tags(citekey: 'str', tags: 'list[str]', *, dry_run: 'bool' = False, config_path: 'str | None' = None, library: 'str | None' = None) -> 'dict[str, Any]'
-pzi.search(query: 'str | None' = None, *, author: 'str | None' = None, year: 'int | None' = None, tag: 'str | None' = None, config_path: 'str | None' = None, library: 'str | None' = None) -> 'list[dict[str, Any]]'
+pzi.get(citekey: 'str', *, config_path: 'str | None' = None, library: 'str | None' = None) -> 'EntryRecord'
+pzi.list_bibs(*, config_path: 'str | None' = None) -> 'list[BibInfo]'
+pzi.merge(citekey_a: 'str', citekey_b: 'str', *, dry_run: 'bool' = True, config_path: 'str | None' = None, library: 'str | None' = None) -> 'MergeResult'
+pzi.promote(*, replace: 'bool' = False, dry_run: 'bool' = True, config_path: 'str | None' = None, library: 'str | None' = None) -> 'PromoteResult'
+pzi.remove_tags(citekey: 'str', tags: 'list[str]', *, dry_run: 'bool' = False, config_path: 'str | None' = None, library: 'str | None' = None) -> 'TagChangeResult'
+pzi.search(query: 'str | None' = None, *, author: 'str | None' = None, year: 'int | None' = None, tag: 'str | None' = None, config_path: 'str | None' = None, library: 'str | None' = None) -> 'list[SearchMatch]'

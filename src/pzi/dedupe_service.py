@@ -21,6 +21,13 @@ from pzi.similarity import (
 
 
 class DedupeResult(TypedDict):
+    """Duplicate report — what `pzi.dedupe()` returns.
+
+    `exact_duplicates` are clusters that share an identity (a DOI, or matching
+    title/author/year); `fuzzy_candidates` are maybes worth a human look.
+    `pzi.merge()` is what acts on a pair.
+    """
+
     status: str
     bib_path: str
     total_entries: int
@@ -35,6 +42,12 @@ class DedupeResult(TypedDict):
 
 
 class MergeResult(TypedDict):
+    """One merge — what `pzi.merge()` returns, preview or write.
+
+    On a dry run the `*_fields` lists are the preview: what the survivor gains,
+    what it loses, and which PDF is left orphaned.
+    """
+
     status: str
     citekey_a: str
     citekey_b: str

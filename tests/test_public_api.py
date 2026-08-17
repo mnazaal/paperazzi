@@ -16,6 +16,7 @@ import inspect
 import os
 import re
 from pathlib import Path
+from typing import is_typeddict
 from unittest.mock import patch
 
 import pytest
@@ -52,10 +53,45 @@ def _library(tmp_path: Path) -> str:
 _MEMORY_ADDRESS = re.compile(r" at 0x[0-9a-f]+>")
 
 
+def _render_type(name: str, obj: type) -> str:
+    """A TypedDict rendered as its keys, not as its constructor.
+
+    `inspect.signature` on a TypedDict class gives `(*args, **kwargs)`, which
+    pins nothing — and pinning nothing is exactly the complaint that put these
+    types here (`-> dict[str, Any]` stayed green through any key rename). What a
+    caller depends on is the key set, each key's type, and which keys are
+    guaranteed present, so that is what the snapshot records.
+    """
+    keys = [
+        f"    {key}: {_annotation_text(annotation)}"
+        for key, annotation in sorted(obj.__annotations__.items())
+    ]
+    return "\n".join([f"pzi.{name} {{", *keys, "}"])
+
+
+def _annotation_text(annotation: object) -> str:
+    """The annotation as written.
+
+    `from __future__ import annotations` is on in every module here, so
+    TypedDict stores each one as a `ForwardRef`, whose repr carries the defining
+    module. Recording that would make moving a type between modules a snapshot
+    failure, which is not what this pins — and `NotRequired[...]` is already
+    visible in the text, so optionality needs no separate marker.
+    """
+    forward_arg = getattr(annotation, "__forward_arg__", None)
+    return forward_arg if isinstance(forward_arg, str) else str(annotation)
+
+
 def _render_surface() -> str:
     lines = []
     for name in sorted(pzi.__all__):
         obj = getattr(pzi, name)
+        # `is_typeddict`, not `isinstance(obj, type)`: `PziError` is also a
+        # class, and the looser check rendered it as its (empty) annotations —
+        # silently dropping the constructor signature this file exists to pin.
+        if is_typeddict(obj):
+            lines.append(_render_type(name, obj))
+            continue
         if not callable(obj):
             # The *type*, never the value: freezing `__version__`'s contents
             # would make every release a snapshot failure.

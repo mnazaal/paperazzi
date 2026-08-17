@@ -70,6 +70,8 @@ from pzi.translation_server import fetch_search_translations
 
 
 class PromoteItem(TypedDict):
+    """One preprint considered for promotion, inside a `PromoteResult`."""
+
     preprint_citekey: str
     published_citekey: str | None
     action: str
@@ -90,6 +92,12 @@ class PromoteItem(TypedDict):
 
 
 class PromoteResult(TypedDict):
+    """A promotion sweep — what `pzi.promote()` returns.
+
+    One `PromoteItem` per preprint the sweep considered, whether or not it was
+    promoted. Previews by default; `dry_run` says which this was.
+    """
+
     status: str
     bib_name: str | None
     dry_run: bool

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Any, TypeAlias, cast
+from typing import TypeAlias, cast
 
 from pzi import add_planning as _add_planning
 from pzi.add_planning import (

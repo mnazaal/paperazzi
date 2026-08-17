@@ -21,6 +21,7 @@ from pzi.errors import REASON_CONFIG
 from pzi.identifiers import is_preprint
 from pzi.pdf_planning import pdf_file_present
 
+
 class BibInfo(TypedDict):
     """One configured library, as `list_bibs` reports it.
 
@@ -86,6 +87,12 @@ class BibStatsResult(TypedDict):
 
 
 class DeleteEntryResult(TypedDict):
+    """One deletion — what `pzi.delete()` returns.
+
+    `backup_path` is the pre-delete copy of the library, taken under the same
+    lock as the write. `pdf_path` is the entry's PDF, which is left on disk.
+    """
+
     status: str
     citekey: str
     bib_path: str

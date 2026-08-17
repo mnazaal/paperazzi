@@ -73,6 +73,13 @@ class TagListResult(TypedDict):
 
 
 class TagChangeResult(TypedDict):
+    """One tag mutation — what `pzi.add_tags()` / `pzi.remove_tags()` return.
+
+    `tags` is the entry's full tag list *afterwards*, not the argument, and
+    `changed` is false when the mutation was a no-op (a tag already present, or
+    already absent) rather than a failure.
+    """
+
     status: str
     bib_name: str | None
     citekey: str | None
