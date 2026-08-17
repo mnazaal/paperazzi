@@ -7,7 +7,7 @@ from typing import Any, TextIO
 
 from pzi import cli_json, exit_codes
 from pzi.cli_render import error_lines, render_pdf_success
-from pzi.commands.common import emit_usage_error, print_lines
+from pzi.commands.common import batch_exit_code, emit_usage_error, print_lines
 from pzi.errors import exit_code_for_error
 from pzi.pdf_service import attach_pdf, retry_failed_pdfs, retry_pdf
 
@@ -76,7 +76,7 @@ def run_pdf_command(
             _print_warnings(result, stderr)
             if result["status"] == "error":
                 return exit_codes.ENVIRONMENT
-            return exit_codes.PARTIAL if result.get("failures") else exit_codes.OK
+            return _failed_only_exit_code(result)
         if result["status"] == "error":
             print_lines(error_lines(result["message"], result["errors"]), stderr)
             _print_warnings(result, stderr)
@@ -96,7 +96,7 @@ def run_pdf_command(
         _print_warnings(result, stderr)
         # Mirror the JSON branch above: the exit code must not depend on the
         # output format, and this path has just printed the failure list.
-        return exit_codes.PARTIAL if result.get("failures") else exit_codes.OK
+        return _failed_only_exit_code(result)
 
     if not args.citekey:
         return emit_usage_error(
@@ -139,6 +139,20 @@ def _print_warnings(result, stderr) -> None:
     """
     for warning in result.get("warnings") or []:
         print(f"warning: {warning}", file=stderr)
+
+
+def _failed_only_exit_code(result) -> int:
+    """Exit code for `pdf retry --failed-only`, from the shared batch rule.
+
+    Both output branches open-coded `PARTIAL if failures else OK`, which is the
+    rule minus its all-failed case: a retry where every entry failed exited 4,
+    claiming a partial success that did not happen, where every other batch
+    command exits 5. Routed through `batch_exit_code` so there is one answer
+    rather than a copy that can drift again.
+    """
+    return batch_exit_code(
+        succeeded=result["succeeded"], failed=len(result.get("failures") or []),
+    )
 
 
 def _pdf_exit_code(result) -> int:

@@ -132,6 +132,18 @@ next to the diff it explains.
 
 ### Fixed
 
+- `pzi pdf retry --failed-only` now exits **5** when every retry failed, not 4.
+  Exit code 4 means a batch partly succeeded; this command open-coded its own
+  rule instead of using the shared one, so a retry that fetched nothing reported
+  a partial success. `pzi.exit_codes`, the `pzi --help` epilog and the README's
+  exit-code table omitted the command from the batch list as well, so the
+  documented rule and the code agreed on the wrong answer.
+
+- `pzi init --force` writes the backup of the config it replaces into the
+  configured `pzi_data_home`, not the XDG default. With that key set, the token
+  went to one directory and the only copy of the replaced config to another —
+  outside the directory documented as holding the files that cannot be rebuilt.
+
 - The live smoke job can no longer pass while capturing nothing. It skips when
   the translation server cannot start (which skips every capture test at once),
   skips again when a provider returns no metadata, and is `continue-on-error` by

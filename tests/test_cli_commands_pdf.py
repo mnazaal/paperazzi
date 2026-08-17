@@ -124,6 +124,41 @@ def test_run_pdf_command_failed_only_uses_injected_service(tmp_path: Path) -> No
     assert stderr.getvalue() == ""
 
 
+def test_run_pdf_command_failed_only_all_failed_is_environment(tmp_path: Path) -> None:
+    """A batch in which *nothing* succeeded is 5, not 4.
+
+    That is the shared rule in `batch_exit_code`, which every other batch
+    command routes through. This one open-coded `PARTIAL if failures else OK`
+    on both output paths, so an all-failed retry claimed a partial success that
+    did not happen. `exit_codes.py` and the `--help` epilog omitted `pdf retry`
+    from the batch list as well, which is why the exit-code table test passed
+    over it — docs and code wrong together is the one disagreement a
+    docs-vs-code test cannot see.
+    """
+    def fake_retry_failed_pdfs(**_kwargs):
+        return {
+            "status": "ok",
+            "bib_name": "ml",
+            "succeeded": 0,
+            "total": 1,
+            "skipped_already_has_pdf": 0,
+            "skipped_no_url": 0,
+            "failures": [{"citekey": "bad2024", "error": "connection refused"}],
+        }
+
+    for as_json in (False, True):
+        exit_code = run_pdf_command(
+            Namespace(pdf_command="retry", citekey=None, failed_only=True, json=as_json),
+            home_dir=str(tmp_path),
+            config_path=str(tmp_path / "config.toml"),
+            stdout=StringIO(),
+            stderr=StringIO(),
+            bib_selector="ml",
+            retry_failed_pdfs_fn=fake_retry_failed_pdfs,
+        )
+        assert exit_code == exit_codes.ENVIRONMENT, f"json={as_json}"
+
+
 def test_pdf_retry_unknown_citekey_is_not_found(tmp_path: Path) -> None:
     """`pdf_service` never set `reason`, so the runner's not-found branch was dead.
 

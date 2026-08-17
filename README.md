@@ -273,7 +273,7 @@ Shared flags: every command accepts `[--config PATH]` to point at a config file 
 | 1 | Ran fine and has something to report: no search matches, duplicates or fuzzy near-duplicates found, integrity issues, entries `check` could not verify |
 | 2 | Usage error (unknown command, bad or missing arguments, or a refusal to overwrite without `--force`) |
 | 3 | Entry not found (unknown citekey) |
-| 4 | Batch partly failed — one or more items in a batch failed while at least one succeeded (`add --from-file`, `import`, `inbox drain`, `update`, `update --promote`). A batch in which *nothing* succeeded is `5`. |
+| 4 | Batch partly failed — one or more items in a batch failed while at least one succeeded (`add --from-file`, `import`, `inbox drain`, `update`, `update --promote`, `pdf retry --failed-only`). A batch in which *nothing* succeeded is `5`. |
 | 5 | Could not run: unreadable or invalid config, unknown `--target`, a bib locked by another process or changed out from under a prepared write, permission denied, unreachable service |
 | 130 / 141 | Interrupted (SIGINT) / downstream pipe closed (SIGPIPE) |
 
