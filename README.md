@@ -467,27 +467,47 @@ The token is resolved in this order: `api_auth_token_cmd` (a command whose stdou
 ### Python API
 
 `import pzi` is a supported surface, frozen at 1.0 and pinned by
-`tests/fixtures/public_api.txt`. Seven functions, each taking an optional
+`tests/fixtures/public_api.txt`. Thirteen functions, each taking an optional
 `config_path` and an optional `library` and nothing else that is not its own
 concern:
 
 ```python
 import pzi
 
-pzi.search(query="collapse")            # -> list[dict]
-pzi.entries(offset=0, limit=50, sort="citekey")
+# read
+pzi.search(query="collapse")            # -> list[SearchMatch]
+pzi.entries(offset=0, limit=50, sort="citekey")   # -> list[EntrySummary]
+pzi.get("smith2020")                    # -> EntryRecord, incl. local_pdf_path
+pzi.list_bibs()                         # -> list[BibInfo]; the names `library=` takes
 pzi.export("bibtex")                    # -> str
-pzi.add("10.1038/nature12373", tags=["ml"], dry_run=False)
-pzi.check(strict=False)
+pzi.check(strict=False)                 # network
 pzi.dedupe()
-pzi.promote(dry_run=True)               # previews by default
+
+# write
+pzi.add("10.1038/nature12373", tags=["ml"])       # network
+pzi.add_tags("smith2020", ["ml"])
+pzi.remove_tags("smith2020", ["ml"])
+pzi.delete("smith2020")                 # backs the library up first
+pzi.merge("dup2020", "smith2020")       # previews by default
+pzi.promote(dry_run=True)               # previews by default; network
 ```
 
-Two conventions hold throughout: **failure raises `pzi.PziError`** (carrying
+Three conventions hold throughout. **Failure raises `pzi.PziError`** (carrying
 `code`, the exit code the CLI would have used) rather than returning an error
-dict, and **functions return the answer, not the envelope**. `pzi.__all__` is
-the whole of the public surface — everything else is internal regardless of its
-docstring — and `pzi.__version__` is the installed version. `py.typed` ships.
+dict — including `pzi.get()` on an unknown citekey, which is `code == 3`.
+**Functions return the answer, not the envelope.** And **the two sweeping
+commands preview by default** — `merge` and `promote` take `dry_run=False` to
+write, while the ones that name their target act.
+
+Every return value is a `TypedDict` exported alongside the functions
+(`pzi.EntryRecord`, `pzi.SearchMatch`, …), so a type checker sees the keys and
+not just `dict`. `pzi.__all__` is the whole of the public surface — everything
+else is internal regardless of its docstring — and `pzi.__version__` is the
+installed version. `py.typed` ships.
+
+`pzi.entries()` and `pzi.search()` return *summaries*: they say whether an entry
+has a PDF, not where it is. `pzi.get()` is the one that carries
+`local_pdf_path`.
 
 ## Architecture
 

@@ -17,6 +17,23 @@ next to the diff it explains.
 
 ### Added
 
+- **Six more functions in `import pzi`, and every return value is now typed.**
+  The API covered seven of ~20 commands, and the gaps were the ones a script
+  reaches for first.
+  - `get(citekey)` returns the whole record — the only way to find a paper's
+    PDF path, since `entries()` and `search()` report `has_pdf` and not where.
+    An unknown citekey raises `PziError` with code 3.
+  - `list_bibs()` names the libraries `library=` accepts. Nothing supported
+    could discover them before.
+  - `delete`, `add_tags`, `remove_tags` and `merge` make the write side
+    reachable; `merge` is what turns `dedupe()`'s clusters into something the
+    API can act on. `merge` previews by default (like `promote`), the other
+    three act, because they name exactly what they touch.
+  - Every function returns a named `TypedDict`, exported alongside it
+    (`pzi.EntryRecord`, `pzi.SearchMatch`, …). The snapshot used to pin
+    `-> dict[str, Any]`, which stays green through any key rename; a test now
+    compares each declared type against a real call.
+
 - **`import pzi` corrections, before the surface freezes.** A three-way review
   of the API added earlier the same day found real defects; these are the fixes,
   each with a test that fails without it.

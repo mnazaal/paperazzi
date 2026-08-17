@@ -86,6 +86,7 @@ NOT_CONFIG_KEYS = frozenset(
     {
         "config_path",  # the Python API's keyword argument (`pzi.search(config_path=…)`)
         "safe_public_http_url",  # the SSRF-validation function in `pzi.url_safety`
+        "local_pdf_path",  # a field of `EntryRecord`, what `pzi.get()` returns
     }
 )
 
