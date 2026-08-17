@@ -365,6 +365,20 @@ Without `--target`, commands operate on the configured default library. `--targe
 
 `--json` is accepted by the commands that report a result — including the mutating ones (`add`, `update`, `update --promote`, `tag`, `delete`, `import`, `inbox`, `pdf`, `fix clean|dedupe|merge|reindex`) — and always emits one envelope. Three commands do not accept it: `export` (whose output *is* the document), `server`, and `init` (see the CLI reference above). For `search` and `update`, which accept several `--target` values at once, the run still produces a single document: each item carries the `bib_name` it came from rather than the output splitting per library.
 
+**What `pzi export` writes where.** It is the one command whose stdout is a
+document rather than a report, so it has three cases and they are not the
+envelope:
+
+| Invocation | stdout | exit |
+|---|---|---|
+| `pzi export --format json` | a bare JSON **array** of entries — not the `--json` envelope, since the array *is* the answer | 0 |
+| `pzi export -o PATH` | one prose line, `exported N entries to PATH`; the document went to the file | 0 |
+| any failure | nothing; the reason goes to stderr as prose | 5 (or 2 for a bad `--format`) |
+
+So a JSON consumer reads stdout on success and branches on the exit code, and
+never has to distinguish a partial document from a complete one — a failed
+export writes no JSON at all.
+
 **Shell completion:** `argcomplete` is a base dependency, so tab-completion works once registered for your shell:
 
 ```sh

@@ -106,6 +106,49 @@ def test_a_nonexistent_target_path_is_an_environment_error(tmp_path: Path) -> No
     assert code == exit_codes.ENVIRONMENT
 
 
+def test_export_has_exactly_the_three_stdout_contracts_the_readme_documents(
+    tmp_path: Path,
+) -> None:
+    """`export` is the one command whose stdout is a document, not a report.
+
+    It therefore does *not* emit the `--json` envelope, and the README now says
+    so case by case: a bare array for `--format json`, one prose line for
+    `-o PATH`, and nothing at all on failure. Nothing checked any of it, which
+    is how "the command whose native output is JSON is the one a JSON consumer
+    cannot classify errors from" went unnoticed.
+    """
+    import json as _json
+
+    config_path, _bib = _library(tmp_path, "@article{a1,\n  title = {A},\n}\n")
+
+    code, stdout, _err = _run(
+        ["export", "--format", "json", "--config", str(config_path)], tmp_path
+    )
+    assert code == exit_codes.OK
+    parsed = _json.loads(stdout)
+    assert isinstance(parsed, list), "a bare array, not the envelope"
+    assert parsed[0]["citekey"] == "a1"
+
+    out_path = tmp_path / "out.bib"
+    code, stdout, _err = _run(
+        ["export", "-o", str(out_path), "--config", str(config_path)], tmp_path
+    )
+    assert code == exit_codes.OK
+    assert stdout.strip() == f"exported 1 entries to {out_path}"
+    assert "@article{a1," in out_path.read_text(encoding="utf-8")
+
+    # A failure writes no document at all — not a truncated one. The content is
+    # rendered whole before anything is printed, which is what makes that true.
+    code, stdout, stderr = _run(
+        ["export", "--format", "json", "--target", str(tmp_path / "gone.bib"),
+         "--config", str(config_path)],
+        tmp_path,
+    )
+    assert code == exit_codes.ENVIRONMENT
+    assert stdout == ""
+    assert "does not exist" in stderr
+
+
 def test_export_to_dash_writes_to_stdout(tmp_path: Path) -> None:
     config_path, _bib = _library(tmp_path, "@article{a1,\n  title = {A},\n}\n")
 
