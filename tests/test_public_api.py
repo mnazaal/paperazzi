@@ -221,6 +221,121 @@ def test_no_public_failure_names_a_cli_flag(tmp_path: Path) -> None:
         assert "--target" not in str(unresolved.value), str(unresolved.value)
 
 
+# --- The declared types match what the functions actually return -------------
+
+
+def _required_keys(declared: type) -> set[str]:
+    """The keys a value of *declared* must carry.
+
+    Read off the annotation *text*, not `__required_keys__`. Every module here
+    has `from __future__ import annotations`, so TypedDict never sees the real
+    `NotRequired[...]` object at class creation and puts every key in
+    `__required_keys__` — `TagChangeResult.__optional_keys__` is empty despite
+    declaring one. Trusting it made this check demand keys that exist only on a
+    failure path.
+    """
+    return {
+        key
+        for key, annotation in declared.__annotations__.items()
+        if not _annotation_text(annotation).startswith("NotRequired[")
+    }
+
+
+def _conforms(value: object, declared: type) -> list[str]:
+    """Complaints about *value* against the TypedDict *declared*, if any."""
+    assert isinstance(value, dict), f"expected a dict, got {type(value).__name__}"
+    keys = set(value)
+    known = set(declared.__annotations__)
+    complaints = [f"undeclared key {key!r}" for key in sorted(keys - known)]
+    complaints += [
+        f"missing required key {key!r}"
+        for key in sorted(_required_keys(declared) - keys)
+    ]
+    return complaints
+
+
+def test_every_declared_type_matches_a_real_call(tmp_path: Path) -> None:
+    """A TypedDict is a claim about a value, so check it against one.
+
+    The annotations alone would not notice a service adding a key, and two of
+    the shapes are assembled across modules — `AddResult` in `add_planning` and
+    `capture_local_pdf`, `EntryRecord` in `bibtex` and read back through
+    `bib_service`. This is what makes the types honest rather than decorative,
+    and it is the answer to item 428: a key rename now fails something.
+
+    Read-only and local-write calls only. `add`, `check` and `promote` reach the
+    network, and `AddResult`'s two builders are statically annotated instead.
+    """
+    bib_path = tmp_path / "ml.bib"
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    (papers / "smith2020.pdf").write_bytes(b"%PDF-1.4\n")
+    bib_path.write_text(
+        "@article{smith2020,\n  title = {A Title},\n  author = {Smith, Jane},\n"
+        "  year = {2020},\n  doi = {10.1000/dup},\n  keywords = {ml},\n"
+        f"  file = {{{papers / 'smith2020.pdf'}}},\n}}\n\n"
+        "@article{smith2020b,\n  title = {A Title},\n  author = {Smith, Jane},\n"
+        "  year = {2020},\n  doi = {10.1000/dup},\n  volume = {12},\n}\n",
+        encoding="utf-8",
+    )
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\npapers_dir = "{papers}"\n'
+        "default = true\n",
+        encoding="utf-8",
+    )
+    config = str(config_path)
+
+    # Ordered: everything read-only first, then the writers, so one call's
+    # mutation cannot make a later assertion vacuous.
+    cases: list[tuple[str, object, type]] = [
+        ("search", pzi.search(query="Title", config_path=config)[0], pzi.SearchMatch),
+        ("entries", pzi.entries(config_path=config)[0], pzi.EntrySummary),
+        ("get", pzi.get("smith2020", config_path=config), pzi.EntryRecord),
+        ("list_bibs", pzi.list_bibs(config_path=config)[0], pzi.BibInfo),
+        ("dedupe", pzi.dedupe(config_path=config), pzi.DedupeResult),
+        (
+            "merge (preview)",
+            pzi.merge("smith2020b", "smith2020", config_path=config),
+            pzi.MergeResult,
+        ),
+        (
+            "add_tags",
+            pzi.add_tags("smith2020", ["nlp"], config_path=config),
+            pzi.TagChangeResult,
+        ),
+        (
+            "remove_tags",
+            pzi.remove_tags("smith2020", ["nlp"], config_path=config),
+            pzi.TagChangeResult,
+        ),
+        (
+            "delete (preview)",
+            pzi.delete("smith2020b", dry_run=True, config_path=config),
+            pzi.DeleteEntryResult,
+        ),
+        (
+            "merge (write)",
+            pzi.merge("smith2020b", "smith2020", dry_run=False, config_path=config),
+            pzi.MergeResult,
+        ),
+        (
+            "delete (write)",
+            pzi.delete("smith2020", config_path=config),
+            pzi.DeleteEntryResult,
+        ),
+    ]
+
+    failures = [
+        f"{label}: {'; '.join(complaints)}"
+        for label, value, declared in cases
+        if (complaints := _conforms(value, declared))
+    ]
+    assert not failures, "declared types disagree with real calls:\n" + "\n".join(
+        failures
+    )
+
+
 # --- The six functions added for item 427 ------------------------------------
 
 
