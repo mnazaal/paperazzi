@@ -125,9 +125,23 @@ pzi --version
 
 ## Enabling PyPI (future)
 
-paperazzi is not yet on PyPI. When ready:
+> **The name `paperazzi` is taken.** Verified 2026-08-15:
+> `https://pypi.org/pypi/paperazzi/json` returns a live, unrelated package — an
+> "LLM-Based Paper Query System with Evaluation Framework", v0.0.8, last
+> uploaded 2026-02-26. So `pip install paperazzi` today installs someone else's
+> project, and **step 1 below cannot be followed as written**. Nothing is
+> blocked by this: pzi installs from git, and decision 11 settled 1.0 as a
+> personal-trust milestone rather than a distribution one.
+>
+> If PyPI is ever taken up, the choice is a different distribution name (the
+> CLI is already `pzi`) or dropping PyPI from scope. A rename is not free — the
+> name appears in the extension build, the systemd unit and the install docs.
 
-1. **Register the project** on PyPI: `https://pypi.org/manage/account/`
+The rest of this section is what publishing *would* involve, kept for whenever
+that is decided:
+
+1. **Register the project** on PyPI: `https://pypi.org/manage/account/` — under
+   a name that is actually available.
 2. **Configure trusted publishing** (OIDC, no API tokens):
    - Go to PyPI → Account settings → Publishing → Add a publisher.
    - Repository: `mnazaal/paperazzi`, workflow: `.github/workflows/release.yml`,
@@ -143,6 +157,13 @@ paperazzi is not yet on PyPI. When ready:
 
 After the first PyPI release, the git-URL install commands in the README remain
 as an alternative for tracking `main` or unreleased versions.
+
+## A note on `v0.1.0b6`
+
+The tag exists locally and never became a GitHub release, so the release
+workflow has not run since `v0.1.0b5`. The gap is not a failed release; the tag
+was simply never pushed. `v0.2.0` is the next run of that pipeline, and the
+first exercise of it in a while — worth watching rather than assuming.
 
 ## Distribution channels
 

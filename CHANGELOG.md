@@ -15,6 +15,8 @@ next to the diff it explains.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-18
+
 ### Added
 
 - **`pzi.update()` and `pzi.list_tags()`**, completing the Python API's coverage
@@ -2156,7 +2158,8 @@ First public beta.
 - No sync, group libraries, or desktop reader (by design).
 - Not yet on PyPI; install from GitHub for now.
 
-[Unreleased]: https://github.com/mnazaal/paperazzi/compare/v0.1.0b6...HEAD
+[Unreleased]: https://github.com/mnazaal/paperazzi/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/mnazaal/paperazzi/compare/v0.1.0b6...v0.2.0
 [0.1.0b6]: https://github.com/mnazaal/paperazzi/compare/v0.1.0b5...v0.1.0b6
 [0.1.0b5]: https://github.com/mnazaal/paperazzi/compare/v0.1.0b4...v0.1.0b5
 [0.1.0b4]: https://github.com/mnazaal/paperazzi/compare/v0.1.0b3...v0.1.0b4
