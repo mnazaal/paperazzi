@@ -65,6 +65,7 @@ pzi.EntryRecord {
     canonical_url: str | None
     citekey: str
     doi: str | None
+    entry_type: str
     isbn: str | None
     issn: str | None
     local_pdf_path: str | None

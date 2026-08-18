@@ -189,6 +189,11 @@ class EntryRecord(TypedDict):
     """
 
     citekey: str
+    #: The BibTeX entry type (`article`, `inproceedings`, …), or `unknown`.
+    #: Read off the parsed entry rather than the record, because
+    #: `bibtex.bibtex_entry_to_record` deliberately never sets it — see
+    #: `list_entries`, which does the same for `EntrySummary`.
+    entry_type: str
     title: str | None
     authors: list[str]
     year: int | None
@@ -379,7 +384,14 @@ def entry_detail(
         "citekey": citekey,
         "bib_name": bib["name"],
         "bib_path": bib["path"],
-        "record": dict(record),
+        # `entry_type` comes from the parsed entry, not the record: without it
+        # `pzi.get()` was not a superset of `pzi.entries()`, which reports it,
+        # and a caller could not tell an `@article` from an `@inproceedings`
+        # for an entry `export --format json` labels correctly.
+        "record": {
+            **record,
+            "entry_type": str(entries[index].get("entry_type") or "unknown"),
+        },
         "errors": [],
         "warnings": dropped,
     }

@@ -625,6 +625,44 @@ def test_a_missing_bib_warns_instead_of_looking_empty(tmp_path: Path) -> None:
             assert call() == []
 
 
+def test_get_is_a_superset_of_the_summary_entries_returns(tmp_path: Path) -> None:
+    """`get()` must not answer less about an entry than `entries()` does.
+
+    `EntryRecord` had no `entry_type` while `EntrySummary` did and
+    `export --format json` emitted it, so the "full record" was missing a field
+    the *summary* carried, and an entry could not be round-tripped through the
+    Python API — nothing in it said `@article` rather than `@inproceedings`.
+
+    The value comes off the parsed entry, not the record:
+    `bibtex.bibtex_entry_to_record` deliberately never sets `entry_type`, and
+    reading it off the record reported `"unknown"` for everything.
+    """
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text(
+        "@inproceedings{jones2021,\n  title = {Another},\n"
+        "  author = {Jones, Ada},\n  year = {2021},\n}\n",
+        encoding="utf-8",
+    )
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\ndefault = true\n',
+        encoding="utf-8",
+    )
+    config = str(config_path)
+
+    record = pzi.get("jones2021", config_path=config)
+    summary = pzi.entries(config_path=config)[0]
+
+    assert record["entry_type"] == "inproceedings"
+    # `has_pdf` is the one deliberate difference and `get`'s docstring says so:
+    # the summary answers "is there a PDF", the record answers "where", in
+    # `local_pdf_path`. Anything else appearing here is a new divergence.
+    assert set(summary) - set(record) == {"has_pdf"}, (
+        "entries() reports a key get() does not: "
+        + repr(set(summary) - set(record) - {"has_pdf"})
+    )
+
+
 def test_two_failures_sharing_an_exit_code_are_told_apart_by_reason(
     tmp_path: Path,
 ) -> None:
