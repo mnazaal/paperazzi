@@ -61,7 +61,7 @@ from pzi.dedupe_service import (
     find_duplicates,
     merge_duplicates,
 )
-from pzi.errors import PziError, exit_code_for_error
+from pzi.errors import REASON_USAGE, PziError, exit_code_for_error
 from pzi.export_service import export_bibtex, export_csv, export_json, export_ris
 from pzi.promote_service import PromoteItem, PromoteResult, promote_bib
 from pzi.search_service import SearchMatch, search_bib
@@ -200,6 +200,35 @@ def _public(fn: Callable[..., Any]) -> Callable[..., Any]:
             ) from exc
 
     return wrapper
+
+
+def _tag_list(tags: object) -> list[str]:
+    """Validate a caller's tag argument, or raise what the CLI would report.
+
+    `list(tags)` on its own accepted a bare string and iterated it: a
+    `pzi.add_tags(key, "nlp")` wrote ``keywords = {l, n, p}`` into the library
+    and reported ``status: ok, changed: True``. The annotation said `list[str]`
+    and nothing enforced it — the CLI cannot reach this (it splits CSV into a
+    list) and `POST /tags/add` already answers 400 for exactly this shape, so
+    the Python API was the one surface that took the mistake and wrote it.
+
+    Rejecting rather than coercing, because a bare string is ambiguous: `"nlp"`
+    is one tag and `"a,b"` is arguably two. Accepting one later is a widening
+    and stays backward-compatible; guessing now and changing the guess is not.
+    """
+    if isinstance(tags, str) or not isinstance(tags, list):
+        raise PziError(
+            f"tags must be a list of strings, not {type(tags).__name__}",
+            code=exit_codes.USAGE,
+            reason=REASON_USAGE,
+        )
+    if not all(isinstance(tag, str) for tag in tags):
+        raise PziError(
+            "tags must be a list of strings",
+            code=exit_codes.USAGE,
+            reason=REASON_USAGE,
+        )
+    return list(tags)
 
 
 def _unwrap(result: Mapping[str, Any], key: str) -> Any:
@@ -412,7 +441,7 @@ def add(
     one function call. Without it, capture falls back to the DOI-based metadata
     providers, which cannot resolve a publisher URL.
     """
-    overrides: dict[str, object] = {"tags": list(tags)} if tags else {}
+    overrides: dict[str, object] = {"tags": _tag_list(tags)} if tags else {}
     # Through `capture_to_bib`, the seam the CLI and the HTTP API both use —
     # not straight to `add_input_to_bib`. It carries the shared capture policy
     # (PDF-candidate ranking, the SSRF check on a page-supplied PDF URL), so a
@@ -548,7 +577,7 @@ def add_tags(
         home_dir=_home(),
         bib_selector=library,
         citekey=citekey,
-        tags=list(tags),
+        tags=_tag_list(tags),
         dry_run=dry_run,
     ).copy()
     _unwrap(typed, "status")
@@ -574,7 +603,7 @@ def remove_tags(
         home_dir=_home(),
         bib_selector=library,
         citekey=citekey,
-        tags=list(tags),
+        tags=_tag_list(tags),
         dry_run=dry_run,
     ).copy()
     _unwrap(typed, "status")

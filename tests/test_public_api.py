@@ -625,6 +625,44 @@ def test_a_missing_bib_warns_instead_of_looking_empty(tmp_path: Path) -> None:
             assert call() == []
 
 
+def test_a_bare_string_is_not_a_tag_list(tmp_path: Path) -> None:
+    """`add_tags(key, "nlp")` must refuse, not write one tag per character.
+
+    The annotation said `list[str]` and `api.py` said `list(tags)`, which
+    iterates a string happily: the call wrote ``keywords = {l, n, p}`` into the
+    library and reported ``status: ok, changed: True``. The CLI cannot reach
+    this — it splits CSV into a list — and `POST /tags/add` answers 400 for the
+    same shape, so the Python API was the one surface that took the mistake and
+    committed it to the file.
+
+    Asserts the file too, not just the raise: the failure being prevented is a
+    write, and a guard that raised *after* writing would satisfy the raise
+    alone.
+    """
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text(ONE_ENTRY, encoding="utf-8")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\ndefault = true\n',
+        encoding="utf-8",
+    )
+    config = str(config_path)
+    before = bib_path.read_text(encoding="utf-8")
+
+    for call in (
+        lambda: pzi.add_tags("smith2020", "nlp", config_path=config),  # type: ignore[arg-type]
+        lambda: pzi.remove_tags("smith2020", "nlp", config_path=config),  # type: ignore[arg-type]
+        lambda: pzi.add("10.1000/x", tags="nlp", config_path=config),  # type: ignore[arg-type]
+        lambda: pzi.add_tags("smith2020", ["ok", 7], config_path=config),  # type: ignore[list-item]
+    ):
+        with pytest.raises(PziError) as excinfo:
+            call()
+        assert excinfo.value.code == 2, str(excinfo.value)
+        assert "list of strings" in str(excinfo.value)
+
+    assert bib_path.read_text(encoding="utf-8") == before
+
+
 def test_each_facade_call_warns_for_itself_not_once_per_process(
     tmp_path: Path,
 ) -> None:
