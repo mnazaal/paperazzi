@@ -559,20 +559,24 @@ def promote(
 def delete(
     citekey: str,
     *,
-    dry_run: bool = False,
+    dry_run: bool = True,
     config_path: str | None = None,
     library: str | None = None,
 ) -> DeleteEntryResult:
-    """Delete one entry by citekey. Writes.
+    """Delete one entry by citekey. **Previews by default.**
 
-    A timestamped copy of the pre-delete library is made first, and its path is
-    in the returned ``backup_path``. The entry's PDF is left on disk — the
-    result reports it as ``pdf_path`` so a caller can remove it deliberately.
+    Pass ``dry_run=False`` to actually delete. A timestamped copy of the
+    pre-delete library is made first, and its path is in the returned
+    ``backup_path``. The entry's PDF is left on disk — the result reports it as
+    ``pdf_path`` so a caller can remove it deliberately.
 
-    Writes by default, unlike :func:`promote`. This deletes exactly the entry
-    named in the call, where ``promote`` sweeps the whole library; the CLI's
-    ``--force`` prompt guards a human typing at a terminal, not a script that
-    wrote the citekey out.
+    Previewing is the odd one out among the writers here, and deliberately so.
+    The general rule is that a function naming exactly what it touches acts —
+    :func:`add_tags` does, :func:`merge` previews because it sweeps. But
+    ``delete`` is the one call in this module that destroys data, and the other
+    two surfaces both hesitate: the CLI refuses without ``--force`` and
+    ``POST /delete`` previews. A Python API that deleted on the first call was
+    the only surface where a typo'd citekey in a REPL took the entry out.
     """
     typed = delete_entry(
         bib_path=_bib_path(config_path, library),

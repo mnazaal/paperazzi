@@ -184,7 +184,7 @@ pzi.add(source: 'str', *, tags: 'list[str] | None' = None, dry_run: 'bool' = Fal
 pzi.add_tags(citekey: 'str', tags: 'list[str]', *, dry_run: 'bool' = False, config_path: 'str | None' = None, library: 'str | None' = None) -> 'TagChangeResult'
 pzi.check(*, strict: 'bool' = False, config_path: 'str | None' = None, library: 'str | None' = None) -> 'CheckResult'
 pzi.dedupe(*, config_path: 'str | None' = None, library: 'str | None' = None) -> 'DedupeResult'
-pzi.delete(citekey: 'str', *, dry_run: 'bool' = False, config_path: 'str | None' = None, library: 'str | None' = None) -> 'DeleteEntryResult'
+pzi.delete(citekey: 'str', *, dry_run: 'bool' = True, config_path: 'str | None' = None, library: 'str | None' = None) -> 'DeleteEntryResult'
 pzi.entries(*, offset: 'int' = 0, limit: 'int' = 50, sort: 'str' = 'citekey', config_path: 'str | None' = None, library: 'str | None' = None) -> 'list[EntrySummary]'
 pzi.export(fmt: 'str' = 'bibtex', *, config_path: 'str | None' = None, library: 'str | None' = None) -> 'str'
 pzi.get(citekey: 'str', *, config_path: 'str | None' = None, library: 'str | None' = None) -> 'EntryRecord'

@@ -31,8 +31,9 @@ next to the diff it explains.
     could discover them before.
   - `delete`, `add_tags`, `remove_tags` and `merge` make the write side
     reachable; `merge` is what turns `dedupe()`'s clusters into something the
-    API can act on. `merge` previews by default (like `promote`), the other
-    three act, because they name exactly what they touch.
+    API can act on. `merge` and `delete` preview by default; the two tag
+    functions act, because they name exactly what they touch and are
+    reversible.
   - Every function returns a named `TypedDict`, exported alongside it
     (`pzi.EntryRecord`, `pzi.SearchMatch`, …). The snapshot used to pin
     `-> dict[str, Any]`, which stays green through any key rename; a test now

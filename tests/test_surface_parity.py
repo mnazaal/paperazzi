@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import inspect
 from dataclasses import dataclass
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -327,34 +328,61 @@ def _cli_dry_run_default(command: str) -> bool:
     raise AssertionError(f"`pzi {command}` has no --dry-run")
 
 
-def _http_dry_run_default(route: str, service: str) -> bool:
-    """What the route passes for `dry_run` given an empty body.
+def _http_dry_run_default(
+    route: str,
+    service: str,
+    body: dict[str, object] | None = None,
+    *,
+    config_path: str = "/nonexistent/config.toml",
+    home_dir: str = "/nonexistent",
+) -> bool:
+    """What the route passes for `dry_run` given a body that omits it.
 
     Observed by calling the route with the service patched, rather than by
     reading the handler's source — the same reason the route inventory stopped
     grepping `http_api`.
+
+    *body* and *config_path* carry whatever else the route validates before it
+    reaches the service — `/delete` needs a citekey *and* a resolvable library,
+    where `/update` hands both straight to the service. Without them the call
+    400s early and the stub is never reached, which would make the caller's
+    assertion pass by not running. So this asserts rather than skips: a route
+    listed in the table and silently never probed is precisely the failure this
+    file exists to prevent.
     """
     with patch(f"pzi.http_post_routes.{service}") as stub:
         stub.return_value = {"status": "ok", "items": [], "errors": []}
-        process_post_request(route, {}, "/nonexistent/config.toml", "/nonexistent")
-        if not stub.called:
-            pytest.skip(f"{route} refused the empty body before reaching {service}")
+        process_post_request(route, dict(body or {}), config_path, home_dir)
+        assert stub.called, (
+            f"{route} refused the body before reaching {service}; give "
+            "`_http_dry_run_default` whatever the route validates first"
+        )
         return bool(stub.call_args.kwargs["dry_run"])
 
 
 @pytest.mark.parametrize(
-    ("cli_command", "route", "service", "python_name", "expected"),
+    ("cli_command", "route", "service", "python_name", "expected", "body"),
     [
         # (CLI, HTTP, Python) — expected dry-run default per surface. The CLI
         # writes because you typed the command; the other two preview.
-        ("update", "/update", "update_bib", "update", (False, True, True)),
+        ("update", "/update", "update_bib", "update", (False, True, True), None),
         # `merge` has no route, so only two surfaces have a default to state.
-        ("library merge", None, None, "merge", (False, None, True)),
+        ("library merge", None, None, "merge", (False, None, True), None),
+        # `delete` is the exception to the CLI half of the rule, and the row
+        # that exists because it was wrong: the CLI's `--dry-run` defaults to
+        # False but the command *refuses* without `--force`, so no surface
+        # deletes on a bare invocation. The Python API used to (decision 34).
+        # The route validates a citekey first, so the probe has to carry one.
+        (
+            "delete", "/delete", "delete_entry", "delete", (False, True, True),
+            {"citekey": "smith2020"},
+        ),
     ],
 )
 def test_the_dry_run_defaults_are_the_declared_ones(
     cli_command: str, route: str | None, service: str | None,
     python_name: str, expected: tuple[bool | None, bool | None, bool | None],
+    body: dict[str, object] | None, tmp_path: Path,
 ) -> None:
     """Each surface's preview default, asserted rather than assumed.
 
@@ -363,11 +391,31 @@ def test_the_dry_run_defaults_are_the_declared_ones(
     from a script should not sweep a library before the caller sees anything.
     Recording that here is the point — a test demanding agreement would be
     wrong, and one ignoring the question would be useless.
+
+    `delete` reads as an exception and is not one. Its CLI `--dry-run` defaults
+    to False, but `commands/delete.py` refuses outright without `--force`, so
+    the effective answer on every surface is "not without a second word".
+    Decision 34 moved the Python default to match, after 23's rule ("a function
+    naming its target acts") made this the one surface that destroyed an entry
+    on the first call.
     """
     want_cli, want_http, want_python = expected
     assert _cli_dry_run_default(cli_command) is want_cli
     if route is not None and service is not None:
-        assert _http_dry_run_default(route, service) is want_http
+        bib_path = tmp_path / "ml.bib"
+        bib_path.write_text("", encoding="utf-8")
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\ndefault = true\n',
+            encoding="utf-8",
+        )
+        assert (
+            _http_dry_run_default(
+                route, service, body,
+                config_path=str(config_path), home_dir=str(tmp_path),
+            )
+            is want_http
+        )
     signature = inspect.signature(getattr(pzi, python_name))
     assert signature.parameters["dry_run"].default is want_python
 

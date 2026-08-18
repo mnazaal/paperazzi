@@ -407,7 +407,7 @@ def test_every_declared_type_matches_a_real_call(tmp_path: Path) -> None:
         ),
         (
             "delete (write)",
-            pzi.delete("smith2020", config_path=config),
+            pzi.delete("smith2020", dry_run=False, config_path=config),
             pzi.DeleteEntryResult,
         ),
     ]
@@ -511,19 +511,25 @@ def test_tags_round_trip_through_the_api(tmp_path: Path) -> None:
     assert removed["changed"] is True
 
 
-def test_delete_writes_by_default_and_reports_its_backup(tmp_path: Path) -> None:
-    """Decision 23: `delete` names its target, so it acts.
+def test_delete_previews_by_default_like_the_other_two_surfaces(
+    tmp_path: Path,
+) -> None:
+    """Decision 34, revising 23: the one destructive call does not act first.
 
-    `promote` previews because a zero-argument call sweeps the whole library;
-    this one deletes exactly the citekey in the call.
+    "A function naming its target acts" gave `delete` a writing default, which
+    made the Python API the only surface that removed an entry with no second
+    step — the CLI refuses without `--force` and `POST /delete` previews. Three
+    surfaces disagreeing about a destructive default is worse than the rule
+    being uniform, and this is the call where being wrong is unrecoverable
+    without the backup.
     """
     config = _library(tmp_path)
 
-    preview = pzi.delete("smith2020", dry_run=True, config_path=config)
-    assert preview["dry_run"] is True
-    assert pzi.entries(config_path=config), "a dry run must not delete"
+    default = pzi.delete("smith2020", config_path=config)
+    assert default["dry_run"] is True
+    assert pzi.entries(config_path=config), "the default must not delete"
 
-    result = pzi.delete("smith2020", config_path=config)
+    result = pzi.delete("smith2020", dry_run=False, config_path=config)
     assert result["dry_run"] is False
     assert Path(result["backup_path"]).exists()
     assert pzi.entries(config_path=config) == []
