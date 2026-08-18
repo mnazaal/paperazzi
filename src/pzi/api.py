@@ -31,7 +31,7 @@ import functools
 import os
 import warnings
 from collections.abc import Callable, Mapping
-from typing import Any, cast
+from typing import Any, NotRequired, TypedDict, cast
 
 from pzi import exit_codes
 from pzi.add_planning import AddResult
@@ -47,7 +47,7 @@ from pzi.bib_service import (
 from pzi.bib_service import list_bibs as _list_bibs_service
 from pzi.capture_core import capture_to_bib
 from pzi.capture_models import CaptureInput, CaptureOptions
-from pzi.check_service import CheckResult, check_bib
+from pzi.check_service import CheckItem, CheckResult, check_bib
 from pzi.config import (
     AppConfig,
     BibConfig,
@@ -78,20 +78,21 @@ from pzi.tag_service import remove_tags as _remove_tags_service
 from pzi.update_service import UpdateBibResult, UpdatePlanItem, update_bib
 
 __all__ = [
-    "AddResult",
+    "AddReport",
     "BibInfo",
-    "CheckResult",
-    "DedupeResult",
-    "DeleteEntryResult",
+    "CheckReport",
+    "DedupeReport",
+    "DeleteEntryReport",
+    "EntryPage",
     "EntryRecord",
     "EntrySummary",
-    "MergeResult",
+    "MergeReport",
     "PromoteItem",
-    "PromoteResult",
+    "PromoteReport",
     "SearchMatch",
-    "TagChangeResult",
-    "TagListResult",
-    "UpdateBibResult",
+    "TagChangeReport",
+    "TagListReport",
+    "UpdateBibReport",
     "UpdatePlanItem",
     "add",
     "add_tags",
@@ -109,6 +110,201 @@ __all__ = [
     "search",
     "update",
 ]
+
+#: What the facade strips before returning. `status` is always ``"ok"`` — a
+#: failure raises `PziError` — `errors` is always empty for the same reason, and
+#: no service sets `reason` on a success (verified across every result literal
+#: in `src/pzi/`; the reason a caller wants is on the raised `PziError`, which
+#: carries it). Three keys that can never vary are three keys frozen into the
+#: 1.0 surface saying nothing, against this module's own stated convention that
+#: it returns the answer rather than the transport envelope.
+#:
+#: The service types keep them: the CLI and the HTTP API both read `status` to
+#: choose an exit code or a status line. So each has a public twin below,
+#: paired in `_REPORT_TYPES`, and `tests/test_public_api.py` asserts the
+#: derivation — a service growing a key cannot silently skip its public type.
+_ENVELOPE_KEYS = frozenset({"status", "errors", "reason"})
+
+
+class AddReport(TypedDict):
+    """One capture — what :func:`pzi.add` returns.
+
+    `AddResult` minus the transport envelope. See `_ENVELOPE_KEYS`.
+    """
+
+    bib_name: str | None
+    bib_path: str | None
+    action: str | None
+    citekey: str | None
+    pdf_path: str | None
+    changed_fields: list[str]
+    dry_run: bool
+    message: str
+    warnings: list[str]
+    pdf_url: NotRequired[str | None]
+    pdf_status: NotRequired[str | None]
+    pdf_error: NotRequired[str | None]
+    pdf_suggestion: NotRequired[str | None]
+    metadata_diagnostics: NotRequired[list[str]]
+    diff: NotRequired[str]
+
+
+class CheckReport(TypedDict):
+    """One reference audit — what :func:`pzi.check` returns.
+
+    `CheckResult` minus the transport envelope. See `_ENVELOPE_KEYS`.
+    """
+
+    bib_name: str | None
+    strict: bool
+    total: int
+    counts: dict[str, int]
+    items: list[CheckItem]
+    warnings: list[str]
+
+
+class DedupeReport(TypedDict):
+    """The duplicate clusters :func:`pzi.dedupe` found.
+
+    `DedupeResult` minus the transport envelope. See `_ENVELOPE_KEYS`.
+    """
+
+    bib_path: str
+    total_entries: int
+    exact_duplicates: list[dict[str, Any]]
+    fuzzy_candidates: list[dict[str, Any]]
+    total_clusters: int
+    warnings: NotRequired[list[str]]
+
+
+class DeleteEntryReport(TypedDict):
+    """One deletion — what :func:`pzi.delete` returns.
+
+    `DeleteEntryResult` minus the transport envelope. See `_ENVELOPE_KEYS`.
+    """
+
+    citekey: str
+    bib_path: str
+    message: str
+    dry_run: NotRequired[bool]
+    title: NotRequired[str]
+    pdf_path: NotRequired[str | None]
+    backup_path: NotRequired[str]
+
+
+class MergeReport(TypedDict):
+    """One merge — what :func:`pzi.merge` returns.
+
+    `MergeResult` minus the transport envelope. See `_ENVELOPE_KEYS`.
+    """
+
+    citekey_a: str
+    citekey_b: str
+    dry_run: bool
+    message: str
+    merged_title: NotRequired[str]
+    dropped_citekey: NotRequired[str]
+    changed_fields: NotRequired[list[str]]
+    merged_record: NotRequired[dict[str, Any]]
+    carried_fields: NotRequired[list[str]]
+    dropped_fields: NotRequired[list[str]]
+    orphaned_pdf: NotRequired[str]
+    overwritten_fields: NotRequired[list[str]]
+    backup_path: NotRequired[str]
+
+
+class PromoteReport(TypedDict):
+    """One promotion sweep — what :func:`pzi.promote` returns.
+
+    `PromoteResult` minus the transport envelope. See `_ENVELOPE_KEYS`.
+    """
+
+    bib_name: str | None
+    dry_run: bool
+    keep_preprint: bool
+    items: list[PromoteItem]
+    summary: NotRequired[dict[str, Any]]
+
+
+class TagChangeReport(TypedDict):
+    """One tag write — what :func:`pzi.add_tags` and
+    :func:`pzi.remove_tags` return.
+
+    `TagChangeResult` minus the transport envelope. See `_ENVELOPE_KEYS`.
+    """
+
+    bib_name: str | None
+    citekey: str | None
+    tags: list[str]
+    changed: bool
+    dry_run: bool
+    message: str
+
+
+class TagListReport(TypedDict):
+    """A tag listing — what :func:`pzi.list_tags` returns.
+
+    `TagListResult` minus the transport envelope. See `_ENVELOPE_KEYS`.
+    """
+
+    bib_name: str | None
+    citekey: str | None
+    tags: list[str]
+    warnings: NotRequired[list[str]]
+
+
+class UpdateBibReport(TypedDict):
+    """One metadata sweep — what :func:`pzi.update` returns.
+
+    `UpdateBibResult` minus the transport envelope. See `_ENVELOPE_KEYS`.
+    """
+
+    bib_name: str | None
+    dry_run: bool
+    items: list[UpdatePlanItem]
+
+class EntryPage(TypedDict):
+    """One page of the library — what :func:`pzi.entries` returns.
+
+    A page rather than a bare list because `total` is the answer to "am I done
+    paginating", and there is no other way to get it: the service computes it
+    and the facade used to throw it away, so a caller looping over `offset` had
+    to keep requesting until a short page came back. `offset` and `limit` are
+    echoed as *resolved* — `limit` is clamped to `_MIN_LIMIT.._MAX_LIMIT` and a
+    negative `offset` becomes zero, matching the other two front ends, so what
+    comes back says what was actually used rather than what was asked for.
+    """
+
+    items: list[EntrySummary]
+    #: Entries in the library, not on this page. `len(items)` is the page.
+    total: int
+    offset: int
+    limit: int
+
+
+#: Public type <- service type. Read by the derivation test, and the single
+#: place the pairing is written down.
+_REPORT_TYPES: tuple[tuple[type, type], ...] = (
+    (AddReport, AddResult),
+    (CheckReport, CheckResult),
+    (DedupeReport, DedupeResult),
+    (DeleteEntryReport, DeleteEntryResult),
+    (MergeReport, MergeResult),
+    (PromoteReport, PromoteResult),
+    (TagChangeReport, TagChangeResult),
+    (TagListReport, TagListResult),
+    (UpdateBibReport, UpdateBibResult),
+)
+
+
+def _report(result: Mapping[str, Any]) -> Any:
+    """A service result with the transport envelope removed.
+
+    Called after `_unwrap`, so the envelope has already been read for its one
+    purpose: deciding whether to raise.
+    """
+    return {key: value for key, value in result.items() if key not in _ENVELOPE_KEYS}
+
 
 _EXPORTERS = {
     "bibtex": export_bibtex,
@@ -358,9 +554,17 @@ def entries(
     sort: str = "citekey",
     config_path: str | None = None,
     library: str | None = None,
-) -> list[EntrySummary]:
+) -> EntryPage:
     """Return a page of the library, sorted by ``citekey``, ``title``,
-    ``author`` or ``year``."""
+    ``author`` or ``year``.
+
+    The entries are in ``["items"]``; ``["total"]`` is the whole library, which
+    is what tells a caller when to stop paginating::
+
+        page = pzi.entries()
+        while page["offset"] + len(page["items"]) < page["total"]:
+            page = pzi.entries(offset=page["offset"] + len(page["items"]))
+    """
     if sort not in _SORT_FIELDS:
         raise PziError(
             f"unknown sort field {sort!r} — expected one of "
@@ -368,18 +572,25 @@ def entries(
             code=exit_codes.USAGE,
             reason=REASON_USAGE,
         )
+    resolved_offset = max(0, offset)
+    resolved_limit = max(_MIN_LIMIT, min(limit, _MAX_LIMIT))
     result = list_entries(
         config_path=_resolved_config_path(config_path),
         home_dir=_home(),
         bib_selector=library,
-        offset=max(0, offset),
-        limit=max(_MIN_LIMIT, min(limit, _MAX_LIMIT)),
+        offset=resolved_offset,
+        limit=resolved_limit,
         sort=sort,
     )
     typed = dict(result)
     items = list(_unwrap(typed, "items"))
     _emit_warnings(typed)
-    return items
+    return {
+        "items": items,
+        "total": int(typed.get("total", len(items))),
+        "offset": resolved_offset,
+        "limit": resolved_limit,
+    }
 
 
 @_public
@@ -463,7 +674,7 @@ def add(
     force_new: bool = False,
     config_path: str | None = None,
     library: str | None = None,
-) -> AddResult:
+) -> AddReport:
     """Capture a paper by DOI, URL or local PDF path.
 
     Returns the write result: the citekey, whether it was an insert or an
@@ -498,7 +709,7 @@ def add(
     # annotated `AddResult`, and the conformance test checks a real call.
     typed = cast("AddResult", dict(result))
     _unwrap(typed, "status")
-    return typed
+    return _report(typed)
 
 
 @_public
@@ -507,7 +718,7 @@ def check(
     strict: bool = False,
     config_path: str | None = None,
     library: str | None = None,
-) -> CheckResult:
+) -> CheckReport:
     """Verify entries against metadata providers. Makes network requests."""
     result = check_bib(
         config_path=_resolved_config_path(config_path),
@@ -517,7 +728,7 @@ def check(
     )
     typed = result.copy()
     _unwrap(typed, "status")
-    return typed
+    return _report(typed)
 
 
 @_public
@@ -525,11 +736,11 @@ def dedupe(
     *,
     config_path: str | None = None,
     library: str | None = None,
-) -> DedupeResult:
+) -> DedupeReport:
     """Report exact duplicate clusters and fuzzy near-duplicates. Reads only."""
     typed = find_duplicates(bib_path=_bib_path(config_path, library)).copy()
     _unwrap(typed, "status")
-    return typed
+    return _report(typed)
 
 
 @_public
@@ -539,7 +750,7 @@ def promote(
     dry_run: bool = True,
     config_path: str | None = None,
     library: str | None = None,
-) -> PromoteResult:
+) -> PromoteReport:
     """Find published versions of preprints. Makes network requests.
 
     **Previews by default** — pass ``dry_run=False`` to write. This sweeps the
@@ -560,7 +771,7 @@ def promote(
     )
     typed = result.copy()
     _unwrap(typed, "status")
-    return typed
+    return _report(typed)
 
 
 @_public
@@ -570,7 +781,7 @@ def delete(
     dry_run: bool = True,
     config_path: str | None = None,
     library: str | None = None,
-) -> DeleteEntryResult:
+) -> DeleteEntryReport:
     """Delete one entry by citekey. **Previews by default.**
 
     Pass ``dry_run=False`` to actually delete. A timestamped copy of the
@@ -592,7 +803,7 @@ def delete(
         dry_run=dry_run,
     ).copy()
     _unwrap(typed, "status")
-    return typed
+    return _report(typed)
 
 
 @_public
@@ -603,7 +814,7 @@ def add_tags(
     dry_run: bool = False,
     config_path: str | None = None,
     library: str | None = None,
-) -> TagChangeResult:
+) -> TagChangeReport:
     """Add tags to one entry, keeping the tags it already has. Writes.
 
     Tags are normalized the way every other front end normalizes them, and the
@@ -620,7 +831,7 @@ def add_tags(
         dry_run=dry_run,
     ).copy()
     _unwrap(typed, "status")
-    return typed
+    return _report(typed)
 
 
 @_public
@@ -631,7 +842,7 @@ def remove_tags(
     dry_run: bool = False,
     config_path: str | None = None,
     library: str | None = None,
-) -> TagChangeResult:
+) -> TagChangeReport:
     """Remove tags from one entry. Writes.
 
     The counterpart of :func:`add_tags`, with the same result shape. Removing a
@@ -646,7 +857,7 @@ def remove_tags(
         dry_run=dry_run,
     ).copy()
     _unwrap(typed, "status")
-    return typed
+    return _report(typed)
 
 
 @_public
@@ -657,7 +868,7 @@ def merge(
     dry_run: bool = True,
     config_path: str | None = None,
     library: str | None = None,
-) -> MergeResult:
+) -> MergeReport:
     """Merge entry *citekey_a* into *citekey_b*, keeping b's citekey.
 
     This is what makes :func:`dedupe` actionable: it reports duplicate clusters,
@@ -682,7 +893,7 @@ def merge(
         file_path_style=config.get("pdf_file_path_style", "absolute"),
     ).copy()
     _unwrap(typed, "status")
-    return typed
+    return _report(typed)
 
 
 @_public
@@ -691,7 +902,7 @@ def list_tags(
     *,
     config_path: str | None = None,
     library: str | None = None,
-) -> TagListResult:
+) -> TagListReport:
     """List tags — one entry's, or the whole library's vocabulary.
 
     With *citekey*, the tags on that entry. Without one, every distinct tag in
@@ -707,7 +918,7 @@ def list_tags(
     tags = _unwrap(typed, "tags")
     _emit_warnings(typed)
     typed["tags"] = list(tags)
-    return typed
+    return _report(typed)
 
 
 @_public
@@ -716,7 +927,7 @@ def update(
     dry_run: bool = True,
     config_path: str | None = None,
     library: str | None = None,
-) -> UpdateBibResult:
+) -> UpdateBibReport:
     """Fill missing metadata on entries that have gaps. Makes network requests.
 
     **Previews by default** — pass ``dry_run=False`` to write, the same split as
@@ -736,4 +947,4 @@ def update(
         dry_run=dry_run,
     ).copy()
     _unwrap(typed, "status")
-    return typed
+    return _report(typed)

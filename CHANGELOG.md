@@ -117,6 +117,29 @@ next to the diff it explains.
 
 ### Changed
 
+- **The Python API returns the answer, not the transport envelope.** Ten of the
+  fifteen functions returned `status`, `errors` and sometimes `reason` — keys
+  that can never vary, since a failure raises `PziError` and no service sets a
+  reason on success. Each of the nine result shapes now has a public twin
+  (`pzi.TagChangeResult` -> `pzi.TagChangeReport`, and the same for `Add`,
+  `Check`, `Dedupe`, `DeleteEntry`, `Merge`, `Promote`, `TagList` and
+  `UpdateBib`); the services keep the envelope, because the CLI reads `status`
+  for its exit code and the HTTP API for its status line. A test derives each
+  public type from its service type, so a service growing a key cannot leave
+  its twin behind. **Breaking**: the type names changed, and the three keys are
+  gone from the returned dicts.
+
+- **`pzi.entries()` returns an `EntryPage`, not a list.** `{items, total,
+  offset, limit}` — the service computed `total` and the facade threw it away,
+  so a caller paginating had no way to know when to stop except by requesting
+  until a short page came back. `offset` and `limit` come back *resolved*, so
+  they say what was used rather than what was asked for. **Breaking**: entries
+  are in `page["items"]`.
+
+- **`PziError` carries `reason`.** `_unwrap` computed the exit code from the
+  service's structured reason and then dropped it, so `except PziError` could
+  not separate a bad config from an unreadable library — both exit 5.
+
 - **`pzi fix` is now `pzi library`, and `pzi check` moved into it.** The group
   was a verb among nouns (`pzi tag add`, `pzi pdf attach`) while three of its
   four subcommands were read-only, and `check` — also pure validation — sat at

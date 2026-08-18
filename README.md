@@ -483,10 +483,10 @@ import pzi
 
 # read
 pzi.search(query="collapse")            # -> list[SearchMatch]
-pzi.entries(offset=0, limit=50, sort="citekey")   # -> list[EntrySummary]
+pzi.entries(offset=0, limit=50, sort="citekey")   # -> EntryPage: items + total
 pzi.get("smith2020")                    # -> EntryRecord, incl. local_pdf_path
 pzi.list_bibs()                         # -> list[BibInfo]; the names `library=` takes
-pzi.list_tags()                         # -> TagListResult; the library's tag vocabulary
+pzi.list_tags()                         # -> TagListReport; the library's tag vocabulary
 pzi.export("bibtex")                    # -> str
 pzi.check(strict=False)                 # network
 pzi.dedupe()
@@ -495,18 +495,29 @@ pzi.dedupe()
 pzi.add("10.1038/nature12373", tags=["ml"])       # network
 pzi.add_tags("smith2020", ["ml"])
 pzi.remove_tags("smith2020", ["ml"])
-pzi.delete("smith2020")                 # backs the library up first
+pzi.delete("smith2020")                 # previews; backs the library up first
 pzi.merge("dup2020", "smith2020")       # previews by default
 pzi.update(dry_run=True)                # fill gaps; previews by default; network
 pzi.promote(dry_run=True)               # replace preprints; previews by default; network
 ```
 
-Three conventions hold throughout. **Failure raises `pzi.PziError`** (carrying
-`code`, the exit code the CLI would have used) rather than returning an error
-dict — including `pzi.get()` on an unknown citekey, which is `code == 3`.
-**Functions return the answer, not the envelope.** And **everything that sweeps
-the library or destroys an entry previews by default** — `update`, `promote`,
-`merge` and `delete` all take `dry_run=False` to write.
+Three conventions hold throughout. **Failure raises `pzi.PziError`** rather
+than returning an error dict — including `pzi.get()` on an unknown citekey,
+which is `code == 3`. The exception carries `code`, the exit code the CLI would
+have used, and `reason`, the structured discriminator behind it, because one
+exit code covers several reasons: `5` is a bad config *and* an unreachable
+provider *and* a locked library.
+
+**Functions return the answer, not the envelope.** The services report
+`status`, `errors` and `reason` because the CLI turns them into an exit code
+and the HTTP API into a status line; none of the three can vary in a value this
+surface returns, so none of them is in it. Each of the nine result shapes has a
+public twin — `TagChangeResult` becomes `pzi.TagChangeReport` — and a test
+derives one from the other so they cannot drift.
+
+And **everything that sweeps the library or destroys an entry previews by
+default** — `update`, `promote`, `merge` and `delete` all take `dry_run=False`
+to write.
 
 Every return value is a `TypedDict` exported alongside the functions
 (`pzi.EntryRecord`, `pzi.SearchMatch`, …), so a type checker sees the keys and

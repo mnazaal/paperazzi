@@ -171,14 +171,17 @@ def test_the_read_only_functions_return_data_not_envelopes(tmp_path: Path) -> No
     matches = pzi.search(query="Title", config_path=config)
     assert [m["citekey"] for m in matches] == ["smith2020"]
 
-    listed = pzi.entries(config_path=config)
-    assert [e["citekey"] for e in listed] == ["smith2020"]
+    page = pzi.entries(config_path=config)
+    assert [e["citekey"] for e in page["items"]] == ["smith2020"]
+    assert page["total"] == 1
 
     assert "@article{smith2020" in pzi.export(config_path=config)
     assert '"citekey"' in pzi.export("json", config_path=config)
 
     report = pzi.dedupe(config_path=config)
-    assert report["status"] == "ok"
+    assert report["total_entries"] == 1
+    # And not the envelope: `status` and `errors` are the CLI's business.
+    assert "status" not in report and "errors" not in report
 
 
 @pytest.mark.parametrize(
@@ -366,6 +369,73 @@ def _conforms(value: object, declared: type) -> list[str]:
     return complaints
 
 
+def test_each_public_report_is_its_service_type_minus_the_envelope() -> None:
+    """The nine pairs, derived rather than transcribed.
+
+    Ten of the fifteen public functions returned the *transport* envelope —
+    `status` always `"ok"` because a failure raises, `errors` always empty for
+    the same reason, and `reason` never set on a success by any service. Three
+    keys that cannot vary, frozen into nine types that 1.0 would freeze
+    further, against `api.py`'s own stated convention that the facade returns
+    the answer.
+
+    The service types keep them, because the CLI reads `status` to pick an exit
+    code and the HTTP API to pick a status line. So each has a public twin, and
+    this is what stops the twin drifting: a service growing a key that the
+    report does not gain is a failure here, not a silently narrower public type
+    that no snapshot notices — the snapshot records whatever it is given.
+    """
+    from pzi.api import _ENVELOPE_KEYS, _REPORT_TYPES
+
+    assert len(_REPORT_TYPES) == 9, "one pair per envelope-returning result type"
+
+    for public, service in _REPORT_TYPES:
+        expected = set(service.__annotations__) - _ENVELOPE_KEYS
+        actual = set(public.__annotations__)
+        assert actual == expected, (
+            f"{public.__name__} should be {service.__name__} minus "
+            f"{sorted(_ENVELOPE_KEYS)}:\n"
+            f"  missing from the public type: {sorted(expected - actual)}\n"
+            f"  not in the service type: {sorted(actual - expected)}"
+        )
+        # Same annotation, not merely the same name.
+        for key in sorted(actual):
+            assert (
+                _annotation_text(public.__annotations__[key])
+                == _annotation_text(service.__annotations__[key])
+            ), f"{public.__name__}.{key} disagrees with {service.__name__}.{key}"
+
+    assert {public for public, _service in _REPORT_TYPES} <= {
+        getattr(pzi, name) for name in pzi.__all__ if name[0].isupper()
+    }, "a report type that is not exported is not public"
+
+
+def test_no_public_return_carries_the_transport_envelope(tmp_path: Path) -> None:
+    """The rule the types describe, checked against real values.
+
+    The derivation above is about declarations. This is the same claim made of
+    what the functions actually hand back, because `_report` could be forgotten
+    at one call site and the type would still read correctly.
+    """
+    from pzi.api import _ENVELOPE_KEYS
+
+    config = _library(tmp_path)
+    # `delete` before `update`, and `update` last: with the library emptied it
+    # has no gap to fill and reaches no provider, which is how the conformance
+    # test above stays hermetic too.
+    returned = [
+        pzi.dedupe(config_path=config),
+        pzi.add_tags("smith2020", ["nlp"], config_path=config),
+        pzi.remove_tags("smith2020", ["nlp"], config_path=config),
+        pzi.list_tags(config_path=config),
+        pzi.delete("smith2020", dry_run=False, config_path=config),
+        pzi.update(config_path=config),
+    ]
+    for value in returned:
+        leaked = sorted(set(value) & _ENVELOPE_KEYS)
+        assert not leaked, f"{value} still carries {leaked}"
+
+
 def test_every_declared_type_matches_a_real_call(tmp_path: Path) -> None:
     """A TypedDict is a claim about a value, so check it against one.
 
@@ -407,49 +477,50 @@ def test_every_declared_type_matches_a_real_call(tmp_path: Path) -> None:
     # mutation cannot make a later assertion vacuous.
     cases: list[tuple[str, object, type]] = [
         ("search", pzi.search(query="Title", config_path=config)[0], pzi.SearchMatch),
-        ("entries", pzi.entries(config_path=config)[0], pzi.EntrySummary),
+        ("entries (page)", pzi.entries(config_path=config), pzi.EntryPage),
+        ("entries", pzi.entries(config_path=config)["items"][0], pzi.EntrySummary),
         ("get", pzi.get("smith2020", config_path=config), pzi.EntryRecord),
         ("list_bibs", pzi.list_bibs(config_path=config)[0], pzi.BibInfo),
-        ("dedupe", pzi.dedupe(config_path=config), pzi.DedupeResult),
+        ("dedupe", pzi.dedupe(config_path=config), pzi.DedupeReport),
         (
             "merge (preview)",
             pzi.merge("smith2020b", "smith2020", config_path=config),
-            pzi.MergeResult,
+            pzi.MergeReport,
         ),
         (
             "add_tags",
             pzi.add_tags("smith2020", ["nlp"], config_path=config),
-            pzi.TagChangeResult,
+            pzi.TagChangeReport,
         ),
         (
             "remove_tags",
             pzi.remove_tags("smith2020", ["nlp"], config_path=config),
-            pzi.TagChangeResult,
+            pzi.TagChangeReport,
         ),
         (
             "delete (preview)",
             pzi.delete("smith2020b", dry_run=True, config_path=config),
-            pzi.DeleteEntryResult,
+            pzi.DeleteEntryReport,
         ),
         (
             "merge (write)",
             pzi.merge("smith2020b", "smith2020", dry_run=False, config_path=config),
-            pzi.MergeResult,
+            pzi.MergeReport,
         ),
         (
             "delete (write)",
             pzi.delete("smith2020", dry_run=False, config_path=config),
-            pzi.DeleteEntryResult,
+            pzi.DeleteEntryReport,
         ),
     ]
     # These two run last, on the library `delete` above emptied: an empty tag
     # list is still a valid `TagListResult`, and an `update` with no entry to
     # fill is a real `UpdateBibResult` that reaches no provider.
     cases.append(
-        ("list_tags", pzi.list_tags(config_path=config), pzi.TagListResult)
+        ("list_tags", pzi.list_tags(config_path=config), pzi.TagListReport)
     )
     cases.append(
-        ("update", pzi.update(config_path=config), pzi.UpdateBibResult)
+        ("update", pzi.update(config_path=config), pzi.UpdateBibReport)
     )
 
     failures = [
@@ -523,7 +594,7 @@ def test_list_bibs_names_what_library_accepts(tmp_path: Path) -> None:
     assert [bib["name"] for bib in listed] == ["ml"]
     assert listed[0]["default"] is True
     # The name it reports is a name the other functions accept.
-    assert pzi.entries(config_path=_library(tmp_path), library="ml")
+    assert pzi.entries(config_path=_library(tmp_path), library="ml")["items"]
 
 
 def test_tags_round_trip_through_the_api(tmp_path: Path) -> None:
@@ -558,12 +629,12 @@ def test_delete_previews_by_default_like_the_other_two_surfaces(
 
     default = pzi.delete("smith2020", config_path=config)
     assert default["dry_run"] is True
-    assert pzi.entries(config_path=config), "the default must not delete"
+    assert pzi.entries(config_path=config)["items"], "the default must not delete"
 
     result = pzi.delete("smith2020", dry_run=False, config_path=config)
     assert result["dry_run"] is False
     assert Path(result["backup_path"]).exists()
-    assert pzi.entries(config_path=config) == []
+    assert pzi.entries(config_path=config)["items"] == []
 
 
 def test_merge_previews_by_default_and_makes_dedupe_actionable(tmp_path: Path) -> None:
@@ -594,11 +665,11 @@ def test_merge_previews_by_default_and_makes_dedupe_actionable(tmp_path: Path) -
     preview = pzi.merge("b2020", "a2020", config_path=config)
     assert preview["dry_run"] is True
     assert preview["carried_fields"] == ["volume"]
-    assert len(pzi.entries(config_path=config)) == 2, "a preview must not write"
+    assert pzi.entries(config_path=config)["total"] == 2, "a preview must not write"
 
     merged = pzi.merge("b2020", "a2020", dry_run=False, config_path=config)
     assert merged["dropped_citekey"] == "b2020"
-    assert [e["citekey"] for e in pzi.entries(config_path=config)] == ["a2020"]
+    assert [e["citekey"] for e in pzi.entries(config_path=config)["items"]] == ["a2020"]
 
 
 def test_merge_honours_the_configured_pdf_path_style(tmp_path: Path) -> None:
@@ -655,7 +726,7 @@ def test_a_missing_bib_warns_instead_of_looking_empty(tmp_path: Path) -> None:
     )
 
     for call in (
-        lambda: pzi.entries(config_path=str(config_path)),
+        lambda: pzi.entries(config_path=str(config_path))["items"],
         lambda: pzi.search(query="anything", config_path=str(config_path)),
     ):
         with pytest.warns(UserWarning, match="does not exist"):
@@ -688,7 +759,7 @@ def test_get_is_a_superset_of_the_summary_entries_returns(tmp_path: Path) -> Non
     config = str(config_path)
 
     record = pzi.get("jones2021", config_path=config)
-    summary = pzi.entries(config_path=config)[0]
+    summary = pzi.entries(config_path=config)["items"][0]
 
     assert record["entry_type"] == "inproceedings"
     # `has_pdf` is the one deliberate difference and `get`'s docstring says so:
@@ -863,7 +934,7 @@ def test_the_environment_config_is_honoured_like_the_cli(tmp_path: Path) -> None
         f'[[bibs]]\nname = "env"\npath = "{bib_path}"\ndefault = true\n', encoding="utf-8"
     )
     with patch.dict(os.environ, {"PZI_CONFIG": str(config_path)}):
-        assert [e["citekey"] for e in pzi.entries()] == ["smith2020"]
+        assert [e["citekey"] for e in pzi.entries()["items"]] == ["smith2020"]
 
 
 def test_entries_validates_what_the_other_front_ends_validate(tmp_path: Path) -> None:
