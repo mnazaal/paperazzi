@@ -15,6 +15,7 @@ from __future__ import annotations
 import inspect
 import os
 import re
+import warnings
 from pathlib import Path
 from types import UnionType
 from typing import (
@@ -622,6 +623,40 @@ def test_a_missing_bib_warns_instead_of_looking_empty(tmp_path: Path) -> None:
     ):
         with pytest.warns(UserWarning, match="does not exist"):
             assert call() == []
+
+
+def test_each_facade_call_warns_for_itself_not_once_per_process(
+    tmp_path: Path,
+) -> None:
+    """Three reads of a missing bib are three warnings, at the caller's line.
+
+    `_emit_warnings` counted `stacklevel` to `_public`'s wrapper rather than
+    past it, so every warning this module raises reported the same origin — one
+    line inside `api.py`. Python's default filter shows a warning once per
+    (message, category, module, lineno), so the second and third call were
+    dropped: three calls, one warning, pointing at pzi's own source.
+
+    `simplefilter("default")` rather than `pytest.warns`, which installs
+    `always` — that is why the test above, covering the same feature, could not
+    see this. The dedup *is* the bug.
+    """
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'[[bibs]]\nname = "ml"\npath = "{tmp_path / "missing.bib"}"\ndefault = true\n',
+        encoding="utf-8",
+    )
+    config = str(config_path)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("default")
+        pzi.entries(config_path=config)
+        pzi.search(query="anything", config_path=config)
+        pzi.list_tags(config_path=config)
+
+    assert len(caught) == 3, [str(w.message) for w in caught]
+    assert {Path(w.filename).name for w in caught} == {Path(__file__).name}, [
+        f"{w.filename}:{w.lineno}" for w in caught
+    ]
 
 
 def test_an_unreadable_bib_raises_pzi_error_not_oserror(tmp_path: Path) -> None:

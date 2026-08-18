@@ -160,9 +160,17 @@ def _emit_warnings(result: Mapping[str, Any]) -> None:
     `warnings.warn` rather than a changed return type: it is the mechanism a
     Python caller already has, it is visible by default, and ``-W error``
     escalates it for a script that would rather stop.
+
+    ``stacklevel=4`` counts past `_public`'s `wrapper`, not to it: here, the
+    public function, the wrapper, the caller. At 3 it stopped on the wrapper,
+    so every warning this module raises reported the same origin — one line
+    inside `api.py`. Python's default filter shows a warning once per (message,
+    category, module, lineno), so the second and third call in a process were
+    dropped: three reads of a missing bib produced one warning, and it pointed
+    at pzi's source rather than the line that asked.
     """
     for warning in result.get("warnings") or []:
-        warnings.warn(str(warning), UserWarning, stacklevel=3)
+        warnings.warn(str(warning), UserWarning, stacklevel=4)
 
 
 def _public(fn: Callable[..., Any]) -> Callable[..., Any]:
