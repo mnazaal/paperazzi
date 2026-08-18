@@ -213,6 +213,16 @@ def test_no_public_failure_names_a_cli_flag(tmp_path: Path) -> None:
     restates itself; and every unresolved-library failure said `--target` until
     `config._unresolved_target_error` was made flag-neutral. Both are checked
     here, because fixing one and not the other is what happened the first time.
+
+    All **three** reachable branches of `_unresolved_target_error`, not the one
+    this used to reach: none marked default, a `.bib` path that does not exist,
+    and an unknown name. Only the last was exercised, so `--target` could come
+    back in the other two without failing anything. They are all flag-neutral
+    today; this is the guard, not a fix.
+
+    A config with no libraries is not a fourth branch — the loader refuses an
+    empty `bibs` before resolution runs, which is checked here too, since the
+    message a caller sees is what matters and not which function wrote it.
     """
     config = _library(tmp_path)
 
@@ -220,6 +230,27 @@ def test_no_public_failure_names_a_cli_flag(tmp_path: Path) -> None:
         pzi.search(config_path=config)
     assert "--" not in str(no_filter.value), str(no_filter.value)
 
+    # A config the loader refuses outright, and one that resolves but has no
+    # default — different functions produce these, same requirement.
+    no_bibs = tmp_path / "no-bibs.toml"
+    no_bibs.write_text("bibs = []\n", encoding="utf-8")
+    no_default = tmp_path / "no-default.toml"
+    no_default.write_text(
+        f'[[bibs]]\nname = "ml"\npath = "{tmp_path / "ml.bib"}"\n'
+        f'\n[[bibs]]\nname = "other"\npath = "{tmp_path / "other.bib"}"\n',
+        encoding="utf-8",
+    )
+    for label, other_config in (("no libraries", no_bibs), ("no default", no_default)):
+        with pytest.raises(PziError) as unresolved:
+            pzi.entries(config_path=str(other_config))
+        assert "--" not in str(unresolved.value), f"{label}: {unresolved.value}"
+
+    # A `.bib` path that does not exist, which takes its own return.
+    with pytest.raises(PziError) as missing_path:
+        pzi.entries(config_path=config, library=str(tmp_path / "gone.bib"))
+    assert "--" not in str(missing_path.value), str(missing_path.value)
+
+    # An unknown library name.
     for call in (
         lambda: pzi.entries(config_path=config, library="nope"),
         lambda: pzi.search(query="x", config_path=config, library="nope"),

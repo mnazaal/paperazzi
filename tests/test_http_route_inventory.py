@@ -12,6 +12,7 @@ test.
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 
 from pzi import http_security
 from pzi.http_get_routes import BINARY_GET_ROUTES, GET_PREFIX_ROUTES, GET_ROUTES
@@ -68,6 +69,19 @@ def test_the_route_tables_match_the_expected_inventory() -> None:
     assert tuple(route.path for route in POST_ROUTES) == EXPECTED_ROUTES["POST"]
 
 
+#: Enough of English to render the route count as the docs spell it. Small on
+#: purpose: if the surface ever grows past this, the failure is a `KeyError`
+#: here rather than a silently unchecked document.
+_NUMBER_WORDS: dict[int, str] = {
+    18: "eighteen", 19: "nineteen", 20: "twenty", 21: "twenty-one",
+    22: "twenty-two", 23: "twenty-three", 24: "twenty-four",
+    25: "twenty-five", 26: "twenty-six",
+}
+
+#: Every file that states the number in prose. Read, not trusted.
+_DOCS_CLAIMING_THE_COUNT = ("docs/security.md", "README.md")
+
+
 def test_the_documented_route_count_is_the_real_one() -> None:
     """`docs/security.md` says twenty-one; this is what makes that stay true."""
     total = sum(len(paths) for paths in EXPECTED_ROUTES.values())
@@ -83,6 +97,53 @@ def test_the_documented_route_count_is_the_real_one() -> None:
     # Every route pzi serves is now in one of four tables, so the count is
     # derived end to end rather than partly transcribed.
     assert tabled == DOCUMENTED_TOTAL
+
+
+def test_the_documents_that_state_the_count_are_read_not_trusted() -> None:
+    """`DOCUMENTED_TOTAL` was a hand-copied literal, and nothing opened a file.
+
+    The test above compared the route tables against `21` and its message told
+    you to go update `docs/security.md` — but changing that document to say
+    "Thirty routes" left the whole suite green, which means the number was
+    pinned to a copy of itself. Three prose statements assert it (the
+    `docs/security.md` heading and two lines of README) and no test read any of
+    them.
+
+    Spelled out in words in all three, and left that way: flattening the prose
+    to a digit to make a test easier is the tail wagging the dog.
+    """
+    repo_root = Path(__file__).resolve().parent.parent
+    assert DOCUMENTED_TOTAL in _NUMBER_WORDS, (
+        f"the route count reached {DOCUMENTED_TOTAL}, past what _NUMBER_WORDS "
+        "can spell — extend it, or this check stops reading the documents"
+    )
+
+    found = 0
+    for relative in _DOCS_CLAIMING_THE_COUNT:
+        text = (repo_root / relative).read_text(encoding="utf-8")
+        for line in text.splitlines():
+            lowered = line.lower()
+            if "route" not in lowered:
+                continue
+            # Longest spelling first: "twenty" is a substring of "twenty-one",
+            # so a shortest-match scan reads the right number as the wrong one.
+            for number, spelling in sorted(
+                _NUMBER_WORDS.items(), key=lambda pair: -len(pair[1])
+            ):
+                if spelling in lowered:
+                    found += 1
+                    assert number == DOCUMENTED_TOTAL, (
+                        f"{relative} says {spelling!r} routes but pzi serves "
+                        f"{DOCUMENTED_TOTAL}: {line.strip()}"
+                    )
+                    break
+
+    assert found == 3, (
+        f"expected 3 prose statements of the route count across "
+        f"{list(_DOCS_CLAIMING_THE_COUNT)}, found {found} — if one was removed "
+        "or reworded, say so here rather than leaving the check to shrink "
+        "quietly"
+    )
 
 
 def test_each_binary_route_declares_how_it_matches() -> None:

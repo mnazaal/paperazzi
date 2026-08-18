@@ -958,8 +958,13 @@ def _unresolved_target_error(
     configured = ", ".join(names) if names else "none"
 
     if selector is None:
-        if not bibs:
-            return "config declares no libraries; add a [[bibs]] table to config.toml"
+        # No `not bibs` branch. The only caller reaches this after
+        # `load_config_file` succeeded, and the loader refuses a `bibs` list
+        # with nothing in it ("bibs must be a non-empty list") — so `bibs` is
+        # never empty here. It had one, unreachable, which is why the docstring
+        # above says three ways and the code had four returns. Verified: a
+        # config with `bibs = []`, and one with no `[[bibs]]` at all, both fail
+        # in the loader and never arrive.
         return (
             f"no library selected and none is marked default "
             f"(configured: {configured}; mark one `default = true`)"

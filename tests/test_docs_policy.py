@@ -6,8 +6,10 @@ promise is checkable rather than a claim, so a named mechanism that no longer
 exists is worse than naming none: the reader has a reference that looks solid
 and is not.
 
-Nothing else in the README had this problem, because nothing else in it pointed
-at a file as evidence.
+The rest of the README points at files too — seven other lines name a
+`tests/...` path as evidence for something — so the check runs over the whole
+document. The `>= 7` floor stays scoped to the policy table, which is the part
+that promises one mechanism per frozen surface.
 """
 
 from __future__ import annotations
@@ -53,6 +55,39 @@ def test_every_mechanism_the_policy_names_exists() -> None:
         f"the compatibility policy names mechanisms that do not exist: {missing}. "
         "Either the file moved — update the README — or the surface is no longer "
         "pinned, in which case the promise about it is no longer true."
+    )
+
+
+def test_every_test_path_the_readme_names_exists() -> None:
+    """The same rule, outside the policy table, where it also applies.
+
+    This file's docstring used to say "nothing else in the README pointed at a
+    file as evidence", and that was simply false: seven other lines name a
+    `tests/...` path — the route inventory, the API snapshot, the layer
+    boundaries, `conftest.py`, `tests/live/`, the end-to-end run and the
+    translation-server stub. A reader has no way to tell which citations are
+    checked, so all of them should be.
+    """
+    text = README.read_text(encoding="utf-8")
+    section_lines = {line for line in _policy_section().splitlines() if _PATH.search(line)}
+    outside = [
+        line
+        for line in text.splitlines()
+        if _PATH.search(line) and line not in section_lines
+    ]
+
+    # Counted by *line*, not by distinct path: two of these cite a file the
+    # policy table also names, so a set difference collapses seven citations
+    # into five and understates what is being checked.
+    assert len(outside) >= 7, (
+        "the README used to carry seven citations of a test path outside the "
+        f"policy section; found {len(outside)} — if some were removed, say so "
+        "here rather than letting the check shrink quietly"
+    )
+    named = sorted(set(_PATH.findall(text)))
+    missing = [path for path in named if not (REPO_ROOT / path).exists()]
+    assert not missing, (
+        f"the README points at files that do not exist: {missing}"
     )
 
 
