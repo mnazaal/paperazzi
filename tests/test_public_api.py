@@ -16,7 +16,16 @@ import inspect
 import os
 import re
 from pathlib import Path
-from typing import is_typeddict
+from types import UnionType
+from typing import (
+    Any,
+    NotRequired,
+    Union,
+    get_args,
+    get_origin,
+    get_type_hints,
+    is_typeddict,
+)
 from unittest.mock import patch
 
 import pytest
@@ -241,8 +250,76 @@ def _required_keys(declared: type) -> set[str]:
     }
 
 
+def _type_complaints(value: object, hint: object, where: str) -> list[str]:
+    """Complaints about *value* against one resolved annotation.
+
+    `get_type_hints(..., include_extras=True)` rather than the annotation text
+    `_required_keys` reads: it resolves the `ForwardRef`s that
+    `from __future__ import annotations` leaves behind, so a nested TypedDict
+    arrives as the class itself and this can recurse into it. The text form is
+    still what the snapshot renders, because that must stay independent of
+    which module a type lives in.
+    """
+    if get_origin(hint) is NotRequired:
+        (inner,) = get_args(hint)
+        return _type_complaints(value, inner, where)
+
+    origin = get_origin(hint)
+    if origin in (Union, UnionType):
+        if any(not _type_complaints(value, arm, where) for arm in get_args(hint)):
+            return []
+        return [f"{where}: expected {hint}, got {type(value).__name__}"]
+    if origin is list:
+        if not isinstance(value, list):
+            return [f"{where}: expected a list, got {type(value).__name__}"]
+        (item_hint,) = get_args(hint)
+        return [
+            complaint
+            for index, item in enumerate(value)
+            for complaint in _type_complaints(item, item_hint, f"{where}[{index}]")
+        ]
+    if origin is dict:
+        if not isinstance(value, dict):
+            return [f"{where}: expected a dict, got {type(value).__name__}"]
+        _key_hint, value_hint = get_args(hint)
+        return [
+            complaint
+            for key, item in sorted(value.items())
+            for complaint in _type_complaints(item, value_hint, f"{where}[{key!r}]")
+        ]
+
+    if hint is Any:
+        return []
+    if hint is type(None):
+        return (
+            []
+            if value is None
+            else [f"{where}: expected None, got {type(value).__name__}"]
+        )
+    if is_typeddict(hint):
+        if not isinstance(value, dict):
+            return [f"{where}: expected a dict, got {type(value).__name__}"]
+        return [f"{where}.{c}" for c in _conforms(value, hint)]
+    if isinstance(hint, type):
+        # `bool` is a subclass of `int`, so a stray `True` in an `int` field
+        # would pass a bare isinstance. That is exactly the confusion worth
+        # catching: `counts` is a tally, not a set of flags.
+        if hint is int and isinstance(value, bool):
+            return [f"{where}: expected int, got bool"]
+        if not isinstance(value, hint):
+            return [f"{where}: expected {hint.__name__}, got {type(value).__name__}"]
+    return []
+
+
 def _conforms(value: object, declared: type) -> list[str]:
-    """Complaints about *value* against the TypedDict *declared*, if any."""
+    """Complaints about *value* against the TypedDict *declared*, if any.
+
+    Keys **and** types. Comparing key sets alone was the whole check here for
+    one release cycle, which meant the name of this function, the message it
+    raises and the snapshot renderer's docstring all claimed something it did
+    not do: retyping `EntrySummary.year` from `int | None` to `str` left it
+    green.
+    """
     assert isinstance(value, dict), f"expected a dict, got {type(value).__name__}"
     keys = set(value)
     known = set(declared.__annotations__)
@@ -251,6 +328,9 @@ def _conforms(value: object, declared: type) -> list[str]:
         f"missing required key {key!r}"
         for key in sorted(_required_keys(declared) - keys)
     ]
+    hints = get_type_hints(declared, include_extras=True)
+    for key in sorted(keys & known):
+        complaints += _type_complaints(value[key], hints[key], key)
     return complaints
 
 
@@ -265,6 +345,11 @@ def test_every_declared_type_matches_a_real_call(tmp_path: Path) -> None:
 
     Read-only and local-write calls only. `add`, `check` and `promote` reach the
     network, and `AddResult`'s two builders are statically annotated instead.
+    `update` reaches the network too, but only for an entry with a gap to fill,
+    so it is checked last against the library the writers below have emptied —
+    zero entries, zero requests, and `UpdateBibResult` is a real one. Without
+    that it was simply absent, and `UpdateBibResult` was checked against
+    nothing while this docstring named three exclusions and meant four.
     """
     bib_path = tmp_path / "ml.bib"
     papers = tmp_path / "papers"
@@ -325,10 +410,14 @@ def test_every_declared_type_matches_a_real_call(tmp_path: Path) -> None:
             pzi.DeleteEntryResult,
         ),
     ]
-    # `list_tags` is read-only but runs last: `delete` above empties the
-    # library, and an empty tag list is still a valid `TagListResult`.
+    # These two run last, on the library `delete` above emptied: an empty tag
+    # list is still a valid `TagListResult`, and an `update` with no entry to
+    # fill is a real `UpdateBibResult` that reaches no provider.
     cases.append(
         ("list_tags", pzi.list_tags(config_path=config), pzi.TagListResult)
+    )
+    cases.append(
+        ("update", pzi.update(config_path=config), pzi.UpdateBibResult)
     )
 
     failures = [
