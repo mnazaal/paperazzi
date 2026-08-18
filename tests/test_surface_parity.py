@@ -97,8 +97,9 @@ _MATRIX: tuple[Capability, ...] = (
         cli="library check",
         python="check",
         note=(
-            "no HTTP route: an audit is a long multi-provider network sweep, and "
-            "the server answers one request at a time with no progress channel"
+            "no HTTP route: an audit is a long multi-provider network sweep with "
+            "no progress channel, so it would sit past any browser-extension "
+            "timeout with nothing to show for the wait"
         ),
     ),
     Capability(
@@ -129,7 +130,12 @@ _MATRIX: tuple[Capability, ...] = (
     Capability(
         "import a .bib",
         cli="import",
-        note="CLI-only: reads a local file, which neither other surface can name",
+        note=(
+            "CLI-only: reads an *arbitrary* local path. The one HTTP route that "
+            "takes a path, /inbox/drain, confines it to the configured "
+            "inbox_path and is disabled without one; a .bib to import has no "
+            "such pre-declared location"
+        ),
     ),
     Capability(
         "drain an inbox file",

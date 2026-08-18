@@ -318,9 +318,17 @@ def search(
     """
     # Checked here rather than left to the service, which words the same refusal
     # as "provide at least one of --query, --author, --year, --tag" — flag names
-    # a caller of this function never typed. This is the last such wording below
-    # the facade: the unresolved-library messages named `--target` until they
-    # were made flag-neutral in `config._unresolved_target_error`.
+    # a caller of this function never typed. The unresolved-library messages had
+    # the same problem and were made flag-neutral in
+    # `config._unresolved_target_error`.
+    #
+    # Not the last of them, though this comment used to claim so:
+    # `add_planning.similarity_hint_warnings` puts `pzi library merge`,
+    # `pzi library dedupe` and `--force-new` into `AddResult["warnings"]`, which
+    # `add()` returns verbatim. Making *that* flag-neutral is a bigger change —
+    # the warning would have to become a structured discriminator, the way
+    # `reason` already is, with each surface rendering its own wording — so it
+    # is noted rather than done here.
     if query is None and author is None and year is None and tag is None:
         raise PziError(
             "search needs at least one of query, author, year or tag",

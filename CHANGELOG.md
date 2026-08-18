@@ -111,6 +111,10 @@ next to the diff it explains.
   These are the first of the 1.0 freeze mechanisms — a frozen surface without a
   test that fails when it changes is a promise with no mechanism.
 
+- `pzi library list` prints the configured libraries and which is the default.
+  `GET /bibs` and `pzi.list_bibs()` already answered this; on the CLI it was
+  only available inside `pzi doctor`'s health output.
+
 ### Changed
 
 - **`pzi fix` is now `pzi library`, and `pzi check` moved into it.** The group
@@ -131,10 +135,6 @@ next to the diff it explains.
   field changes with it** — `"fix clean"` becomes `"library clean"` and
   `"check"` becomes `"library check"` — which is a breaking change for anything
   branching on `.command`.
-
-- `pzi library list` prints the configured libraries and which is the default.
-  `GET /bibs` and `pzi.list_bibs()` already answered this; on the CLI it was
-  only available inside `pzi doctor`'s health output.
 
 - **`import pzi` costs one module again, not forty-four.** The public API is
   bound lazily (PEP 562), so a script calling `pzi.search()` no longer pays for
