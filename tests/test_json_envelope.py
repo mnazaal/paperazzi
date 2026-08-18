@@ -24,6 +24,7 @@ from typing import Any
 import pytest
 
 from pzi.cli import run_cli
+from pzi.cli_json import ENVELOPE_COMMANDS
 from pzi.cli_parser import build_parser
 from tests.test_cli_surface import _subparsers
 
@@ -116,11 +117,33 @@ def _library(home: Path) -> Path:
     return config_path
 
 
+#: Invocations whose envelope names a *flag*, not the command path. They cannot
+#: live in `INVOCATIONS`, which `test_every_json_command_is_covered` pins to the
+#: parser's command paths — and that is the whole reason these went unnoticed.
+FLAG_INVOCATIONS: dict[str, list[str]] = {
+    "add --from-file": ["add", "--from-file", "MISSING"],
+    "entries --stats": ["entries", "--stats"],
+    "update --promote": ["update", "--promote", "--target", "MISSING"],
+}
+
+#: Envelope names nothing here can produce, and why. Kept explicit so the
+#: coverage check below stays two-way for everything else: an unexercised name
+#: has to be argued for, not simply absent.
+UNEXERCISED_ENVELOPE_COMMANDS: dict[str, str] = {
+    # `INVOCATIONS["doctor"]` passes `--config-only`, so the bare form — which
+    # runs live service probes over the network — is never emitted here.
+    "doctor": "the bare form probes live services",
+    "doctor --reinstall-server": (
+        "downloads a Node runtime and replaces the installed translation server"
+    ),
+}
+
+
 def _run_json(command: str, home: Path) -> dict[str, Any]:
     config = _library(home)
     argv = [
         arg.replace("MISSING", str(home / "missing.bib"))
-        for arg in INVOCATIONS[command]
+        for arg in {**INVOCATIONS, **FLAG_INVOCATIONS}[command]
     ]
     stdout = StringIO()
     run_cli(
@@ -133,6 +156,58 @@ def _run_json(command: str, home: Path) -> dict[str, Any]:
     assert raw.strip(), f"`pzi {command} --json` wrote nothing to stdout"
     # Exactly one document: a consumer reads stdout once and parses it once.
     return json.loads(raw)
+
+
+@pytest.mark.parametrize("command", sorted({**INVOCATIONS, **FLAG_INVOCATIONS}))
+def test_the_envelope_names_a_declared_command(command: str, tmp_path: Path) -> None:
+    """The `command` a runner emits has to be one somebody decided about.
+
+    `cli_json.ENVELOPE_COMMANDS` is the declared set, and
+    `tests/test_surface_parity.py` demands a cross-surface row for each name in
+    it. That only means anything if the set matches what the runners actually
+    emit — otherwise the parity matrix is complete with respect to a list, not
+    with respect to the CLI.
+
+    So this half is *observed*. It has to be: five of the names are flags, and
+    a flag is exactly what no parser walk can see.
+    """
+    envelope = _run_json(command, tmp_path / command.replace(" ", "-"))
+
+    assert envelope["command"] in ENVELOPE_COMMANDS, (
+        f"`pzi {command} --json` labelled its envelope "
+        f"{envelope['command']!r}, which is not in cli_json.ENVELOPE_COMMANDS "
+        "— register it there and give it a row in the surface-parity matrix"
+    )
+
+
+def test_every_declared_envelope_command_is_actually_produced(
+    tmp_path: Path,
+) -> None:
+    """The other direction: a registered name nothing emits is a dead entry.
+
+    Without this, `ENVELOPE_COMMANDS` could drift into a wish-list — and the
+    parity matrix would be complete with respect to names that no longer exist,
+    which is worse than incomplete because it reads as covered.
+
+    Two names are exempt and say why in `UNEXERCISED_ENVELOPE_COMMANDS`; the
+    exemption list is part of the assertion, so adding to it is a visible edit
+    rather than a silent gap.
+    """
+    observed = {
+        _run_json(command, tmp_path / f"observe-{index}")["command"]
+        for index, command in enumerate(sorted({**INVOCATIONS, **FLAG_INVOCATIONS}))
+    }
+    unexercised = set(UNEXERCISED_ENVELOPE_COMMANDS)
+
+    assert observed | unexercised == set(ENVELOPE_COMMANDS), (
+        f"  declared but never produced: "
+        f"{sorted(set(ENVELOPE_COMMANDS) - observed - unexercised)}\n"
+        f"  produced but not declared: {sorted(observed - set(ENVELOPE_COMMANDS))}"
+    )
+    assert unexercised <= set(ENVELOPE_COMMANDS), (
+        "the exemption list names something that is not a declared envelope "
+        f"command: {sorted(unexercised - set(ENVELOPE_COMMANDS))}"
+    )
 
 
 @pytest.mark.parametrize("command", sorted(INVOCATIONS))

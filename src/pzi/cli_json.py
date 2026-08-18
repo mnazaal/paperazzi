@@ -29,6 +29,46 @@ _ITEM_KEYS: tuple[str, ...] = ("items", "matches", "results", "bibs")
 
 _ENVELOPE_KEYS = frozenset({"command", "status", "bib_name", "items", "errors"})
 
+#: Every value a runner passes as ``command=``, declared in one place.
+#:
+#: Most are a command path, but five name a *flag* — a distinct capability
+#: reached through a shared command, which the runner reports under its own
+#: name because it is a different thing being reported. That distinction was
+#: invisible to anything: the cross-surface parity matrix keys on command
+#: paths, so `pzi entries --stats` had no row and no test could notice, and the
+#: same held for the other four. `tests/test_surface_parity.py` reads this set
+#: and demands a row for each; `tests/test_json_envelope.py` checks that every
+#: envelope a real invocation produces names one of these.
+#:
+#: A runner emitting a name that is not here is a capability nobody decided
+#: about, which is the whole point of writing them down.
+ENVELOPE_COMMANDS: frozenset[str] = frozenset({
+    "add",
+    "add --from-file",
+    "delete",
+    "doctor",
+    "doctor --config-only",
+    "doctor --reinstall-server",
+    "entries",
+    "entries --stats",
+    "import",
+    "inbox",
+    "library check",
+    "library clean",
+    "library dedupe",
+    "library list",
+    "library merge",
+    "library reindex",
+    "pdf attach",
+    "pdf retry",
+    "search",
+    "tag add",
+    "tag list",
+    "tag remove",
+    "update",
+    "update --promote",
+})
+
 
 def build_envelope(
     result: Mapping[str, Any],
@@ -42,9 +82,10 @@ def build_envelope(
     Pure.  Pass *items* when the command's list does not live under one of the
     usual keys (e.g. a single record rendered as a one-item list).
 
-    Pass *bib_name* when the service does not report one. Six commands — `fix
-    dedupe|clean|reindex|merge`, `delete`, `import` — take a `bib_path` rather
-    than a selector, so their envelopes carried `"bib_name": null` permanently
+    Pass *bib_name* when the service does not report one. Six commands —
+    `library dedupe|clean|reindex|merge`, `delete`, `import` — take a
+    `bib_path` rather than a selector, so their envelopes carried
+    `"bib_name": null` permanently
     while the other five populated it, against a README that documents it as a
     real value. The runners resolved the target to call the service at all, so
     they can say which library it was.

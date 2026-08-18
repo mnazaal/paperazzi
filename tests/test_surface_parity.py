@@ -22,6 +22,7 @@ from unittest.mock import patch
 import pytest
 
 import pzi
+from pzi.cli_json import ENVELOPE_COMMANDS
 from pzi.cli_parser import build_parser
 from pzi.http_get_routes import BINARY_GET_ROUTES, GET_PREFIX_ROUTES, GET_ROUTES
 from pzi.http_post_routes import POST_ROUTES, process_post_request
@@ -45,7 +46,23 @@ class Capability:
 
 
 _MATRIX: tuple[Capability, ...] = (
-    Capability("capture", cli="add", http=("/capture",), python="add"),
+    Capability(
+        "capture",
+        cli="add",
+        cli_detail="pzi add",
+        http=("/capture",),
+        python="add",
+    ),
+    Capability(
+        "capture a batch from a file",
+        cli="add",
+        cli_detail="pzi add --from-file",
+        note=(
+            "CLI-only: reads an arbitrary local list of sources, the same "
+            "reason `import` is CLI-only. A caller with the list already in "
+            "hand loops over pzi.add(); the extension has one page at a time"
+        ),
+    ),
     Capability("search", cli="search", http=("/search",), python="search"),
     Capability(
         "list entries",
@@ -53,6 +70,17 @@ _MATRIX: tuple[Capability, ...] = (
         cli_detail="pzi entries",
         http=("/entries",),
         python="entries",
+    ),
+    Capability(
+        "library statistics",
+        cli="entries",
+        cli_detail="pzi entries --stats",
+        note=(
+            "CLI-only: a reporting summary (totals, PDF and DOI coverage, "
+            "entry-type counts) over the whole library. Every number in it is "
+            "derivable from pzi.entries(), and the extension has no surface "
+            "that would show it — this is the row item 493 was about"
+        ),
     ),
     Capability(
         "entry detail",
@@ -178,10 +206,33 @@ _MATRIX: tuple[Capability, ...] = (
     Capability(
         "health / diagnostics",
         cli="doctor",
+        cli_detail="pzi doctor",
         http=("/health",),
         note=(
             "no Python function: it reports on the installation, not the library, "
             "and a caller who imported pzi already knows it is installed"
+        ),
+    ),
+    Capability(
+        "validate the configuration offline",
+        cli="doctor",
+        cli_detail="pzi doctor --config-only",
+        note=(
+            "CLI-only: it deliberately skips the live probes, and the two other "
+            "surfaces cannot be reached without a working config in the first "
+            "place — GET /health needs the server running, which needs the "
+            "config this checks"
+        ),
+    ),
+    Capability(
+        "reinstall the translation server",
+        cli="doctor",
+        cli_detail="pzi doctor --reinstall-server",
+        note=(
+            "CLI-only: downloads a Node runtime and replaces an installed "
+            "service. `pzi.add()` refuses to install one for the same reason — "
+            "too much hidden behaviour for a function call — and exposing it "
+            "over HTTP would let a token holder replace an executable"
         ),
     ),
     Capability(
@@ -264,6 +315,47 @@ def test_every_public_function_is_in_the_matrix() -> None:
     )
     assert declared - actual == set(), (
         f"the matrix names functions that do not exist: {sorted(declared - actual)}"
+    )
+
+
+def _matrix_cli_invocations() -> set[str]:
+    """Every CLI spelling the matrix names, flags included.
+
+    `cli` is a command path; `cli_detail` is the fuller spelling when the
+    command alone does not identify the row. Stripping the leading `pzi ` puts
+    both in the same vocabulary as `cli_json.ENVELOPE_COMMANDS`.
+    """
+    found = {cap.cli for cap in _MATRIX if cap.cli}
+    found |= {
+        cap.cli_detail.removeprefix("pzi ") for cap in _MATRIX if cap.cli_detail
+    }
+    return found
+
+
+def test_every_envelope_command_is_in_the_matrix() -> None:
+    """A flag that is its own capability needs a row, and nothing demanded one.
+
+    The three inventory tests above key on command paths, route strings and
+    function names. None has a flag in its key space, so `pzi entries --stats`
+    sat outside the matrix entirely — and `test_every_gap_is_explained` could
+    not help, because it iterates the rows that exist and a capability with no
+    row is invisible to it by construction.
+
+    `cli_json.ENVELOPE_COMMANDS` is the key space that does see them: a runner
+    labels its `--json` envelope `entries --stats` rather than `entries`
+    precisely because it is reporting a different thing. Five of the
+    twenty-four names are flags, and when this test was written only one of the
+    five (`update --promote`) had a row.
+
+    One-way on purpose. Plenty of matrix rows have no `--json` envelope at all
+    (`export`, `init`, `server`), so the reverse containment is not a property
+    this file wants.
+    """
+    missing = sorted(ENVELOPE_COMMANDS - _matrix_cli_invocations())
+    assert not missing, (
+        f"these CLI invocations report their own envelope but have no matrix "
+        f"row: {missing} — add one saying which other surfaces offer them, and "
+        "why not the rest"
     )
 
 
