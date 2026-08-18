@@ -625,6 +625,50 @@ def test_a_missing_bib_warns_instead_of_looking_empty(tmp_path: Path) -> None:
             assert call() == []
 
 
+def test_two_failures_sharing_an_exit_code_are_told_apart_by_reason(
+    tmp_path: Path,
+) -> None:
+    """Exit code 5 covers config *and* unavailable, so it cannot be the answer.
+
+    `_unwrap` computed the exit code from the service's structured `reason` and
+    then threw the reason away, so a caller catching `PziError` got the lossy
+    half. `PziError.reason` has existed for this the whole time and the CLI
+    reads it (`exc.reason or <coarse map>` — the map is the fallback for
+    raisers that did not know).
+
+    The pair below is the point: both are code 5 and only `reason` separates a
+    library that is misconfigured from one that is there and unreadable.
+    """
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text(ONE_ENTRY, encoding="utf-8")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\ndefault = true\n',
+        encoding="utf-8",
+    )
+    config = str(config_path)
+
+    with pytest.raises(PziError) as misconfigured:
+        pzi.entries(config_path=config, library="nope")
+
+    bib_path.chmod(0o000)
+    try:
+        with pytest.raises(PziError) as unreadable:
+            pzi.entries(config_path=config)
+    finally:
+        bib_path.chmod(0o600)
+
+    assert misconfigured.value.code == unreadable.value.code == 5
+    assert misconfigured.value.reason == "config"
+    assert unreadable.value.reason == "unavailable"
+
+    # And the reason a service reported survives the trip, rather than being
+    # recomputed from the code it was mapped to.
+    with pytest.raises(PziError) as missing:
+        pzi.get("nosuchkey", config_path=config)
+    assert (missing.value.code, missing.value.reason) == (3, "not_found")
+
+
 def test_a_bare_string_is_not_a_tag_list(tmp_path: Path) -> None:
     """`add_tags(key, "nlp")` must refuse, not write one tag per character.
 

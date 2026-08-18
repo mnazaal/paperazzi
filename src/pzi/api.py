@@ -61,7 +61,13 @@ from pzi.dedupe_service import (
     find_duplicates,
     merge_duplicates,
 )
-from pzi.errors import REASON_USAGE, PziError, exit_code_for_error
+from pzi.errors import (
+    REASON_CONFIG,
+    REASON_UNAVAILABLE,
+    REASON_USAGE,
+    PziError,
+    exit_code_for_error,
+)
 from pzi.export_service import export_bibtex, export_csv, export_json, export_ris
 from pzi.promote_service import PromoteItem, PromoteResult, promote_bib
 from pzi.search_service import SearchMatch, search_bib
@@ -196,7 +202,9 @@ def _public(fn: Callable[..., Any]) -> Callable[..., Any]:
             raise
         except OSError as exc:
             raise PziError(
-                f"{type(exc).__name__}: {exc}", code=exit_codes.ENVIRONMENT
+                f"{type(exc).__name__}: {exc}",
+                code=exit_codes.ENVIRONMENT,
+                reason=REASON_UNAVAILABLE,
             ) from exc
 
     return wrapper
@@ -237,13 +245,27 @@ def _unwrap(result: Mapping[str, Any], key: str) -> Any:
     `exit_code_for_error` is the CLI's own mapping from a service's structured
     `reason` to an exit code, reused here so a caller catching `PziError` sees
     the same classification a shell script branching on `$?` would.
+
+    The `reason` is passed through as well as folded into the code, because the
+    code loses information the caller may need: `ENVIRONMENT` covers config,
+    unavailable *and* conflict, so branching on it alone cannot separate a bad
+    `path =` from a provider that is down. `exit_code_for_error` has the value
+    in hand here; forwarding it costs nothing and is what `PziError.reason`
+    exists for. The CLI's own fallback is `exc.reason or <coarse map>`, i.e.
+    the map is for raisers that did not know. This one knows.
     """
     if result.get("status") == "error":
         errors = [str(error) for error in result.get("errors") or []]
         message = str(result.get("message") or "") or (
             errors[0] if errors else "the command failed"
         )
-        raise PziError(message, code=exit_code_for_error(result), details=errors)
+        reason = result.get("reason")
+        raise PziError(
+            message,
+            code=exit_code_for_error(result),
+            details=errors,
+            reason=reason if isinstance(reason, str) else None,
+        )
     return result[key]
 
 
@@ -269,6 +291,7 @@ def _bib_target(
         raise PziError(
             "; ".join(resolved.errors) or "could not resolve a library",
             details=list(resolved.errors),
+            reason=REASON_CONFIG,
         )
     return resolved
 
@@ -300,7 +323,9 @@ def search(
     # were made flag-neutral in `config._unresolved_target_error`.
     if query is None and author is None and year is None and tag is None:
         raise PziError(
-            "search needs at least one of query, author, year or tag", code=2
+            "search needs at least one of query, author, year or tag",
+            code=exit_codes.USAGE,
+            reason=REASON_USAGE,
         )
     result = search_bib(
         config_path=_resolved_config_path(config_path),
@@ -332,7 +357,8 @@ def entries(
         raise PziError(
             f"unknown sort field {sort!r} — expected one of "
             f"{', '.join(_SORT_FIELDS)}",
-            code=2,
+            code=exit_codes.USAGE,
+            reason=REASON_USAGE,
         )
     result = list_entries(
         config_path=_resolved_config_path(config_path),
@@ -362,7 +388,8 @@ def export(
         raise PziError(
             f"unknown export format {fmt!r} — expected one of "
             f"{', '.join(sorted(_EXPORTERS))}",
-            code=2,
+            code=exit_codes.USAGE,
+            reason=REASON_USAGE,
         )
     return str(_unwrap(dict(exporter(_bib_path(config_path, library))), "content"))
 
