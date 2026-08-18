@@ -299,6 +299,14 @@ def test_an_audit_that_reached_a_source_stays_ok(tmp_path: Path) -> None:
 
     Without this, "status is error whenever anything failed" would satisfy the
     test above and turn every partial outage into a failed audit.
+
+    The *first* provider is the unreachable one, deliberately. `check_bib`
+    stops at the first candidate scoring >= 95 and `crossref` leads the
+    registry, so binding the answering stub to crossref meant the four
+    unreachable ones were never called: the partial outage this docstring
+    describes did not happen, and the test passed identically with every stub
+    replaced by an answering one. `reached` records that at least one refusal
+    really was hit.
     """
     config_path, _bib_path = _config(
         tmp_path,
@@ -309,23 +317,29 @@ def test_an_audit_that_reached_a_source_stays_ok(tmp_path: Path) -> None:
         "}\n",
     )
 
+    reached: list[str] = []
+
     def _unreachable(title: str, *_args, **_kwargs):
+        reached.append("refused")
         raise OSError("connection refused")
 
     def _answers(title: str, *_args, **_kwargs):
+        reached.append("answered")
         return {"title": "A Paper About Things", "authors": ["Smith, Jane"], "year": 2020}
 
     result = check_bib(
         config_path=config_path,
         home_dir=str(tmp_path),
         bib_selector=None,
-        fetch_crossref=_answers,
+        fetch_crossref=_unreachable,
         fetch_openalex=_unreachable,
-        fetch_dblp=_unreachable,
+        fetch_dblp=_answers,
         fetch_openreview=_unreachable,
         fetch_s2=_unreachable,
     )
 
+    assert reached[:3] == ["refused", "refused", "answered"], reached
+    assert result["items"][0]["sources_checked"] == ["dblp"], result["items"][0]
     assert result["status"] == "ok"
     assert "reason" not in result
 

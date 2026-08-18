@@ -1063,3 +1063,30 @@ def test_library_list_aligns_its_columns_and_marks_the_default(
     assert [line for line in lines if line.endswith("  (default)")] == [lines[0]]
     assert lines[0].startswith("ml ")
 
+
+def test_export_says_a_missing_target_once(tmp_path: Path) -> None:
+    """The symptom `distinct_details` exists for, on the path that produced it.
+
+    `commands/common.py` raises `PziError(resolved.errors[0],
+    details=list(resolved.errors))`, so `message` and `details[0]` are the same
+    string, and `cli._fail` printed the headline and then bulleted it — one
+    failure reported as two.
+
+    `error_lines` had a unit test naming this exact invocation, but
+    `error_lines` is the *other* renderer sharing the rule; `_fail` had none.
+    Reverting `_fail`'s `distinct_details` call left the whole suite green.
+    Counted rather than substring-matched, because "does not exist" appearing
+    somewhere in stderr is true either way.
+    """
+    config_path, _bib = _library(tmp_path)
+
+    code, stdout, stderr = _run(
+        ["export", "--target", str(tmp_path / "gone.bib"), "--config", str(config_path)],
+        tmp_path,
+    )
+
+    assert code == exit_codes.ENVIRONMENT, stderr
+    assert stdout == ""
+    assert stderr.count("does not exist") == 1, stderr
+    assert stderr.count("\n") == 1, f"one line, not a headline plus a bullet: {stderr!r}"
+

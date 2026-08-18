@@ -20,9 +20,15 @@ def test_error_lines_prefixes_each_error() -> None:
 def test_error_lines_does_not_say_the_same_thing_twice() -> None:
     """Many services set `message` and `errors[0]` to the same sentence.
 
-    `pzi export --target <missing>` printed that sentence, then printed it again
-    as a bullet — which reads as two failures. The bullets exist to add detail
-    the headline does not have.
+    A renderer that prints the headline and then bullets every error shows that
+    sentence twice, which reads as two separate failures. The bullets exist to
+    add detail the headline does not have.
+
+    This covers `error_lines` and only `error_lines`. The symptom it used to
+    name — `pzi export --target <missing>` — goes through `cli._fail`, the
+    other renderer sharing `distinct_details`, and nothing tested that one:
+    `tests/test_cli_contract.py::test_export_says_a_missing_target_once` is
+    where it lives now.
     """
     assert error_lines("no such library", ["no such library"]) == ["no such library"]
     assert error_lines("failed", ["failed", "and here is why"]) == [
