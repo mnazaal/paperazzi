@@ -139,6 +139,13 @@ def test_export_has_exactly_the_three_stdout_contracts_the_readme_documents(
 
     # A failure writes no document at all — not a truncated one. The content is
     # rendered whole before anything is printed, which is what makes that true.
+    #
+    # Two failures, because they prove different things. A missing `--target`
+    # fails in `resolve_target`, *before* any exporter runs, so `stdout == ""`
+    # there is true for a reason that has nothing to do with the whole-then-
+    # print property — a `print` on the real failure path left it green. The
+    # second reaches `export_json`, which does the read itself, so the
+    # exporter has genuinely started and still emitted nothing.
     code, stdout, stderr = _run(
         ["export", "--format", "json", "--target", str(tmp_path / "gone.bib"),
          "--config", str(config_path)],
@@ -147,6 +154,18 @@ def test_export_has_exactly_the_three_stdout_contracts_the_readme_documents(
     assert code == exit_codes.ENVIRONMENT
     assert stdout == ""
     assert "does not exist" in stderr
+
+    unreadable = tmp_path / "ml.bib"
+    unreadable.chmod(0o000)
+    try:
+        code, stdout, stderr = _run(
+            ["export", "--format", "json", "--config", str(config_path)], tmp_path
+        )
+    finally:
+        unreadable.chmod(0o600)
+    assert code == exit_codes.ENVIRONMENT
+    assert stdout == "", f"a failed export wrote a partial document: {stdout!r}"
+    assert "Permission denied" in stderr
 
 
 def test_export_to_dash_writes_to_stdout(tmp_path: Path) -> None:
@@ -912,8 +931,14 @@ def test_a_bare_subcommand_group_prints_its_own_help(tmp_path: Path) -> None:
         assert code == exit_codes.USAGE, group
         assert out == "", f"{group} wrote to stdout"
         assert f"usage: pzi {group}" in err, group
-        for sub in subcommands:
-            assert sub in err, f"{group}: {sub} not offered"
+        # The choices line argparse builds from the registry, not a bare
+        # substring. Every one of these names also appears in the group's
+        # description and epilog prose — `library`'s description spells out all
+        # six — so `assert sub in err` stayed true after renaming a subparser,
+        # which is the one thing this assertion is for.
+        assert "{" + ",".join(subcommands) + "}" in err, (
+            f"{group}: expected the choices line for {subcommands}, got:\n{err}"
+        )
         assert f"{group}_command" not in err, f"{group} still names the internal dest"
 
 

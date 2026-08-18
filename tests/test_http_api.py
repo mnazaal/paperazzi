@@ -402,6 +402,34 @@ def test_get_export_raw_returns_export_content_with_content_type(tmp_path: Path)
     assert b"smith2024graph" in body
 
 
+def test_an_exact_binary_route_does_not_match_a_longer_path(tmp_path: Path) -> None:
+    """`/export/raw` is exact; `/pdf/` is a prefix. The dispatcher must obey.
+
+    `BinaryGetRoute.is_prefix` is what says which, and
+    `test_each_binary_route_declares_how_it_matches` covers the dataclass —
+    mutating `matches` to `startswith` does fail it. What nothing covered is
+    the dispatcher *using* `matches`: rewriting `http_api`'s loop to compare
+    with `startswith` directly, ignoring `is_prefix`, made `/export/rawXYZ` a
+    200 with the whole suite green, because no test ever issued that request.
+
+    So this one goes over the wire. `/pdf/<citekey>` is asserted elsewhere; the
+    exact half is the one that had no end-to-end check.
+    """
+    config_path, _ = _seed(tmp_path)
+    port, _thread, server = _serve_once(config_path, tmp_path)
+    try:
+        try:
+            urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/export/rawXYZ?format=bibtex", timeout=10
+            )
+            raise AssertionError("expected HTTPError — /export/raw is not a prefix")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 404
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_post_capture_accepts_page_metadata_overrides(tmp_path: Path) -> None:
     config_path, bib_path = _seed(tmp_path)
     port, _thread, server = _serve_once(config_path, tmp_path)
