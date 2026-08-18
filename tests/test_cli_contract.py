@@ -1027,3 +1027,39 @@ def test_every_json_failure_carries_a_reason(tmp_path: Path) -> None:
         assert envelope["status"] == "error"
         assert envelope.get("reason") == "config", (argv, envelope)
         assert code == exit_codes.ENVIRONMENT
+
+
+def test_library_list_aligns_its_columns_and_marks_the_default(
+    tmp_path: Path,
+) -> None:
+    """The human-readable path of `pzi library list`, which nothing ran.
+
+    Every invocation in the suite went through `--json`, a parser snapshot or
+    an identity assertion, so the column padding and the `(default)` marker —
+    the entire reason this command exists rather than `pzi doctor` — were
+    executed by no test. The module sat at 44% while looking covered.
+    """
+    long_bib = tmp_path / "with-a-long-name.bib"
+    short_bib = tmp_path / "ml.bib"
+    for path in (long_bib, short_bib):
+        path.write_text("", encoding="utf-8")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'[[bibs]]\nname = "ml"\npath = "{short_bib}"\ndefault = true\n'
+        f'\n[[bibs]]\nname = "a-much-longer-name"\npath = "{long_bib}"\n',
+        encoding="utf-8",
+    )
+
+    code, stdout, stderr = _run(["library", "list", "--config", str(config_path)], tmp_path)
+
+    assert code == exit_codes.OK, stderr
+    lines = stdout.splitlines()
+    assert len(lines) == 2, stdout
+    # Padded to the widest name, so the paths line up in a terminal.
+    assert [line.index(str(tmp_path)) for line in lines] == [
+        len("a-much-longer-name") + 2
+    ] * 2, stdout
+    # Exactly one default, and it is the one the config marked.
+    assert [line for line in lines if line.endswith("  (default)")] == [lines[0]]
+    assert lines[0].startswith("ml ")
+
