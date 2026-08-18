@@ -29,6 +29,14 @@ SNAPSHOT = Path(__file__).parent / "fixtures" / "cli_surface.txt"
 UPDATE_ENV = "PZI_UPDATE_CLI_SURFACE"
 
 
+def _subparsers(parser: argparse.ArgumentParser) -> dict[str, argparse.ArgumentParser]:
+    """The parser's immediate subcommands, or an empty mapping."""
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            return dict(action.choices)
+    return {}
+
+
 def _format_default(action: argparse.Action) -> str:
     """The default, when there is one worth pinning.
 
@@ -144,3 +152,50 @@ def test_every_command_and_subcommand_appears_in_the_snapshot() -> None:
             assert f"\npzi {parent} {child}\n" in recorded, (
                 f"`pzi {parent} {child}` is not pinned"
             )
+
+
+#: The command paths whose `--help` carries an EXAMPLES block, and the top
+#: level. Recorded as a set rather than snapshotted with the flags because
+#: this file pins shape, not prose — but *whether* a command documents itself
+#: is shape. `pzi library check` lost its three examples in the `pzi fix` ->
+#: `pzi library` rename: the new group subparser was given a description and a
+#: formatter and no epilog, and nothing noticed, because the snapshot records
+#: flags only.
+COMMANDS_WITH_EXAMPLES = frozenset({
+    "",  # the top-level parser
+    "add",
+    "entries",
+    "export",
+    "inbox",
+    "library",
+    "library check",
+    "pdf",
+    "search",
+    "update",
+})
+
+
+def _commands_with_examples() -> set[str]:
+    root = build_parser()
+    found = {"" if "EXAMPLES" in (root.epilog or "") else None}
+    for name, sub in _subparsers(root).items():
+        if "EXAMPLES" in (sub.epilog or ""):
+            found.add(name)
+        for child_name, child in _subparsers(sub).items():
+            if "EXAMPLES" in (child.epilog or ""):
+                found.add(f"{name} {child_name}")
+    found.discard(None)
+    return {name for name in found if name is not None}
+
+
+def test_every_command_that_documented_examples_still_does() -> None:
+    """Losing an EXAMPLES block is a silent regression, so name the set.
+
+    `pzi check` carried three examples — including the `--report` and `--jsonl`
+    forms, which are the ones nobody guesses. Moving it under `pzi library`
+    dropped them, and every gate stayed green: the surface snapshot records
+    flags and deliberately ignores prose, and no test read `--help` text for
+    any subcommand.
+    """
+    assert _commands_with_examples() == set(COMMANDS_WITH_EXAMPLES)
+

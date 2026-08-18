@@ -731,6 +731,11 @@ def build_parser() -> argparse.ArgumentParser:
             "fabricated or mismatched references. Never writes the library."
         ),
         formatter_class=_PziHelpFormatter,
+        epilog=_subcommand_epilog((
+            "pzi library check",
+            "pzi library check --report audit.json",
+            "pzi library check --strict --jsonl audit.jsonl",
+        )),
     )
     check_parser.add_argument(
         "--strict",
@@ -752,7 +757,6 @@ def build_parser() -> argparse.ArgumentParser:
     add_config(check_parser)
     add_single_target(check_parser)
     check_parser.add_argument("--json", action="store_true", help="output the result as JSON")
-
 
     clean_parser = library_sub.add_parser(
         "clean", help="Check and clean a BibTeX library for integrity issues"
