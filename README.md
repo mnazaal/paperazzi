@@ -510,8 +510,12 @@ provider *and* a locked library.
 
 **Functions return the answer, not the envelope.** The services report
 `status`, `errors` and `reason` because the CLI turns them into an exit code
-and the HTTP API into a status line; none of the three can vary in a value this
-surface returns, so none of them is in it. Each of the nine result shapes has a
+and the HTTP API into a status line. `status` and `reason` can never vary in a
+value this surface returns — a failure raises, and the exception carries both
+— so neither is in it. `errors` is stripped from six reports and kept in
+`check`, `promote` and `update`'s: those sweeps report a *partial* failure as
+ok-with-errors (the CLI exits 4 on the same result), so there the key is part
+of the answer, empty on a clean run. Each of the nine result shapes has a
 public twin — `TagChangeResult` becomes `pzi.TagChangeReport` — and a test
 derives one from the other so they cannot drift.
 

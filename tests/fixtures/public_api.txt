@@ -21,9 +21,19 @@ pzi.BibInfo {
     papers_dir: str
     path: str
 }
+pzi.CheckItem {
+    citekey: str
+    confidence_score: int
+    flags: list[str]
+    mismatches: list[str]
+    source_errors: NotRequired[list[str]]
+    sources_checked: list[str]
+    verdict: Verdict
+}
 pzi.CheckReport {
     bib_name: str | None
     counts: dict[str, int]
+    errors: list[str]
     items: list[CheckItem]
     strict: bool
     total: int
@@ -116,6 +126,7 @@ pzi.PromoteItem {
 pzi.PromoteReport {
     bib_name: str | None
     dry_run: bool
+    errors: list[str]
     items: list[PromoteItem]
     keep_preprint: bool
     summary: NotRequired[dict[str, Any]]
@@ -146,6 +157,7 @@ pzi.TagListReport {
 pzi.UpdateBibReport {
     bib_name: str | None
     dry_run: bool
+    errors: list[str]
     items: list[UpdatePlanItem]
 }
 pzi.UpdatePlanItem {

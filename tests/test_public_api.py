@@ -385,16 +385,27 @@ def test_each_public_report_is_its_service_type_minus_the_envelope() -> None:
     report does not gain is a failure here, not a silently narrower public type
     that no snapshot notices — the snapshot records whatever it is given.
     """
-    from pzi.api import _ENVELOPE_KEYS, _REPORT_TYPES
+    from pzi.api import _ENVELOPE_KEYS, _REPORT_TYPES, _REPORTS_KEEPING_ERRORS
 
     assert len(_REPORT_TYPES) == 9, "one pair per envelope-returning result type"
+    # Decision 40's exception, as an exact list: the three network sweeps where
+    # ok-with-errors is a real outcome (a partial failure the CLI exits 4 on).
+    # Exact, not a subset check — a fourth member is a decision, not a drift.
+    assert _REPORTS_KEEPING_ERRORS == {
+        "CheckReport", "PromoteReport", "UpdateBibReport"
+    }
 
     for public, service in _REPORT_TYPES:
-        expected = set(service.__annotations__) - _ENVELOPE_KEYS
+        stripped = (
+            _ENVELOPE_KEYS - {"errors"}
+            if public.__name__ in _REPORTS_KEEPING_ERRORS
+            else _ENVELOPE_KEYS
+        )
+        expected = set(service.__annotations__) - stripped
         actual = set(public.__annotations__)
         assert actual == expected, (
             f"{public.__name__} should be {service.__name__} minus "
-            f"{sorted(_ENVELOPE_KEYS)}:\n"
+            f"{sorted(stripped)}:\n"
             f"  missing from the public type: {sorted(expected - actual)}\n"
             f"  not in the service type: {sorted(actual - expected)}"
         )
@@ -415,25 +426,41 @@ def test_no_public_return_carries_the_transport_envelope(tmp_path: Path) -> None
 
     The derivation above is about declarations. This is the same claim made of
     what the functions actually hand back, because `_report` could be forgotten
-    at one call site and the type would still read correctly.
+    at one call site and the type would still read correctly — which is
+    exactly what the pre-0.2.0 review proved by mutation: `check()` and
+    `promote()` returned the raw envelope with the whole suite green, because
+    this list stopped at the functions that need no network. It covers all
+    nine `_report` sites now; the last three run against the library `delete`
+    emptied, where `check_bib` audits nothing and `promote`/`update` sweep
+    nothing, so none reaches a provider.
+
+    Decision 40's exception is asserted, not just allowed: the three sweep
+    reports must *carry* `errors` (empty on a clean run), because a caller
+    branching on `report["errors"]` after a real sweep needs the key to exist.
     """
     from pzi.api import _ENVELOPE_KEYS
 
     config = _library(tmp_path)
-    # `delete` before `update`, and `update` last: with the library emptied it
-    # has no gap to fill and reaches no provider, which is how the conformance
-    # test above stays hermetic too.
-    returned = [
-        pzi.dedupe(config_path=config),
-        pzi.add_tags("smith2020", ["nlp"], config_path=config),
-        pzi.remove_tags("smith2020", ["nlp"], config_path=config),
-        pzi.list_tags(config_path=config),
-        pzi.delete("smith2020", dry_run=False, config_path=config),
-        pzi.update(config_path=config),
+    returned: list[tuple[str, dict]] = [
+        ("dedupe", pzi.dedupe(config_path=config)),
+        ("add_tags", pzi.add_tags("smith2020", ["nlp"], config_path=config)),
+        ("remove_tags", pzi.remove_tags("smith2020", ["nlp"], config_path=config)),
+        ("list_tags", pzi.list_tags(config_path=config)),
+        ("delete", pzi.delete("smith2020", dry_run=False, config_path=config)),
+        ("check", pzi.check(config_path=config)),
+        ("promote", pzi.promote(config_path=config)),
+        ("update", pzi.update(config_path=config)),
     ]
-    for value in returned:
-        leaked = sorted(set(value) & _ENVELOPE_KEYS)
-        assert not leaked, f"{value} still carries {leaked}"
+    sweeps = {"check", "promote", "update"}
+    for label, value in returned:
+        if label in sweeps:
+            leaked = sorted(set(value) & (_ENVELOPE_KEYS - {"errors"}))
+            assert value.get("errors") == [], (
+                f"{label}: a clean run's errors must be present and empty"
+            )
+        else:
+            leaked = sorted(set(value) & _ENVELOPE_KEYS)
+        assert not leaked, f"{label}: {value} still carries {leaked}"
 
 
 def test_every_declared_type_matches_a_real_call(tmp_path: Path) -> None:
@@ -731,6 +758,50 @@ def test_a_missing_bib_warns_instead_of_looking_empty(tmp_path: Path) -> None:
     ):
         with pytest.warns(UserWarning, match="does not exist"):
             assert call() == []
+
+
+def test_entry_page_reports_the_library_total_not_the_page(tmp_path: Path) -> None:
+    """`total` is the whole library; `offset` is echoed. Pinned off-page.
+
+    Every prior assertion on `total` used a library that fit in one page, so
+    `total == len(items)` held by construction and `"total": len(items)` — the
+    mutation that guts the field the type exists for — survived the whole
+    suite. The pre-0.2.0 review proved that; this is the kill. Three entries,
+    pages of one, and the docstring's own pagination loop walked to the end.
+    """
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text(
+        "@article{a1,\n  title = {A},\n}\n\n"
+        "@article{b2,\n  title = {B},\n}\n\n"
+        "@article{c3,\n  title = {C},\n}\n",
+        encoding="utf-8",
+    )
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\ndefault = true\n',
+        encoding="utf-8",
+    )
+    config = str(config_path)
+
+    middle = pzi.entries(offset=1, limit=1, config_path=config)
+    assert middle["total"] == 3, "total is the library, not this page"
+    assert middle["offset"] == 1 and middle["limit"] == 1
+    assert [e["citekey"] for e in middle["items"]] == ["b2"]
+
+    # The loop the docstring advertises terminates and covers everything once.
+    seen: list[str] = []
+    page = pzi.entries(limit=1, config_path=config)
+    seen += [e["citekey"] for e in page["items"]]
+    while page["offset"] + len(page["items"]) < page["total"]:
+        page = pzi.entries(
+            offset=page["offset"] + len(page["items"]), limit=1, config_path=config
+        )
+        seen += [e["citekey"] for e in page["items"]]
+    assert seen == ["a1", "b2", "c3"]
+
+    # Off the end: an empty page still reports the real total.
+    past = pzi.entries(offset=10, limit=1, config_path=config)
+    assert (past["items"], past["total"], past["offset"]) == ([], 3, 10)
 
 
 def test_get_is_a_superset_of_the_summary_entries_returns(tmp_path: Path) -> None:

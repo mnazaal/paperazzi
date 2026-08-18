@@ -160,10 +160,17 @@ as an alternative for tracking `main` or unreleased versions.
 
 ## A note on `v0.1.0b6`
 
-The tag exists locally and never became a GitHub release, so the release
-workflow has not run since `v0.1.0b5`. The gap is not a failed release; the tag
-was simply never pushed. `v0.2.0` is the next run of that pipeline, and the
-first exercise of it in a while — worth watching rather than assuming.
+There is no GitHub release for `v0.1.0b6` because its release run **failed**.
+The tag was pushed on 2026-08-13 and Release run #6 (with CI runs #26/#27 on
+the same commit) failed at the "Run tests" step; the cause was the inverted
+bib-lock hashing that `16fe04f` ("fix: make concurrent bib writes safe") fixed
+the same day — that commit's message identifies the CI failure explicitly. The
+tag was never re-cut after the fix, so the release simply never happened.
+
+An earlier version of this note claimed the tag was never pushed and the
+pipeline never ran. Both were wrong — checked against the GitHub API on
+2026-08-18. `v0.2.0` is the pipeline's first run since that failure; the fix is
+in it, and the gate passed locally, but watch the run rather than assume it.
 
 ## Distribution channels
 

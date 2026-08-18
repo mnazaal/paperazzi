@@ -80,6 +80,7 @@ from pzi.update_service import UpdateBibResult, UpdatePlanItem, update_bib
 __all__ = [
     "AddReport",
     "BibInfo",
+    "CheckItem",
     "CheckReport",
     "DedupeReport",
     "DeleteEntryReport",
@@ -112,18 +113,33 @@ __all__ = [
 ]
 
 #: What the facade strips before returning. `status` is always ``"ok"`` — a
-#: failure raises `PziError` — `errors` is always empty for the same reason, and
-#: no service sets `reason` on a success (verified across every result literal
-#: in `src/pzi/`; the reason a caller wants is on the raised `PziError`, which
-#: carries it). Three keys that can never vary are three keys frozen into the
-#: 1.0 surface saying nothing, against this module's own stated convention that
-#: it returns the answer rather than the transport envelope.
+#: failure raises `PziError` — and no service sets `reason` on a success
+#: (verified across every result literal in `src/pzi/`; the reason a caller
+#: wants is on the raised `PziError`, which carries it). Keys that can never
+#: vary are keys frozen into the 1.0 surface saying nothing, against this
+#: module's own stated convention that it returns the answer rather than the
+#: transport envelope.
 #:
-#: The service types keep them: the CLI and the HTTP API both read `status` to
-#: choose an exit code or a status line. So each has a public twin below,
-#: paired in `_REPORT_TYPES`, and `tests/test_public_api.py` asserts the
-#: derivation — a service growing a key cannot silently skip its public type.
+#: `errors` is **not** always empty, which an earlier version of this comment
+#: claimed: `check`, `update` and `promote` deliberately return ``status:
+#: "ok"`` with non-empty ``errors`` on a *partial* failure — a provider
+#: unreachable for some entries, a lookup failed for one citekey — and the CLI
+#: exits 4 (PARTIAL) on the very same result. For those three sweeps the key is
+#: part of the answer, so their reports keep it (`_REPORTS_KEEPING_ERRORS`);
+#: for the other six a failure can only raise, so theirs is provably dead and
+#: is stripped. Decision 40.
+#:
+#: The service types keep the whole envelope: the CLI and the HTTP API both
+#: read `status` to choose an exit code or a status line. So each has a public
+#: twin below, paired in `_REPORT_TYPES`, and `tests/test_public_api.py`
+#: asserts the derivation — a service growing a key cannot silently skip its
+#: public type.
 _ENVELOPE_KEYS = frozenset({"status", "errors", "reason"})
+
+#: The public report names whose `errors` is data rather than transport — the
+#: three network sweeps where ok-with-errors is a real outcome. Read by
+#: `_report` and by the derivation test, which demands this exact list.
+_REPORTS_KEEPING_ERRORS = frozenset({"CheckReport", "PromoteReport", "UpdateBibReport"})
 
 
 class AddReport(TypedDict):
@@ -155,6 +171,10 @@ class CheckReport(TypedDict):
     `CheckResult` minus the transport envelope. See `_ENVELOPE_KEYS`.
     """
 
+    #: Partial-failure channel: non-empty when the sweep succeeded for
+    #: some entries and failed for others (the CLI exits 4 on the same
+    #: result). Kept by decision 40; empty on a clean run.
+    errors: list[str]
     bib_name: str | None
     strict: bool
     total: int
@@ -219,6 +239,10 @@ class PromoteReport(TypedDict):
     `PromoteResult` minus the transport envelope. See `_ENVELOPE_KEYS`.
     """
 
+    #: Partial-failure channel: non-empty when the sweep succeeded for
+    #: some entries and failed for others (the CLI exits 4 on the same
+    #: result). Kept by decision 40; empty on a clean run.
+    errors: list[str]
     bib_name: str | None
     dry_run: bool
     keep_preprint: bool
@@ -259,6 +283,10 @@ class UpdateBibReport(TypedDict):
     `UpdateBibResult` minus the transport envelope. See `_ENVELOPE_KEYS`.
     """
 
+    #: Partial-failure channel: non-empty when the sweep succeeded for
+    #: some entries and failed for others (the CLI exits 4 on the same
+    #: result). Kept by decision 40; empty on a clean run.
+    errors: list[str]
     bib_name: str | None
     dry_run: bool
     items: list[UpdatePlanItem]
@@ -297,13 +325,19 @@ _REPORT_TYPES: tuple[tuple[type, type], ...] = (
 )
 
 
-def _report(result: Mapping[str, Any]) -> Any:
+def _report(result: Mapping[str, Any], *, keep_errors: bool = False) -> Any:
     """A service result with the transport envelope removed.
 
     Called after `_unwrap`, so the envelope has already been read for its one
-    purpose: deciding whether to raise.
+    purpose: deciding whether to raise. ``keep_errors=True`` is the three-sweep
+    exception (`_REPORTS_KEEPING_ERRORS`): there ``errors`` reports the failed
+    part of a partially-successful run and must survive the strip.
     """
-    return {key: value for key, value in result.items() if key not in _ENVELOPE_KEYS}
+    stripped = _ENVELOPE_KEYS - {"errors"} if keep_errors else _ENVELOPE_KEYS
+    report = {key: value for key, value in result.items() if key not in stripped}
+    if keep_errors:
+        report.setdefault("errors", [])
+    return report
 
 
 _EXPORTERS = {
@@ -317,11 +351,13 @@ _EXPORTERS = {
 #: The sort fields `bib_service.list_entries` actually implements. It falls back
 #: to `citekey` for anything else *silently*, so an unvalidated typo returns
 #: plausible data in the wrong order. The CLI enforces the same set as argparse
-#: `choices` (`cli_parser.py:703`); this is that guard for the library.
+#: `choices` (the `--sort` argument in `cli_parser`); this is that guard for
+#: the library.
 _SORT_FIELDS = ("author", "citekey", "title", "year")
 
-#: The bounds the other two front ends clamp to (`http_get_routes.py:150-151`,
-#: `commands/entries.py:67`). Clamped rather than rejected, matching them.
+#: The bounds the other two front ends clamp to (`_handle_entries_get` in
+#: `http_get_routes` and the entries runner in `commands/entries`). Clamped
+#: rather than rejected, matching them.
 _MIN_LIMIT, _MAX_LIMIT = 1, 500
 
 
@@ -419,6 +455,11 @@ def _tag_list(tags: object) -> list[str]:
     Rejecting rather than coercing, because a bare string is ambiguous: `"nlp"`
     is one tag and `"a,b"` is arguably two. Accepting one later is a widening
     and stays backward-compatible; guessing now and changing the guess is not.
+
+    A `list` exactly — not any iterable — matching both the annotation and
+    `POST /tags/add`'s validation, so the two programmatic surfaces refuse the
+    same shapes. A tuple is unambiguous and could be admitted later; that too
+    is a widening.
     """
     if isinstance(tags, str) or not isinstance(tags, list):
         raise PziError(
@@ -687,7 +728,10 @@ def add(
     one function call. Without it, capture falls back to the DOI-based metadata
     providers, which cannot resolve a publisher URL.
     """
-    overrides: dict[str, object] = {"tags": _tag_list(tags)} if tags else {}
+    # Validate before the truthiness test, or a falsy wrong type slips the
+    # guard: `tags=""` silently meant "no tags" while `tags="nlp"` raised.
+    tag_overrides = _tag_list(tags) if tags is not None else []
+    overrides: dict[str, object] = {"tags": tag_overrides} if tag_overrides else {}
     # Through `capture_to_bib`, the seam the CLI and the HTTP API both use —
     # not straight to `add_input_to_bib`. It carries the shared capture policy
     # (PDF-candidate ranking, the SSRF check on a page-supplied PDF URL), so a
@@ -728,7 +772,7 @@ def check(
     )
     typed = result.copy()
     _unwrap(typed, "status")
-    return _report(typed)
+    return _report(typed, keep_errors=True)
 
 
 @_public
@@ -771,7 +815,7 @@ def promote(
     )
     typed = result.copy()
     _unwrap(typed, "status")
-    return _report(typed)
+    return _report(typed, keep_errors=True)
 
 
 @_public
@@ -947,4 +991,4 @@ def update(
         dry_run=dry_run,
     ).copy()
     _unwrap(typed, "status")
-    return _report(typed)
+    return _report(typed, keep_errors=True)

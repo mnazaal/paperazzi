@@ -126,25 +126,36 @@ FLAG_INVOCATIONS: dict[str, list[str]] = {
     "update --promote": ["update", "--promote", "--target", "MISSING"],
 }
 
-#: Envelope names nothing here can produce, and why. Kept explicit so the
-#: coverage check below stays two-way for everything else: an unexercised name
-#: has to be argued for, not simply absent.
-UNEXERCISED_ENVELOPE_COMMANDS: dict[str, str] = {
-    # `INVOCATIONS["doctor"]` passes `--config-only`, so the bare form — which
-    # runs live service probes over the network — is never emitted here.
-    "doctor": "the bare form probes live services",
-    "doctor --reinstall-server": (
-        "downloads a Node runtime and replaces the installed translation server"
-    ),
+#: Invocations run against a config that does not exist. Both forms of
+#: `doctor` that this file cannot run on their success path — the bare form
+#: probes live services, `--reinstall-server` downloads a Node runtime — still
+#: emit their labelled envelope on the *failure* path, because `doctor_check`
+#: returns before any probe when the config fails to load and the reinstall
+#: reaches its reporting before `ensure_node`. So the label contract is
+#: exercised offline without either side effect. This replaced an exemption
+#: list: the pre-0.2.0 review showed both of its justifications were true of
+#: the success paths only, and label verification never needed those.
+MISSING_CONFIG_INVOCATIONS: dict[str, list[str]] = {
+    "doctor (bare, failing config)": ["doctor"],
+    "doctor --reinstall-server (failing config)": ["doctor", "--reinstall-server"],
+}
+
+#: Label each missing-config invocation must produce.
+MISSING_CONFIG_LABELS: dict[str, str] = {
+    "doctor (bare, failing config)": "doctor",
+    "doctor --reinstall-server (failing config)": "doctor --reinstall-server",
 }
 
 
 def _run_json(command: str, home: Path) -> dict[str, Any]:
-    config = _library(home)
-    argv = [
-        arg.replace("MISSING", str(home / "missing.bib"))
-        for arg in {**INVOCATIONS, **FLAG_INVOCATIONS}[command]
-    ]
+    if command in MISSING_CONFIG_INVOCATIONS:
+        home.mkdir(parents=True, exist_ok=True)
+        config = home / "absent-config.toml"  # deliberately never written
+        spec = MISSING_CONFIG_INVOCATIONS[command]
+    else:
+        config = _library(home)
+        spec = {**INVOCATIONS, **FLAG_INVOCATIONS}[command]
+    argv = [arg.replace("MISSING", str(home / "missing.bib")) for arg in spec]
     stdout = StringIO()
     run_cli(
         [*argv, "--json", "--config", str(config)],
@@ -170,6 +181,15 @@ def test_the_envelope_names_a_declared_command(command: str, tmp_path: Path) -> 
 
     So this half is *observed*. It has to be: five of the names are flags, and
     a flag is exactly what no parser walk can see.
+
+    Membership **and** identity. Membership alone let two runners swap their
+    labels with the whole suite green — `entries --stats` reporting
+    `update --promote` is still "a declared name", just the wrong one — which
+    the pre-0.2.0 review proved by doing exactly that. `startswith` rather
+    than equality because `INVOCATIONS` keys are command paths and several
+    runners rightly label the *mode* (`doctor` emits `doctor --config-only`);
+    for a flag-level invocation the prefix is the whole label, so the swap
+    cannot survive it.
     """
     envelope = _run_json(command, tmp_path / command.replace(" ", "-"))
 
@@ -177,6 +197,9 @@ def test_the_envelope_names_a_declared_command(command: str, tmp_path: Path) -> 
         f"`pzi {command} --json` labelled its envelope "
         f"{envelope['command']!r}, which is not in cli_json.ENVELOPE_COMMANDS "
         "— register it there and give it a row in the surface-parity matrix"
+    )
+    assert envelope["command"].startswith(command), (
+        f"`pzi {command} --json` labelled its envelope {envelope['command']!r}"
     )
 
 
@@ -189,28 +212,30 @@ def test_every_declared_envelope_command_is_actually_produced(
     parity matrix would be complete with respect to names that no longer exist,
     which is worse than incomplete because it reads as covered.
 
-    Two names are exempt and say why in `UNEXERCISED_ENVELOPE_COMMANDS`; the
-    exemption list is part of the assertion, so adding to it is a visible edit
-    rather than a silent gap.
+    No exemptions. An earlier version exempted both `doctor` forms with
+    justifications that were true only of their success paths; the failing-
+    config invocations in `MISSING_CONFIG_INVOCATIONS` produce the same labels
+    with no network and no side effects, so every declared name is observed.
     """
+    all_invocations = sorted(
+        {**INVOCATIONS, **FLAG_INVOCATIONS, **MISSING_CONFIG_INVOCATIONS}
+    )
     observed = {
         _run_json(command, tmp_path / f"observe-{index}")["command"]
-        for index, command in enumerate(sorted({**INVOCATIONS, **FLAG_INVOCATIONS}))
+        for index, command in enumerate(all_invocations)
     }
-    unexercised = set(UNEXERCISED_ENVELOPE_COMMANDS)
 
-    assert observed | unexercised == set(ENVELOPE_COMMANDS), (
+    assert observed == set(ENVELOPE_COMMANDS), (
         f"  declared but never produced: "
-        f"{sorted(set(ENVELOPE_COMMANDS) - observed - unexercised)}\n"
+        f"{sorted(set(ENVELOPE_COMMANDS) - observed)}\n"
         f"  produced but not declared: {sorted(observed - set(ENVELOPE_COMMANDS))}"
     )
-    assert unexercised <= set(ENVELOPE_COMMANDS), (
-        "the exemption list names something that is not a declared envelope "
-        f"command: {sorted(unexercised - set(ENVELOPE_COMMANDS))}"
-    )
 
 
-@pytest.mark.parametrize("command", sorted(INVOCATIONS))
+@pytest.mark.parametrize(
+    "command",
+    sorted({**INVOCATIONS, **FLAG_INVOCATIONS, **MISSING_CONFIG_INVOCATIONS}),
+)
 def test_the_envelope_holds_for_every_json_command(
     command: str, tmp_path: Path
 ) -> None:
@@ -225,7 +250,8 @@ def test_the_envelope_holds_for_every_json_command(
     # results, and a consumer switching on `command` wants to tell them apart.
     # The exact strings are pinned by the snapshot below; what must hold
     # everywhere is that the field starts with the command that was invoked.
-    assert envelope["command"].startswith(command), (
+    expected_prefix = MISSING_CONFIG_LABELS.get(command, command)
+    assert envelope["command"].startswith(expected_prefix), (
         f"envelope says {envelope['command']!r}, invoked as {command!r}"
     )
     assert envelope["status"] in {"ok", "error"}

@@ -1304,3 +1304,29 @@ def test_inbox_drain_rejects_a_non_numeric_delay(tmp_path: Path) -> None:
         )
         assert status == 400, bad
         assert "delay" in body["error"], bad
+
+
+def test_process_get_detail_reports_the_entry_type(tmp_path: Path) -> None:
+    """`GET /detail/<citekey>` answers what `pzi.get()` answers.
+
+    `entry_type` was added to `pzi.get()` and the CLI detail via
+    `entry_detail`'s enrichment — but this route is a parallel implementation
+    that reads records directly, and records never carry the key
+    (`bibtex_entry_to_record` deliberately omits it). The commit claimed all
+    three surfaces gained it; only two had, which is the repo's dominant defect
+    shape: a fix landing at one call site. Only the pure payload function had a
+    test, so the handler's missing enrichment was observed by nothing.
+    """
+    bib = tmp_path / "ml.bib"
+    bib.write_text(
+        "@inproceedings{jones2021,\n  title = {Another},\n"
+        "  author = {Jones, Ada},\n  year = {2021},\n}\n"
+    )
+    cpath = tmp_path / "config.toml"
+    cpath.write_text(f'[[bibs]]\nname="ml"\npath="{bib}"\ndefault=true\n')
+
+    status, body = process_get_request("/detail/jones2021", str(cpath), str(tmp_path))
+
+    assert status == 200
+    assert body["entry"]["entry_type"] == "inproceedings"
+

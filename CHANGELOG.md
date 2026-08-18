@@ -99,19 +99,27 @@ next to the diff it explains.
   `config.template.toml` and the loader's accepted key set are checked to
   describe the same options, with `rate_limit_rpm` pinned as a retired key that
   still loads with an explanation. All 21 HTTP routes are pinned, including the
-  two binary `GET`s that live in inline conditionals rather than a route table,
+  two binary `GET`s, which had lived in inline conditionals until this window
+  moved them into a route table of their own,
   and the fact that authentication is one gate in front of every route rather
   than a per-route flag.
 - The CLI shape and the exit-code table are now pinned by tests, so neither can
   change without a failure that says so. `tests/fixtures/cli_surface.txt`
   records every command, subcommand, flag, positional, `nargs`, `choices` and
-  default across the whole parser tree — 185 lines covering 24 parsers — and
+  default across the whole parser tree — 189 lines covering 26 parsers — and
   `tests/test_exit_code_table.py` checks the README's exit-code table against
   `pzi.exit_codes` in both directions, that every documented code is reachable,
   and that no two codes share a meaning. Nothing asserted any of this before: a
   renamed flag, a dropped subcommand or a changed default passed every gate.
   These are the first of the 1.0 freeze mechanisms — a frozen surface without a
   test that fails when it changes is a promise with no mechanism.
+
+- **Every reader reports the BibTeX entry type.** `pzi.get()`, `pzi entries
+  <citekey> --json` and `GET /detail/<citekey>` all gain `entry_type`, which
+  `entries()`, `--stats` and `export` already reported — so the full record is
+  a superset of the summary again and an entry can be round-tripped. The HTTP
+  route was initially missed (a fix landing at one call site, found by the
+  pre-release review) and now has its own handler-level test.
 
 - `pzi library list` prints the configured libraries and which is the default.
   `GET /bibs` and `pzi.list_bibs()` already answered this; on the CLI it was
@@ -120,16 +128,23 @@ next to the diff it explains.
 ### Changed
 
 - **The Python API returns the answer, not the transport envelope.** Ten of the
-  fifteen functions returned `status`, `errors` and sometimes `reason` — keys
-  that can never vary, since a failure raises `PziError` and no service sets a
-  reason on success. Each of the nine result shapes now has a public twin
-  (`pzi.TagChangeResult` -> `pzi.TagChangeReport`, and the same for `Add`,
-  `Check`, `Dedupe`, `DeleteEntry`, `Merge`, `Promote`, `TagList` and
-  `UpdateBib`); the services keep the envelope, because the CLI reads `status`
-  for its exit code and the HTTP API for its status line. A test derives each
-  public type from its service type, so a service growing a key cannot leave
-  its twin behind. **Breaking**: the type names changed, and the three keys are
-  gone from the returned dicts.
+  fifteen functions returned `status`, `errors` and sometimes `reason`. Each of
+  the nine result shapes now has a public twin (`pzi.TagChangeResult` ->
+  `pzi.TagChangeReport`, and the same for `Add`, `Check`, `Dedupe`,
+  `DeleteEntry`, `Merge`, `Promote`, `TagList` and `UpdateBib`); the services
+  keep the envelope, because the CLI reads `status` for its exit code and the
+  HTTP API for its status line. `status` and `reason` can never vary in a
+  returned value — a failure raises `PziError`, which carries both the code
+  and the reason — so they are stripped everywhere. `errors` is stripped from
+  six reports and **kept in `CheckReport`, `PromoteReport` and
+  `UpdateBibReport`**: those sweeps deliberately report a *partial* failure as
+  ok-with-errors (the CLI exits 4 on the same result), so there the key is the
+  answer. A test derives each public type from its service type, with that
+  three-member exception encoded explicitly, so a service growing a key cannot
+  leave its twin behind. `pzi.CheckItem` is exported beside its siblings, so
+  `CheckReport["items"]` has a nameable, snapshot-pinned type. **Breaking**:
+  the type names changed, and the stripped keys are gone from the returned
+  dicts.
 
 - **`pzi.entries()` returns an `EntryPage`, not a list.** `{items, total,
   offset, limit}` — the service computed `total` and the facade threw it away,
@@ -188,7 +203,7 @@ next to the diff it explains.
   path and not another. `PziError` now carries the structured reason where the
   raiser knows it, with a documented coarse fallback from the exit code where
   nothing better exists.
-- `pzi check --force` is refused when neither `--report` nor `--jsonl` is given.
+- `pzi library check --force` (then `pzi check --force`) is refused when neither `--report` nor `--jsonl` is given.
   It was accepted and did nothing — on the longest-running command, where a
   silently ignored flag costs a whole network run to discover.
 
@@ -202,7 +217,7 @@ next to the diff it explains.
 
 ### Fixed
 
-- **`pzi check` and `pzi.check()` now agree about whether a library was
+- **`pzi library check` (then `pzi check`) and `pzi.check()` now agree about whether a library was
   verified.** An audit that reached no metadata source at all exited 5 from the
   CLI while returning `"status": "ok"` from Python and raising nothing — the
   rule lived in the CLI runner and nowhere else. It is part of the audit now, so

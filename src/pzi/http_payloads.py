@@ -89,6 +89,10 @@ def detail_payload(record: Mapping[str, Any], bib_name: str | None) -> dict[str,
         "citekey": record.get("citekey"),
         "entry": {
             "citekey": record.get("citekey"),
+            # Present only when the caller enriched the record from its parsed
+            # entry — `bibtex_entry_to_record` deliberately never sets it, the
+            # same seam `entry_detail` and `list_entries` work around.
+            "entry_type": record.get("entry_type") or "unknown",
             "title": record.get("title"),
             "authors": normalize_authors(record.get("authors")),
             "year": record.get("year"),

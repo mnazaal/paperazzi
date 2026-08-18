@@ -63,6 +63,12 @@ _PROBLEMATIC_FLAGS = frozenset(
 
 
 class CheckItem(TypedDict):
+    """One entry's audit verdict, as `pzi.check()` reports it in ``items``.
+
+    The per-entry half of a `CheckReport`: which sources answered, how the
+    entry scored, and the verdict the counts summarize.
+    """
+
     citekey: str
     verdict: Verdict
     confidence_score: int

@@ -212,9 +212,18 @@ def _handle_detail_get(
     _config, bib = resolved
 
     read_result = read_bib_file(bib["path"])
-    for record in read_result["records"]:
+    entries = read_result["entries"]
+    for index, record in enumerate(read_result["records"]):
         if record.get("citekey") == citekey:
-            return 200, detail_payload(record, bib["name"])
+            # `entry_type` lives on the parsed entry, not the record — the same
+            # enrichment `entry_detail` does for `pzi.get()`, missed here when
+            # that landed, which left `/detail/` the one reader without it.
+            entry = entries[index] if index < len(entries) else {}
+            enriched = {
+                **record,
+                "entry_type": str(entry.get("entry_type") or "unknown"),
+            }
+            return 200, detail_payload(enriched, bib["name"])
     return 404, {"error": f"citekey not found: {citekey}"}
 
 

@@ -83,6 +83,7 @@ if TYPE_CHECKING:
     from pzi.api import (
         AddReport,
         BibInfo,
+        CheckItem,
         CheckReport,
         DedupeReport,
         DeleteEntryReport,
@@ -123,6 +124,7 @@ _PUBLIC_TYPES = frozenset(
     {
         "AddReport",
         "BibInfo",
+        "CheckItem",
         "CheckReport",
         "DedupeReport",
         "DeleteEntryReport",
@@ -180,6 +182,7 @@ def __dir__() -> list[str]:
 __all__ = [
     "AddReport",
     "BibInfo",
+    "CheckItem",
     "CheckReport",
     "DedupeReport",
     "DeleteEntryReport",
