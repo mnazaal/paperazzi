@@ -81,7 +81,7 @@ def test_dedupe_exits_one_on_fuzzy_candidates_alone_json(
     assert code == 1
 
 
-def test_fix_merge_unknown_citekey_is_not_found(tmp_path: Path) -> None:
+def test_library_merge_unknown_citekey_is_not_found(tmp_path: Path) -> None:
     """Both halves were missing here: the service `reason` and the runner branch."""
     from pzi.dedupe_service import merge_duplicates
 
@@ -96,7 +96,7 @@ def test_fix_merge_unknown_citekey_is_not_found(tmp_path: Path) -> None:
     assert result["reason"] == "not_found"
 
 
-def test_fix_merge_self_merge_is_not_tagged_not_found(tmp_path: Path) -> None:
+def test_library_merge_self_merge_is_not_tagged_not_found(tmp_path: Path) -> None:
     """"Cannot merge an entry with itself" is a usage mistake, not a missing entry."""
     from pzi import exit_codes
     from pzi.dedupe_service import merge_duplicates
@@ -117,7 +117,7 @@ def test_fix_merge_self_merge_is_not_tagged_not_found(tmp_path: Path) -> None:
     assert exit_code_for_error(result) == exit_codes.USAGE
 
 
-def test_fix_merge_names_the_survivor_fields_it_overwrites(tmp_path: Path) -> None:
+def test_library_merge_names_the_survivor_fields_it_overwrites(tmp_path: Path) -> None:
     """The dry run is where the user decides, and it never mentioned the loss.
 
     `merge_entries` prefers the longer string for title, venue and abstract, so

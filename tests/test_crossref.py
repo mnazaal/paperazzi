@@ -163,7 +163,7 @@ def test_an_organizational_author_is_not_dropped() -> None:
     """Crossref gives a corporate author a `name`, not `family`/`given`.
 
     Standards bodies, consortia and working groups were silently dropped, so a
-    W3C or IETF reference captured with *no author at all* — and `pzi check`
+    W3C or IETF reference captured with *no author at all* — and `pzi library check`
     then flagged it `author_unknown`.
     """
     result = _record_from({
@@ -202,7 +202,7 @@ def test_issued_wins_over_the_deposit_date() -> None:
     """`created` is when the DOI record was deposited, not when the work appeared.
 
     A 1998 paper back-deposited in 2015 was captured as `year = {2015}`, which
-    then failed `pzi check` against every other source.
+    then failed `pzi library check` against every other source.
     """
     result = _record_from({
         "title": ["An Old Paper"],

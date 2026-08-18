@@ -89,7 +89,7 @@ def test_check_strict_exits_nonzero_on_problematic(tmp_path: Path) -> None:
 def test_check_reports_a_problematic_entry_without_strict(tmp_path: Path) -> None:
     """`1` is the documented answer for "ran fine and has something to report".
 
-    It fired only under `--strict`, so `pzi check || alert` — written straight
+    It fired only under `--strict`, so `pzi library check || alert` — written straight
     from the README's exit-code table — stayed silent on a library of fabricated
     references. `--strict` selects *harder checks*; it is not the switch that
     decides whether a finding is reported.

@@ -2,7 +2,7 @@
 
 Three behaviours were carried for a long time as "verified manually, cannot be
 automated": `pzi server` binding, `add --from-file` returning PARTIAL, and
-`pzi check` exiting 5 with no network. Each blocker turned out to have a way
+`pzi library check` exiting 5 with no network. Each blocker turned out to have a way
 around it, recorded here so the checks stop depending on someone remembering to
 run them:
 

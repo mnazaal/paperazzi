@@ -144,7 +144,7 @@ def test_tag_runners_emit_the_envelope(library, tmp_path: Path) -> None:
         _assert_envelope(envelope, command=f"tag {command}")
 
 
-def test_fix_merge_emits_the_envelope(library, tmp_path: Path) -> None:
+def test_library_merge_emits_the_envelope(library, tmp_path: Path) -> None:
     config_path, bib_path = library
     bib_path.write_text(
         ENTRY + "\n@article{smith2024b,\n  title = {Deep Learning},\n"

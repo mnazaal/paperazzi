@@ -569,10 +569,10 @@ def test_a_violated_internal_invariant_still_emits_a_json_document(tmp_path: Pat
         pytest.param(["entries"], id="entries"),
         pytest.param(["search", "--query", "x"], id="search"),
         pytest.param(["tag", "list"], id="tag-list"),
-        pytest.param(["library", "check"], id="check"),
-        pytest.param(["library", "clean"], id="fix-clean"),
-        pytest.param(["library", "dedupe"], id="fix-dedupe"),
-        pytest.param(["library", "reindex"], id="fix-reindex"),
+        pytest.param(["library", "check"], id="library-check"),
+        pytest.param(["library", "clean"], id="library-clean"),
+        pytest.param(["library", "dedupe"], id="library-dedupe"),
+        pytest.param(["library", "reindex"], id="library-reindex"),
     ],
 )
 def test_a_read_command_says_the_configured_bib_does_not_exist(

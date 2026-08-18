@@ -64,7 +64,6 @@ def resolve_target(
 # `import pzi`. The command runners keep importing it from here.
 
 
-
 def target_list(target: Sequence[str] | None) -> list[str | None]:
     """Normalize optional repeated --target values for command loops."""
     return list(target) if target else [None]

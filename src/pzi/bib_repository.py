@@ -282,8 +282,8 @@ def read_bib_notices(path: str) -> list[str]:
     One home for the fact, because the previous arrangement — each caller
     appending :func:`describe_missing_bib` itself — reached `bib_service` and
     none of the other six read sites, so only ``pzi entries`` said the library
-    file was missing while `check`, `search`, `tag list` and the three `fix`
-    subcommands reported a healthy empty library at exit 0.
+    file was missing while `library check`, `search`, `tag list` and the three
+    other `library` subcommands reported a healthy empty library at exit 0.
     """
     return [notice for notice in (describe_missing_bib(path),) if notice]
 
@@ -1387,8 +1387,9 @@ def merge_bib_entries(
 def backup_path_for(bib_path: str, citekey: str) -> Path:
     """A non-existing ``<bib>.<citekey>.bak`` path beside the bib.
 
-    Shared by the two commands that destroy a block — ``delete`` and ``fix
-    merge`` — so both leave the same kind of trace under the same lock.
+    Shared by the two commands that destroy a block — ``delete`` and
+    ``library merge`` — so both leave the same kind of trace under the same
+    lock.
     """
     source = Path(bib_path)
     safe_citekey = "".join(

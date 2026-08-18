@@ -438,7 +438,7 @@ def test_a_search_miss_from_one_source_does_not_condemn_a_confirmed_entry(tmp_pa
 def test_a_defect_from_a_source_that_did_identify_the_work_still_counts(tmp_path):
     """The union exists for a reason: a sparse title-only record can outscore a
     Crossref record that found the same paper under a *different* DOI, and that
-    `doi_mismatch` is exactly what `pzi check` is for."""
+    `doi_mismatch` is exactly what `pzi library check` is for."""
     config_path = _setup(
         tmp_path,
         citekey="vaswani2017",

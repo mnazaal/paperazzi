@@ -414,7 +414,7 @@ def test_reindex_audit_needs_no_confirmation(tmp_path: Path) -> None:
     assert bib.read_text(encoding="utf-8") == _RENAMEABLE
 
 
-def test_fix_clean_does_not_quarantine_a_sibling_librarys_pdf(tmp_path: Path) -> None:
+def test_library_clean_fix_does_not_quarantine_a_sibling_librarys_pdf(tmp_path: Path) -> None:
     """The default layout points every configured bib at one `papers_dir`.
 
     `pzi library clean --fix` on one target moved the other library's PDFs into
@@ -640,7 +640,7 @@ def test_delete_of_a_missing_citekey_is_not_found(tmp_path: Path) -> None:
     assert bib.read_text(encoding="utf-8") == _TWO_ENTRIES
 
 
-def test_fix_merge_folds_one_entry_into_the_other(tmp_path: Path) -> None:
+def test_library_merge_folds_one_entry_into_the_other(tmp_path: Path) -> None:
     """`pzi library merge` had no command-level test either, and it destroys a block."""
     config_path, bib = _library(
         tmp_path,
@@ -664,7 +664,7 @@ def test_fix_merge_folds_one_entry_into_the_other(tmp_path: Path) -> None:
     assert list(tmp_path.glob("*.bak"))
 
 
-def test_fix_merge_dry_run_writes_nothing(tmp_path: Path) -> None:
+def test_library_merge_dry_run_writes_nothing(tmp_path: Path) -> None:
     before = (
         "@article{a2020,\n  title = {Same},\n  doi = {10.1000/same},\n}\n\n"
         "@article{b2020,\n  title = {Same},\n  doi = {10.1000/same},\n}\n"
@@ -682,7 +682,7 @@ def test_fix_merge_dry_run_writes_nothing(tmp_path: Path) -> None:
     assert "would merge" in stdout
 
 
-def test_fix_merge_of_a_missing_citekey_is_not_found(tmp_path: Path) -> None:
+def test_library_merge_of_a_missing_citekey_is_not_found(tmp_path: Path) -> None:
     config_path, bib = _library(tmp_path, _TWO_ENTRIES)
 
     code, _stdout, _stderr = _run(

@@ -1877,7 +1877,7 @@ def test_read_commands_report_a_dropped_duplicate(tmp_path: Path, argv) -> None:
     assert "smith2024" in stdout.getvalue() + stderr.getvalue()
 
 
-def test_fix_clean_json_populates_errors_on_an_unreadable_library(tmp_path: Path) -> None:
+def test_library_clean_json_populates_errors_on_an_unreadable_library(tmp_path: Path) -> None:
     """`errors[]` is the documented failure channel and must not be empty.
 
     `library clean` reported `"status": "error"` with `"errors": []`, stranding the
@@ -1909,7 +1909,7 @@ def test_fix_clean_json_populates_errors_on_an_unreadable_library(tmp_path: Path
     assert "unparseable" in parsed["errors"][0]
 
 
-def test_fix_clean_exits_environment_on_an_unreadable_library(tmp_path: Path) -> None:
+def test_library_clean_exits_environment_on_an_unreadable_library(tmp_path: Path) -> None:
     """1 never means failure — the exit-code contract says so explicitly.
 
     `library clean` returned bare 1 both for "could not read the library" and for
@@ -1936,7 +1936,7 @@ def test_fix_clean_exits_environment_on_an_unreadable_library(tmp_path: Path) ->
     assert json_exit == exit_codes.ENVIRONMENT, "the exit code must not depend on --json"
 
 
-def test_fix_clean_exits_findings_for_a_duplicate_citekey(tmp_path: Path) -> None:
+def test_library_clean_exits_findings_for_a_duplicate_citekey(tmp_path: Path) -> None:
     """A duplicate is a finding: the library is readable, one entry is missing."""
     config_path = _dup_library(tmp_path)
 

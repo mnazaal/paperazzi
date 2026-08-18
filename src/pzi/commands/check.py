@@ -89,10 +89,10 @@ def run_check_command(
     if getattr(args, "force", False) and not report_path and not jsonl_path:
         # `--force` here means only "overwrite the file at --report/--jsonl", and
         # with neither given it was accepted and did nothing. This CLI refuses
-        # that pattern in six other places (`export -o`, `library clean`, `fix
-        # reindex`, `update`, `entries`, `add --failures-out`); `check` was the
-        # one miss, on the longest-running command, where a silently ignored
-        # flag costs a whole network run to discover.
+        # that pattern in six other places (`export -o`, `library clean`,
+        # `library reindex`, `update`, `entries`, `add --failures-out`);
+        # `library check` was the one miss, on the longest-running command,
+        # where a silently ignored flag costs a whole network run to discover.
         return emit_usage_error(
             args,
             "--force applies to --report/--jsonl and has no effect without one",

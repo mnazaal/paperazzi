@@ -1,4 +1,4 @@
-"""`pzi check` is the audit tool; a false verdict is the worst bug it can have.
+"""`pzi library check` is the audit tool; a false verdict is the worst bug it can have.
 
 Two directions matter equally here: a fabricated citation reported as
 `verified`, and a correct one reported as `problematic` (which under `--strict`

@@ -1517,7 +1517,7 @@ def test_promote_drops_the_arxiv_doi_when_the_published_version_has_none(tmp_pat
     """`10.48550/arXiv.…` identifies the preprint, not the published paper.
 
     Inherited, it labels the promoted entry with the version it just stopped
-    being — and a later `pzi check` resolves it straight back to the preprint.
+    being — and a later `pzi library check` resolves it straight back to the preprint.
     """
     bib_path = tmp_path / "ml.bib"
     config_path = _write_config(tmp_path, bib_path)
