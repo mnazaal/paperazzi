@@ -6,6 +6,11 @@
 export const DEFAULT_HOST = "http://127.0.0.1:8765";
 export const DEFAULT_ENDPOINT = `${DEFAULT_HOST}/capture`;
 export const PDF_FETCH_TIMEOUT_MS = 30000;
+// Derived from the server's `api_max_body_bytes` (default 64 MiB,
+// `pzi/http_security.py:DEFAULT_MAX_BODY_BYTES`): the JSON attach path
+// base64-encodes the bytes, which costs 4/3, so 47 MiB is the largest
+// payload that still fits. That key is user-configurable — lowering it
+// below ~63 MiB invalidates this number.
 export const MAX_ATTACH_PDF_BYTES = 47 * 1024 * 1024;
 // Read from the manifest the build stamps, not hardcoded. The literal here was
 // `"2025-06-12-phases-012"`, repeated verbatim in `popup.js`, and had been

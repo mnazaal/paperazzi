@@ -74,6 +74,7 @@ ruff check src tools tests
 pyright
 pytest -m "not browser" -q
 pytest -m browser -q          # needs: playwright install chromium firefox
+rm -rf dist/   # `build` appends; a stale wheel would pass the check below
 python -m build
 twine check dist/*.tar.gz dist/*.whl
 ```
@@ -98,7 +99,7 @@ Pushing the tag triggers `.github/workflows/release.yml`:
    the tag against `pyproject.toml`'s version and against a matching
    `CHANGELOG.md` section, installs with `uv sync --locked` (which fails on a
    lockfile out of step with the manifest), then runs the test suite, the
-   browser suite, and `ruff`. Everything below only runs if this passes.
+   browser suite, `ruff` and `pyright`. Everything below only runs if this passes.
 2. **build** — builds sdist + wheel, runs twine check, builds the Firefox +
    Chrome extension zips (`tools/build_extension.py`), uploads all of it as a
    workflow artifact.

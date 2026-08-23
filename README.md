@@ -29,7 +29,7 @@ paperazzi is NOT for those who need:
 
 ### Requirements
 
-- Python 3.11+
+- Python 3.11.4+
 - `pip`, `uv` or `pipx` for installation
 - `git` if you want paperazzi to auto-install the Zotero translation-server
 - Node.js 22+ (auto-downloaded if missing)
@@ -282,12 +282,12 @@ Shared flags: every command accepts `[--config PATH]` to point at a config file 
 | Code | Meaning |
 |---|---|
 | 0 | Success |
-| 1 | Ran fine and has something to report: no search matches, duplicates or fuzzy near-duplicates found, integrity issues, entries `check` could not verify |
+| 1 | Ran fine and has something to report: no search matches, duplicates or fuzzy near-duplicates found, integrity issues, entries `check` could not verify, or a library only partly read (a block the parser had to drop) |
 | 2 | Usage error (unknown command, bad or missing arguments, or a refusal to overwrite without `--force`) |
 | 3 | Entry not found (unknown citekey) |
-| 4 | Batch partly failed — one or more items in a batch failed while at least one succeeded (`add --from-file`, `import`, `inbox drain`, `update`, `update --promote`, `pdf retry --failed-only`). A batch in which *nothing* succeeded is `5`. |
+| 4 | Batch partly failed — one or more items in a batch failed while at least one succeeded (`add --from-file`, `import`, `inbox`, `update`, `update --promote`, `pdf retry --failed-only`). A batch in which *nothing* succeeded is `5`. |
 | 5 | Could not run: unreadable or invalid config, unknown `--target`, a bib locked by another process or changed out from under a prepared write, permission denied, unreachable service |
-| 130 / 141 | Interrupted (SIGINT) / downstream pipe closed (SIGPIPE) |
+| 130 / 141 | Stopped by a signal (SIGINT, or SIGTERM to `pzi server`) / downstream pipe closed (SIGPIPE) |
 
 Note that `1` never means "the command failed" — a failure to run is always `5`.
 So `pzi search ... || echo broken` *does* fire on an empty result set (`||`
@@ -544,7 +544,7 @@ Three front-ends — the CLI (`pzi.cli` → `pzi.commands.*`), the local HTTP AP
 paperazzi follows [SemVer](https://semver.org/). This section says what that
 covers — which is not everything, and the boundary is the useful part.
 
-**The freeze takes effect at 1.0.** Until then the version is `0.1.0bN` and the
+**The freeze takes effect at 1.0.** Until then the version is `0.x.y` and the
 surfaces below still move; several of them moved in the current beta, and the
 `CHANGELOG` says which. What is already true is that each one has a test that
 fails when it changes, so a break is a decision rather than an accident.
@@ -692,10 +692,11 @@ PDF download tries in order (`pdf.fetch_and_store_pdf_with_fallbacks`):
 5. **Desktop browser + Downloads watcher** — opens the page in your desktop
    browser and waits for the file, for hosts in `desktop_fallback_hosts`
 
-Stages 2 and 3 are skipped when `browser_hook = false`, and stage 3 also when
-`PZI_SKIP_BROWSER_HOOK` is set or the capture came from the browser extension
-(which downloads through its own live session instead); stage 5 has its own
-switch, `PZI_DISABLE_DESKTOP_BROWSER_FALLBACK`. Two stages are gated on the
+Stages 2 and 3 are skipped when `browser_hook = false`. Stages 2, 3 **and 5**
+are all skipped when the capture came from the browser extension, which
+downloads through its own live session instead. `PZI_SKIP_BROWSER_HOOK` skips
+stage 3 only, and stage 5 has its own switch,
+`PZI_DISABLE_DESKTOP_BROWSER_FALLBACK`. Two stages are gated on the
 candidate's **host** rather than on a switch: stage 5 runs only for hosts in
 `desktop_fallback_hosts`, and so does stage 3 when you have not set
 `browser_pdf_cmd` yourself — pzi builds one automatically for those hosts only.
@@ -767,7 +768,8 @@ pytest -m browser -v
 ```sh
 .venv/bin/ruff check src tools tests
 .venv/bin/pyright  # type-checks src + tools (see [tool.pyright] include)
-pytest --cov=pzi --cov-report=term-missing -q
+pytest -m "not browser" --cov=pzi --cov-report=term-missing -q
+rm -rf dist/   # both steps below append; a stale wheel would pass twine check
 .venv/bin/python tools/build_extension.py
 .venv/bin/python -m build
 .venv/bin/twine check dist/*.tar.gz dist/*.whl

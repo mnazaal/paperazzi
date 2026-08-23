@@ -120,7 +120,6 @@ Europe PMC) receive only DOIs, titles and author names.
 - Capture results expose `pdf_status`; `direct_blocked` means metadata was saved but the PDF needs browser capture or `browser_pdf_cmd`.
 - Advanced/devtools-only: to change the endpoint persistently, open the extension popup devtools and set a value:
   `chrome.storage.local.set({ endpoint: "http://127.0.0.1:9000/capture" })`.
-  Runtime/session values override local values until the browser clears session storage.
 
 ## Smoke test
 

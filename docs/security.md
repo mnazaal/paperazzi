@@ -213,9 +213,10 @@ the checks in step 9 cannot be skipped by omitting it.
 
 `/attach-pdf-bytes` (the JSON fallback, used when the capture produced no attach
 plan) accepts an attach session and enforces the same checks when one is given,
-but also accepts a sessionless upload. That upload is governed by the API-token
-auth gate alone — it is not covered by the TTL, size or source-URL checks above.
-Treat the API token as the boundary for it.
+but also accepts a sessionless upload. That upload skips the attach-session TTL
+and the per-plan source-URL allowlist; the 64 MiB body cap and the
+public-http(s)-URL check still apply to it. Treat the API token as the boundary
+for the allowlist it does not get.
 
 ### Cookie handling
 
