@@ -1,4 +1,5 @@
 import importlib
+import json
 from argparse import ArgumentParser, Namespace, _SubParsersAction
 from io import StringIO
 from pathlib import Path
@@ -1949,12 +1950,19 @@ def test_library_clean_json_populates_errors_on_an_unreadable_library(tmp_path: 
     assert "unparseable" in parsed["errors"][0]
 
 
-def test_library_clean_exits_environment_on_an_unreadable_library(tmp_path: Path) -> None:
-    """1 never means failure — the exit-code contract says so explicitly.
+def test_library_clean_reports_a_partly_read_library_the_same_way_in_both_formats(
+    tmp_path: Path,
+) -> None:
+    """The verdict changed on 2026-08-23; the format-independence did not.
 
-    `library clean` returned bare 1 both for "could not read the library" and for
-    "found some orphan PDFs", so a script could not tell a broken library from
-    a healthy one with findings.
+    This test used to assert exit 5, on the argument that 1 would make a broken
+    library indistinguishable from a healthy one with findings. That argument was
+    weighed and rejected: `partial_parse` and the issue severity already draw
+    that line, and eight exit codes cannot. 5 says "could not run", which is
+    false — the audit ran, and found that part of the file is unreadable.
+
+    What has to stay true, and is the reason this test exists, is that one
+    invocation does not tell a script and a human different things.
     """
     bib_path = tmp_path / "ml.bib"
     bib_path.write_text("@article{broken\n  title = {No}\n")
@@ -1963,17 +1971,23 @@ def test_library_clean_exits_environment_on_an_unreadable_library(tmp_path: Path
         f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\ndefault = true\n'
     )
 
+    stderr = StringIO()
     exit_code = run_cli(
         ["library", "clean", "--config", str(config_path)],
-        home_dir=str(tmp_path), stdout=StringIO(), stderr=StringIO(),
+        home_dir=str(tmp_path), stdout=StringIO(), stderr=stderr,
     )
-    assert exit_code == exit_codes.ENVIRONMENT
+    assert exit_code == exit_codes.FINDINGS
+    # The reason reaches a terminal user, which under exit 5 it did not.
+    assert "unparseable" in stderr.getvalue()
 
+    json_stdout = StringIO()
     json_exit = run_cli(
         ["library", "clean", "--json", "--config", str(config_path)],
-        home_dir=str(tmp_path), stdout=StringIO(), stderr=StringIO(),
+        home_dir=str(tmp_path), stdout=json_stdout, stderr=StringIO(),
     )
-    assert json_exit == exit_codes.ENVIRONMENT, "the exit code must not depend on --json"
+    assert json_exit == exit_code, "the exit code must not depend on --json"
+    # Where the broken-vs-findings distinction actually lives.
+    assert json.loads(json_stdout.getvalue())["partial_parse"] is True
 
 
 def test_library_clean_exits_findings_for_a_duplicate_citekey(tmp_path: Path) -> None:

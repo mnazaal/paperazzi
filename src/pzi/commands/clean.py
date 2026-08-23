@@ -62,19 +62,34 @@ def run_clean_command(args, *, home_dir, config_path, stdout, stderr, bib_select
 
     if getattr(args, "json", False):
         cli_json.emit_result(result, stdout, command="library clean", bib_name=target["name"])
-        if result["status"] != "ok":
-            return exit_codes.ENVIRONMENT
         return _verdict(result)
 
     if result["status"] != "ok":
-        # ENVIRONMENT, not 1: the library could not be read, and 1 is reserved
-        # for "ran fine, has something to report". Returning 1 here made an
-        # unreadable bib indistinguishable from a handful of orphan PDFs.
+        # A finding, not a failure to run: the audit *ran*, and what it found is
+        # that part of the file could not be read. 5 said "could not run", which
+        # was false, and it suppressed the reason — a `--json` caller was told
+        # the block and the line number while a terminal user got `clean failed`
+        # and nothing else, from the same invocation.
+        #
+        # Both facts are printed, because only the first is a report. The PDF,
+        # orphan and duplicate checks did **not** run: `validate_library` returns
+        # early on a parse failure, deliberately, since a dropped entry
+        # contributes no referenced path and its PDF would then look orphaned to
+        # `--fix`. So their empty lists mean "not checked", and saying so is the
+        # difference between a finding and a clean bill of health for a library
+        # this run never read.
         print_lines(
-            error_lines("clean failed", result.get("errors") or ["unparseable library"]),
+            error_lines(
+                "library only partly read", result.get("errors") or ["unparseable library"]
+            ),
             stderr,
         )
-        return exit_codes.ENVIRONMENT
+        print(
+            "the PDF, orphan and duplicate checks did not run — fix the block "
+            "above and re-run to get them",
+            file=stderr,
+        )
+        return _verdict(result)
 
     print_read_warnings(result, stderr)
     print_lines(render_clean_result(result, dry_run=args.dry_run or not args.fix), stdout)
@@ -87,6 +102,12 @@ def _verdict(result) -> int:
     A read the parser could only partly complete is a finding: the issue list
     below it was computed from the blocks that *did* parse, so "no issues found"
     at exit 0 was a clean bill of health for a library this run had not read.
+
+    Since 2026-08-23 this is also the answer for an *unparseable block*, which
+    used to return 5. `status != "ok"` there means the audit ran and could not
+    read all of the file — a finding. 5 is reserved for a run that could not
+    happen at all (no config, no library, unreadable target), which
+    `resolve_target` raises before this point.
     """
     if result.get("issues") or has_read_warnings(result):
         return exit_codes.FINDINGS

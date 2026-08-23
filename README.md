@@ -233,8 +233,8 @@ refused. What you may see:
 |---|---|---|
 | `timed out after 300s waiting for the lock on <bib> — another pzi process is still holding it` | Another pzi process has held the lock for five minutes. | Find that process. **Do not delete the `.lock` file** — see below. |
 | `the bib changed while this write was being prepared — …; retry the command` | Someone re-keyed or deleted the exact entry this command was about to write, while it was resolving metadata. Ordinary concurrent edits are absorbed and never reach this. | Retry. `pzi add` already retries once on its own before reporting it. |
-| `malformed BibTeX: refusing to rewrite the file — duplicate citekey 'x' at line N: only the first occurrence is read` | Two entries share a key, so a rewrite would silently drop one. | Rename one of them; the message names the line. |
-| `malformed BibTeX: refusing to rewrite the file — entry with no citekey at line N …` | An entry has no key. It cannot be cited, and it blocks every write to the library. | Give it a key. |
+| `malformed BibTeX: this file cannot be rewritten until it is fixed — duplicate citekey 'x' at line N: only the first occurrence is read` | Two entries share a key, so a rewrite would silently drop one. | Rename one of them; the message names the line. |
+| `malformed BibTeX: this file cannot be rewritten until it is fixed — entry with no citekey at line N …` | An entry has no key. It cannot be cited, and it blocks every write to the library. | Give it a key. |
 | `cannot write this plan — …` | A bug in pzi, not a problem with your file. | Report it; retrying will not help. |
 
 **Never delete a `<bib>.lock` file to clear a jam.** The lock is `flock`-based,

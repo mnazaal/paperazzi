@@ -579,12 +579,19 @@ def validate_library_parseable(library: Library) -> None:
 def _malformed_bib_refusal(detail: str) -> PziError:
     """The user has to fix the file by hand, so say so — do not raise a traceback.
 
-    These messages were always written for a reader ("refusing to rewrite the
-    file"), but as a bare ``ValueError`` they reached that reader as a Python
-    stack trace with exit 1, and ``--json`` printed nothing at all.
+    These messages were always written for a reader, but as a bare
+    ``ValueError`` they reached that reader as a Python stack trace with exit 1,
+    and ``--json`` printed nothing at all.
+
+    Phrased as a fact about the *file* rather than as a report of an action
+    taken. It used to read "refusing to rewrite the file", which is false on the
+    two paths that rewrite nothing: `reindex --rename-citekeys --dry-run` and
+    `preview_write_plan` both surface this while only previewing. The condition
+    is the same either way — this library cannot be written until the block is
+    fixed — and saying that is true for the seven call sites at once.
     """
     return PziError(
-        f"malformed BibTeX: refusing to rewrite the file — {detail}",
+        f"malformed BibTeX: this file cannot be rewritten until it is fixed — {detail}",
         code=exit_codes.ENVIRONMENT,
     )
 
