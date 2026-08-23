@@ -41,6 +41,7 @@ from pzi.bib_merge import (
 from pzi.bib_merge import plan_bib_write as plan_bib_write
 from pzi.bib_merge import resolve_entry_type as resolve_entry_type
 from pzi.bib_serialize import (
+    assert_citekeys_unique,
     bibtex_entry_to_library_entry,
     build_library,
     detect_bib_layout,
@@ -525,6 +526,23 @@ def _update_library_blocks(
     return build_library(new_blocks), frozenset(verbatim)
 
 
+def _written_entries(
+    updated_entries: list[BibtexEntry], plan: WritePlan
+) -> list[BibtexEntry]:
+    """The entries this plan actually wrote, for the round-trip half of the gate.
+
+    An update rewrites its own index; an insert appends, so the new entry is the
+    last one. Everything else in the list came off disk and is written back
+    unchanged, so it has nothing new to verify.
+    """
+    if plan["action"] == "update":
+        index = plan["index"]
+        if isinstance(index, int) and 0 <= index < len(updated_entries):
+            return [updated_entries[index]]
+        return updated_entries
+    return updated_entries[-1:]
+
+
 def _touched_index(plan: WritePlan) -> int | None:
     """The existing block index a plan rewrites, or None for a pure insert.
 
@@ -613,7 +631,13 @@ def _prepare_write(
             plan = _rebase_insert_plan_against_current(records, entries, plan)
 
         updated_entries = apply_write_plan(entries, plan)
-        validate_bibtex_roundtrip(updated_entries)
+        # Uniqueness spans the library — it is a property of the pair, so a
+        # rename colliding with an entry this write never touched is invisible
+        # to any per-entry check. The round-trip is per-entry, so it runs only
+        # on what changed: `_update_library_blocks` writes every other block
+        # back as the bytes it was read as, and those parsed cleanly already.
+        assert_citekeys_unique(updated_entries)
+        validate_bibtex_roundtrip(_written_entries(updated_entries, plan))
 
         new_source = _render_updated_library(
             library,
@@ -795,7 +819,10 @@ def _gate_batch(session: BatchWriteSession) -> None:
     characterize. Neither gate mutates.
     """
     session.check_consistency()
-    validate_bibtex_roundtrip(session.entries)
+    assert_citekeys_unique(session.entries)
+    validate_bibtex_roundtrip(
+        [session.entries[index] for index in sorted(session.touched)]
+    )
 
 
 def _render_batch(
@@ -1170,8 +1197,11 @@ def update_bib_entry(
             # The round-trip gate the plan-based sinks have always had. This is
             # the path behind `tag`, `pdf attach/retry`, `update` and `promote`
             # — i.e. the commands that were writing unparseable libraries while
-            # the safety net sat unwired two functions away.
-            validate_bibtex_roundtrip(entries)
+            # the safety net sat unwired two functions away. Split: uniqueness
+            # over the library (a pair property), round-trip over the one entry
+            # that changed.
+            assert_citekeys_unique(entries)
+            validate_bibtex_roundtrip([entries[index]])
             # `entries` already has the update applied at `index`, which is
             # exactly what apply_write_plan would produce for this plan — so
             # there is nothing left to re-derive from `source`.

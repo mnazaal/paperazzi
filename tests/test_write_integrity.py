@@ -737,34 +737,53 @@ def test_a_structurally_unsafe_field_key_is_still_refused(
     assert bib.read_text() == before
 
 
-def test_a_batch_dry_run_refuses_what_the_real_write_would_refuse(tmp_path: Path) -> None:
-    """A preview must not report success for a batch the write would reject.
+def test_a_batch_dry_run_and_the_real_write_reach_the_same_verdict(tmp_path: Path) -> None:
+    """A preview must never disagree with the write it predicts.
 
-    `batch_write_session` returned before `check_consistency` and
-    `validate_bibtex_roundtrip`, and those validate the *whole library* while a
-    dry run otherwise only checks each incoming entry alone. So a pre-existing
-    entry that blocks the write was invisible until the real run: `import
-    --dry-run` said `would_import` at exit 0, then `import` exited 5 having
-    written nothing.
+    The original bug: `batch_write_session` returned before `check_consistency`
+    and the round-trip gate, so `import --dry-run` said `would_import` at exit 0
+    and `import` then exited 5 having written nothing.
 
-    A field key containing a space is the reachable case — it is not legal
-    BibTeX, so the gate is right to refuse it; what was wrong was refusing it
-    only on the second attempt.
+    **The verdict this reaches changed on 2026-08-23 (item 567), the agreement
+    did not.** The gate's round-trip half is now scoped to the entries a write
+    touched, so a *pre-existing* entry that does not round-trip — here a field
+    key containing a space, which is not legal BibTeX — no longer blocks an
+    unrelated insert. Nothing is corrupted by allowing it: that entry is written
+    back as the exact bytes it was read as (item 566), so the file keeps the
+    illegal entry it already had. What is lost is a diagnostic, and item 574 is
+    where it went — `library clean` reports it, rather than every unrelated
+    write refusing. Citekey uniqueness is *not* scoped, because it is a property
+    of the pair; see `tests/test_write_gate_scope.py`.
     """
-    bib = tmp_path / "lib.bib"
-    bib.write_text(
-        "@article{legacy2019,\n  title = {Hand Edited},\n  bad key = {v}\n}\n"
-    )
-
-    with pytest.raises(PziError):
-        with batch_write_session(str(bib), write=False) as session:
-            session.apply_plan(
-                plan_bib_write(
-                    {"citekey": "new2021", "title": "New"},
-                    session.records,
-                    existing_entries=session.entries,
+    def attempt(*, write: bool) -> tuple[bool, str]:
+        bib = tmp_path / f"lib-{write}.bib"
+        bib.write_text(
+            "@article{legacy2019,\n  title = {Hand Edited},\n  bad key = {v}\n}\n"
+        )
+        try:
+            with batch_write_session(str(bib), write=write) as session:
+                session.apply_plan(
+                    plan_bib_write(
+                        {"citekey": "new2021", "title": "New"},
+                        session.records,
+                        existing_entries=session.entries,
+                    )
                 )
-            )
+        except PziError:
+            return False, bib.read_text()
+        return True, bib.read_text()
+
+    preview_ok, _ = attempt(write=False)
+    write_ok, written = attempt(write=True)
+
+    assert preview_ok == write_ok, (
+        "a dry run and the write it predicts must reach the same verdict"
+    )
+    # The verdict, pinned rather than assumed.
+    assert write_ok is True
+    # And the untouched illegal entry survives byte-for-byte, uncorrupted.
+    assert "bad key = {v}" in written
+    assert "new2021" in written
 
 
 # ---------------------------------------------------------------------------

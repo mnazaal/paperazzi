@@ -13,8 +13,9 @@ from pzi.bib_repository import (
     read_bib_file_with_failures,
     read_bib_notices,
 )
-from pzi.bib_serialize import failed_block_details
+from pzi.bib_serialize import failed_block_details, validate_bibtex_roundtrip
 from pzi.bibtex import BibtexEntry
+from pzi.errors import PziError
 from pzi.fileio import read_text_utf8
 from pzi.pdf_planning import pdf_file_present
 
@@ -111,6 +112,31 @@ def validate_library(
                 for message in parse_failures
             ],
         }
+
+    # --- Entries that parse but cannot be written back ---
+    #
+    # An entry can read fine and still be unrepresentable — a field key with a
+    # space in it is the reachable case, and it is not legal BibTeX. Until
+    # 2026-08-23 this surfaced only as a side effect: the write gate round-tripped
+    # the *whole* library, so one such entry made every unrelated write refuse.
+    # Item 567 scoped that gate to the entries a write touches (a ~50% saving on
+    # every write), which means the condition now has to be looked for
+    # deliberately — and `clean` is where a library's health is reported.
+    #
+    # Checked per entry rather than as one library round-trip, so the report can
+    # name which entry is at fault instead of failing the whole run.
+    for entry in entries:
+        try:
+            validate_bibtex_roundtrip([entry])
+        except PziError as exc:
+            issues.append({
+                "severity": "error",
+                "type": "unwritable_entry",
+                "message": (
+                    f"{entry.get('citekey') or '<no citekey>'}: reads back but "
+                    f"cannot be written — {exc.message}"
+                ),
+            })
 
     duplicate_citekeys = sorted(set(duplicate_citekeys))
     # True whenever the parser dropped something. `clean_library` keys the

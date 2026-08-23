@@ -482,3 +482,38 @@ def test_a_zotero_style_file_field_resolves_and_is_not_an_orphan() -> None:
         assert result["missing_pdfs"] == []
         assert result["orphan_pdfs"] == []
         assert os.path.exists(pdf)
+
+
+# ── An entry that parses but cannot be written back (item 574) ──────────
+#
+# Until 2026-08-23 this surfaced only as a side effect: the write gate
+# round-tripped the whole library, so one such entry made every unrelated write
+# refuse. Item 567 scoped that gate, so `clean` is now where the condition is
+# reported. These tests are what stops that report being dropped silently.
+
+
+def test_clean_names_an_entry_that_reads_back_but_cannot_be_written(tmp_path):
+    """A field key with a space is legal to parse and illegal to write."""
+    bib = tmp_path / "lib.bib"
+    bib.write_text(
+        "@article{legacy2019,\n  title = {Hand Edited},\n  bad key = {v}\n}\n\n"
+        "@article{fine2020,\n  title = {Fine},\n}\n"
+    )
+    result = validate_library(bib_path=str(bib), papers_dir=str(tmp_path / "papers"))
+
+    unwritable = [i for i in result["issues"] if i["type"] == "unwritable_entry"]
+    assert len(unwritable) == 1, result["issues"]
+    assert "legacy2019" in unwritable[0]["message"]
+    assert unwritable[0]["severity"] == "error"
+    # The healthy entry is not implicated.
+    assert "fine2020" not in unwritable[0]["message"]
+
+
+def test_clean_reports_nothing_unwritable_for_a_healthy_library(tmp_path):
+    """The contrast: silence must stay silent, or the report becomes noise."""
+    bib = tmp_path / "lib.bib"
+    bib.write_text(
+        "@article{a2020,\n  title = {A},\n}\n\n@article{b2021,\n  title = {B},\n}\n"
+    )
+    result = validate_library(bib_path=str(bib), papers_dir=str(tmp_path / "papers"))
+    assert [i for i in result["issues"] if i["type"] == "unwritable_entry"] == []
