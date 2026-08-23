@@ -15,6 +15,7 @@ from typing import Any, cast
 from urllib.error import HTTPError
 
 from pzi.bibtex import NormalizedRecord
+from pzi.fetch_helpers import ProviderBreaker
 from pzi.identifiers import has_preprint_identity, is_preprint_doi
 from pzi.metadata_sources import (
     fetch_crossref_record_by_title,
@@ -46,6 +47,7 @@ def find_published_candidate_with_diagnostics(
     fetch_dblp: MetadataRecordFetcher | None = None,
     fetch_openreview: MetadataRecordFetcher | None = None,
     metadata_fetch_text: Callable[..., str] | None = None,
+    breaker: ProviderBreaker | None = None,
 ) -> dict[str, Any]:
     provider_errors: list[str] = []
     search_fn = fetch_search or fetch_search_translations
@@ -96,6 +98,7 @@ def find_published_candidate_with_diagnostics(
         candidate = _try_provider(
             provider_fn, title, name=name,
             contact_email=contact_email, provider_errors=provider_errors,
+            breaker=breaker,
         )
         # No venue means there is nothing to promote *to*; such a result was
         # never a candidate and is not reported as a rejection.
@@ -197,13 +200,24 @@ def _try_provider(
     name: str,
     contact_email: str | None,
     provider_errors: list[str],
+    breaker: ProviderBreaker | None = None,
 ) -> NormalizedRecord | None:
     """Query one title-search provider, recording why it produced nothing.
 
     A provider that could not be reached must not be silently equivalent to one
     that answered "unknown": the first leaves the preprint unpromoted for a
     fixable reason, and only a recorded error says which.
+
+    *breaker* is the run-level guard. A sweep over this library asks five
+    providers about 13,462 preprints, so a provider that has stopped answering
+    costs a timeout on every one of them for an answer already known. Skipping a
+    tripped provider is not the same as it answering "unknown", so the skip is
+    still recorded on `provider_errors` — the reason a preprint went unpromoted
+    stays visible.
     """
+    if breaker is not None and breaker.is_open(name):
+        provider_errors.append(f"{name} (skipped — unreachable earlier in this run)")
+        return None
     errors: list[str] = []
     try:
         candidate = _call_provider(
@@ -211,10 +225,16 @@ def _try_provider(
         )
     except (OSError, ValueError) as exc:
         provider_errors.append(f"{name} ({exc})")
+        if breaker is not None:
+            breaker.record_failure(name, str(exc))
         return None
     if errors:
         provider_errors.append(f"{name} ({errors[0]})")
+        if breaker is not None:
+            breaker.record_failure(name, errors[0])
         return None
+    if breaker is not None:
+        breaker.record_answer(name)
     return candidate
 
 

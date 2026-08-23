@@ -262,3 +262,44 @@ def test_retry_after_falls_back_to_backoff_for_an_http_date() -> None:
         headers = {"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}
 
     assert _retry_after_delay(_Exc(), 1) == 2.0
+
+
+# ── ProviderBreaker (moved here from check_service for item 576) ────────
+#
+# It lives in this module, not in `check_service` where it was written, because
+# `update --promote` walks the same providers over the same library and needs the
+# same guard — and `promote_planning` is core, so it cannot import a service.
+
+
+def test_the_breaker_trips_only_after_consecutive_failures() -> None:
+    from pzi.fetch_helpers import ProviderBreaker
+
+    breaker = ProviderBreaker(threshold=3)
+    breaker.record_failure("s2", "timeout")
+    breaker.record_failure("s2", "timeout")
+    assert not breaker.is_open("s2"), "two failures is not yet a dead provider"
+    breaker.record_failure("s2", "timeout")
+    assert breaker.is_open("s2")
+
+
+def test_a_provider_that_recovers_is_never_tripped() -> None:
+    """Consecutive, not cumulative — a flaky source keeps being asked."""
+    from pzi.fetch_helpers import ProviderBreaker
+
+    breaker = ProviderBreaker(threshold=3)
+    for _ in range(10):
+        breaker.record_failure("crossref", "timeout")
+        breaker.record_failure("crossref", "timeout")
+        breaker.record_answer("crossref")
+    assert not breaker.is_open("crossref")
+
+
+def test_a_tripped_provider_is_reported_once_for_the_run() -> None:
+    from pzi.fetch_helpers import ProviderBreaker
+
+    breaker = ProviderBreaker(threshold=2)
+    for _ in range(50):
+        breaker.record_failure("dblp", "connection refused")
+    assert len(breaker.tripped) == 1
+    assert "dblp" in breaker.tripped
+    assert "not retried" in breaker.tripped["dblp"]

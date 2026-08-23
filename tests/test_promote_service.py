@@ -1971,3 +1971,151 @@ def test_promote_makes_no_network_call_while_holding_the_bib_lock(tmp_path, monk
     assert result["summary"]["created"] == 2, result["items"]
     assert bib_path.read_text().count("Proceedings of Parsing") == 2
     assert under_lock == [], f"network under the exclusive bib lock: {under_lock}"
+
+
+# ── Item 576: a bounded, instrumented, breaker-guarded sweep ────────────
+#
+# `promote` walks 60% of a 22k-entry library at a per-candidate cost set by the
+# slowest provider's polite interval, so an unbounded run is hours. These pin
+# the four things that make it usable, and the two numbers the plan's remaining
+# decisions are chosen from.
+
+
+def _promote_library(tmp_path, count: int):
+    """A library of `count` arXiv preprints, and a config naming it."""
+    entries = "\n".join(
+        f"@article{{pre{i:03d},\n  title = {{Preprint {i}}},\n  author = {{Doe, Jane}},\n"
+        f"  year = {{2023}},\n  doi = {{10.48550/arXiv.2301.{i:05d}}}\n}}\n"
+        for i in range(count)
+    )
+    bib = tmp_path / "lib.bib"
+    bib.write_text(entries)
+    config = tmp_path / "config.toml"
+    config.write_text(f'[[bibs]]\nname = "p"\npath = "{bib}"\ndefault = true\n')
+    return str(config)
+
+
+def _resolving_finder(calls: list):
+    def finder(*, record, breaker=None, **kw):
+        calls.append(record.get("citekey"))
+        doi = str(record.get("doi") or "")
+        return {
+            "candidate": {
+                "title": record.get("title"), "authors": ["Doe, Jane"], "year": 2024,
+                "doi": doi.replace("10.48550/arXiv.", "10.1000/pub."),
+                "journal": "Published Journal", "item_type": "journalArticle",
+            },
+            "confidence": 95, "provider_errors": [], "metadata_diagnostics": [],
+            "reason": None,
+        }
+    return finder
+
+
+def test_limit_stops_the_work_not_just_the_output(tmp_path, monkeypatch):
+    """The bound has to prevent provider calls, or it saves nothing."""
+    import pzi.promote_service as ps
+
+    config = _promote_library(tmp_path, 10)
+    calls: list = []
+    monkeypatch.setattr(ps, "find_published_candidate_with_diagnostics", _resolving_finder(calls))
+
+    result = ps.promote_bib(
+        config_path=config, home_dir=str(tmp_path), bib_selector=None,
+        dry_run=True, limit=4,
+    )
+    assert len(calls) == 4, "a bounded run must not query providers past its budget"
+    assert result["summary"]["checked"] == 4
+
+
+def test_a_bounded_run_reports_what_is_left(tmp_path, monkeypatch):
+    """Without this a partial pass is indistinguishable from a complete one."""
+    import pzi.promote_service as ps
+
+    config = _promote_library(tmp_path, 10)
+    monkeypatch.setattr(ps, "find_published_candidate_with_diagnostics", _resolving_finder([]))
+
+    summary = ps.promote_bib(
+        config_path=config, home_dir=str(tmp_path), bib_selector=None,
+        dry_run=True, limit=4,
+    )["summary"]
+    assert summary["eligible"] == 10
+    assert summary["remaining"] == 6
+
+    full = ps.promote_bib(
+        config_path=config, home_dir=str(tmp_path), bib_selector=None, dry_run=True,
+    )["summary"]
+    assert full["remaining"] == 0, "an unbounded run has nothing left over"
+
+
+def test_the_run_reports_the_two_numbers_the_plan_decides_from(tmp_path, monkeypatch):
+    """Resolve rate and seconds-per-candidate; see PLAN.md section F, steps 3-4."""
+    import pzi.promote_service as ps
+
+    config = _promote_library(tmp_path, 4)
+    seen: list = []
+
+    def half_resolving(*, record, breaker=None, **kw):
+        seen.append(record.get("citekey"))
+        if len(seen) % 2:
+            return {"candidate": None, "provider_errors": [],
+                    "metadata_diagnostics": [], "reason": None}
+        return _resolving_finder([])(record=record, breaker=breaker, **kw)
+
+    monkeypatch.setattr(ps, "find_published_candidate_with_diagnostics", half_resolving)
+    summary = ps.promote_bib(
+        config_path=config, home_dir=str(tmp_path), bib_selector=None, dry_run=True,
+    )["summary"]
+    assert summary["resolve_rate"] == 0.5
+    assert summary["seconds_per_candidate"] >= 0
+
+
+def test_every_verdict_is_streamed_as_it_is_reached(tmp_path, monkeypatch):
+    """An interrupted sweep keeps its work only if the caller sees items live."""
+    import pzi.promote_service as ps
+
+    config = _promote_library(tmp_path, 5)
+    monkeypatch.setattr(ps, "find_published_candidate_with_diagnostics", _resolving_finder([]))
+
+    streamed: list = []
+    result = ps.promote_bib(
+        config_path=config, home_dir=str(tmp_path), bib_selector=None, dry_run=True,
+        on_item=lambda item, done, total: streamed.append(item["preprint_citekey"]),
+    )
+    assert [i["preprint_citekey"] for i in result["items"]] == streamed
+    assert len(streamed) == 5
+
+
+def test_a_dead_provider_is_dropped_for_the_rest_of_the_sweep(tmp_path, monkeypatch):
+    """Otherwise a provider that has stopped answering costs a timeout 13,462 times."""
+    import pzi.promote_planning as pp
+    from pzi.fetch_helpers import ProviderBreaker
+
+    attempts: list = []
+
+    def always_fails(_title, **kw):
+        attempts.append(1)
+        raise OSError("connection refused")
+
+    breaker = ProviderBreaker(threshold=3)
+    for _ in range(10):
+        pp._try_provider(
+            always_fails, "A Title", name="dblp",
+            contact_email=None, provider_errors=[], breaker=breaker,
+        )
+    assert len(attempts) == 3, "the provider is dialled until it trips, then never again"
+    assert breaker.is_open("dblp")
+
+
+def test_a_skipped_provider_still_says_why_the_preprint_was_not_promoted(tmp_path):
+    """A silent skip and a provider that answered 'unknown' must not look alike."""
+    import pzi.promote_planning as pp
+    from pzi.fetch_helpers import ProviderBreaker
+
+    breaker = ProviderBreaker(threshold=1)
+    breaker.record_failure("s2", "timeout")
+    errors: list = []
+    pp._try_provider(
+        lambda *_a, **_k: None, "A Title", name="s2",
+        contact_email=None, provider_errors=errors, breaker=breaker,
+    )
+    assert errors and "skipped" in errors[0]

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+import time
+from collections.abc import Callable
 from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,7 +40,7 @@ from pzi.bibtex import changed_fields as changed_fields_between
 from pzi.capture_context import resolve_contact_email, resolve_optional_value
 from pzi.config import BibResolutionFailure, load_bib_target
 from pzi.errors import REASON_CONFIG, REASON_UNAVAILABLE
-from pzi.fetch_helpers import build_metadata_fetch_text
+from pzi.fetch_helpers import ProviderBreaker, build_metadata_fetch_text
 from pzi.format_templates import format_citekey
 from pzi.identifiers import (
     has_preprint_identity,
@@ -142,6 +144,8 @@ def promote_bib(
     flaresolverr_url: str | None = None,
     browser_pdf_cmd: str | None = None,
     mark_resolved: bool = False,
+    limit: int | None = None,
+    on_item: Callable[[PromoteItem, int, int], None] | None = None,
 ) -> PromoteResult:
     resolved = load_bib_target(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector
@@ -203,6 +207,29 @@ def promote_bib(
     # *fail* rather than wait. Keep mode's writes are collected here as
     # `_PendingFork`s and applied together in phase 2.
     pending: list[tuple[int, _PendingFork]] = []
+    #: One breaker for the run. Five providers over 13,462 candidates means a
+    #: provider that has stopped answering costs a timeout 13,462 times for an
+    #: answer already known.
+    breaker = ProviderBreaker()
+    #: Candidates this run is willing to check. `promote` walks 60% of a 22k
+    #: library, at a per-candidate cost set by the slowest provider's polite
+    #: interval, so an unbounded run is hours. `remaining` is reported so a
+    #: bounded pass reads as resumable rather than as silently incomplete.
+    budget = limit if limit is not None and limit >= 0 else None
+    eligible = 0
+    started = time.monotonic()
+
+    def record_item(item: PromoteItem) -> None:
+        """Append a verdict and stream it, in one place.
+
+        Five paths reach a verdict; routing them all through here is what stops
+        `on_item` quietly missing one — and a caller that streams to disk is the
+        only reason an interrupted sweep keeps its work.
+        """
+        items.append(item)
+        if on_item is not None:
+            on_item(item, len(items), eligible)
+
     for record in records:
         preprint_ck = record.get("citekey")
         if not isinstance(preprint_ck, str):
@@ -220,6 +247,11 @@ def promote_bib(
             # Already promoted on a previous --mark-resolved run; skip re-checking.
             summary["skipped_already_resolved"] += 1
             continue
+        # Eligible whether or not this run has budget left, so `remaining` counts
+        # what a follow-up run would still face rather than what this loop saw.
+        eligible += 1
+        if budget is not None and summary["checked"] >= budget:
+            continue
         summary["checked"] += 1
 
         candidate_result = find_published_candidate_with_diagnostics(
@@ -234,6 +266,7 @@ def promote_bib(
             s2_api_key=s2_api_key,
             contact_email=contact_email,
             metadata_fetch_text=metadata_fetch_text,
+            breaker=breaker,
         )
         candidate = candidate_result["candidate"]
         provider_errors = candidate_result["provider_errors"]
@@ -249,7 +282,7 @@ def promote_bib(
             item = _skip_item(preprint_ck, note)
             if metadata_diagnostics:
                 item["metadata_diagnostics"] = metadata_diagnostics
-            items.append(item)
+            record_item(item)
             continue
 
         # Gate on the explainable 0–100 breakdown, not a coarse feature count:
@@ -275,7 +308,7 @@ def promote_bib(
             )
             if metadata_warnings:
                 item["metadata_warnings"] = metadata_warnings
-            items.append(item)
+            record_item(item)
             continue
 
         duplicate_ck = _find_duplicate_citekey(candidate, known_records, preprint_ck)
@@ -285,7 +318,7 @@ def promote_bib(
             item = _skip_item(preprint_ck, msg, published_ck=duplicate_ck)
             if metadata_diagnostics:
                 item["metadata_diagnostics"] = metadata_diagnostics
-            items.append(item)
+            record_item(item)
             continue
 
         # Explainable breakdown of the score the gate above accepted (shown
@@ -351,14 +384,14 @@ def promote_bib(
             raise
         except Exception as exc:  # one failing entry must not abort the run
             summary["skipped_failed"] += 1
-            items.append(
+            record_item(
                 _skip_item(preprint_ck, f"promotion failed: {exc}", failed=True)
             )
             continue
         if metadata_diagnostics:
             item["metadata_diagnostics"] = metadata_diagnostics
 
-        items.append(item)
+        record_item(item)
         if fork is not None:
             # Counted in phase 2 instead: whether this promotion happened is not
             # known until its writes have gone into the session.
@@ -438,6 +471,23 @@ def promote_bib(
         for item in items
         if item.get("failed")
     ]
+    # A provider dropped for the rest of the run is reported once, not per
+    # candidate — the same rule `check` applies to the same providers.
+    errors.extend(breaker.tripped.values())
+
+    # What a follow-up run still faces, and what this one cost per candidate.
+    # `remaining` is the difference between a bounded pass and a silently
+    # incomplete one. The timing is not decoration: the default bound is chosen
+    # from it (PLAN.md section F, Step 3), and item 577's worth is judged against
+    # the resolve rate, so both are reported rather than guessed at later.
+    summary["eligible"] = eligible
+    summary["remaining"] = max(0, eligible - summary["checked"])
+    elapsed = time.monotonic() - started
+    summary["elapsed_seconds"] = round(elapsed, 1)
+    if summary["checked"]:
+        summary["seconds_per_candidate"] = round(elapsed / summary["checked"], 2)
+        resolved = summary["checked"] - summary["skipped_no_candidate"]
+        summary["resolve_rate"] = round(resolved / summary["checked"], 3)
 
     # Emit a top-level warning when S2 rate-limit failures accumulate.
     s2_rate_count = sum(

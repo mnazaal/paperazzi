@@ -1119,6 +1119,9 @@ def test_cli_update_promote_dispatches_to_promote_service(tmp_path: Path) -> Non
     )
 
     assert exit_code == 0
+    # `on_item` is a closure; the rest is pinned exactly, so a new kwarg on the
+    # service still fails this test.
+    assert all(callable(call.pop("on_item")) for call in calls)
     assert calls == [
         {
             "config_path": str(tmp_path / "config.toml"),
@@ -1127,6 +1130,7 @@ def test_cli_update_promote_dispatches_to_promote_service(tmp_path: Path) -> Non
             "dry_run": False,
             "keep_preprint": False,
             "mark_resolved": False,
+            "limit": None,
         }
     ]
     assert stderr.getvalue() == ""

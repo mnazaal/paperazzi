@@ -546,6 +546,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--mark-resolved", action="store_true",
         help="with --promote, tag promoted preprints and skip already-tagged ones on re-runs",
     )
+    update_parser.add_argument(
+        "--limit", type=int, default=None, metavar="N",
+        help=(
+            "with --promote, check at most N preprints and report how many remain "
+            "(a full sweep of a large library is hours: the providers are rate-limited)"
+        ),
+    )
 
     # ── doctor ───────────────────────────────────────────────────────────
     doctor_parser = subparsers.add_parser("doctor", help="Check configuration and service health")

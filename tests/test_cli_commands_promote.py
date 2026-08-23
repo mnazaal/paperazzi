@@ -40,6 +40,9 @@ def test_run_promote_command_calls_service_for_each_target(tmp_path: Path) -> No
     )
 
     assert exit_code == 0
+    # `on_item` is a closure, so it is checked separately; the rest is pinned
+    # exactly, so a new kwarg on the service still fails this test.
+    assert all(callable(call.pop("on_item")) for call in calls)
     assert calls == [
         {
             "config_path": str(tmp_path / "config.toml"),
@@ -48,6 +51,7 @@ def test_run_promote_command_calls_service_for_each_target(tmp_path: Path) -> No
             "dry_run": True,
             "keep_preprint": False,
             "mark_resolved": False,
+            "limit": None,
         },
         {
             "config_path": str(tmp_path / "config.toml"),
@@ -56,6 +60,7 @@ def test_run_promote_command_calls_service_for_each_target(tmp_path: Path) -> No
             "dry_run": True,
             "keep_preprint": False,
             "mark_resolved": False,
+            "limit": None,
         },
     ]
     assert "DRY RUN: no preprints to promote" in stdout.getvalue()

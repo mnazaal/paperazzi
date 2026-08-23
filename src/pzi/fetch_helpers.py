@@ -228,6 +228,46 @@ def _is_transient_error_body(text: str) -> bool:
     return any(marker in lowered for marker in _TRANSIENT_ERROR_MARKERS)
 
 
+BREAKER_THRESHOLD = 3
+
+
+class ProviderBreaker:
+    """Stops re-dialling a provider that has failed *BREAKER_THRESHOLD* times running.
+
+    A sweep's cost is linear in entries times providers, and a source proven
+    unreachable on entry 1 was retried in full for entries 2..N — 22,232 times,
+    at one timeout each, for an answer already known. Consecutive rather than
+    cumulative, so a flaky source that answers every other call keeps being
+    asked; only a source that has stopped answering altogether is dropped.
+
+    Lives here rather than in `check_service`, where it was written, because
+    `update --promote` walks the same providers over the same library and needs
+    the same guard — and `promote_planning` is core, so it cannot import a
+    service. One breaker per run; the caller owns its lifetime.
+    """
+
+    def __init__(self, threshold: int = BREAKER_THRESHOLD) -> None:
+        self._threshold = threshold
+        self._consecutive: dict[str, int] = {}
+        #: Tripped provider -> the one message the run reports for it.
+        self.tripped: dict[str, str] = {}
+
+    def is_open(self, name: str) -> bool:
+        return name in self.tripped
+
+    def record_answer(self, name: str) -> None:
+        self._consecutive[name] = 0
+
+    def record_failure(self, name: str, detail: str) -> None:
+        count = self._consecutive.get(name, 0) + 1
+        self._consecutive[name] = count
+        if count >= self._threshold and name not in self.tripped:
+            self.tripped[name] = (
+                f"{name}: stopped after {count} consecutive failures "
+                f"({detail}) — not retried for the remaining entries"
+            )
+
+
 def build_metadata_fetch_text(
     config: Mapping[str, Any],
     *,

@@ -27,7 +27,7 @@ from pzi.bibtex import NormalizedRecord
 from pzi.capture_context import resolve_contact_email, resolve_optional_value
 from pzi.config import BibResolutionFailure, load_bib_target
 from pzi.errors import REASON_UNAVAILABLE
-from pzi.fetch_helpers import build_metadata_fetch_text
+from pzi.fetch_helpers import ProviderBreaker, build_metadata_fetch_text
 from pzi.metadata_sources import (
     fetch_crossref_record_by_title,
     fetch_dblp_record_by_title,
@@ -154,41 +154,6 @@ def _providers(
 #: of the run. Small on purpose: the failure this exists for (a refused
 #: connection, a DNS miss, an API that is down) does not clear between two
 #: entries, and the cost of finding out is one full request timeout per entry.
-_BREAKER_THRESHOLD = 3
-
-
-class _ProviderBreaker:
-    """Stops re-dialling a provider that has failed *_BREAKER_THRESHOLD* times running.
-
-    The audit's cost is linear in entries times providers, and a source proven
-    unreachable on entry 1 was retried in full for entries 2..N — 22,232 times,
-    at one timeout each, for an answer already known. Consecutive rather than
-    cumulative, so a flaky source that answers every other call keeps being
-    asked; only a source that has stopped answering altogether is dropped.
-    """
-
-    def __init__(self, threshold: int = _BREAKER_THRESHOLD) -> None:
-        self._threshold = threshold
-        self._consecutive: dict[str, int] = {}
-        #: Tripped provider -> the one message the run reports for it.
-        self.tripped: dict[str, str] = {}
-
-    def is_open(self, name: str) -> bool:
-        return name in self.tripped
-
-    def record_answer(self, name: str) -> None:
-        self._consecutive[name] = 0
-
-    def record_failure(self, name: str, detail: str) -> None:
-        count = self._consecutive.get(name, 0) + 1
-        self._consecutive[name] = count
-        if count >= self._threshold and name not in self.tripped:
-            self.tripped[name] = (
-                f"{name}: stopped after {count} consecutive failures "
-                f"({detail}) — not retried for the remaining entries"
-            )
-
-
 def _impossible_year(record: Mapping[str, object], *, now_year: int) -> bool:
     year = record.get("year")
     return isinstance(year, int) and (year > now_year + 1 or year < 1500)
@@ -200,7 +165,7 @@ def _verify_entry(
     *,
     strict: bool,
     now_year: int,
-    breaker: _ProviderBreaker,
+    breaker: ProviderBreaker,
 ) -> CheckItem:
     citekey = str(record.get("citekey") or "")
     title = record.get("title")
@@ -516,7 +481,7 @@ def check_bib(
     effective_year = now_year if now_year is not None else time.gmtime().tm_year
     counts = {"verified": 0, "could_not_verify": 0, "problematic": 0}
     items: list[CheckItem] = []
-    breaker = _ProviderBreaker()
+    breaker = ProviderBreaker()
     for index, record in enumerate(records):
         item = _verify_entry(
             record, providers, strict=strict, now_year=effective_year, breaker=breaker

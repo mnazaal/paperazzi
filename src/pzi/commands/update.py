@@ -27,6 +27,27 @@ Result = Mapping[str, Any]
 Service = Callable[..., Result]
 
 
+#: A promote sweep over a large library runs for a long time before it prints
+#: anything, and the providers are rate-limited, so silence is indistinguishable
+#: from a hang. Matches `library check`'s thresholds rather than inventing a
+#: second convention.
+_PROGRESS_MIN_CANDIDATES = 200
+_PROGRESS_STEP = 25
+
+
+def _progress_printer(stderr: TextIO):
+    """Report progress for a sweep long enough that silence would look like a hang."""
+
+    def report(_item: Mapping[str, Any], done: int, total: int) -> None:
+        if total < _PROGRESS_MIN_CANDIDATES:
+            return
+        if done % _PROGRESS_STEP and done != total:
+            return
+        print(f"  checked {done}/{total} preprints", file=stderr)
+
+    return report
+
+
 def run_update_command(
     args,
     *,
@@ -56,6 +77,18 @@ def run_update_command(
             command_path=("update",), stdout=stdout, stderr=stderr,
         )
 
+    limit: int | None = getattr(args, "limit", None)
+    if limit is not None and not promote:
+        return emit_usage_error(
+            args, "--limit only applies with --promote",
+            command_path=("update",), stdout=stdout, stderr=stderr,
+        )
+    if limit is not None and limit < 1:
+        return emit_usage_error(
+            args, "--limit must be at least 1",
+            command_path=("update",), stdout=stdout, stderr=stderr,
+        )
+
     as_json = getattr(args, "json", False)
     ok = True
     items_succeeded = 0
@@ -70,6 +103,8 @@ def run_update_command(
                 dry_run=args.dry_run,
                 keep_preprint=not args.replace,
                 mark_resolved=mark_resolved,
+                limit=limit,
+                on_item=None if as_json else _progress_printer(stderr),
             )
             render = render_bib_promote_items
             failure = "promote failed"
@@ -100,6 +135,15 @@ def run_update_command(
 
         if result["status"] == "ok":
             print_lines(render(result), stdout)
+            remaining = (result.get("summary") or {}).get("remaining") or 0
+            if remaining:
+                # A bounded pass that did not say this is indistinguishable from
+                # a full one that found nothing more to do.
+                print(
+                    f"note: {remaining} preprints not checked in this run — "
+                    f"re-run to continue",
+                    file=stderr,
+                )
             if args.dry_run:
                 print_result_item_diffs(result, stdout)
             print_metadata_warnings(result, stderr)
