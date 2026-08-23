@@ -205,3 +205,27 @@ def test_classify_input_extracts_dois_from_publisher_display_paths() -> None:
         result = classify_input(url)
         assert result["kind"] == "doi", url
         assert result["normalized"].startswith("10."), url
+
+
+def test_every_doi_a_publisher_path_yields_is_one_normalize_doi_accepts() -> None:
+    """Why `classify_input`'s `embedded_doi is not None` guard cannot fail.
+
+    `DOI_IN_PATH_PATTERN` captures `10.\\d{4,9}/[^\\s?#]+`, which is exactly the
+    group `DOI_PATTERN` matches, so `normalize_doi` cannot reject what the path
+    pattern found — the guard is there for the type, not for a case that occurs.
+    That coupling is what the `# pragma: no branch` on it now claims, and this
+    test is what keeps the claim true if either pattern is tightened.
+    """
+    from pzi.identifiers import DOI_IN_PATH_PATTERN
+
+    for path in (
+        "/doi/10.1145/3372297",
+        "/doi/abs/10.1145/3372297.3372299",
+        "/doi/epdf/10.1002/spe.1234",
+        "/doi/10.1145/abc..",       # trailing punctuation
+        "/doi/10.1145/x)]",         # bracket cruft a paste picks up
+        "/doi/10.1145/UPPER/Case",  # case is folded, not rejected
+    ):
+        match = DOI_IN_PATH_PATTERN.search(path)
+        assert match is not None, path
+        assert normalize_doi(match.group(1)) is not None, path

@@ -18,7 +18,7 @@ from pzi import exit_codes
 #
 # A failed service result says *why* in a ``reason`` field, so neither the CLI
 # nor the HTTP API has to match on message text. Both mappers
-# (:func:`pzi.commands.common.exit_code_for_error` and
+# (:func:`exit_code_for_error` below and
 # :func:`pzi.http_status.status_for_service_result`) read the same vocabulary,
 # which is why it lives here rather than beside either of them: a service adds
 # ``"reason": REASON_USAGE`` once and both surfaces agree.

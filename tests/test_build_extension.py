@@ -262,3 +262,40 @@ def test_manifest_carries_numeric_version_and_human_version_name() -> None:
     assert manifest["version"] == "0.1.0.2003"
     # The PEP 440 string is preserved for humans, not used as the version.
     assert manifest["version_name"] == "0.1.0b3"
+
+
+# ── Cross-language constants ────────────────────────────────────────────
+#
+# The extension and the server each hold their own copy of a shared limit,
+# in different languages, and nothing compared them. The extension caps its
+# candidate list so the server does not reject the capture body; if the two
+# numbers drift, the failure is a rejected capture at runtime, not a red test.
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _js_int_constant(path: Path, name: str) -> int:
+    """Read `export const <name> = <int>;` out of an extension module."""
+    import re
+
+    match = re.search(rf"^export const {name} = (\d+);", path.read_text(), re.M)
+    assert match is not None, f"{name} not found in {path}"
+    return int(match.group(1))
+
+
+def test_max_pdf_url_candidates_agrees_across_the_two_languages() -> None:
+    """The extension's candidate cap equals the server's, or a capture is rejected.
+
+    `pdf_discovery.js` says it mirrors `http_post_routes.py`. This is the test
+    that makes the comment true rather than aspirational.
+    """
+    from pzi.http_post_routes import MAX_PDF_URL_CANDIDATES as server_cap
+
+    extension_cap = _js_int_constant(
+        _PROJECT_ROOT / "browser-extension" / "background" / "pdf_discovery.js",
+        "MAX_PDF_URL_CANDIDATES",
+    )
+    assert extension_cap == server_cap, (
+        f"extension caps candidates at {extension_cap} but the server accepts "
+        f"{server_cap}; update both (pdf_discovery.js and http_post_routes.py)"
+    )

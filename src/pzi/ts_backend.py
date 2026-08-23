@@ -263,6 +263,20 @@ def _run_git(args: list[str]) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _subprocess_failure_text(exc: subprocess.SubprocessError) -> str:
+    """What to show the user for a failed bootstrap subprocess.
+
+    `TimeoutExpired.stderr` is `None` when the child was killed before writing
+    anything and `bytes` when the call was not in text mode, so `.strip()` on it
+    is not safe. Falling back to `str(exc)` keeps the timeout case informative —
+    it names the command and the deadline it blew.
+    """
+    raw = getattr(exc, "stderr", None)
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", "replace")
+    return raw.strip() if isinstance(raw, str) and raw.strip() else str(exc)
+
+
 def _clone_repo(
     url: str,
     ref: str,
@@ -442,9 +456,13 @@ def _build_translation_server(
         stdout.flush()
         try:
             _clone_repo(repo["url"], repo["ref"], dest)
-        except subprocess.CalledProcessError as exc:
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            # `_clone_repo` re-raises whichever of the two it exhausted its
+            # retries on, and `TimeoutExpired` is not a `CalledProcessError`
+            # subclass — so catching only the latter let a stalled clone (the
+            # 300 s deadline `_run_git` sets) escape `pzi add` as a traceback.
             print(
-                f"failed to clone {repo['name']}: {exc.stderr.strip()}",
+                f"failed to clone {repo['name']}: {_subprocess_failure_text(exc)}",
                 file=stderr,
             )
             return None
@@ -510,7 +528,7 @@ def _build_translation_server(
         )
         return None
     except subprocess.CalledProcessError as exc:
-        print(f"npm install failed: {exc.stderr.strip()}", file=stderr)
+        print(f"npm install failed: {_subprocess_failure_text(exc)}", file=stderr)
         return None
 
     _write_sentinel(build_dir)

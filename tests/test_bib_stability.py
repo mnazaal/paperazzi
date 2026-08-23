@@ -12,6 +12,13 @@ Macro references survive a write, in the entries a plan touches as well as
 those it does not: a rebuilt block keeps the source text of every field whose
 value the plan did not change. Only the fields a write actually rewrites are
 re-serialized from the record model.
+
+One documented limit, pinned by
+``test_an_untouched_minority_style_entry_is_reformatted``: indent and
+trailing-comma style are normalised file-wide to the dominant convention, so an
+untouched entry written in a minority style is reformatted. Byte-for-byte above
+means the whole file where its layout is uniform, and field-for-field where it
+is not.
 """
 
 from pathlib import Path
@@ -444,6 +451,49 @@ def test_a_library_with_no_comments_is_written_exactly_as_before(
     compact_layout = detect_bib_layout(compact)
     assert compact_layout.comment_separator == compact_layout.block_separator == ""
     assert serialize_library(parse_bib_library(compact), layout=compact_layout) == compact
+
+
+def test_an_untouched_minority_style_entry_is_reformatted(tmp_path: Path) -> None:
+    """The limit of the untouched-entry guarantee: it is field-level, not bytes.
+
+    `serialize_library` renders every block with the one indent and
+    trailing-comma style `detect_bib_layout` found dominant, so an entry written
+    in the file's minority style is reformatted by a write that never named it.
+    This test pins the behaviour that actually ships — the source-slice fix that
+    would make the guarantee byte-level is deferred past 1.0 (decision
+    2026-08-23), and until it lands a reader must not take the docstrings for a
+    byte-level promise.
+    """
+    bib_path = tmp_path / "mixed.bib"
+    bib_path.write_text(
+        "@article{a2020,\n  title = {A},\n  year = {2020}\n}\n\n"
+        "@article{b2021,\n  title = {B},\n  year = {2021}\n}\n\n"
+        # The minority style: four-space indent and a trailing comma, against
+        # two entries at two spaces with none.
+        "@article{c2022,\n    title = {C},\n    year = {2022},\n}\n"
+    )
+    before = bib_path.read_text()
+
+    result = update_bib_entry(
+        str(bib_path),
+        "a2020",
+        lambda entry, record: {
+            **entry,
+            "fields": {**entry["fields"], "abstract": "Touched."},
+        },
+    )
+    assert result["found"] is True
+    after = bib_path.read_text()
+
+    # The layout of the entry nobody named did change.
+    assert "    title = {C}," in before
+    assert "    title = {C}," not in after
+    assert "  title = {C},\n  year = {2022}\n}" in after
+
+    # What *is* guaranteed for it: the fields, their values and their order.
+    entry_c = next(e for e in parse_bib_library(after).entries if e.key == "c2022")
+    assert [field.key for field in entry_c.fields] == ["title", "year"]
+    assert [field.value for field in entry_c.fields] == ["C", "2022"]
 
 
 def test_update_bib_entry_preserves_extras(tmp_path: Path) -> None:

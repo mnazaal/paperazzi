@@ -30,11 +30,11 @@ from pzi.bib_serialize import (
     parse_bib_library,
     parse_bibtex_with_failures,
     resolve_file_field,
+    resolved_bib_dir,
     serialize_library,
     validate_bibtex_roundtrip,
     validate_library_parseable,
 )
-from pzi.bib_serialize import parse_bibtex as _parse_bibtex
 from pzi.bibtex import (
     BibtexEntry,
     NormalizedRecord,
@@ -65,7 +65,7 @@ class ConcurrentEditError(RuntimeError):
     """
 
 
-def _find_entry_index(entries: Sequence[dict[str, Any]], citekey: str) -> int | None:
+def find_entry_index(entries: Sequence[dict[str, Any]], citekey: str) -> int | None:
     """Return index of first entry with the given citekey, or None."""
     return next(
         (i for i, entry in enumerate(entries) if entry["citekey"] == citekey),
@@ -97,16 +97,6 @@ class WritePlan(TypedDict):
     #: file gained. The two answers differ after
     #: :func:`_rebase_update_plan_against_current` hands a field back to a
     #: concurrent writer: this writer did decide that field, and lost it.
-    #:
-    #: Which of the two questions this answers was left undecided (item 406);
-    #: it is the decided-fields one, for two reasons. The vocabulary cannot
-    #: express the other — `source_payload`, `pdf_url` and `source_name` have no
-    #: BibTeX field to have changed. And the file-level answer is not reachable
-    #: from here anyway: `execute_write_plan` rebases a *local* copy of the plan
-    #: and returns only the entries, so the caller that reports `changed_fields`
-    #: never sees the rebased plan. Making it file-level therefore means
-    #: changing that function's return type, which is not worth doing for a
-    #: field that drives one `--json` key and one message and never a write.
     changed_fields: list[str]
     force_new: NotRequired[bool]
     #: The entry ``entry`` was merged onto when this plan was built, for update
@@ -248,11 +238,14 @@ def apply_write_plan(entries: list[BibtexEntry], plan: WritePlan) -> list[Bibtex
 
     index = plan["index"]
     if index is None:
+        # No caller in the tree reaches this — `plan_bib_write` always sets
+        # `index` for an update — but ``WritePlan`` types it `int | None`, so a
+        # hand-assembled plan can express it. The alternative to raising here is
+        # `updated_entries[None]`, i.e. a `TypeError` out of a write path.
         raise PziError(
             "cannot apply the update: the write plan names no entry to replace",
             code=exit_codes.ENVIRONMENT,
         )
-        # pragma: no cover — covered by integration/browser tests
     updated_entries[index] = plan["entry"]
     return updated_entries
 
@@ -291,7 +284,7 @@ def read_bib_notices(path: str) -> list[str]:
 def read_bib_file(path: str) -> ReadBibResult:
     """Read a BibTeX file and project its entries into normalized records."""
     with with_bib_lock(path, shared=True):
-        return _read_bib_file_raw(path)
+        return read_bib_file_raw(path)
 
 
 def read_bib_file_with_notices(path: str) -> tuple[ReadBibResult, list[str]]:
@@ -312,16 +305,16 @@ def read_bib_file_with_failures(path: str) -> tuple[ReadBibResult, list[str]]:
     the file contains and says nothing about it.
     """
     with with_bib_lock(path, shared=True):
-        return _read_bib_file_raw_with_failures(path)
+        return read_bib_file_raw_with_failures(path)
 
 
-def _read_bib_file_raw(path: str) -> ReadBibResult:
+def read_bib_file_raw(path: str) -> ReadBibResult:
     """Read BibTeX file without acquiring a lock (caller must lock)."""
-    result, _failures = _read_bib_file_raw_with_failures(path)
+    result, _failures = read_bib_file_raw_with_failures(path)
     return result
 
 
-def _read_bib_file_raw_with_failures(path: str) -> tuple[ReadBibResult, list[str]]:
+def read_bib_file_raw_with_failures(path: str) -> tuple[ReadBibResult, list[str]]:
     """Read a BibTeX file, also reporting entries the parser had to drop.
 
     Callers that present the read as complete — an export billed as a backup, an
@@ -437,7 +430,31 @@ def _write_bib_text_atomic(path: str, text: str) -> None:
     fsync_parent_dir(file_path)
 
 
-def _read_bib_source(path: str) -> str:
+def _write_bib_with_backup(path: str, text: str, backup_path: Path | None) -> None:
+    """Write *text*, leaving a ``.bak`` of the replaced file only if it lands.
+
+    The copy is taken here — under the caller's lock, immediately before the
+    write — so the backup is exactly the content being replaced. It is removed
+    again when the write raises, because a ``.bak`` from a write that did not
+    happen is a snapshot of a file nothing replaced: the user is invited to
+    restore over content that never changed, and :func:`backup_path_for` hands
+    the next, real run a ``.bak2``. ``reindex_service`` unlinks its own backup
+    on failure for the same reason; this is the same rule for the three
+    block-destroying writers that share this path.
+    """
+    if backup_path is not None:
+        backup_path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+        shutil.copy2(path, backup_path)
+    try:
+        _write_bib_text_atomic(path, text)
+    except BaseException:
+        if backup_path is not None:
+            backup_path.unlink(missing_ok=True)
+        raise
+
+
+def read_bib_source(path: str) -> str:
+    """The bib's text, or ``""`` when the file is not there (caller must lock)."""
     file_path = Path(path)
     if not file_path.exists():
         return ""
@@ -470,9 +487,21 @@ def _update_library_blocks(
     out of convenience reintroduces both losses above. An empty collection is
     therefore meaningfully different from ``None``: it says "touch nothing",
     which is what a pure insert does.
+
+    What an untouched position keeps is its **fields** — values, enclosings and
+    order — not its bytes. ``serialize_library`` renders every block with the
+    one indent and trailing-comma style ``detect_bib_layout`` found dominant, so
+    an entry written in the file's *minority* style is reformatted by a write
+    that never named it. Pinned by
+    ``test_an_untouched_minority_style_entry_is_reformatted``.
     """
+    # Resolved once for the whole library: it is the same answer for every
+    # entry, and `Path.resolve()` is a syscall walk paid per entry per write.
+    bib_dir = resolved_bib_dir(bib_path) if bib_path else None
     new_entry_blocks: list[BibtexEntryV2] = [
-        bibtex_entry_to_library_entry(e, bib_path, file_path_style=file_path_style)
+        bibtex_entry_to_library_entry(
+            e, bib_path, file_path_style=file_path_style, bib_dir=bib_dir
+        )
         for e in entries
     ]
     # ``entries`` comes from ``apply_write_plan``, which only ever replaces an
@@ -556,44 +585,28 @@ def _render_updated_library(
     return serialize_library(updated_library, layout=detect_bib_layout(source))
 
 
-def execute_write_plan(
+@contextmanager
+def _prepare_write(
     path: str,
     plan: WritePlan,
     *,
+    shared: bool,
     file_path_style: str = "absolute",
-) -> list[BibtexEntry]:
-    """Read, apply a plan, and write a BibTeX file under an exclusive lock.
+) -> Iterator[tuple[str, str, list[BibtexEntry]]]:
+    """Read, gate, rebase and render one plan, holding the lock over the yield.
 
-    Validates that the resulting BibTeX round-trips through
-    serialize → parse before committing to disk.
+    Yields ``(source, new_source, updated_entries)`` to a body that decides what
+    to do with it: :func:`execute_write_plan` commits, :func:`preview_write_plan`
+    diffs. Those two were byte-identical from the read to the render, which is
+    how they came to be two of the paths that "validated four different amounts"
+    (see :func:`_gate_batch`); one body means one answer.
 
-    A plan built against an older read is *rebased* under the lock rather than
-    rejected: the read below is the authoritative one, and
-    `_validate_update_plan_against_current` /
-    `_rebase_{update,insert}_plan_against_current` re-project the plan onto it.
-    This used to hash the file on the line before `with_bib_lock` and abort with
-    `ConcurrentEditError` when the digest moved, which inverted the point of the
-    lock — a *correctly serialized* second writer, having waited its turn, was
-    told the file had been "modified externally" and failed with exit 5. Four
-    concurrent `pzi add`s on a two-core CI runner exhausted `add_service`'s
-    single retry and lost their captures outright.
-
-    Being honest about what that guard did and did not do, since it is the
-    argument for removing it: the snapshot was taken before *blocking* on the
-    lock, so it did cover the queue wait — a writer that queued behind another
-    saw the digest move and was forced to replan, which is real protection. It
-    never covered the window that matters, though: the plan predates the
-    snapshot by however long metadata resolution and the PDF download took, and
-    an edit landing in *that* window left the digests equal and passed straight
-    through. So the protection was incidental to contention rather than to
-    staleness, and it was paid for in permanently lost captures. What the guard
-    was accidentally standing in for — a stale plan's carried fields winning
-    over a concurrent writer — is handled where it belongs, in
-    :func:`_rebase_update_plan_against_current`, for both windows rather than
-    the one the digest happened to see.
+    *shared* picks the lock mode — a preview takes a read lock, a write an
+    exclusive one — and is the only thing the two callers still differ on
+    besides their return shape.
     """
-    with with_bib_lock(path):
-        source = _read_bib_source(path)
+    with with_bib_lock(path, shared=shared):
+        source = read_bib_source(path)
         library = parse_bib_library(source)
         # Inserts are gated too. An insert rewrites the whole file just as an
         # update does, so adding to a bib with an unparseable block used to
@@ -604,8 +617,8 @@ def execute_write_plan(
 
         if plan["action"] == "update":
             _validate_update_plan_against_current(records, plan)
-            # Applied in `preview_write_plan` too, or `--dry-run` would show a
-            # diff the real write does not produce.
+            # Rebased for the preview too, or `--dry-run` would show a diff the
+            # real write does not produce.
             plan = _rebase_update_plan_against_current(records, entries, plan)
         if plan["action"] == "insert":
             plan = _rebase_insert_plan_against_current(records, entries, plan)
@@ -621,6 +634,30 @@ def execute_write_plan(
             source=source,
             file_path_style=file_path_style,
         )
+        yield source, new_source, updated_entries
+
+
+def execute_write_plan(
+    path: str,
+    plan: WritePlan,
+    *,
+    file_path_style: str = "absolute",
+) -> list[BibtexEntry]:
+    """Read, apply a plan, and write a BibTeX file under an exclusive lock.
+
+    Validates that the resulting BibTeX round-trips through
+    serialize → parse before committing to disk.
+
+    A plan built against an older read is *rebased* under the lock rather than
+    rejected: the read in :func:`_prepare_write` is the authoritative one, and
+    `_validate_update_plan_against_current` /
+    `_rebase_{update,insert}_plan_against_current` re-project the plan onto it.
+    A stale plan's carried fields losing to a concurrent writer is handled
+    there, in :func:`_rebase_update_plan_against_current`.
+    """
+    with _prepare_write(
+        path, plan, shared=False, file_path_style=file_path_style
+    ) as (source, new_source, updated_entries):
         if new_source != source:
             _write_bib_text_atomic(path, new_source)
         return updated_entries
@@ -736,6 +773,61 @@ class BatchWriteSession:
         )
 
 
+def _open_batch_session(path: str) -> tuple[str, Library, BatchWriteSession]:
+    """Read and gate the library once, returning ``(source, library, session)``.
+
+    The caller must already hold the bib lock; that lock's mode is the only
+    thing :func:`batch_write_session` and :func:`preview_batch_write` still
+    decide for themselves about the read.
+    """
+    source = read_bib_source(path)
+    library = parse_bib_library(source)
+    validate_library_parseable(library)
+    entries, records = library_to_entries_records(library, path)
+    session = BatchWriteSession(
+        entries=entries, records=records, index=build_identity_index(records),
+    )
+    return source, library, session
+
+
+def _gate_batch(session: BatchWriteSession) -> None:
+    """The two whole-library gates every batch path runs, dry run included.
+
+    A preview must not report success for a batch the real write would refuse.
+    These validate the *whole library*, not just the incoming entries, and a dry
+    run otherwise only checks each incoming entry on its own — so a pre-existing
+    entry that blocks the write was invisible until the real run.
+
+    This costs a dry run roughly what the real write costs (measured: ~1.4s to
+    ~5s on a 22k-entry library). That is the right price for a preview whose
+    entire job is to predict the write, and it is why `execute_write_plan`,
+    `preview_write_plan`, `batch_write_session` and `preview_batch_write` no
+    longer validate four different amounts — the gap that took so long to
+    characterize. Neither gate mutates.
+    """
+    session.check_consistency()
+    validate_bibtex_roundtrip(session.entries)
+
+
+def _render_batch(
+    library: Library,
+    session: BatchWriteSession,
+    path: str,
+    source: str,
+    *,
+    file_path_style: str,
+) -> str:
+    """Render what a gated batch session would write."""
+    new_library = _update_library_blocks(
+        library,
+        session.entries,
+        path,
+        file_path_style=file_path_style,
+        touched_indices=session.touched,
+    )
+    return serialize_library(new_library, layout=detect_bib_layout(source))
+
+
 @contextmanager
 def batch_write_session(
     path: str, *, file_path_style: str = "absolute", write: bool = True,
@@ -752,39 +844,16 @@ def batch_write_session(
     written.  It is the bulk path behind ``import``.
     """
     with with_bib_lock(path):
-        source = _read_bib_source(path)
-        library = parse_bib_library(source)
-        validate_library_parseable(library)
-        entries, records = library_to_entries_records(library, path)
-        session = BatchWriteSession(
-            entries=entries, records=records, index=build_identity_index(records),
-        )
+        source, library, session = _open_batch_session(path)
         yield session
-        # The gates run in dry-run too, so a preview cannot report success for a
-        # batch the real write would refuse. They validate the *whole library*,
-        # not just the incoming entries, and a dry run otherwise only checks each
-        # incoming entry on its own — so a pre-existing entry that blocks the
-        # write was invisible until the real run.
-        #
-        # This costs a dry run roughly what the real write costs (measured: ~1.4s
-        # to ~5s on a 22k-entry library). That is the right price for a preview
-        # whose entire job is to predict the write, and it makes this path behave
-        # like `execute_write_plan`, `preview_write_plan` and
-        # `preview_batch_write` — four paths that previously validated four
-        # different amounts, which is why the gap took so long to characterize.
-        # Neither gate mutates.
-        session.check_consistency()
-        validate_bibtex_roundtrip(session.entries)
+        _gate_batch(session)
         if not write:
+            # A dry run stops here rather than rendering: the gates are what it
+            # came for, and the render is the expensive half on a 22k library.
             return
-        new_library = _update_library_blocks(
-            library,
-            session.entries,
-            path,
-            file_path_style=file_path_style,
-            touched_indices=session.touched,
+        new_source = _render_batch(
+            library, session, path, source, file_path_style=file_path_style
         )
-        new_source = serialize_library(new_library, layout=detect_bib_layout(source))
         if new_source != source:
             _write_bib_text_atomic(path, new_source)
 
@@ -801,35 +870,9 @@ def preview_write_plan(
     :func:`execute_write_plan` will use, or the diff shows `file` paths in a
     style the real write would not produce.
     """
-    with with_bib_lock(path, shared=True):
-        source = _read_bib_source(path)
-        library = parse_bib_library(source)
-        # Inserts are gated too. An insert rewrites the whole file just as an
-        # update does, so adding to a bib with an unparseable block used to
-        # re-emit that block under bibtexparser's `% WARNING Parsing failed`
-        # header — a fresh copy of the marker on every subsequent add.
-        validate_library_parseable(library)
-        entries, records = library_to_entries_records(library, path)
-
-        if plan["action"] == "update":
-            _validate_update_plan_against_current(records, plan)
-            # Applied in `preview_write_plan` too, or `--dry-run` would show a
-            # diff the real write does not produce.
-            plan = _rebase_update_plan_against_current(records, entries, plan)
-        if plan["action"] == "insert":
-            plan = _rebase_insert_plan_against_current(records, entries, plan)
-
-        updated_entries = apply_write_plan(entries, plan)
-        validate_bibtex_roundtrip(updated_entries)
-
-        new_source = _render_updated_library(
-            library,
-            updated_entries,
-            path,
-            updated_index=_touched_index(plan),
-            source=source,
-            file_path_style=file_path_style,
-        )
+    with _prepare_write(
+        path, plan, shared=True, file_path_style=file_path_style
+    ) as (source, new_source, updated_entries):
         return {
             "changed": source != new_source,
             "diff": _source_diff(source, new_source, path),
@@ -854,30 +897,12 @@ def preview_batch_write(
     write build their plans in one place.
     """
     with with_bib_lock(path, shared=True):
-        source = _read_bib_source(path)
-        library = parse_bib_library(source)
-        validate_library_parseable(library)
-        entries, records = library_to_entries_records(library, path)
-        session = BatchWriteSession(
-            entries=entries, records=records, index=build_identity_index(records),
-        )
+        source, library, session = _open_batch_session(path)
         apply_plans(session)
-        # The same two gates `batch_write_session` runs, for the same reason: a
-        # preview that skips them reports a clean diff for a batch every real
-        # write refuses. This was the fifth path validating a different amount
-        # from the other four — and the one `update --promote --dry-run` uses,
-        # so the command whose dry run exists to be trusted had the weakest one.
-        # Neither gate mutates.
-        session.check_consistency()
-        validate_bibtex_roundtrip(session.entries)
-        new_library = _update_library_blocks(
-            library,
-            session.entries,
-            path,
-            file_path_style=file_path_style,
-            touched_indices=session.touched,
+        _gate_batch(session)
+        new_source = _render_batch(
+            library, session, path, source, file_path_style=file_path_style
         )
-        new_source = serialize_library(new_library, layout=detect_bib_layout(source))
         return {
             "changed": new_source != source,
             "diff": _source_diff(source, new_source, path),
@@ -1168,12 +1193,12 @@ def update_bib_entry(
     identity with a different paper's, which is a loss of the same kind.
     """
     with with_bib_lock(path):
-        source = _read_bib_source(path)
+        source = read_bib_source(path)
         library = parse_bib_library(source)
         validate_library_parseable(library)
         entries, records = library_to_entries_records(library, path)
 
-        index = _find_entry_index(entries, citekey)  # type: ignore[arg-type]
+        index = find_entry_index(entries, citekey)  # type: ignore[arg-type]
         if index is None:
             return {"found": False, "entries": entries, "entry": None, "record": None}
 
@@ -1201,10 +1226,7 @@ def update_bib_entry(
                 file_path_style=file_path_style,
             )
             if new_source != source:
-                if backup_path is not None:
-                    backup_path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
-                    shutil.copy2(path, backup_path)
-                _write_bib_text_atomic(path, new_source)
+                _write_bib_with_backup(path, new_source, backup_path)
         return {
             "found": True,
             "entries": entries,
@@ -1242,7 +1264,7 @@ def delete_bib_entry(
     another writer may already have replaced.
     """
     with with_bib_lock(path):
-        source = _read_bib_source(path)
+        source = read_bib_source(path)
         library = parse_bib_library(source)
         validate_library_parseable(library)
 
@@ -1266,14 +1288,9 @@ def delete_bib_entry(
         validate_bibtex_roundtrip(remaining)
         new_source = serialize_library(new_library, layout=detect_bib_layout(source))
         if new_source != source:
-            if backup_path is not None:
-                # Under the lock and immediately before the write, so the backup
-                # is exactly the content being replaced — and written only when
-                # something is actually deleted, so a missing citekey leaves no
-                # stray `.bak`.
-                backup_path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
-                shutil.copy2(path, backup_path)
-            _write_bib_text_atomic(path, new_source)
+            # Only when something is actually deleted, so a missing citekey
+            # leaves no stray `.bak`; `_write_bib_with_backup` owns the rest.
+            _write_bib_with_backup(path, new_source, backup_path)
         return {"found": True, "entries": remaining, "entry": None, "record": None}
 
 
@@ -1315,13 +1332,13 @@ def merge_bib_entries(
             code=exit_codes.ENVIRONMENT,
         )
     with with_bib_lock(path):
-        source = _read_bib_source(path)
+        source = read_bib_source(path)
         library = parse_bib_library(source)
         validate_library_parseable(library)
         entries, records = library_to_entries_records(library, path)
 
-        idx_a = _find_entry_index(entries, citekey_a)  # type: ignore[arg-type]
-        idx_b = _find_entry_index(entries, citekey_b)  # type: ignore[arg-type]
+        idx_a = find_entry_index(entries, citekey_a)  # type: ignore[arg-type]
+        idx_b = find_entry_index(entries, citekey_b)  # type: ignore[arg-type]
         if idx_a is None or idx_b is None:
             return {"found": False, "merged_record": None, "changed_fields": []}
 
@@ -1372,10 +1389,7 @@ def merge_bib_entries(
         new_library = build_library(new_blocks)
         new_source = serialize_library(new_library, layout=detect_bib_layout(source))
         if new_source != source:
-            if backup_path is not None:
-                backup_path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
-                shutil.copy2(path, backup_path)
-            _write_bib_text_atomic(path, new_source)
+            _write_bib_with_backup(path, new_source, backup_path)
         return {
             "found": True,
             "merged_record": merged_record,
@@ -1444,7 +1458,7 @@ def rewrite_entries_in_order_locked(
     blocks (positional replace, which also supports citekey renames).  Comment
     positions, ``@string``, and ``@preamble`` are preserved.
     """
-    source = _read_bib_source(path)
+    source = read_bib_source(path)
     library = parse_bib_library(source)
     validate_library_parseable(library)
     existing_entries, _records = library_to_entries_records(library, path)
@@ -1468,15 +1482,6 @@ def rewrite_entries_in_order_locked(
     if new_source != source:
         _write_bib_text_atomic(path, new_source)
     return entries
-
-
-# Public aliases for helpers consumed across modules — callers should not reach
-# for the underscore-private names.
-read_bib_file_raw = _read_bib_file_raw
-read_bib_file_raw_with_failures = _read_bib_file_raw_with_failures
-parse_bibtex = _parse_bibtex
-find_entry_index = _find_entry_index
-read_bib_source = _read_bib_source
 
 
 # ---------------------------------------------------------------------------
@@ -1705,12 +1710,6 @@ def merge_entries(existing: MergeableEntry, incoming: MergeableEntry) -> MergeDe
             merged[field] = merged_value
             changed_fields.append(field)
 
-    # There used to be a `_USER_OWNED_FIELDS` restore loop here. It could never
-    # fire — `merged` starts as `dict(existing)` and nothing above deletes a key
-    # — so it read as the protection for user-owned fields while being none, and
-    # `note` was quietly overwritten a few lines above it. The protection now
-    # lives where the fields are classified, and is pinned by
-    # `test_every_user_owned_field_is_protected_by_the_merge`.
     return {
         "merged": cast(NormalizedRecord, merged),
         "changed_fields": sorted(set(changed_fields)),
@@ -1724,6 +1723,4 @@ def _prefer_more_informative_text(
         return incoming
     if incoming is None or (isinstance(incoming, str) and not incoming.strip()):
         return existing
-    assert isinstance(existing, str)
-    assert isinstance(incoming, str)
     return incoming if len(incoming.strip()) > len(existing.strip()) else existing

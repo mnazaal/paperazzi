@@ -780,3 +780,109 @@ def test_a_thin_answer_is_still_used_when_nothing_better_arrives() -> None:
 
     assert record is not None
     assert record.get("year") == 2020
+
+
+# ---------------------------------------------------------------------------
+# An injected FlareSolverr fetcher that raises
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("kind", "raw_value"),
+    [
+        # The DOI cascade's last rung, reached when the raw input was a URL.
+        ("doi", "https://example.com/paper"),
+        # The URL / PDF-URL branch's own rung.
+        ("url", "https://example.com/paper"),
+    ],
+    ids=["doi-branch", "url-branch"],
+)
+@pytest.mark.parametrize(
+    "exc",
+    [
+        urllib.error.HTTPError(None, 502, "Bad Gateway", {}, None),  # type: ignore[arg-type]
+        urllib.error.URLError("connection refused"),
+        TimeoutError("read timed out"),
+    ],
+    ids=["http", "unreachable", "timeout"],
+)
+def test_a_raising_flaresolverr_fetcher_does_not_abort_the_cascade(
+    kind: str, raw_value: str, exc: Exception
+) -> None:
+    """Every injected FlareSolverr seam absorbs its fetcher's failure.
+
+    The module's own `fetch_html_via_flaresolverr` returns None on a transport
+    failure, but an injected fetcher is a plain one-argument callable that may
+    raise — and the HTTP capture route injects one. Called bare, a dead
+    FlareSolverr escaped `fetch_record_for_input` as whatever it raised, so the
+    cascade never reached `MetadataExhausted` and the provider errors it had
+    already accumulated died with it.
+    """
+    from pzi.add_planning import MetadataExhausted, fetch_record_for_input
+
+    def _raising(_url: str) -> str | None:
+        raise exc
+
+    with pytest.raises(MetadataExhausted) as caught:
+        fetch_record_for_input(
+            raw_value=raw_value,
+            classified={"kind": kind, "normalized":
+                        "10.1000/x" if kind == "doi" else raw_value},
+            server_url="http://127.0.0.1:59999",
+            fetch_web=lambda *a, **k: [],
+            fetch_search=lambda *a, **k: [],
+            fetch_crossref=lambda *a, **k: None,
+            fetch_openalex=lambda *a, **k: None,
+            fetch_s2=lambda *a, **k: None,
+            flaresolverr_url="http://127.0.0.1:8191",
+            fetch_flaresolverr=_raising,
+        )
+
+    # The failure is reported, not swallowed and not raised.
+    assert any(
+        "502" in err or "refused" in err or "timed out" in err
+        for err in caught.value.provider_errors
+    ), caught.value.provider_errors
+
+
+@pytest.mark.parametrize(
+    ("kind", "raw_value"),
+    [("doi", "https://example.com/paper"), ("url", "https://example.com/paper")],
+    ids=["doi-branch", "url-branch"],
+)
+def test_flaresolverr_html_is_read_into_a_record_at_both_seams(
+    kind: str, raw_value: str
+) -> None:
+    """The success side of the same two rungs.
+
+    Both carried a `# pragma: no cover — covered by integration/browser tests`;
+    no browser test imports this module, and the rungs are reachable from a
+    string. Their `return` tuples were also dedented to a level that parses only
+    by bracket continuation, so this is what says the re-indentation kept them.
+    """
+    from pzi.add_planning import fetch_record_for_input
+
+    html = (
+        '<html><head>'
+        '<meta name="citation_title" content="Behind Cloudflare">'
+        '<meta name="citation_author" content="Smith, Ada">'
+        '<meta name="citation_publication_date" content="2024">'
+        '</head></html>'
+    )
+
+    record, _errors, _results = fetch_record_for_input(
+        raw_value=raw_value,
+        classified={"kind": kind, "normalized":
+                    "10.1000/x" if kind == "doi" else raw_value},
+        server_url="http://127.0.0.1:59999",
+        fetch_web=lambda *a, **k: [],
+        fetch_search=lambda *a, **k: [],
+        fetch_crossref=lambda *a, **k: None,
+        fetch_openalex=lambda *a, **k: None,
+        fetch_s2=lambda *a, **k: None,
+        flaresolverr_url="http://127.0.0.1:8191",
+        fetch_flaresolverr=lambda _url: html,
+    )
+
+    assert record["title"] == "Behind Cloudflare"
+    assert record["authors"] == ["Smith, Ada"]

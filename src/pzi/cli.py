@@ -29,7 +29,7 @@ from pzi.commands.update import run_update_command as _run_update
 from pzi.config import default_config_path
 from pzi.errors import PziError
 
-#: The inverse of `commands.common._EXIT_CODE_BY_REASON`, for a `PziError` that
+#: The inverse of `errors._EXIT_CODE_BY_REASON`, for a `PziError` that
 #: carried no `reason`. Coarse on purpose and only where nothing better exists:
 #: `ENVIRONMENT` covers config, unavailable and conflict, so it maps to the one
 #: that claims least — reporting `config` for a service outage would be a guess

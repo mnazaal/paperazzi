@@ -179,3 +179,150 @@ def test_non_pdf_bytes_are_never_stored_as_a_paper(tmp_path: Path) -> None:
     assert lying_path is None
     assert "not a PDF" in (lying_error or "")
     assert list(papers.iterdir()) == []
+
+
+def _add_config(tmp_path: Path) -> str:
+    config_path = tmp_path / "config.toml"
+    (tmp_path / "papers").mkdir()
+    config_path.write_text(
+        f"""
+translation_server_url = "http://127.0.0.1:1"
+
+[[bibs]]
+name = "ml"
+path = "{tmp_path / "library.bib"}"
+papers_dir = "{tmp_path / "papers"}"
+default = true
+""".strip(),
+        encoding="utf-8",
+    )
+    return str(config_path)
+
+
+@pytest.mark.parametrize("strict", [False, True], ids=["default", "strict-metadata"])
+def test_a_doi_no_provider_knows_is_not_a_dead_service(tmp_path: Path, strict: bool) -> None:
+    """"Retry later" was the answer to a DOI that will never resolve.
+
+    Every source was tried and every one answered "I do not have this" —
+    `MetadataExhausted`. It subclasses `ValueError`, so it landed in the
+    transport-failure handler and came back classified `unavailable`: exit 5 on
+    the CLI and HTTP 503 on the API, telling the caller to retry a lookup whose
+    verdict will not change. The same verdict reached from the other direction
+    ("no metadata found for this input") carries no reason at all.
+    """
+    from pzi.add_service import add_input_to_bib
+    from pzi.errors import REASON_UNAVAILABLE
+    from pzi.http_status import status_for_service_result
+
+    result = add_input_to_bib(
+        config_path=_add_config(tmp_path),
+        home_dir=str(tmp_path),
+        value="10.1234/nobody.knows.this",
+        record_overrides={},
+        bib_selector=None,
+        dry_run=True,
+        fetch_web=lambda *_a, **_k: [],
+        fetch_search=lambda *_a, **_k: [],
+        fetch_crossref=lambda *_a, **_k: None,
+        fetch_openalex=lambda *_a, **_k: None,
+        fetch_s2=lambda *_a, **_k: None,
+        metadata_strict=strict,
+    )
+
+    assert result["status"] == "error"
+    assert result.get("reason") != REASON_UNAVAILABLE, result
+    assert status_for_service_result(result) == 400
+
+
+def test_a_translation_server_that_is_actually_down_is_still_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The contrast case the classification exists for: retrying *is* reasonable.
+
+    The cascade absorbs transport failures at every seam it injects, so the only
+    way to put a bare `URLError` in front of this handler is to raise it where
+    the cascade itself is called.
+    """
+    import urllib.error
+
+    from pzi import add_service
+    from pzi.errors import REASON_UNAVAILABLE
+    from pzi.http_status import status_for_service_result
+
+    def _refused(**_kwargs):
+        raise urllib.error.URLError("Connection refused")
+
+    monkeypatch.setattr(add_service, "fetch_record_for_input", _refused)
+
+    result = add_service.add_input_to_bib(
+        config_path=_add_config(tmp_path),
+        home_dir=str(tmp_path),
+        value="10.1234/somewhere",
+        record_overrides={},
+        bib_selector=None,
+        dry_run=True,
+    )
+
+    assert result["status"] == "error"
+    assert result["message"] == "translation server error"
+    assert result.get("reason") == REASON_UNAVAILABLE, result
+    assert status_for_service_result(result) == 503
+
+
+def _orphan_pdf_record() -> dict[str, object]:
+    return {
+        "citekey": "orphan2024pdf",
+        "title": "A Paper Whose PDF Is Already On Disk",
+        "authors": ["Smith, Ada"],
+        "year": 2024,
+        "doi": "10.1234/orphan",
+        "pdf_url": "https://example.com/orphan.pdf",
+    }
+
+
+def _plant_orphan_pdf(papers_dir: Path, record: dict[str, object]) -> Path:
+    """Write a real PDF where the planner would put this record's."""
+    from pzi.pdf_planning import plan_pdf_path
+
+    planned = Path(
+        plan_pdf_path(
+            papers_dir=str(papers_dir),
+            citekey=str(record["citekey"]),
+            record=record,  # type: ignore[arg-type]
+            filename_format=None,
+        )
+    )
+    planned.parent.mkdir(parents=True, exist_ok=True)
+    planned.write_bytes(b"%PDF-1.4\n%stub\n")
+    return planned
+
+
+@pytest.mark.parametrize("path", ["single", "batch"])
+def test_every_write_path_prepares_a_record_the_same_way(tmp_path: Path, path: str) -> None:
+    """One record-preparation pipeline, not one per write path.
+
+    Citekey, exact-match PDF reuse and orphan-PDF reuse were written out three
+    times, and two of the copies had already drifted apart by a step. This pins
+    the last of the three — adopting a PDF already sitting at the planned path,
+    rather than re-downloading it — across both public write entry points.
+    """
+    from pzi.add_service import add_record_with_bib, add_records_to_bib_batch
+
+    papers_dir = tmp_path / "papers"
+    papers_dir.mkdir()
+    bib_path = tmp_path / "library.bib"
+    bib_path.write_text("", encoding="utf-8")
+    bib = {"name": "ml", "path": str(bib_path), "papers_dir": str(papers_dir), "default": True}
+
+    record = _orphan_pdf_record()
+    planted = _plant_orphan_pdf(papers_dir, record)
+
+    if path == "single":
+        result = add_record_with_bib(bib=bib, record=dict(record), dry_run=False)
+    else:
+        result = add_records_to_bib_batch(
+            bib=bib, records=[dict(record)], dry_run=False
+        )[0]
+
+    assert result["status"] == "ok", result
+    assert result["pdf_path"] == str(planted), result

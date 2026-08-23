@@ -26,10 +26,6 @@ from pzi.protocols import accepts_keyword
 from pzi.url_safety import DEFAULT_DNS_LOOKUP_TIMEOUT_SECONDS, origin_of, safe_public_http_url
 
 PdfDiscoveryContext: TypeAlias = dict[str, Any]
-#: Re-exported from `url_safety`, which owns DNS resolution. Three modules
-#: each defined their own `0.25`, so tuning the timeout meant finding all
-#: three — and two of them drifting apart would be invisible.
-DNS_LOOKUP_TIMEOUT_SECONDS = DEFAULT_DNS_LOOKUP_TIMEOUT_SECONDS
 
 PdfCandidate: TypeAlias = dict[str, Any]
 
@@ -196,27 +192,39 @@ def apply_pdf_discovery_parallel(
     *,
     max_workers: int = 4,
 ) -> NormalizedRecord:
-    """Run PDF discovery with HTTP steps (web_attachment, doi_pdf, unpaywall)
-    executed in parallel. Pure steps run sequentially first, browser step
-    runs last as fallback.
+    """Run PDF discovery with the HTTP steps (web_attachment, doi_pdf,
+    unpaywall) executed in parallel.
+
+    The steps above the first HTTP step run sequentially first, the HTTP steps
+    run together, and the steps below them run sequentially afterwards — so a
+    record resolves to the same ``pdf_source`` here as it does in
+    :func:`apply_pdf_discovery`.
 
     ``max_workers`` controls the thread pool size for parallel HTTP steps.
     """
-    # Phase 1: run pure/fast steps sequentially. The incoming record is
-    # validated first for the same reason as in ``apply_pdf_discovery``: after a
-    # failed download it still carries the URL that failed.
+    # Phase 1: run the non-HTTP steps that come *before* the first HTTP step,
+    # sequentially. Running every "pure" step here regardless of its position
+    # let a pure step late in the chain pre-empt the HTTP steps above it —
+    # `pdf_url_candidates_step` sits at position 7 and beat positions 4-6, so
+    # the same record resolved to a different `pdf_source` in parallel mode
+    # than sequentially. The incoming record is validated first for the same
+    # reason as in ``apply_pdf_discovery``: after a failed download it still
+    # carries the URL that failed.
+    http_steps = [step for step in steps if phase_of(step) == "http"]
+    first_http = next(
+        (index for index, step in enumerate(steps) if phase_of(step) == "http"),
+        len(steps),
+    )
     record = _validated_discovery(record, context)
-    for step in steps:
+    for step in steps[:first_http]:
         if record.get("pdf_url"):
             return record
-        if phase_of(step) == "pure":
-            record = _validated_discovery(step(record, context), context)
+        record = _validated_discovery(step(record, context), context)
 
     if record.get("pdf_url"):
         return record
 
     # Phase 2: run HTTP steps in parallel
-    http_steps = [step for step in steps if phase_of(step) == "http"]
     if http_steps:
         from concurrent.futures import ThreadPoolExecutor
 
@@ -241,11 +249,12 @@ def apply_pdf_discovery_parallel(
             if result is not None and result.get("pdf_url"):
                 return result
 
-    # Phase 3: browser fallback
-    for step in steps:
+    # Phase 3: everything after the parallel block, still in chain order — the
+    # browser fallback, and any non-HTTP step ranked below the HTTP sources.
+    for step in steps[first_http:]:
         if record.get("pdf_url"):
             return record
-        if phase_of(step) == "browser":
+        if phase_of(step) != "http":
             record = _validated_discovery(step(record, context), context)
 
     return record
@@ -301,7 +310,9 @@ def pdf_url_candidates_step(
     return record
 
 
-def _safe_public_http_url(value: str, *, dns_timeout: float = DNS_LOOKUP_TIMEOUT_SECONDS) -> bool:
+def _safe_public_http_url(
+    value: str, *, dns_timeout: float = DEFAULT_DNS_LOOKUP_TIMEOUT_SECONDS
+) -> bool:
     return safe_public_http_url(value, dns_timeout=dns_timeout)
 
 
@@ -326,13 +337,10 @@ def cookies_for_url(context: PdfDiscoveryContext, url: str) -> str | None:
     origin = context.get("cookie_origin")
     if not isinstance(origin, str) or not origin:
         raw = context.get("raw_value")
-        origin = _origin_of(raw) if isinstance(raw, str) else None
-    if not origin or _origin_of(url) != origin:
+        origin = origin_of(raw) if isinstance(raw, str) else None
+    if not origin or origin_of(url) != origin:
         return None
     return cookies
-
-
-_origin_of = origin_of
 
 
 def web_attachment_step(
@@ -468,38 +476,55 @@ def doi_pdf_step(
     fetch_doaj_pdf = context.get("fetch_doaj_pdf") or fetch_doaj_pdf_url
 
     contact_email = context.get("contact_email")
-    pdf_url = _call_pdf_resolver(
-        fetch_crossref_pdf,
-        doi,
-        contact_email=contact_email if isinstance(contact_email, str) else None,
-    )
-    if pdf_url:
-        updated = dict(record)
-        updated["pdf_url"] = pdf_url
-        updated["pdf_source"] = "doi"
-        return cast(NormalizedRecord, updated)
 
-    pdf_url = fetch_europepmc_pdf(doi)
-    if pdf_url:
-        updated = dict(record)
-        updated["pdf_url"] = pdf_url
-        updated["pdf_source"] = "doi"
-        return cast(NormalizedRecord, updated)
-
-    pdf_url = fetch_doaj_pdf(doi)
-    if pdf_url:
-        updated = dict(record)
-        updated["pdf_url"] = pdf_url
-        updated["pdf_source"] = "doi"
-        return cast(NormalizedRecord, updated)
+    # These three answer "no PDF" and "I am broken" with the same `None`. They
+    # accept an `errors` list precisely so the second can be told from the
+    # first; supplying one is what makes a permanently broken provider visible,
+    # which is the whole point of `record_discovery_failure` above — that one
+    # only fires for a step that *raises*, and these swallow instead.
+    provider_errors: list[str] = []
+    for name, fetch in (
+        ("crossref", fetch_crossref_pdf),
+        ("europepmc", fetch_europepmc_pdf),
+        ("doaj", fetch_doaj_pdf),
+    ):
+        before = len(provider_errors)
+        pdf_url = _call_pdf_resolver(
+            fetch,
+            doi,
+            contact_email=contact_email if isinstance(contact_email, str) else None,
+            errors=provider_errors,
+        )
+        for detail in provider_errors[before:]:
+            context.setdefault("discovery_diagnostics", []).append(f"{name}: {detail}")
+        if pdf_url:
+            updated = dict(record)
+            updated["pdf_url"] = pdf_url
+            updated["pdf_source"] = "doi"
+            return cast(NormalizedRecord, updated)
 
     return record
 
 
-def _call_pdf_resolver(fn, doi: str, *, contact_email: str | None = None) -> str | None:
+def _call_pdf_resolver(
+    fn,
+    doi: str,
+    *,
+    contact_email: str | None = None,
+    errors: list[str] | None = None,
+) -> str | None:
+    """Call a PDF resolver, passing only the keywords it actually accepts.
+
+    `errors` is threaded the same way `contact_email` is, because an injected
+    seam (a test double, an alternate provider) is a plain one-argument callable
+    that has neither parameter.
+    """
+    kwargs: dict[str, object] = {}
     if contact_email and accepts_keyword(fn, "contact_email"):
-        return fn(doi, contact_email=contact_email)
-    return fn(doi)
+        kwargs["contact_email"] = contact_email
+    if errors is not None and accepts_keyword(fn, "errors"):
+        kwargs["errors"] = errors
+    return fn(doi, **kwargs)
 
 
 @discovery_phase("http")

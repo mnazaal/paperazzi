@@ -653,3 +653,59 @@ def test_a_relative_file_path_survives_an_unrelated_edit() -> None:
         assert read_bib_file(bib)["records"][0]["local_pdf_path"].endswith(
             "papers/a2020.pdf"
         )
+
+
+def test_the_bib_directory_is_resolved_once_per_write_not_once_per_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`resolved_bib_dir` is a syscall walk with the same answer for every entry.
+
+    It used to be recomputed inside `_normalize_file_field`, i.e. once per entry
+    per write — on a 22,232-entry library, 22,232 path walks to learn one
+    directory. The hoist is only real if the per-entry fallback stops firing, so
+    both ends are counted: the bulk caller once, the per-entry path never.
+    """
+    import pzi.bib_repository as bib_repository
+    import pzi.bib_serialize as bib_serialize
+
+    calls = {"hoisted": 0, "per_entry": 0}
+
+    def counted(key: str):
+        real = bib_serialize.resolved_bib_dir
+
+        def wrapper(bib_path: str):
+            calls[key] += 1
+            return real(bib_path)
+
+        return wrapper
+
+    monkeypatch.setattr(bib_repository, "resolved_bib_dir", counted("hoisted"))
+    monkeypatch.setattr(bib_serialize, "resolved_bib_dir", counted("per_entry"))
+
+    with tempfile.TemporaryDirectory() as td:
+        cp, bib, papers = _config(td, pdf_file_path_style="relative")
+        entries = ""
+        for i in range(5):
+            pdf_abs = os.path.join(papers, f"e{i}2020.pdf")
+            Path(pdf_abs).write_bytes(b"%PDF-1.4\n")
+            entries += (
+                f"@article{{e{i}2020, title = {{E{i}}}, author = {{S}}, "
+                f"year = {{2020}}, file = {{{pdf_abs}}}}}\n"
+            )
+        Path(bib).write_text(entries)
+
+        result = add_tags(
+            config_path=cp, home_dir=td, bib_selector=None,
+            citekey="e02020", tags=["ml"],
+        )
+
+        assert result["status"] == "ok"
+        text = Path(bib).read_text()
+        # The hoist must not have changed the answer: the touched entry is
+        # relativized, and the four untouched ones keep their original block.
+        assert "file = {papers/e02020.pdf}" in text
+        for i in range(1, 5):
+            assert f"file = {{{os.path.join(papers, f'e{i}2020.pdf')}}}" in text
+
+    assert calls["hoisted"] == 1, calls
+    assert calls["per_entry"] == 0, calls

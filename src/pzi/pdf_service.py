@@ -670,16 +670,16 @@ def _attach_pdf_data(
         }
 
     existing_pdf_paths = _snapshot_pdf_paths(papers_dir)
-    if filename_format:
-        destination = write_pdf_bytes(
-            data=data,
-            papers_dir=papers_dir,
-            citekey=citekey,
-            record=_record_at(read_result, index),
-            filename_format=filename_format,
-        )
-    else:
-        destination = write_pdf_bytes(data=data, papers_dir=papers_dir, citekey=citekey)
+    # Both arguments passed unconditionally: pdf_planning already handles a
+    # falsy filename_format and a None record, so branching on them here only
+    # duplicated that decision.
+    destination = write_pdf_bytes(
+        data=data,
+        papers_dir=papers_dir,
+        citekey=citekey,
+        record=_record_at(read_result, index),
+        filename_format=filename_format,
+    )
 
     update_result = _update_entry_keeping_pdf_consistent(
         lambda: update_bib_entry(

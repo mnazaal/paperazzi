@@ -48,7 +48,8 @@ def _run(args, fake, tmp_path):
 
 
 def _args(**kw):
-    base = dict(strict=False, report=None, jsonl=None, json=False, target=None)
+    base = dict(strict=False, report=None, jsonl=None, json=False, target=None,
+                limit=None)
     base.update(kw)
     return Namespace(**base)
 
@@ -268,3 +269,135 @@ def test_a_partial_audit_is_reported_and_written_not_discarded(tmp_path: Path) -
     # The audited entry is shown, and the gap is named.
     assert "checked 1" in out
     assert "duplicate citekey" in err
+
+
+def test_report_dash_and_jsonl_dash_together_are_refused(tmp_path: Path) -> None:
+    """Three flag pairs write to stdout; two were guarded and one was not.
+
+    `--report -` is refused with `--json` and `--jsonl -` is refused with
+    `--json`, but `--report - --jsonl -` produced the whole report document
+    followed by an NDJSON stream on the same stdout — neither valid JSON nor
+    valid NDJSON, from the command whose `-` markers exist to be piped into jq.
+    """
+    called = []
+
+    def _never(**_kw):
+        called.append(True)
+        return _result()
+
+    code, out, err = _run(_args(report="-", jsonl="-"), _never, tmp_path)
+
+    assert code == exit_codes.USAGE, err
+    assert out == "", out
+    assert "both write to stdout" in err
+    assert called == [], "the audit ran before the invocation was refused"
+
+
+def _many(count: int) -> dict:
+    return {
+        "status": "ok",
+        "bib_name": "ml",
+        "strict": False,
+        "total": count,
+        "counts": {"verified": count, "could_not_verify": 0, "problematic": 0},
+        "items": [
+            {
+                "citekey": f"entry{i}",
+                "verdict": "verified",
+                "confidence_score": 100,
+                "flags": [],
+                "mismatches": [],
+                "sources_checked": ["crossref"],
+            }
+            for i in range(count)
+        ],
+        "errors": [],
+        "warnings": [],
+    }
+
+
+def _streaming_fake(count: int):
+    """A `check_bib` that hands each verdict over as it is reached, as the real one does."""
+
+    def fake(*, on_item=None, limit=None, **_kw):
+        result = _many(min(count, limit) if limit else count)
+        for index, item in enumerate(result["items"]):
+            if on_item is not None:
+                on_item(item, index, result["total"])
+        return result
+
+    return fake
+
+
+def test_jsonl_is_written_as_the_audit_goes(tmp_path: Path) -> None:
+    """An interrupted run has to keep the verdicts it already reached.
+
+    `--jsonl` was built after the service returned, so a run killed at entry
+    20,000 of 22,232 — hours in, on the command that takes hours — wrote
+    nothing. Checked by looking at the file *during* the run, which is the only
+    way to tell streaming from buffering: the finished file is identical either
+    way.
+    """
+    out_path = tmp_path / "audit.jsonl"
+    seen_midway = []
+
+    def fake(*, on_item=None, **_kw):
+        result = _many(3)
+        for index, item in enumerate(result["items"]):
+            on_item(item, index, 3)
+            seen_midway.append(out_path.read_text(encoding="utf-8").count("\n"))
+        return result
+
+    code, _out, err = _run(_args(jsonl=str(out_path)), fake, tmp_path)
+
+    assert code == 0, err
+    assert seen_midway == [1, 2, 3], seen_midway
+    assert out_path.read_text(encoding="utf-8").count("\n") == 3
+
+
+def test_jsonl_is_complete_even_when_the_service_does_not_stream(tmp_path: Path) -> None:
+    """The fallback: a `check_bib` that ignores `on_item` still gets a full file."""
+    out_path = tmp_path / "audit.jsonl"
+
+    code, _out, err = _run(_args(jsonl=str(out_path)), lambda **_k: _many(3), tmp_path)
+
+    assert code == 0, err
+    assert out_path.read_text(encoding="utf-8").count("\n") == 3
+
+
+def test_limit_is_passed_through_and_reported(tmp_path: Path) -> None:
+    """A count of an audited slice reads exactly like a count of the library."""
+    code, out, err = _run(_args(limit=2), _streaming_fake(10), tmp_path)
+
+    assert code == 0, err
+    assert "checked 2" in out
+    assert "--limit 2" in err
+    assert "were not audited" in err
+
+
+def test_limit_below_one_is_a_usage_error(tmp_path: Path) -> None:
+    called = []
+
+    code, out, err = _run(
+        _args(limit=0), lambda **_k: called.append(True) or _many(1), tmp_path
+    )
+
+    assert code == exit_codes.USAGE, err
+    assert out == ""
+    assert called == []
+
+
+def test_progress_is_printed_for_a_long_run_only(tmp_path: Path) -> None:
+    """Nothing at all was printed until the audit finished — a hang, to a reader.
+
+    Gated on size so a three-entry library does not grow a progress log: the
+    command that needs this is the whole-library run, which is hours.
+    """
+    _code, _out, short_err = _run(_args(), _streaming_fake(10), tmp_path)
+    assert "checked 10/10 entries" not in short_err
+
+    _code, _out, long_err = _run(_args(), _streaming_fake(200), tmp_path)
+    assert "checked 25/200 entries" in long_err
+    assert "checked 200/200 entries" in long_err
+    # One line per 25, not one per entry.
+    assert long_err.count("entries\n") == 8, long_err

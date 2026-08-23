@@ -4,7 +4,10 @@ import os
 import subprocess
 from unittest.mock import patch
 
+import pytest
+
 from pzi.browser_pdf import (
+    _HOOK_OVERHEAD_SECONDS,
     _validate_browser_command,
     discover_pdf_url_with_browser,
     download_pdf_with_browser,
@@ -257,3 +260,32 @@ def test_discover_pdf_url_with_browser_returns_none_on_unbalanced_quote() -> Non
     assert discover_pdf_url_with_browser(
         command='python hook.py --profile "unterminated', page_url="https://x"
     ) is None
+
+
+@pytest.mark.parametrize(
+    ("invoke", "kwargs"),
+    [
+        (discover_pdf_url_with_browser, {"page_url": "https://journal.org/article"}),
+        (download_pdf_with_browser, {"pdf_url": "https://journal.org/paper.pdf"}),
+    ],
+    ids=["discover", "download"],
+)
+@patch("pzi.browser_pdf.subprocess.run")
+def test_every_hook_invocation_budgets_for_the_challenge_wait(
+    mock_run, invoke, kwargs: dict[str, str]
+) -> None:
+    """Both hook entry points derive their timeout from the child's own arguments.
+
+    `_hook_timeout_seconds` exists so the parent's budget and the child's
+    `--challenge-timeout` cannot drift; the discovery entry point hardcoded 120,
+    which is *below* the 240 s wait it was asking the child to perform, so a
+    headful CAPTCHA solve was killed at the moment it became useful.
+    """
+    mock_run.return_value = _mock_subprocess(stdout="{}")
+
+    invoke(
+        command="mock-cmd --headful --challenge-timeout 240",
+        **kwargs,
+    )
+
+    assert mock_run.call_args.kwargs["timeout"] == 240 + _HOOK_OVERHEAD_SECONDS

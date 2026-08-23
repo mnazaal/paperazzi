@@ -59,8 +59,16 @@ class FakeBrowserSession:
     def wait_network_idle(self, *, timeout=5000):
         pass
 
+    def wait_for_timeout(self, milliseconds):
+        pass
+
     def close(self):
         self._closed = True
+
+    def _check_open(self):
+        """Raise like the real session does once the browser is gone."""
+        if self._closed:
+            raise RuntimeError("browser session is closed")
 
     # Legacy triple-format support
     def locator(self, sel):
@@ -74,16 +82,16 @@ class FakeBrowserSession:
         return self.navigate(url, **kw)
 
 
-def make_fake_response(content_type="text/html", body=b"<html></html>"):
+def make_fake_response(content_type="text/html", body=b"<html></html>", status=200):
     """Create a fake Playwright response object."""
     class FakeResponse:
         headers = {"content-type": content_type}
-        status = 200
-        def body(self):
-            return body
+        pass
+    FakeResponse.status = status
+    FakeResponse.body = lambda self=None: body
     return FakeResponse()
 
 
-def make_pdf_response(body=b"%PDF-1.4 test"):
+def make_pdf_response(body=b"%PDF-1.4 test", status=200):
     """Create a fake PDF response."""
-    return make_fake_response(content_type="application/pdf", body=body)
+    return make_fake_response(content_type="application/pdf", body=body, status=status)

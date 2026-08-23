@@ -735,3 +735,182 @@ def test_rejected_requests_do_not_keep_an_auto_stop_server_alive(
         server.server_close()
 
     assert idle_state["_last_request"] == 0.0, "a rejected request refreshed the timer"
+
+
+# ---------------------------------------------------------------------------
+# Requests that never reach a `do_*` handler
+# ---------------------------------------------------------------------------
+
+
+def _raw_exchange(port: int, payload: bytes) -> bytes:
+    """Send a hand-built request and read the whole response.
+
+    `http.client` will not send what these tests need — a request line with a
+    bad version, or two `Host` headers — so they go down a plain socket.
+    """
+    sock = socket.create_connection(("127.0.0.1", port), timeout=10)
+    try:
+        sock.sendall(payload)
+        chunks = []
+        while True:
+            chunk = sock.recv(65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    finally:
+        sock.close()
+    return b"".join(chunks)
+
+
+def _json_body(raw: bytes) -> dict:
+    """The JSON document from a raw response, headers or not.
+
+    A request line the parser rejected leaves `request_version` at HTTP/0.9,
+    where the stdlib suppresses the status line and headers entirely — so the
+    response is the body alone.
+    """
+    head, separator, body = raw.partition(b"\r\n\r\n")
+    return json.loads(body if separator else head)
+
+
+def test_an_unsupported_method_answers_json_with_the_security_headers(tmp_path: Path) -> None:
+    """`PUT` reaches no `do_*` method, so it used to get the stdlib HTML page.
+
+    No CORS headers (a cross-origin caller could not read it), no
+    `X-Content-Type-Options`, and a `Server` header naming the exact CPython
+    patch version — all of it before any token was checked.
+    """
+    config_path, _ = _seed(tmp_path)
+    port, _thread, server = _serve_once(config_path, tmp_path)
+    try:
+        raw = _raw_exchange(
+            port,
+            b"PUT /capture HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+            b"Origin: http://127.0.0.1\r\nContent-Length: 0\r\n\r\n",
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    head, _, _body = raw.partition(b"\r\n\r\n")
+    assert head.startswith(b"HTTP/1.0 501 ")
+    assert b"Content-Type: application/json" in head
+    assert b"X-Content-Type-Options: nosniff" in head
+    assert b"Access-Control-Allow-Origin: http://127.0.0.1" in head
+    assert b"<html" not in raw.lower()
+    assert isinstance(_json_body(raw)["error"], str)
+
+
+def test_a_head_request_gets_the_headers_and_no_body(tmp_path: Path) -> None:
+    """A body on a HEAD response is a protocol violation, JSON or not."""
+    config_path, _ = _seed(tmp_path)
+    port, _thread, server = _serve_once(config_path, tmp_path)
+    try:
+        raw = _raw_exchange(port, b"HEAD /health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    head, _, body = raw.partition(b"\r\n\r\n")
+    assert head.startswith(b"HTTP/1.0 501 ")
+    assert b"Content-Type: application/json" in head
+    assert body == b""
+
+
+def test_a_malformed_request_line_answers_json_not_an_html_page(tmp_path: Path) -> None:
+    config_path, _ = _seed(tmp_path)
+    port, _thread, server = _serve_once(config_path, tmp_path)
+    try:
+        raw = _raw_exchange(port, b"GET / HTTP/x\r\nHost: 127.0.0.1\r\n\r\n")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert b"<html" not in raw.lower()
+    assert isinstance(_json_body(raw)["error"], str)
+
+
+def test_no_response_discloses_the_interpreter_version(tmp_path: Path) -> None:
+    """`Server: pzi/0.1 Python/3.12.3` named the exact patch level, pre-auth.
+
+    Both halves were wrong: the version was stale (the package is past 0.1) and
+    the interpreter is nobody's business. Checked on a served route and on the
+    `send_error` path, because they build the header the same way and only one
+    of them was ever looked at.
+    """
+    config_path, _ = _seed(tmp_path)
+    port, _thread, server = _serve_once(config_path, tmp_path)
+    try:
+        served = _raw_exchange(port, b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+        errored = _raw_exchange(port, b"PUT /health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    for raw in (served, errored):
+        head = raw.partition(b"\r\n\r\n")[0]
+        assert b"Python/" not in head, head
+        # `version_string()` is `server_version + " " + sys_version`, so an
+        # empty `sys_version` leaves one trailing space that every HTTP parser
+        # strips. What matters is that nothing after `pzi` is a version.
+        server = next(
+            line for line in head.split(b"\r\n") if line.startswith(b"Server:")
+        )
+        assert server.partition(b":")[2].strip() == b"pzi", server
+
+
+def test_a_second_host_header_is_refused_in_either_order(tmp_path: Path) -> None:
+    """`dict(headers.items())` keeps the last value, so order decided the answer.
+
+    `Host: evil.com` then `Host: 127.0.0.1` passed the rebinding guard; the
+    reverse was refused. RFC 7230 section 5.4 says a message with more than one
+    `Host` is rejected, which is also the only answer that does not depend on
+    which copy a proxy happens to put first.
+    """
+    config_path, _ = _seed(tmp_path)
+    port, _thread, server = _serve_once(config_path, tmp_path)
+    try:
+        for first, second in ((b"evil.example", b"127.0.0.1"), (b"127.0.0.1", b"evil.example")):
+            for method in (b"GET", b"POST", b"OPTIONS"):
+                raw = _raw_exchange(
+                    port,
+                    method + b" /bibs HTTP/1.1\r\nHost: " + first
+                    + b"\r\nHost: " + second + b"\r\nContent-Length: 0\r\n\r\n",
+                )
+                assert raw.startswith(b"HTTP/1.0 400 "), (method, first, second, raw[:80])
+                assert "Host" in _json_body(raw)["error"]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_a_binary_route_with_no_handler_is_not_served_as_an_export(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A third `BINARY_GET_ROUTES` entry used to be served as an export.
+
+    The dispatcher branched `if route.name == "pdf": ... else: export`, so any
+    name that was not `pdf` got the export handler — while `BinaryGetRoute`
+    documented `name` as a key into a handler table `http_api` did not have.
+    """
+    import pzi.http_api as http_api
+    from pzi.http_get_routes import BinaryGetRoute
+
+    monkeypatch.setattr(
+        http_api,
+        "BINARY_GET_ROUTES",
+        (*http_api.BINARY_GET_ROUTES, BinaryGetRoute("/not-wired/", "not_wired", is_prefix=True)),
+    )
+    config_path, _ = _seed(tmp_path)
+    port, _thread, server = _serve_once(config_path, tmp_path)
+    try:
+        raw = _raw_exchange(
+            port, b"GET /not-wired/x HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert raw.startswith(b"HTTP/1.0 404 "), raw[:120]
+    assert b"@article" not in raw
+    assert _json_body(raw)["error"] == "not found"

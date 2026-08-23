@@ -8,6 +8,8 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 from urllib.error import HTTPError, URLError
 
+import pytest
+
 from pzi import ts_backend
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -886,3 +888,157 @@ def test_the_pinned_translation_server_still_needs_the_override() -> None:
         "config/custom-environment-variables.json (does it map PORT yet?) before "
         "trusting ts_child_env's rationale"
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# _build_translation_server  (clone → cookie patch → npm → sentinel → swap)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _staged_install(tmp_path: Path) -> tuple[Path, Path]:
+    """A previous install in ``ts/`` plus the empty staging dir beside it."""
+    ts_dir = tmp_path / "ts"
+    ts_dir.mkdir()
+    (ts_dir / "previous.txt").write_text("the install already in service", encoding="utf-8")
+    build_dir = tmp_path / "ts.new.1"
+    build_dir.mkdir()
+    return ts_dir, build_dir
+
+
+def _fake_clone(build_dir: Path):
+    """Stand in for ``_run_git``, materialising what a real clone would leave.
+
+    Only the first repo (``dest == "."``) carries the files the cookie patch
+    and ``npm ci`` look at; the module clones the submodules underneath it.
+    """
+
+    def run_git(args: list[str]) -> subprocess.CompletedProcess[str]:
+        dest = Path(args[-1]) if args[1] == "clone" else build_dir
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / ".git").mkdir(exist_ok=True)
+        if dest == build_dir:
+            src = build_dir / "src"
+            src.mkdir(exist_ok=True)
+            _copy_fixture("webSession.js", src)
+            _copy_fixture("webEndpoint.js", src)
+            (build_dir / "package-lock.json").write_text("{}", encoding="utf-8")
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    return run_git
+
+
+def test_install_swaps_the_staged_tree_over_the_previous_one(tmp_path: Path) -> None:
+    """The whole install: clone, patch, npm, sentinel, then the rename swap."""
+    ts_dir, build_dir = _staged_install(tmp_path)
+    npm_calls: list[list[str]] = []
+
+    def fake_npm(argv, **_kwargs):
+        npm_calls.append(list(argv))
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    stdout, stderr = io.StringIO(), io.StringIO()
+    with patch("pzi.ts_backend._run_git", side_effect=_fake_clone(build_dir)), \
+         patch("pzi.ts_backend._npm_cli_path", return_value=Path("/node/npm-cli.js")), \
+         patch("pzi.ts_backend.subprocess.run", side_effect=fake_npm):
+        result = ts_backend._build_translation_server(
+            ts_dir, build_dir, "/usr/bin/node", stdout=stdout, stderr=stderr
+        )
+
+    assert result == ts_dir
+    # A lockfile was cloned, so `npm ci` — never `npm install`, which may
+    # resolve outside the lockfile.
+    assert npm_calls and npm_calls[0][2:4] == ["ci", "--omit=dev"]
+    # The staged tree is now the live one: its files are there, the previous
+    # install's are not, and neither the staging nor the rollback dir survives.
+    assert (ts_dir / "src" / "webSession.js").exists()
+    assert not (ts_dir / "previous.txt").exists()
+    assert not build_dir.exists()
+    assert not ts_dir.with_name("ts.old").exists()
+    # The sentinel is what `_needs_reinstall` reads to skip the next install.
+    assert ts_backend._read_sentinel(ts_dir) is not None
+    # The cookie bridge landed, and no warning about it was printed.
+    assert "_pziCookies" in (ts_dir / "src" / "webSession.js").read_text(encoding="utf-8")
+    assert "WARNING" not in stderr.getvalue()
+
+
+def test_a_failed_swap_rolls_the_previous_install_back(tmp_path: Path) -> None:
+    """The design's stated safety property: a failure leaves the old install.
+
+    The swap is ``ts`` → ``ts.old`` → staged tree → ``ts``. If the last rename
+    fails (a cross-device staging dir is the real case), the rollback rename has
+    to put ``ts.old`` back, or the user is left with no translation-server at
+    all — on the command they ran *because* something was already broken.
+    """
+    ts_dir, build_dir = _staged_install(tmp_path)
+    real_rename = Path.rename
+
+    def failing_rename(self: Path, target):
+        if self == build_dir:
+            raise OSError("EXDEV: cross-device link")
+        return real_rename(self, target)
+
+    stdout, stderr = io.StringIO(), io.StringIO()
+    with patch("pzi.ts_backend._run_git", side_effect=_fake_clone(build_dir)), \
+         patch("pzi.ts_backend._npm_cli_path", return_value=Path("/node/npm-cli.js")), \
+         patch("pzi.ts_backend.subprocess.run",
+               return_value=subprocess.CompletedProcess([], 0, "", "")), \
+         patch.object(Path, "rename", failing_rename):
+        result = ts_backend._build_translation_server(
+            ts_dir, build_dir, "/usr/bin/node", stdout=stdout, stderr=stderr
+        )
+
+    assert result is None
+    assert "failed to install translation-server" in stderr.getvalue()
+    # Rolled back, not lost.
+    assert (ts_dir / "previous.txt").read_text(encoding="utf-8") == (
+        "the install already in service"
+    )
+    assert not ts_dir.with_name("ts.old").exists()
+
+
+@pytest.mark.parametrize("stage", ["clone", "npm"])
+@pytest.mark.parametrize(
+    "exc",
+    [
+        subprocess.CalledProcessError(128, ["git"], stderr="fatal: repository not found"),
+        subprocess.TimeoutExpired(["git"], 300),
+    ],
+    ids=["exit-status", "timeout"],
+)
+def test_a_failing_subprocess_is_reported_not_raised(
+    tmp_path: Path, stage: str, exc: Exception
+) -> None:
+    """Both subprocess stages, both failure modes: a message, never a traceback.
+
+    ``TimeoutExpired`` is *not* a ``CalledProcessError`` subclass, so the clone
+    stage catching only the latter let a stalled `git clone` escape `pzi add` as
+    a traceback — while the npm stage below it handled the same case. The
+    previous install must survive either way.
+    """
+    ts_dir, build_dir = _staged_install(tmp_path)
+    clone = _fake_clone(build_dir)
+
+    def run_git(args):
+        if stage == "clone":
+            raise exc
+        return clone(args)
+
+    def run_npm(argv, **_kwargs):
+        if stage == "npm":
+            raise exc
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    stdout, stderr = io.StringIO(), io.StringIO()
+    with patch("pzi.ts_backend._run_git", side_effect=run_git), \
+         patch("pzi.ts_backend._npm_cli_path", return_value=Path("/node/npm-cli.js")), \
+         patch("pzi.ts_backend.subprocess.run", side_effect=run_npm), \
+         patch("time.sleep"):  # `_clone_repo` retries with a 3 s delay
+        result = ts_backend._build_translation_server(
+            ts_dir, build_dir, "/usr/bin/node", stdout=stdout, stderr=stderr
+        )
+
+    assert result is None
+    assert stderr.getvalue().strip(), "the failure was silent"
+    # Untouched: the swap never ran, so the working install is still in place.
+    assert (ts_dir / "previous.txt").exists()
+    assert ts_backend._read_sentinel(ts_dir) is None

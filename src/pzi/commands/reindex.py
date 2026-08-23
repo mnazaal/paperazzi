@@ -8,6 +8,7 @@ from pzi import cli_json, exit_codes
 from pzi.cli_render import error_lines, reindex_error_lines, render_reindex_result
 from pzi.commands.common import (
     emit_usage_error,
+    has_read_warnings,
     print_lines,
     print_read_warnings,
     resolve_target,
@@ -111,7 +112,14 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
     # nothing to report, according to the exit code. Renames only count as a
     # finding for the audit: once `--rename-citekeys` has applied them the work
     # is done and the caller has nothing left to act on.
-    findings = bool(result.get("errors")) or (not apply and bool(result.get("changed")))
+    # A partial read counts too: the rename plan below was computed from the
+    # blocks that parsed, so "no citekey changes needed" at exit 0 described a
+    # library this run had only partly seen.
+    findings = (
+        bool(result.get("errors"))
+        or has_read_warnings(result)
+        or (not apply and bool(result.get("changed")))
+    )
 
     if as_json:
         # `applied` distinguishes the two runs that otherwise look identical: an

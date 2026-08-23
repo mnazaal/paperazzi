@@ -39,7 +39,7 @@ def build_attach_session(
         bib=bib,
         expires_at=created_at + max(0, ttl_seconds),
         max_bytes=max(0, max_bytes),
-        allowed_source_urls=_unique_nonempty(allowed_source_urls),
+        allowed_source_urls=unique_nonempty(allowed_source_urls),
     )
 
 
@@ -106,15 +106,9 @@ def _source_allowed(source_url: str | None, allowed_source_urls: tuple[str, ...]
         return False
     if source_url in allowed_source_urls:
         return True
-    source_origin = _origin(source_url)
+    source_origin = origin_of(source_url)
     return source_origin is not None and any(
-        _origin(allowed_url) == source_origin for allowed_url in allowed_source_urls
+        origin_of(allowed_url) == source_origin for allowed_url in allowed_source_urls
     )
-
-
-_origin = origin_of
-
-
-_unique_nonempty = unique_nonempty
 
 

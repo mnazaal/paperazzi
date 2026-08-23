@@ -1275,3 +1275,100 @@ def test_a_readable_pdf_reports_no_parse_failure(tmp_path: Path) -> None:
     result = pdf_service.extract_pdf_metadata(str(good))
 
     assert result["unreadable"] is None
+
+
+# ---------------------------------------------------------------------------
+# The filename-format decision lives in pdf_planning, at every write site
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "filename_format",
+    [None, "{{citekey}}-copy"],
+    ids=["unset", "set"],
+)
+@pytest.mark.parametrize(
+    "attach",
+    ["attach_pdf_bytes", "attach_pdf_raw_bytes"],
+)
+def test_every_attach_write_defers_the_filename_decision_to_planning(
+    attach: str, filename_format: str | None, tmp_path: Path
+) -> None:
+    """Both attach entry points name the file exactly as ``plan_pdf_path`` would.
+
+    ``pdf_planning`` already handles a falsy ``filename_format`` and a ``None``
+    record, and ``retry_pdf`` records that in a comment. ``_attach_pdf_data``
+    re-branched on the same value, which is the shape that lets one site drift.
+    """
+    import base64
+
+    from pzi.pdf_planning import plan_pdf_path
+
+    bib_path = tmp_path / "refs.bib"
+    config_path = tmp_path / "config.toml"
+    format_line = (
+        f'pdf_filename_format = "{filename_format}"\n' if filename_format else ""
+    )
+    config_path.write_text(
+        f"""{format_line}
+[[bibs]]
+name = "ml"
+path = "{bib_path}"
+default = true
+""".strip(),
+        encoding="utf-8",
+    )
+    bib_path.write_text("@article{smith2024,\n  title = {T}\n}\n", encoding="utf-8")
+
+    common = {
+        "config_path": str(config_path),
+        "home_dir": str(tmp_path),
+        "bib_selector": None,
+        "citekey": "smith2024",
+        "source_url": None,
+    }
+    if attach == "attach_pdf_bytes":
+        result = pdf_service.attach_pdf_bytes(
+            pdf_base64=base64.b64encode(b"%PDF-1.4 data").decode("ascii"), **common
+        )
+    else:
+        result = pdf_service.attach_pdf_raw_bytes(pdf_bytes=b"%PDF-1.4 data", **common)
+
+    assert result["status"] == "ok"
+    expected = plan_pdf_path(
+        papers_dir=str(tmp_path / "papers"),
+        citekey="smith2024",
+        record={"citekey": "smith2024", "title": "T"},
+        filename_format=filename_format,
+    )
+    assert result["local_pdf_path"] == expected
+
+
+# ---------------------------------------------------------------------------
+# The PDF rollback guard (item 533)
+# ---------------------------------------------------------------------------
+
+
+def test_remove_new_pdf_deletes_only_what_this_operation_created(tmp_path: Path) -> None:
+    """A PDF that existed before the operation is never deleted by its rollback.
+
+    The guard had no direct test: the one test near it stubbed
+    ``_snapshot_pdf_paths`` to ``set()``, which is exactly the value that makes
+    the ``resolved in existing_paths`` branch unreachable — so the test passed
+    with the guard disabled.
+    """
+    from pzi.pdf import remove_new_pdf
+
+    pre_existing = tmp_path / "smith2024.pdf"
+    pre_existing.write_bytes(b"%PDF-original")
+    freshly_written = tmp_path / "jones2024.pdf"
+    freshly_written.write_bytes(b"%PDF-new")
+
+    existing_paths = {pre_existing.resolve()}
+
+    remove_new_pdf(str(pre_existing), existing_paths)
+    assert pre_existing.exists()
+    assert pre_existing.read_bytes() == b"%PDF-original"
+
+    remove_new_pdf(str(freshly_written), existing_paths)
+    assert not freshly_written.exists()

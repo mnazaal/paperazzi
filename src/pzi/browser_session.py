@@ -305,6 +305,24 @@ class FetchResult:
             return self.body.startswith(b"%PDF-")
         return False
 
+    @classmethod
+    def from_response(cls, response: Any) -> FetchResult:
+        """Wrap a Playwright *navigation* response so ``is_pdf`` can judge it.
+
+        "Content-type says PDF and the body starts with ``%PDF-``" was written
+        out longhand at two more places in :mod:`pzi.browser_pdf_hook`; a change
+        to what counts as a PDF had three sites to land at. The body is read
+        only when the content type claims a PDF, because reading it is a network
+        round trip that can itself raise on a response that carries none.
+        """
+        content_type = response.headers.get("content-type", "")
+        body = response.body() if "application/pdf" in content_type else b""
+        return cls(
+            status=getattr(response, "status", 200),
+            content_type=content_type,
+            body=body,
+        )
+
 
 # ------------------------------------------------------------------
 # Context manager entry point

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -47,16 +48,16 @@ def discover_pdf_url_with_browser(
             shell=False,
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=_hook_timeout_seconds(tokens),
         )
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         # `ValueError` too: `_validate_browser_command` raises it for an empty
         # command, and `shlex.split` for an unbalanced quote. A config typo must
         # read as "this hook found nothing", like every other failure here —
-        # but it must still *say so*. `download_pdf_with_browser` prints the
-        # child's stderr on all six of its failure branches; this function read
-        # `result.stderr` nowhere, so "install the playwright extra" reached the
-        # user down one path and vanished down the other.
+        # but it must still *say so*. `download_pdf_with_browser` forwards the
+        # child's stderr on every failure; this function read `result.stderr`
+        # nowhere, so "install the playwright extra" reached the user down one
+        # path and vanished down the other.
         print(f"browser hook could not run: {exc}", file=sys.stderr)
         return None
     if result.returncode != 0:
@@ -159,40 +160,37 @@ def download_pdf_with_browser(
         # `_auto_browser_pdf_cmd_for_url` synthesizes one for known hosts.
         print(f"browser PDF hook could not run: {exc}", file=sys.stderr)
         return None
+    pdf_bytes = _decode_hook_pdf(result)
+    if pdf_bytes is not None:
+        return pdf_bytes
+    # One forwarding site, not one per failure branch: every way this can fail
+    # -- non-zero exit, empty stdout, unparseable JSON, no `pdf_base64`, bad
+    # base64, bytes that are not a PDF -- wants the child's own diagnostics on
+    # stderr, and the six copies were how one of them lost it.
     child_stderr = getattr(result, "stderr", "")
+    if child_stderr:
+        print(_safe_stderr(child_stderr), end="", file=sys.stderr)
+    return None
+
+
+def _decode_hook_pdf(result: subprocess.CompletedProcess[str]) -> bytes | None:
+    """PDF bytes from a completed hook run, or None if it did not produce any."""
     if result.returncode != 0:
-        if child_stderr:
-            print(_safe_stderr(child_stderr), end="", file=sys.stderr)
         return None
     stdout = result.stdout.strip()
     if not stdout:
-        if child_stderr:
-            print(_safe_stderr(child_stderr), end="", file=sys.stderr)
         return None
     try:
         data = json.loads(stdout)
     except json.JSONDecodeError:
-        if child_stderr:
-            print(_safe_stderr(child_stderr), end="", file=sys.stderr)
         return None
     if not isinstance(data, dict):
-        if child_stderr:
-            print(_safe_stderr(child_stderr), end="", file=sys.stderr)
         return None
     pdf_base64 = data.get("pdf_base64")
     if not isinstance(pdf_base64, str):
-        if child_stderr:
-            print(_safe_stderr(child_stderr), end="", file=sys.stderr)
         return None
-    import base64
     try:
         pdf_bytes = base64.b64decode(pdf_base64, validate=True)
-        if pdf_bytes.startswith(b"%PDF-"):
-            return pdf_bytes
-        if child_stderr:
-            print(_safe_stderr(child_stderr), end="", file=sys.stderr)
-        return None
     except (ValueError, TypeError):
-        if child_stderr:
-            print(_safe_stderr(child_stderr), end="", file=sys.stderr)
         return None
+    return pdf_bytes if pdf_bytes.startswith(b"%PDF-") else None

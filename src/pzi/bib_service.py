@@ -21,6 +21,28 @@ from pzi.errors import REASON_CONFIG
 from pzi.identifiers import is_preprint
 from pzi.pdf_planning import pdf_file_present
 
+#: The sort fields `list_entries` implements. Anything else falls back to
+#: `citekey` *silently*, so a typo returns plausible data in the wrong order —
+#: which is why each front end validates against this set rather than trusting
+#: the caller. One home, because the Python API and the CLI parser each carried
+#: their own copy of it.
+SORT_FIELDS: frozenset[str] = frozenset({"citekey", "title", "year", "author"})
+
+#: Page bounds for `list_entries`. All three front ends clamp rather than
+#: reject, and each had its own copy of these three numbers.
+MIN_LIMIT = 1
+MAX_LIMIT = 500
+DEFAULT_LIMIT = 50
+
+
+def clamp_limit(limit: int | None) -> int:
+    """The requested page size, brought inside `MIN_LIMIT`..`MAX_LIMIT`.
+
+    `None` means "the caller did not ask", which is `DEFAULT_LIMIT`. Clamping
+    rather than rejecting is the established behaviour of all three front ends.
+    """
+    return max(MIN_LIMIT, min(DEFAULT_LIMIT if limit is None else limit, MAX_LIMIT))
+
 
 class BibInfo(TypedDict):
     """One configured library, as `list_bibs` reports it.
@@ -265,39 +287,42 @@ def list_entries(
     # deliberately never sets it, so reading it off the record reported
     # `"unknown"` for every entry, always. `--stats` and `export` have always
     # reported the real types.
-    entry_types = {
-        id(record): str(entry.get("entry_type") or "unknown")
+    #
+    # Pinned to its record as a pair rather than looked up by `id(record)`:
+    # `records` and `entries` are positionally parallel, and the sort below is
+    # the only thing that loses the position — so carry the type through it.
+    typed_records = [
+        (record, str(entry.get("entry_type") or "unknown"))
         for record, entry in zip(records, read_result["entries"])
-    }
+    ]
     total = len(records)
 
     sort_field: str = sort.lower().strip()
-    valid_sorts = {"citekey", "title", "year", "author"}
-    if sort_field not in valid_sorts:
+    if sort_field not in SORT_FIELDS:
         sort_field = "citekey"
 
     if sort_field == "year":
         sorted_records = sorted(
-            records,
-            key=lambda r: (
-                r.get("year") if isinstance(r.get("year"), int) else 0
+            typed_records,
+            key=lambda pair: (
+                pair[0].get("year") if isinstance(pair[0].get("year"), int) else 0
             ),
             reverse=True,
         )
     elif sort_field == "author":
         sorted_records = sorted(
-            records,
-            key=lambda r: _first_author_sort_key(r).lower(),
+            typed_records,
+            key=lambda pair: _first_author_sort_key(pair[0]).lower(),
         )
     elif sort_field == "title":
         sorted_records = sorted(
-            records,
-            key=lambda r: str(r.get("title") or "").lower(),
+            typed_records,
+            key=lambda pair: str(pair[0].get("title") or "").lower(),
         )
     else:
         sorted_records = sorted(
-            records,
-            key=lambda r: str(r.get("citekey", "")).lower(),
+            typed_records,
+            key=lambda pair: str(pair[0].get("citekey", "")).lower(),
         )
 
     page = sorted_records[offset : offset + limit]
@@ -311,11 +336,11 @@ def list_entries(
             "title": str(r.get("title") or ""),
             "year": r.get("year"),
             "authors": _author_names(r),
-            "entry_type": entry_types.get(id(r), "unknown"),
+            "entry_type": entry_type,
             "has_pdf": pdf_file_present(r.get("local_pdf_path")),
             "doi": r.get("doi"),
         }
-        for r in page
+        for r, entry_type in page
     ]
 
     return {

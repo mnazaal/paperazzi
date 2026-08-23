@@ -15,8 +15,8 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from pzi import package_version
 from pzi.bib_repository import read_bib_file
-from pzi.bib_service import list_bibs, list_entries
-from pzi.config import BibResolutionFailure, load_bib_target, load_config_file
+from pzi.bib_service import clamp_limit, list_bibs, list_entries
+from pzi.config import load_config_file
 from pzi.doctor_service import doctor_check
 from pzi.http_payloads import (
     detail_payload,
@@ -25,7 +25,9 @@ from pzi.http_payloads import (
     tag_list_payload,
 )
 from pzi.http_status import (
+    JsonError,
     reject_unconfigured_bib_selector,
+    resolve_bib_or_error,
     status_for_service_result,
 )
 from pzi.search_service import search_bib
@@ -53,22 +55,19 @@ class BinaryGetRoute:
     """A GET whose body is bytes rather than a JSON document.
 
     Declared here, with the other two tables, so the served route inventory is
-    derivable from one registry. These two were matched by `if` statements in
-    `http_api`'s dispatcher instead — no introspection could find them, so
-    `test_http_route_inventory` hand-maintained a copy of the pair and
-    `docs/security.md`'s "twenty-one routes" was a number nothing could check
-    (counting the tables gives nineteen).
+    derivable from one registry — `test_http_route_inventory` and
+    `docs/security.md`'s route count both read it.
 
     The *handler* stays in `http_api`: unlike a `GetRoute`, it writes status,
     headers and a body straight to the socket rather than returning
     `(status, dict)`, so it cannot live in a module with no server dependency.
-    `name` is what the dispatcher keys on, so this table declares the surface
-    and `http_api` owns the plumbing.
+    This table declares the surface and `http_api` owns the plumbing.
     """
 
     #: Exact path, or the prefix a citekey follows when *is_prefix*.
     path: str
-    #: Dispatch key, matched against `http_api`'s own handler table.
+    #: Key into `http_api.BINARY_GET_HANDLERS`. A name with no entry there is a
+    #: 404, not whichever handler a fallthrough would have reached.
     name: str
     is_prefix: bool = False
 
@@ -183,7 +182,7 @@ def _handle_entries_get(
     bib_selector = qs.get("bib") or None
     offset = max(0, _parse_int(qs.get("offset"), 0))
     limit = _parse_int(qs.get("limit"), 50)
-    limit = max(1, min(limit, 500))
+    limit = clamp_limit(limit)
     sort = qs.get("sort") or "citekey"
 
     result = list_entries(
@@ -204,11 +203,11 @@ def _handle_detail_get(
     if not citekey:
         return 400, {"error": "citekey required"}
 
-    resolved = load_bib_target(
+    resolved = resolve_bib_or_error(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector,
     )
-    if isinstance(resolved, BibResolutionFailure):
-        return 400, {"status": "error", "errors": resolved.errors}
+    if isinstance(resolved, JsonError):
+        return resolved
     _config, bib = resolved
 
     read_result = read_bib_file(bib["path"])
@@ -254,15 +253,15 @@ def _handle_export_get(
         return 400, {"error": f"unsupported format: {fmt}"}
 
     bib_selector = qs.get("bib") or None
-    resolved = load_bib_target(
+    resolved = resolve_bib_or_error(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector,
     )
-    if isinstance(resolved, BibResolutionFailure):
-        return 400, {"status": "error", "errors": resolved.errors}
+    if isinstance(resolved, JsonError):
+        return resolved
 
     _config, bib = resolved
     export, _extension = EXPORT_FORMATS[fmt]
-    result = export(bib_path=bib["path"])
+    result = export(bib["path"])
 
     if result["status"] != "ok":
         return 500, {"error": "export failed", "errors": result.get("errors", [])}

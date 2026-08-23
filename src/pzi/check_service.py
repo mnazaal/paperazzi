@@ -150,6 +150,45 @@ def _providers(
     ]
 
 
+#: Consecutive transport failures after which a provider is dropped for the rest
+#: of the run. Small on purpose: the failure this exists for (a refused
+#: connection, a DNS miss, an API that is down) does not clear between two
+#: entries, and the cost of finding out is one full request timeout per entry.
+_BREAKER_THRESHOLD = 3
+
+
+class _ProviderBreaker:
+    """Stops re-dialling a provider that has failed *_BREAKER_THRESHOLD* times running.
+
+    The audit's cost is linear in entries times providers, and a source proven
+    unreachable on entry 1 was retried in full for entries 2..N — 22,232 times,
+    at one timeout each, for an answer already known. Consecutive rather than
+    cumulative, so a flaky source that answers every other call keeps being
+    asked; only a source that has stopped answering altogether is dropped.
+    """
+
+    def __init__(self, threshold: int = _BREAKER_THRESHOLD) -> None:
+        self._threshold = threshold
+        self._consecutive: dict[str, int] = {}
+        #: Tripped provider -> the one message the run reports for it.
+        self.tripped: dict[str, str] = {}
+
+    def is_open(self, name: str) -> bool:
+        return name in self.tripped
+
+    def record_answer(self, name: str) -> None:
+        self._consecutive[name] = 0
+
+    def record_failure(self, name: str, detail: str) -> None:
+        count = self._consecutive.get(name, 0) + 1
+        self._consecutive[name] = count
+        if count >= self._threshold and name not in self.tripped:
+            self.tripped[name] = (
+                f"{name}: stopped after {count} consecutive failures "
+                f"({detail}) — not retried for the remaining entries"
+            )
+
+
 def _impossible_year(record: Mapping[str, object], *, now_year: int) -> bool:
     year = record.get("year")
     return isinstance(year, int) and (year > now_year + 1 or year < 1500)
@@ -161,6 +200,7 @@ def _verify_entry(
     *,
     strict: bool,
     now_year: int,
+    breaker: _ProviderBreaker,
 ) -> CheckItem:
     citekey = str(record.get("citekey") or "")
     title = record.get("title")
@@ -186,15 +226,24 @@ def _verify_entry(
     source_errors: list[str] = []
     scored: list[tuple[str, MatchScore]] = []
     for name, fetch in providers:
+        if breaker.is_open(name):
+            # Recorded per entry but never dialled: "consulted and did not know
+            # it" against "never reached" is the whole difference between a
+            # fabricated reference and a bad network, so the item still has to
+            # say which of the two this was.
+            source_errors.append(f"{name}: not consulted (unreachable earlier in this run)")
+            continue
         provider_errors: list[str] = []
         try:
             candidate = fetch(title, provider_errors)
         except (OSError, ValueError) as exc:
             # The documented failure modes of the fetchers: transport and decode.
             source_errors.append(f"{name}: {exc}")
+            breaker.record_failure(name, str(exc))
             continue
         except Exception as exc:  # a provider bug must not abort the run
             source_errors.append(f"{name}: unexpected {type(exc).__name__}: {exc}")
+            breaker.record_failure(name, f"unexpected {type(exc).__name__}")
             continue
         if provider_errors:
             # Reached the call but got no answer — a network or API failure, which
@@ -204,7 +253,9 @@ def _verify_entry(
             # having been consulted and none of them knowing the paper, which is
             # the fabricated-reference signal this command exists to raise.
             source_errors.append(f"{name}: {provider_errors[0]}")
+            breaker.record_failure(name, str(provider_errors[0]))
             continue
+        breaker.record_answer(name)
         sources_checked.append(name)
         if candidate is None:
             continue
@@ -410,8 +461,21 @@ def check_bib(
     fetch_openreview: Callable[..., NormalizedRecord | None] | None = None,
     fetch_s2: Callable[..., NormalizedRecord | None] | None = None,
     now_year: int | None = None,
+    limit: int | None = None,
+    on_item: Callable[[CheckItem, int, int], None] | None = None,
 ) -> CheckResult:
-    """Validate every entry in a library against authoritative metadata sources."""
+    """Validate every entry in a library against authoritative metadata sources.
+
+    *limit* audits only the first N entries. The politeness gate floors this
+    command at 0.6 s/entry best case and 11.2 s worst, so on a library of any
+    size the whole-library run is hours and there was no way to try a smaller
+    one.
+
+    *on_item* is called ``(item, index, total)`` as each verdict is reached,
+    before the next entry is fetched. It is how the runner streams `--jsonl` and
+    prints progress: everything used to be buffered until the run returned, so a
+    run interrupted near the end wrote nothing at all.
+    """
     resolved = load_bib_target(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector
     )
@@ -445,16 +509,22 @@ def check_bib(
     # unaudited entry inside a clean bill of health. An audit tool cannot report
     # on a file it only partly read.
     read_result, dropped_blocks = read_bib_file_with_notices(bib["path"])
-    records = read_result["records"]
+    records = [r for r in read_result["records"] if isinstance(r.get("citekey"), str)]
+    if limit is not None and limit >= 0:
+        records = records[:limit]
+    total_planned = len(records)
     effective_year = now_year if now_year is not None else time.gmtime().tm_year
     counts = {"verified": 0, "could_not_verify": 0, "problematic": 0}
     items: list[CheckItem] = []
-    for record in records:
-        if not isinstance(record.get("citekey"), str):
-            continue
-        item = _verify_entry(record, providers, strict=strict, now_year=effective_year)
+    breaker = _ProviderBreaker()
+    for index, record in enumerate(records):
+        item = _verify_entry(
+            record, providers, strict=strict, now_year=effective_year, breaker=breaker
+        )
         counts[item["verdict"]] += 1
         items.append(item)
+        if on_item is not None:
+            on_item(item, index, total_planned)
 
     # Summarize per-source failures once for the run rather than repeating the
     # same "connection refused" under every entry. A `check` that reached no
@@ -465,7 +535,11 @@ def check_bib(
         for error in item.get("source_errors", [])
     })
     run_errors = [
-        f"{name}: unreachable for some or all entries" for name in failed_sources
+        # A tripped provider says so once, naming the failure that tripped it,
+        # instead of the generic line: "unreachable for some or all entries"
+        # does not tell the reader that the remaining entries were never asked.
+        breaker.tripped.get(name, f"{name}: unreachable for some or all entries")
+        for name in failed_sources
     ]
     # An audit that reached no source at all audited nothing, so it cannot wear
     # an `ok`. This lived in `commands/check.py` and nowhere else, which made it

@@ -48,11 +48,17 @@ pzi entries [ok]
 pzi import [error]
     bib_name
     command
+    dry_run
     errors
+    imported
     items
     message
     reason
+    skipped_duplicates
+    skipped_errors
+    source_path
     status
+    total_source
 
 pzi inbox [error]
     bib_name

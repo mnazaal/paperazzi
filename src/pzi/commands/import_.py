@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TextIO
 
-from pzi import cli_json, exit_codes
+from pzi import cli_json
 from pzi.cli_parser import load_text_arg
 from pzi.cli_render import error_lines
 from pzi.commands.common import batch_exit_code, print_lines
@@ -26,17 +25,11 @@ def run_import_command(
     # `-` reads BibTeX from stdin, closing the `pzi export | pzi import -` pipe;
     # the same marker `add --from-file` already accepts.
     source_text = load_text_arg(source) if source == "-" else None
-    if source_text is None and not Path(source).exists():
-        # ENVIRONMENT, not NOT_FOUND: `3` is reserved for a missing *entry*
-        # (`exit_codes.py`, `commands/common.py`), and a source path that is not
-        # there is the same "could not run" condition `import_service` already
-        # reports as an error when its own check wins the race.
-        message = f"source file not found: {source}"
-        if getattr(args, "json", False):
-            cli_json.emit_error(message, [message], stdout, command="import")
-        else:
-            print(f"error: {message}", file=stderr)
-        return exit_codes.ENVIRONMENT
+    # A missing source file is not checked here: `import_from_bibtex` checks it
+    # first thing and classifies it as `REASON_USAGE`. The duplicate check that
+    # used to stand here emitted that same reason and then returned 5, so which
+    # of the two checks won the race decided whether the process exited 2 or 5
+    # for one typo'd path.
 
     result = import_from_bibtex(
         config_path=config_path,

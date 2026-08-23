@@ -121,7 +121,7 @@ def normalize_url(value: str) -> str | None:
     scheme = parts.scheme.lower()
     hostname = (parts.hostname or "").lower()
     if not hostname:
-        return None  # pragma: no cover — covered by integration/browser tests
+        return None
 
     try:
         port = parts.port
@@ -181,7 +181,10 @@ def classify_input(value: str) -> ClassifiedInput:
     doi_match = DOI_IN_PATH_PATTERN.search(url_parts.path)
     if doi_match is not None:
         embedded_doi = normalize_doi(doi_match.group(1))
-        if embedded_doi is not None:  # pragma: no branch — covered by integration/browser tests
+        # `normalize_doi` cannot reject what `DOI_IN_PATH_PATTERN` captured —
+        # the path pattern's group is `DOI_PATTERN`'s group. The guard is for
+        # the return type; see the test that pins the two patterns together.
+        if embedded_doi is not None:  # pragma: no branch — see DOI_PATTERN coupling
             return {"kind": "doi", "raw": value, "normalized": embedded_doi}
 
     if url_parts.hostname in {"arxiv.org", "www.arxiv.org"}:
@@ -488,8 +491,8 @@ def _url_domain(value: object) -> str | None:
         return None
     try:
         parts = urlsplit(value.strip())
-    except ValueError:  # pragma: no cover — covered by integration/browser tests
-        return None  # pragma: no cover — covered by integration/browser tests
+    except ValueError:
+        return None
     host = parts.hostname
     if host is None:
         return None

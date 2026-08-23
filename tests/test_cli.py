@@ -1626,11 +1626,13 @@ def test_add_reports_a_broken_key_command_as_a_structured_error(tmp_path: Path) 
 # --- exit-code contract (Batch 5) -------------------------------------------
 
 
-def test_import_missing_source_is_environment_not_not_found(tmp_path: Path) -> None:
+def test_import_missing_source_is_usage_not_not_found(tmp_path: Path) -> None:
     """`3` is reserved for a missing *entry*, not a missing file.
 
-    It also has to agree with `import_service`, which already reports the same
-    condition as an error -> 5 when its own check wins the race.
+    It has to agree with `import_service`, which classifies a source path that
+    is not there as `REASON_USAGE` -> 2. The runner used to check the same
+    condition itself, emit that same reason and return 5, so which of the two
+    checks won the race decided the exit status.
     """
     config_path = tmp_path / "config.toml"
     bib_path = tmp_path / "library.bib"
@@ -1645,8 +1647,8 @@ def test_import_missing_source_is_environment_not_not_found(tmp_path: Path) -> N
         home_dir=str(tmp_path), stdout=StringIO(), stderr=stderr,
     )
 
-    assert exit_code == exit_codes.ENVIRONMENT
-    assert "source file not found" in stderr.getvalue()
+    assert exit_code == exit_codes.USAGE
+    assert "file not found" in stderr.getvalue()
 
 
 def test_import_unknown_target_is_environment_not_partial(tmp_path: Path) -> None:
@@ -1695,7 +1697,12 @@ def test_add_backend_not_ready_is_environment(tmp_path: Path, monkeypatch) -> No
     assert "translation server is not running" in stderr.getvalue()
 
 
-def test_add_from_file_unreadable_is_environment(tmp_path: Path) -> None:
+def test_add_from_file_unreadable_is_a_usage_error(tmp_path: Path) -> None:
+    """The path was typed wrong, so the user must retype rather than retry.
+
+    It reported `"reason": "usage"` on stdout and exited 5 — retype *and*
+    retry — for one mistake.
+    """
     stderr = StringIO()
 
     exit_code = run_cli(
@@ -1705,7 +1712,40 @@ def test_add_from_file_unreadable_is_environment(tmp_path: Path) -> None:
         fetch_web=_fake_fetch_web,
     )
 
-    assert exit_code == exit_codes.ENVIRONMENT
+    assert exit_code == exit_codes.USAGE
+
+
+def test_add_from_file_checks_the_path_before_starting_the_backend(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A typo'd list paid for a full translation-server bootstrap first.
+
+    `--metadata-json` is validated in the fail-fast block for exactly this
+    reason and `--from-file` was not, so the cheapest possible mistake was the
+    most expensive one to be told about. No injected fetcher here on purpose:
+    that is what makes `run_add_command` enter the backend session at all.
+    """
+    import contextlib
+
+    import pzi.ts_backend
+
+    entered = []
+
+    @contextlib.contextmanager
+    def _record(*_args, **_kwargs):
+        entered.append(True)
+        yield {"ready": True}
+
+    monkeypatch.setattr(pzi.ts_backend, "backend_session", _record)
+
+    exit_code = run_cli(
+        ["add", "--from-file", str(tmp_path / "missing.txt"), "--delay", "0",
+         "--config", str(_batch_config(tmp_path))],
+        home_dir=str(tmp_path), stdout=StringIO(), stderr=StringIO(),
+    )
+
+    assert exit_code == exit_codes.USAGE
+    assert entered == [], "the backend session was started for a path that is not there"
 
 
 @pytest.mark.parametrize(

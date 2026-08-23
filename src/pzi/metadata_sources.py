@@ -71,12 +71,16 @@ def fetch_crossref_record_by_title(
 
 
 def fetch_crossref_pdf_url(
-    doi: str, *, contact_email: str | None = None, fetch_text: FetchText | None = None
+    doi: str,
+    *,
+    contact_email: str | None = None,
+    fetch_text: FetchText | None = None,
+    errors: list[str] | None = None,
 ) -> str | None:
     """Return a direct PDF URL from Crossref link[] field, or None."""
     fn = fetch_text or _fetch_text
     data = _api_json(f"https://api.crossref.org/works/{quote(doi, safe='')}",
-                     fn=fn, contact_email=contact_email)
+                     fn=fn, contact_email=contact_email, errors=errors)
     if not isinstance(data, dict):
         return None
     work = data.get("message")
@@ -821,11 +825,14 @@ def _openreview_normalize(note: dict[str, object]) -> NormalizedRecord:
 
 
 def fetch_doaj_pdf_url(
-    doi: str, *, fetch_text: FetchText | None = None
+    doi: str, *, fetch_text: FetchText | None = None, errors: list[str] | None = None
 ) -> str | None:
     """Return a PDF URL from DOAJ for a DOI, or None."""
     fn = fetch_text or _fetch_text
-    data = _api_json(f"https://doaj.org/api/search/articles/doi:{quote(doi, safe='')}", fn=fn)
+    data = _api_json(
+        f"https://doaj.org/api/search/articles/doi:{quote(doi, safe='')}",
+        fn=fn, errors=errors,
+    )
     if not isinstance(data, dict):
         return None
     results = data.get("results", [])
@@ -874,7 +881,7 @@ def _doaj_extract_pdf_url(article: dict[str, object]) -> str | None:
 
 
 def fetch_europepmc_pdf_url(
-    doi: str, *, fetch_text: FetchText | None = None
+    doi: str, *, fetch_text: FetchText | None = None, errors: list[str] | None = None
 ) -> str | None:
     """Return an open-access PDF URL from Europe PMC, or None."""
     fn = fetch_text or _fetch_text
@@ -882,7 +889,7 @@ def fetch_europepmc_pdf_url(
         "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
         f"?query=DOI:{quote(doi, safe='')}&resultType=core&format=json"
     )
-    data = _api_json(url, fn=fn)
+    data = _api_json(url, fn=fn, errors=errors)
     if not isinstance(data, dict):
         return None
     results = data.get("resultList", {}).get("result", [])

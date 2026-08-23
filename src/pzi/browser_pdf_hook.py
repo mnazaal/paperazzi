@@ -34,6 +34,9 @@ from urllib.parse import urljoin
 
 from pzi.browser_session import (
     BrowserSession,
+    FetchResult,
+    default_url_allowed,
+    launch_browser,
 )
 
 PDF_HINT_RE = re.compile(r"pdf|download", re.IGNORECASE)
@@ -280,28 +283,6 @@ def main() -> int:  # pragma: no cover — CLI entry point
     return 0
 
 
-def launch_browser(
-    browser: str,
-    profile_path: str | None = None,
-    *,
-    headless: bool = True,
-    url_allowed: Callable[[str], bool] | None = None,
-) -> BrowserSession:
-    """Launch a browser and return a BrowserSession (delegates to browser_session module)."""
-    from pzi.browser_session import default_url_allowed
-    from pzi.browser_session import launch_browser as _impl
-
-    return _impl(
-        browser, profile_path, headless=headless,
-        url_allowed=url_allowed or default_url_allowed,
-    )
-
-
-def _close_browser(session: BrowserSession) -> None:
-    """Clean up browser resources."""
-    session.close()
-
-
 def discover_pdf_url(
     page_url: str,
     *,
@@ -320,12 +301,15 @@ def discover_pdf_url(
     URL predicate — see :class:`BrowserSession.url_allowed` for why that is a
     parameter and not a config key.
     """
-    close_on_exit = _session is None  # pragma: no branch
+    close_on_exit = _session is None
     if _session is not None:  # pragma: no branch
         session = _session
     else:  # pragma: no cover
         session = launch_browser(
-            browser, profile_path, headless=headless, url_allowed=url_allowed
+            browser,
+            profile_path,
+            headless=headless,
+            url_allowed=url_allowed or default_url_allowed,
         )
 
     dismiss_fn = _dismiss or _dismiss_cookie_banners
@@ -359,7 +343,7 @@ def discover_pdf_url(
         return None
     finally:
         if close_on_exit:  # pragma: no cover — browser integration path
-            _close_browser(session)
+            session.close()
 
 
 def download_pdf(
@@ -384,12 +368,15 @@ def download_pdf(
     is held — one hostile document could stall every other capture indefinitely,
     30 seconds at a time.
     """
-    close_on_exit = _session is None  # pragma: no branch
+    close_on_exit = _session is None
     if _session is not None:  # pragma: no branch
         session = _session
     else:  # pragma: no cover
         session = launch_browser(
-            browser, profile_path, headless=headless, url_allowed=url_allowed
+            browser,
+            profile_path,
+            headless=headless,
+            url_allowed=url_allowed or default_url_allowed,
         )
 
     dismiss_fn = _dismiss or _dismiss_cookie_banners
@@ -408,11 +395,9 @@ def download_pdf(
             pass
 
         if response is not None:
-            content_type = response.headers.get("content-type", "")
-            if "application/pdf" in content_type:
-                body = response.body()  # pragma: no branch — covered by integration/browser tests
-                if body and body.startswith(b"%PDF-"):  # pragma: no branch
-                    return body
+            navigated = FetchResult.from_response(response)
+            if navigated.is_pdf():
+                return navigated.body
 
         if challenge_timeout > 0:
             pdf_bytes = _wait_for_verified_pdf(session, pdf_url, timeout=challenge_timeout)
@@ -453,7 +438,7 @@ def download_pdf(
         return None
     finally:
         if close_on_exit:  # pragma: no cover — browser integration path
-            _close_browser(session)
+            session.close()
 
 
 def _wait_for_verified_pdf(
@@ -475,11 +460,9 @@ def _wait_for_verified_pdf(
         try:
             response = session.navigate(pdf_url, wait_until="domcontentloaded", timeout=30000)
             if response is not None:
-                content_type = response.headers.get("content-type", "")
-                if "application/pdf" in content_type:
-                    body = response.body()
-                    if body and body.startswith(b"%PDF-"):
-                        return body
+                navigated = FetchResult.from_response(response)
+                if navigated.is_pdf():
+                    return navigated.body
         except Exception:
             pass
     return None

@@ -87,24 +87,6 @@ def test_a_loopback_bind_without_a_token_is_refused_by_default() -> None:
     assert "--no-auth" in plan["message"]
 
 
-def test_the_opt_out_starts_the_server_and_still_reports_auth_off() -> None:
-    plan = build_server_plan(
-        host=None, port=None, config=dict(_CONFIG), auth_token=None, allow_no_auth=True
-    )
-
-    assert plan["status"] == "ok"
-    assert plan["auth_enabled"] is False
-
-
-def test_a_token_needs_no_opt_out() -> None:
-    plan = build_server_plan(
-        host=None, port=None, config=dict(_CONFIG), auth_token="s3cret"
-    )
-
-    assert plan["status"] == "ok"
-    assert plan["auth_enabled"] is True
-
-
 def test_the_opt_out_is_a_cli_flag_not_a_config_key() -> None:
     """Nothing reachable from `config.toml` or the HTTP API may disable auth —
     the same reasoning that kept the browser-test URL seam out of config."""

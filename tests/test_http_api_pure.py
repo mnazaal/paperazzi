@@ -1,7 +1,10 @@
 """Tests for extracted pure HTTP handler functions."""
 
 import base64
+import json
 from pathlib import Path
+
+import pytest
 
 from pzi import http_binary_routes, http_get_routes, http_post_routes, http_status
 from pzi.capture_models import AuthHints, CaptureInput, CaptureOptions, PageArtifact, PdfCandidate
@@ -271,6 +274,114 @@ def test_process_get_not_found() -> None:
     )
     assert status == 404
     assert "not found" in body["error"]
+
+
+def _tagged_library(tmp_path: Path) -> Path:
+    """Two entries, two shared tags — enough for both `/tags` shapes."""
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text(
+        """
+@article{a2024,
+  title = {A},
+  keywords = {ml, graphs}
+}
+
+@article{b2024,
+  title = {B},
+  keywords = {graphs, nlp}
+}
+""".strip()
+    )
+    cpath = tmp_path / "config.toml"
+    cpath.write_text(f'[[bibs]]\nname="ml"\npath="{bib_path}"\ndefault=true\n')
+    return cpath
+
+
+def test_process_get_tags_for_one_citekey(tmp_path: Path) -> None:
+    """`/tags/<citekey>` is in the frozen route inventory and had no test."""
+    cpath = _tagged_library(tmp_path)
+
+    status, body = process_get_request("/tags/b2024", str(cpath), str(tmp_path))
+
+    assert status == 200
+    assert body["citekey"] == "b2024"
+    assert body["tags"] == ["graphs", "nlp"]
+
+
+def test_process_get_tags_for_an_unknown_citekey_is_404(tmp_path: Path) -> None:
+    cpath = _tagged_library(tmp_path)
+
+    status, body = process_get_request("/tags/nosuch2024", str(cpath), str(tmp_path))
+
+    assert status == 404
+    assert "nosuch2024" in " ".join(body["errors"])
+
+
+def test_process_get_tags_decodes_a_percent_encoded_citekey(tmp_path: Path) -> None:
+    """The extension builds these with `encodeURIComponent`, so `:` arrives as `%3A`."""
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text("@article{a:2024,\n  title = {A},\n  keywords = {ml}\n}")
+    cpath = tmp_path / "config.toml"
+    cpath.write_text(f'[[bibs]]\nname="ml"\npath="{bib_path}"\ndefault=true\n')
+
+    status, body = process_get_request("/tags/a%3A2024", str(cpath), str(tmp_path))
+
+    assert status == 200
+    assert body["citekey"] == "a:2024"
+    assert body["tags"] == ["ml"]
+
+
+def test_process_get_export_returns_the_document_and_its_content_type(
+    tmp_path: Path,
+) -> None:
+    """`/export` is in the frozen route inventory and had no test.
+
+    Distinct from `/export/raw`, which serves the same bytes down the socket:
+    this one wraps them in a JSON envelope, and nothing checked the envelope's
+    keys.
+    """
+    cpath = _tagged_library(tmp_path)
+
+    status, body = process_get_request("/export?format=json", str(cpath), str(tmp_path))
+
+    assert status == 200
+    assert set(body) == {"format", "total_entries", "content_type", "content"}
+    assert body["format"] == "json"
+    assert body["total_entries"] == 2
+    assert body["content_type"] == "application/json"
+    assert [entry["citekey"] for entry in json.loads(body["content"])] == ["a2024", "b2024"]
+
+
+def test_process_get_export_defaults_to_bibtex(tmp_path: Path) -> None:
+    cpath = _tagged_library(tmp_path)
+
+    status, body = process_get_request("/export", str(cpath), str(tmp_path))
+
+    assert status == 200
+    assert body["format"] == "bibtex"
+    assert "@article{a2024" in body["content"]
+
+
+def test_process_get_export_rejects_an_unsupported_format(tmp_path: Path) -> None:
+    """The allowlist is `EXPORT_FORMATS`, shared with `/export/raw`."""
+    cpath = _tagged_library(tmp_path)
+
+    status, body = process_get_request("/export?format=docx", str(cpath), str(tmp_path))
+
+    assert status == 400
+    assert "docx" in body["error"]
+
+
+def test_process_get_export_reports_an_unresolvable_library(tmp_path: Path) -> None:
+    """The shared `resolve_bib_or_error` shape, on the route that had no test."""
+    cpath = tmp_path / "config.toml"
+    cpath.write_text("")
+
+    status, body = process_get_request("/export", str(cpath), str(tmp_path))
+
+    assert status == 400
+    assert body["status"] == "error"
+    assert body["errors"]
 
 
 def test_process_get_tags_without_citekey_lists_all_tags(tmp_path: Path) -> None:
@@ -1110,7 +1221,15 @@ def test_http_refuses_a_bib_path_that_is_not_a_configured_library(monkeypatch) -
 
 
 def test_http_still_accepts_a_configured_library_by_name_or_path(monkeypatch) -> None:
-    captured: dict[str, object] = {}
+    """A configured library, named either way, reaches the service.
+
+    This recorded `"not-rejected"` in *both* the success branch and the
+    `except AssertionError` branch, and the confinement check does not raise —
+    it returns `(400, ...)`. So the test passed when both selectors were fully
+    rejected, which is the failure it exists to catch. It asserts on the
+    sentinel the service raises now, and on the status when it does not.
+    """
+    reached: list[str] = []
 
     monkeypatch.setattr(
         http_post_routes,
@@ -1120,26 +1239,31 @@ def test_http_still_accepts_a_configured_library_by_name_or_path(monkeypatch) ->
                                  "papers_dir": "/tmp/papers", "default": True}]}
         },
     )
+
+    class _ReachedTheService(Exception):
+        """Raised by the stubbed service, so only the service can produce it."""
+
     def _boom(*args, **kwargs):
-        raise AssertionError("reached the service")
+        raise _ReachedTheService
 
     monkeypatch.setattr(http_post_routes, "capture_to_bib", _boom)
 
-    # Getting as far as the service is the property under test: a configured
-    # library, named either way, must not be rejected by the confinement check.
     for selector in ("main", "/tmp/main.bib"):
         try:
-            http_post_routes.process_post_request(
+            status, body = http_post_routes.process_post_request(
                 "/capture",
                 {"url": "https://example.com/paper", "bib": selector},
                 "/tmp/c.toml",
                 "/tmp",
             )
-            captured[selector] = "not-rejected"
-        except AssertionError as exc:
-            captured[selector] = "not-rejected" if "reached the service" in str(exc) else "?"
+        except _ReachedTheService:
+            reached.append(selector)
+            continue
+        raise AssertionError(
+            f"{selector!r} never reached the service: {status} {body}"
+        )
 
-    assert captured == {"main": "not-rejected", "/tmp/main.bib": "not-rejected"}
+    assert reached == ["main", "/tmp/main.bib"]
 
 
 # === /capture local-path confinement ===================================
@@ -1330,3 +1454,80 @@ def test_process_get_detail_reports_the_entry_type(tmp_path: Path) -> None:
     assert status == 200
     assert body["entry"]["entry_type"] == "inproceedings"
 
+
+
+# === one validation contract, spanning the routes that repeat it (item 545) ===
+
+
+def _one_library(tmp_path: Path) -> Path:
+    cpath = tmp_path / "config.toml"
+    cpath.write_text(
+        f'[[bibs]]\nname="ml"\npath="{tmp_path / "ml.bib"}"\ndefault=true\n'
+    )
+    return cpath
+
+
+@pytest.mark.parametrize("path", [route.path for route in http_post_routes.POST_ROUTES])
+@pytest.mark.parametrize("body", [["a", "list"], "a string", 7, None])
+def test_every_post_route_rejects_a_non_object_body_identically(
+    path: str, body: object, tmp_path: Path
+) -> None:
+    """One answer, not six.
+
+    The `isinstance(body, dict)` guard was written out at ten sites in six
+    spellings ("body", "capture body", "attach body", "tags body", "update
+    body", "promote body", "inbox body"), which is six chances for one route to
+    drift into describing itself wrongly. Nothing consumes the text — the
+    extension branches on the HTTP status and on `result.status` — so the
+    routes have no reason to disagree, and this is what stops a new one from
+    inventing a seventh.
+    """
+    cpath = _one_library(tmp_path)
+
+    status, response = http_post_routes.process_post_request(
+        path, body, str(cpath), str(tmp_path)
+    )
+
+    assert (status, response) == (400, {"error": http_status.BODY_NOT_AN_OBJECT})
+
+
+def test_every_route_that_resolves_a_library_reports_a_failure_identically(
+    tmp_path: Path,
+) -> None:
+    """Five routes across three modules built this 400 themselves.
+
+    `POST /delete`, `GET /detail/`, `GET /export`, `GET /pdf/` and
+    `GET /export/raw` each spelled out `load_bib_target` →
+    `isinstance(resolved, BibResolutionFailure)` → `400, {"status": "error",
+    "errors": ...}`. Five copies of a response shape is five chances for one
+    route to answer a resolution failure differently from its neighbours, and
+    nothing compared them.
+    """
+    cpath = tmp_path / "config.toml"
+    cpath.write_text("")  # parses, declares no library
+
+    answers = {
+        "POST /delete": http_post_routes.process_post_request(
+            "/delete",
+            {"citekey": "a2024", "force": True, "dry_run": True},
+            str(cpath),
+            str(tmp_path),
+        ),
+        "GET /detail/": process_get_request("/detail/a2024", str(cpath), str(tmp_path)),
+        "GET /export": process_get_request("/export", str(cpath), str(tmp_path)),
+        "GET /pdf/": http_binary_routes.build_pdf_file_response(
+            config_path=str(cpath), home_dir=str(tmp_path),
+            citekey="a2024", bib_selector=None,
+        ),
+        "GET /export/raw": http_binary_routes.build_export_bytes_response(
+            config_path=str(cpath), home_dir=str(tmp_path),
+            fmt="bibtex", bib_selector=None,
+        ),
+    }
+
+    for name, (status, body) in answers.items():
+        assert status == 400, name
+        assert set(body) == {"status", "errors"}, name
+        assert body["status"] == "error", name
+        assert body["errors"], name
+    assert len({repr(answer) for answer in answers.values()}) == 1, answers

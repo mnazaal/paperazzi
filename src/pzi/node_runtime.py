@@ -241,30 +241,6 @@ def _node_bin_dir(data_home: Path) -> Path:
     return data_home / "node"
 
 
-def _extractall_no_traversal(
-    tar: tarfile.TarFile, dest: Path
-) -> None:  # pragma: no cover — Python < 3.11.4 fallback only
-    """Extract *tar* into *dest*, rejecting any member that escapes *dest*.
-
-    Replicates the ``filter="data"`` traversal/symlink guard for the rare
-    Python < 3.11.4 patch releases where that argument is unavailable.
-    """
-    dest_resolved = dest.resolve()
-
-    def _within(target: Path) -> bool:
-        resolved = target.resolve()
-        return resolved == dest_resolved or dest_resolved in resolved.parents
-
-    for member in tar.getmembers():
-        if not _within(dest_resolved / member.name):
-            raise tarfile.TarError(f"unsafe path in tarball: {member.name!r}")
-        if (member.issym() or member.islnk()) and not _within(
-            (dest_resolved / member.name).parent / member.linkname
-        ):
-            raise tarfile.TarError(f"unsafe link in tarball: {member.name!r}")
-    tar.extractall(path=dest)
-
-
 def download_node(
     data_home: Path,
     *,
@@ -348,20 +324,12 @@ def download_node(
         )
 
     try:
-        # Remove previous extraction if it exists
-        for p in list(node_dir.glob("node-v*")):
-            if p.is_dir():
-                shutil.rmtree(p, ignore_errors=True)
-
         with tarfile.open(tmp_path, "r:gz") as tar:
             # filter="data" rejects members with absolute paths, "..", or that
             # would escape node_dir (tar-slip), and is required on Python 3.14+
             # where the default-less extractall is an error.  The filter arg
-            # landed in 3.11.4; fall back for older 3.11 patch releases.
-            try:
-                tar.extractall(path=node_dir, filter="data")
-            except TypeError:  # pragma: no cover — Python < 3.11.4 only
-                _extractall_no_traversal(tar, node_dir)
+            # landed in 3.11.4, which is the floor `requires-python` sets.
+            tar.extractall(path=node_dir, filter="data")
     except (tarfile.TarError, OSError) as exc:
         raise RuntimeError(f"failed to extract Node.js tarball: {exc}") from exc
     finally:
@@ -387,6 +355,14 @@ def download_node(
 
     if not _node_binary_runs(actual_bin):
         raise RuntimeError(f"downloaded node failed to start: {actual_bin}")
+
+    # Superseded extractions go only once the replacement is proven to run.
+    # This used to happen before the tarball was even opened, so a truncated
+    # download or a node binary that would not start left a machine that had a
+    # working cached Node with none — on the command it ran to *get* one.
+    for stale in list(node_dir.glob("node-v*")):
+        if stale.is_dir() and stale != extracted_dir:
+            shutil.rmtree(stale, ignore_errors=True)
 
     return str(actual_bin)
 

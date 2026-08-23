@@ -15,6 +15,29 @@ next to the diff it explains.
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** `pzi import <missing-file>` and `pzi add --from-file <missing-file>` now exit `2` (usage), not `5`. Their `--json` envelopes already said `"reason": "usage"`, which maps to `2`; the code and the field now agree.
+- **Breaking:** `entries`, `entries --stats`, `library dedupe`, `library clean` and `library reindex` exit `1`, not `0`, when the library was only partly read (a block the parser had to drop). A script gating on `library dedupe` succeeding on a partly-read library will now see a finding.
+- **Breaking:** `pzi.promote()` raises, and `POST /promote` answers non-200, when every promotion in a sweep failed. Both previously reported `status: "ok"`.
+- **Breaking:** a DOI no metadata provider knows now answers HTTP `400` from `POST /capture`, not `503`. It is a settled verdict, not a transient outage.
+- `pzi import`'s error envelope carries the same keys as its success envelope (`source_path`, `dry_run`, and the counters) plus `reason`.
+- Unsupported HTTP methods (`PUT`, `HEAD`) and malformed request lines now return the JSON error shape rather than an HTML page, and the server no longer discloses its Python patch version.
+- `library check` no longer re-dials a provider that has failed three times running, streams `--jsonl` per entry instead of buffering to the end, reports progress for runs of 200+ entries, and accepts `--limit`.
+- `130` is documented as SIGINT *or* SIGTERM to `pzi server`, which is what it always returned under systemd.
+- Minimum Python is now 3.11.4 (was 3.11), which removes a hand-rolled tar-extraction guard superseded by `filter="data"`.
+
+### Fixed
+
+- A failed write no longer leaves a stale `.bak` behind in `update`, `delete` or `merge`.
+- A stalled `git clone` during translation-server install is reported instead of escaping as a traceback.
+- Crossref, DOAJ and Europe PMC PDF-lookup failures are reported under `--verbose` instead of being indistinguishable from "this paper has no open-access copy".
+- The desktop-browser PDF fallback honours caller-supplied settings, and an unwritable downloads directory no longer aborts the whole fallback chain.
+- Parallel PDF discovery ranks sources in the same order as sequential discovery (affects `pdf_discovery_parallel = true` only).
+- A second `Host` header is refused rather than resolved last-wins.
+- A failed Node upgrade no longer leaves a machine with no cached Node.
+- Losing a write race during `update --promote` is re-raised rather than reported once per preprint.
+
 ## [0.2.0] - 2026-08-18
 
 ### Added

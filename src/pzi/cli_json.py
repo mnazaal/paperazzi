@@ -82,13 +82,11 @@ def build_envelope(
     Pure.  Pass *items* when the command's list does not live under one of the
     usual keys (e.g. a single record rendered as a one-item list).
 
-    Pass *bib_name* when the service does not report one. Six commands —
-    `library dedupe|clean|reindex|merge`, `delete`, `import` — take a
-    `bib_path` rather than a selector, so their envelopes carried
-    `"bib_name": null` permanently
-    while the other five populated it, against a README that documents it as a
-    real value. The runners resolved the target to call the service at all, so
-    they can say which library it was.
+    Pass *bib_name* when the service does not report one: `library
+    dedupe|clean|reindex|merge`, `delete` and `import` take a `bib_path` rather
+    than a selector, so they cannot name the library. Their runners resolved the
+    target to call them at all, so the name comes from there — the README
+    documents `bib_name` as a real value on every envelope.
     """
     found_items: Sequence[Any] | None = items
     consumed: set[str] = set()

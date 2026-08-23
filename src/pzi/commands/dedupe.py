@@ -5,6 +5,7 @@ from __future__ import annotations
 from pzi import cli_json, exit_codes
 from pzi.cli_render import error_lines, render_dedupe_result
 from pzi.commands.common import (
+    has_read_warnings,
     print_lines,
     print_read_warnings,
     resolve_target,
@@ -21,19 +22,35 @@ def run_dedupe_command(args, *, home_dir, config_path, stdout, stderr, bib_selec
     )
 
     result = find_duplicates(bib_path=target["path"])
+    if result.get("status") not in (None, "ok"):
+        # Nothing inspected `status` at all, so a failed detection ran on into
+        # `render_dedupe_result`, which indexes `total_entries` directly and
+        # landed in `cli.py`'s `KeyError` net — "internal error: result is
+        # missing the key" for a condition the service had already named.
+        if getattr(args, "json", False):
+            cli_json.emit_result(
+                result, stdout, command="library dedupe", bib_name=target["name"]
+            )
+        else:
+            print_lines(error_lines("dedupe failed", result.get("errors") or []), stderr)
+        return exit_code_for_error(result)
     # `total_clusters` counts exact clusters only, so it cannot stand in for
     # "has something to report" — a library whose sole finding is a fuzzy
-    # near-duplicate still owes the caller exit 1.
-    findings = result.get("total_clusters", 0) + len(result.get("fuzzy_candidates", []))
+    # near-duplicate still owes the caller exit 1. A duplicate citekey never
+    # reaches the identity index at all (the parser keeps only the first block),
+    # so a partial read is a finding too: without it the command built to find
+    # duplicates reported "0 clusters", exit 0, for a file that plainly has one.
+    findings = (
+        result.get("total_clusters", 0)
+        + len(result.get("fuzzy_candidates", []))
+        or has_read_warnings(result)
+    )
     if getattr(args, "json", False):
         cli_json.emit_result(result, stdout, command="library dedupe", bib_name=target["name"])
-        return exit_codes.OK if findings == 0 else exit_codes.FINDINGS
+        return exit_codes.OK if not findings else exit_codes.FINDINGS
     print_lines(render_dedupe_result(result), stdout)
-    # A duplicate citekey never reaches the identity index -- the parser keeps
-    # only the first block -- so without this the command built to find
-    # duplicates reports "0 clusters" for a file that plainly has one.
     print_read_warnings(result, stderr)
-    return exit_codes.OK if findings == 0 else exit_codes.FINDINGS
+    return exit_codes.OK if not findings else exit_codes.FINDINGS
 
 
 def run_merge_command(args, *, home_dir, config_path, stdout, stderr, bib_selector) -> int:

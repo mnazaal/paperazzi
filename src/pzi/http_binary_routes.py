@@ -12,9 +12,9 @@ from pathlib import Path
 from typing import Any
 
 from pzi.bib_repository import read_bib_file
-from pzi.config import BibResolutionFailure, load_bib_target, load_config_file
-from pzi.export_service import export_bibtex, export_csv, export_json, export_ris
-from pzi.http_status import reject_unconfigured_bib_selector
+from pzi.config import load_config_file
+from pzi.export_service import EXPORT_SUFFIXES, EXPORTERS
+from pzi.http_status import JsonError, reject_unconfigured_bib_selector, resolve_bib_or_error
 
 # Characters unsafe inside a quoted ``Content-Disposition`` filename: control
 # bytes (incl. CR/LF, which could split the header) plus the quote/backslash
@@ -30,11 +30,11 @@ def safe_header_filename(name: str, *, fallback: str = "download") -> str:
     return cleaned or fallback
 
 
+#: Renderer + file extension per format, both from `export_service`, which
+#: owns the format table. Built rather than restated so a format added there
+#: cannot be missing here.
 EXPORT_FORMATS = {
-    "bibtex": (export_bibtex, "bib"),
-    "csv": (export_csv, "csv"),
-    "json": (export_json, "json"),
-    "ris": (export_ris, "ris"),
+    fmt: (renderer, EXPORT_SUFFIXES[fmt]) for fmt, renderer in EXPORTERS.items()
 }
 
 
@@ -71,13 +71,13 @@ def build_pdf_file_response(
     if rejection is not None:
         return rejection
 
-    resolved = load_bib_target(
+    resolved = resolve_bib_or_error(
         config_path=config_path,
         home_dir=home_dir,
         bib_selector=bib_selector,
     )
-    if isinstance(resolved, BibResolutionFailure):
-        return 400, {"status": "error", "errors": resolved.errors}
+    if isinstance(resolved, JsonError):
+        return resolved
 
     _config, bib = resolved
     read_result = read_bib_file(bib["path"])
@@ -117,17 +117,17 @@ def build_export_bytes_response(
     if rejection is not None:
         return rejection
 
-    resolved = load_bib_target(
+    resolved = resolve_bib_or_error(
         config_path=config_path,
         home_dir=home_dir,
         bib_selector=bib_selector,
     )
-    if isinstance(resolved, BibResolutionFailure):
-        return 400, {"status": "error", "errors": resolved.errors}
+    if isinstance(resolved, JsonError):
+        return resolved
 
     _config, bib = resolved
     exporter, extension = EXPORT_FORMATS[fmt]
-    result = exporter(bib_path=bib["path"])
+    result = exporter(bib["path"])
     if result["status"] != "ok":
         return 500, {"error": "export failed", "errors": result.get("errors", [])}
 

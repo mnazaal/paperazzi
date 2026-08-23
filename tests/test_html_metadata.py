@@ -218,3 +218,24 @@ def test_a_json_ld_type_list_still_matches() -> None:
     record = extract_metadata_from_html(html)
     assert record is not None
     assert record["title"] == "A Real Paper"
+
+
+def test_a_meta_tag_with_no_content_is_skipped_without_disturbing_its_neighbours() -> None:
+    """The skip branch carried a `# pragma: no cover` citing browser tests.
+
+    No browser test imports this module. The branch is reachable from a string:
+    publishers routinely emit an empty `citation_*` tag, and recording it as a
+    value would overwrite the real one that follows.
+    """
+    html = """
+    <html><head>
+    <meta name="citation_title" content="">
+    <meta name="citation_title" content="The Real Title">
+    <meta property="" content="orphaned content">
+    <meta name="citation_author" content="Vaswani, Ashish">
+    </head></html>
+    """
+    record = extract_metadata_from_html(html)
+    assert record is not None
+    assert record["title"] == "The Real Title"
+    assert record["authors"] == ["Vaswani, Ashish"]

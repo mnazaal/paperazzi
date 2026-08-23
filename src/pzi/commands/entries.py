@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from pzi import cli_json, exit_codes
-from pzi.bib_service import bib_stats, entry_detail, list_entries
+from pzi.bib_service import bib_stats, clamp_limit, entry_detail, list_entries
 from pzi.cli_render import error_lines, render_bib_stats, render_cell
 from pzi.commands.common import (
     emit_usage_error,
+    has_read_warnings,
     print_lines,
     print_read_warnings,
     resolve_target,
@@ -64,12 +65,17 @@ def _run_list(args, home_dir, config_path, stdout, stderr, bib_selector) -> int:
         home_dir=home_dir,
         bib_selector=bib_selector,
         offset=max(0, args.offset if args.offset is not None else 0),
-        limit=max(1, min(args.limit if args.limit is not None else 50, 500)),
+        limit=clamp_limit(args.limit),
         sort=args.sort if args.sort is not None else "citekey",
     )
     if getattr(args, "json", False):
         cli_json.emit_result(result, stdout, command="entries")
-        return exit_codes.OK if result["status"] == "ok" else exit_codes.ENVIRONMENT
+        if result["status"] != "ok":
+            return exit_codes.ENVIRONMENT
+        # The same verdict the text branch below reaches. `--json` is a
+        # rendering choice, and computing the code twice is how the two answers
+        # drift apart.
+        return exit_codes.FINDINGS if has_read_warnings(result) else exit_codes.OK
     if result["status"] == "ok":
         items = result["items"]
         if not items:
@@ -91,7 +97,7 @@ def _run_list(args, home_dir, config_path, stdout, stderr, bib_selector) -> int:
             # "(no entries)" and exit 0 — the one case where the warnings matter
             # most was the one case that never printed them.
             print_read_warnings(result, stderr)
-            return exit_codes.OK
+            return exit_codes.FINDINGS if has_read_warnings(result) else exit_codes.OK
         for item in items:
             ck = item["citekey"]
             title = item.get("title", "") or ""
@@ -120,7 +126,7 @@ def _run_list(args, home_dir, config_path, stdout, stderr, bib_selector) -> int:
             f"(bib: {result['bib_name']}, sort: {result['sort']})",
             file=stderr,
         )
-        return exit_codes.OK
+        return exit_codes.FINDINGS if has_read_warnings(result) else exit_codes.OK
     print_lines(error_lines("failed to list entries", result["errors"]), stderr)
     return exit_codes.ENVIRONMENT
 
@@ -153,7 +159,7 @@ def _run_detail(args, home_dir, config_path, stdout, stderr, bib_selector) -> in
             command="entries",
             items=[record],
         )
-        return exit_codes.OK
+        return exit_codes.FINDINGS if has_read_warnings(result) else exit_codes.OK
     print(f"citekey: {record.get('citekey', '')}", file=stdout)
     print(f"title: {record.get('title') or ''}", file=stdout)
     year = record.get("year")
@@ -177,7 +183,7 @@ def _run_detail(args, home_dir, config_path, stdout, stderr, bib_selector) -> in
     abstract = record.get("abstract")
     if isinstance(abstract, str) and abstract.strip():
         print(f"\nabstract:\n{abstract.strip()}", file=stdout)
-    return exit_codes.OK
+    return exit_codes.FINDINGS if has_read_warnings(result) else exit_codes.OK
 
 
 def _run_stats(args, home_dir, config_path, stdout, stderr, bib_selector) -> int:
@@ -196,11 +202,13 @@ def _run_stats(args, home_dir, config_path, stdout, stderr, bib_selector) -> int
             result, stdout, command="entries --stats", items=[],
             bib_name=target["name"],
         )
-        return exit_codes.OK if result["status"] == "ok" else exit_codes.ENVIRONMENT
+        if result["status"] != "ok":
+            return exit_codes.ENVIRONMENT
+        return exit_codes.FINDINGS if has_read_warnings(result) else exit_codes.OK
     if result["status"] == "ok":
         print_lines(render_bib_stats(result), stdout)
         print_read_warnings(result, stderr)
-        return exit_codes.OK
+        return exit_codes.FINDINGS if has_read_warnings(result) else exit_codes.OK
     print_lines(error_lines("stats failed", result["errors"]), stderr)
     return exit_codes.ENVIRONMENT
 

@@ -186,3 +186,55 @@ def test_library_merge_names_the_survivor_fields_it_overwrites(tmp_path: Path) -
     assert "overwritten by drop2020: title" in real_text, real_text
     # And the file agrees: the survivor's title really was replaced.
     assert "A Considerably Longer Title That Will Win" in bib.read_text()
+
+
+def test_dedupe_reports_a_failed_detection_instead_of_a_key_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The runner never inspected `status`, so a failure fell into the renderer.
+
+    `DedupeResult` declares `status: str` and `run_merge_command` — the sibling
+    in the same module — branches on it. `run_dedupe_command` did not, so a
+    failed detection went straight to `render_dedupe_result`, which indexes
+    `result['total_entries']`. The user was told "internal error: result is
+    missing the key 'total_entries'" for a condition the service had named, and
+    only because `cli.py` nets `KeyError` at the boundary.
+    """
+    failed = {
+        "status": "error",
+        "errors": ["bib is locked by another process"],
+        "reason": "unavailable",
+    }
+    monkeypatch.setattr(
+        dedupe_command,
+        "resolve_target",
+        lambda **_kw: ({}, {"name": "ml", "path": "/tmp/lib.bib"}),
+    )
+    monkeypatch.setattr(dedupe_command, "find_duplicates", lambda **_kw: failed)
+    stdout, stderr = StringIO(), StringIO()
+
+    code = dedupe_command.run_dedupe_command(
+        Namespace(config=None, target=None, json=False),
+        home_dir=str(tmp_path),
+        config_path=str(tmp_path / "config.toml"),
+        stdout=stdout,
+        stderr=stderr,
+        bib_selector=None,
+    )
+
+    assert code == 5
+    assert "locked by another process" in stderr.getvalue()
+    assert stdout.getvalue() == ""
+
+
+def test_dedupe_json_reports_a_failed_detection_with_the_same_code(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Both formats through `exit_code_for_error`, as `library merge` already is."""
+    import json
+
+    failed = {"status": "error", "errors": ["no such bib"], "reason": "config"}
+    code, out = _run(monkeypatch, tmp_path, failed, json_output=True)
+
+    assert code == 5
+    assert json.loads(out)["status"] == "error"

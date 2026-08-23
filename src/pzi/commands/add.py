@@ -34,6 +34,7 @@ from pzi.commands.common import (
     print_metadata_diagnostics,
 )
 from pzi.config import load_config_file
+from pzi.errors import REASON_UNAVAILABLE
 from pzi.tag_service import parse_tag_csv
 
 # Single-item-only flags (defined on the `add` parser) that have no meaning
@@ -89,13 +90,26 @@ def run_add_command(
             return emit_usage_error(args, bad_metadata, command_path=("add",),
                                     stdout=stdout, stderr=stderr)
 
+    # And the batch input list, for the same reason: it was read inside `_work`,
+    # which runs after the backend session below, so `--from-file typo.txt` paid
+    # for a translation-server clone before reporting a path that is not there.
+    # `-` (stdin) is excluded exactly as above.
+    batch_text: str | None = None
+    if from_file and from_file != "-":
+        try:
+            batch_text = load_text_arg(from_file)
+        except OSError as exc:
+            return emit_usage_error(args, f"cannot read --from-file {from_file}: {exc}",
+                                    command_path=("add",), stdout=stdout, stderr=stderr)
+
     cfg = load_config_file(config_path, home_dir=home_dir)
     config = cfg["config"]
 
     def _work() -> int:
         if from_file:
             return _run_batch(
-                args, cfg, from_file=from_file, home_dir=home_dir, config_path=config_path,
+                args, cfg, from_file=from_file, text=batch_text, home_dir=home_dir,
+                config_path=config_path,
                 stdout=stdout, stderr=stderr, bib_selector=bib_selector,
                 fetch_web=fetch_web, fetch_search=fetch_search,
             )
@@ -139,8 +153,13 @@ def run_add_command(
                 # parseable document on every outcome. This one printed prose to
                 # stderr and nothing at all to stdout.
                 if getattr(args, "json", False):
+                    # `unavailable`, spelled out: `emit_error` defaults to
+                    # `usage`, so this envelope told a consumer to retype while
+                    # the process exited 5 and told it to retry. `inbox` names
+                    # the reason on the same refusal; this call site did not.
                     cli_json.emit_error(
                         message, [message], stdout, command=command_label(args),
+                        reason=REASON_UNAVAILABLE,
                     )
                 else:
                     print(message, file=stderr)
@@ -243,6 +262,7 @@ def _run_batch(
     cfg,
     *,
     from_file: str,
+    text: str | None,
     home_dir: str,
     config_path: str,
     stdout: TextIO,
@@ -251,27 +271,21 @@ def _run_batch(
     fetch_web=None,
     fetch_search=None,
 ) -> int:
-    try:
-        text = load_text_arg(from_file)
-    except OSError as exc:
-        message = f"cannot read --from-file {from_file}: {exc}"
-        if getattr(args, "json", False):
-            cli_json.emit_error(
-                message, [message], stdout, command="add --from-file",
-            )
-        else:
-            print(f"error: {message}", file=stderr)
-        return exit_codes.ENVIRONMENT
+    if text is None:
+        # `--from-file -`. Stdin is read here rather than in the fail-fast block
+        # because it can only be read once.
+        try:
+            text = load_text_arg(from_file)
+        except OSError as exc:
+            return emit_usage_error(args, f"cannot read --from-file {from_file}: {exc}",
+                                    command_path=("add",), stdout=stdout, stderr=stderr)
     values = parse_batch_values(text)
     if not values:
-        message = f"no DOIs or URLs found in {from_file}"
-        if getattr(args, "json", False):
-            cli_json.emit_error(
-                message, [message], stdout, command="add --from-file",
-            )
-        else:
-            print(f"error: {message}", file=stderr)
-        return exit_codes.ENVIRONMENT
+        # The file is there and holds nothing this command can act on, so the
+        # user has to edit it — `usage`, and exit 2 to match. Both refusals here
+        # used to emit `"reason": "usage"` and then return 5.
+        return emit_usage_error(args, f"no DOIs or URLs found in {from_file}",
+                                command_path=("add",), stdout=stdout, stderr=stderr)
 
     options = build_capture_options_from_add_args(args, config=cfg.get("config"))
     tags = parse_tag_csv(args.tags) if getattr(args, "tags", None) else []

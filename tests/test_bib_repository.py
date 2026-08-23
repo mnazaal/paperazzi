@@ -14,14 +14,19 @@ from pzi.bib_repository import (
     execute_write_plan,
     merge_bib_entries,
     parse_bib_library,
-    parse_bibtex,
     plan_bib_write,
     preview_write_plan,
     read_bib_file,
     update_bib_entry,
     with_bib_lock,
 )
-from pzi.bib_serialize import _balance_braces, _safe_citekey, _safe_field_value, serialize_bibtex
+from pzi.bib_serialize import (
+    _balance_braces,
+    _safe_citekey,
+    _safe_field_value,
+    parse_bibtex,
+    serialize_bibtex,
+)
 from pzi.bibtex import record_to_bibtex_entry
 from pzi.errors import PziError
 

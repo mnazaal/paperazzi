@@ -829,19 +829,21 @@ def fetch_record_for_input(
                 )
 
             if flaresolverr_url is not None:  # pragma: no branch
-                fn = fetch_flaresolverr or (
-                    lambda u: fetch_html_via_flaresolverr(u, server_url=flaresolverr_url)
+                html = _fetch_flaresolverr_guarded(
+                    fetch_flaresolverr,
+                    raw_as_url,
+                    flaresolverr_url=flaresolverr_url,
+                    errors=provider_errors,
                 )
-                html = fn(raw_as_url)
-                if html:  # pragma: no branch — covered by integration/browser tests
+                if html:
                     meta = extract_metadata_from_html(html)
-                    if meta is not None:  # pragma: no branch — covered by integration/browser tests
+                    if meta is not None:
                         best = dict(merge_record_sources(meta, fallback))
                         return (
-                _with_pdf_discovery(cast(NormalizedRecord, best)),
-                provider_errors,
-                translation_results,
-            )
+                            _with_pdf_discovery(cast(NormalizedRecord, best)),
+                            provider_errors,
+                            translation_results,
+                        )
 
         suffix = (
             " (page may be Cloudflare-protected — configure flaresolverr_url to bypass)"
@@ -870,19 +872,21 @@ def fetch_record_for_input(
             return merge_record_sources(fallback, best), provider_errors, translation_results
 
         if flaresolverr_url is not None:
-            fn = fetch_flaresolverr or (
-                lambda u: fetch_html_via_flaresolverr(u, server_url=flaresolverr_url)
+            html = _fetch_flaresolverr_guarded(
+                fetch_flaresolverr,
+                normalized,
+                flaresolverr_url=flaresolverr_url,
+                errors=provider_errors,
             )
-            html = fn(normalized)
             if html:
                 meta = extract_metadata_from_html(html)
                 if meta is not None:
                     best = dict(merge_record_sources(meta, fallback))
                     return (
-                _with_pdf_discovery(cast(NormalizedRecord, best)),
-                provider_errors,
-                translation_results,
-            )
+                        _with_pdf_discovery(cast(NormalizedRecord, best)),
+                        provider_errors,
+                        translation_results,
+                    )
 
         raise MetadataExhausted(
             f"translation server returned no results for URL: {normalized}",
@@ -1135,6 +1139,35 @@ def _fetch_s2_guarded(
         return None
     except (OSError, TimeoutError) as exc:
         errors.append(str(exc))
+        return None
+
+
+def _fetch_flaresolverr_guarded(
+    fetch_flaresolverr,
+    url: str,
+    *,
+    flaresolverr_url: str,
+    errors: list[str],
+) -> str | None:
+    """Call the FlareSolverr seam with the cascade's error contract.
+
+    Same hazard `_fetch_s2_guarded` above exists for: the module's own
+    `fetch_html_via_flaresolverr` absorbs its transport failures and returns
+    None, but an injected fetcher is a plain one-argument callable that may
+    raise — and the HTTP capture route injects one. Called bare, a dead
+    FlareSolverr aborted the cascade at its last rung, so the errors already
+    accumulated never reached `MetadataExhausted` and `--strict-metadata` had
+    nothing to be strict about.
+    """
+    if fetch_flaresolverr is None:
+        return fetch_html_via_flaresolverr(url, server_url=flaresolverr_url)
+    try:
+        return fetch_flaresolverr(url)
+    except urllib.error.HTTPError as exc:
+        errors.append(f"HTTP {exc.code}")
+        return None
+    except (OSError, TimeoutError) as exc:
+        errors.append(f"flaresolverr unreachable: {exc}")
         return None
 
 

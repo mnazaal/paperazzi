@@ -12,6 +12,7 @@ own machine. Worth remembering when this file's snapshot next fails.
 
 from __future__ import annotations
 
+import ast
 import inspect
 import os
 import re
@@ -136,6 +137,17 @@ def test_the_public_api_matches_its_snapshot() -> None:
         "If the change is intended, record it in CHANGELOG.md and regenerate:\n"
         f"    {UPDATE_ENV}=1 pytest {__file__}\n"
     )
+
+
+def test_dir_advertises_the_public_surface_and_nothing_else() -> None:
+    """`dir(pzi)` is the docstring's claim, made mechanical.
+
+    The module docstring says "``__all__`` is the whole of the public surface",
+    and `__dir__` returned it unioned with `globals()` — so tab-completion
+    offered `logging`, `TYPE_CHECKING`, `_PUBLIC_API` and six more internals as
+    though they were part of it.
+    """
+    assert dir(pzi) == sorted(pzi.__all__)
 
 
 def test_every_public_name_is_importable_and_documented() -> None:
@@ -1051,3 +1063,116 @@ def test_no_public_name_freezes_a_test_seam() -> None:
                 f"pzi.{name} freezes an injected callable ({parameter.name}) as "
                 "public API"
             )
+
+
+#: Modules whose `raise PziError` sites predate the reason contract and each
+#: need their own classification decision (audit item 526 fixed the four that
+#: had an obvious one). Listed by name rather than skipped silently, so the
+#: debt is countable and a *new* unclassified raise anywhere else still fails.
+_UNCLASSIFIED_RAISERS = frozenset(
+    {
+        "bib_repository",
+        "bib_serialize",
+        "bibtex",
+        "capture_context",
+        "cli_parser",
+        "fileio",
+        "pdf_download",
+    }
+)
+
+
+def test_every_raised_pzi_error_carries_a_reason() -> None:
+    """A `PziError` without a `reason` is an unclassifiable failure.
+
+    `http_status.status_for_service_result` says so in its own docstring: an
+    unclassified failure takes the 400 fallback, "a bug in that service". The
+    exit-code side is just as lossy — `ENVIRONMENT` covers config, unavailable
+    *and* conflict — so the raiser is the only place that knows.
+
+    Read from the source rather than by calling, because these raises are the
+    failure paths that are hardest to reach: three of the four this test was
+    written for are triggered by a mistyped `page_metadata_cmd`.
+    """
+    src_dir = Path(pzi.__file__).parent
+    missing: list[str] = []
+    for path in sorted(src_dir.rglob("*.py")):
+        if path.stem in _UNCLASSIFIED_RAISERS:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Raise) or not isinstance(node.exc, ast.Call):
+                continue
+            func = node.exc.func
+            name = getattr(func, "id", None) or getattr(func, "attr", None)
+            if name != "PziError":
+                continue
+            if not any(keyword.arg == "reason" for keyword in node.exc.keywords):
+                missing.append(f"{path.name}:{node.lineno}")
+    assert not missing, (
+        "raise PziError without a reason (the HTTP API cannot classify these, "
+        f"so they answer 400): {sorted(missing)}"
+    )
+
+
+def _capture_result(**overrides: object) -> dict[str, object]:
+    """An `AddResult` as `capture_to_bib` builds one, envelope included."""
+    result: dict[str, object] = {
+        "status": "ok",
+        "bib_name": "ml",
+        "bib_path": "/tmp/ml.bib",
+        "action": "insert",
+        "citekey": "smith2020",
+        "pdf_path": None,
+        "changed_fields": ["title"],
+        "dry_run": False,
+        "message": "added smith2020",
+        "warnings": [],
+        "errors": [],
+    }
+    result.update(overrides)
+    return result
+
+
+def test_add_returns_the_capture_minus_the_envelope(tmp_path: Path) -> None:
+    """`pzi.add()`'s own `_unwrap` + `_report` pass, on a stubbed capture.
+
+    Stubbed because the real one makes network requests and wants a running
+    translation server, which is why this function was the one public entry
+    point with no coverage at all: the single test calling it passed
+    ``tags="nlp"`` to trip `_tag_list`, and raised before `capture_to_bib` was
+    ever reached.
+    """
+    config = _library(tmp_path)
+    with patch("pzi.api.capture_to_bib", return_value=_capture_result()) as capture:
+        report = pzi.add("10.1/x", tags=["nlp"], config_path=config, library="ml")
+
+    assert set(report) & {"status", "errors", "reason"} == set(), report
+    assert report["citekey"] == "smith2020"
+    assert report["action"] == "insert"
+    assert report["message"] == "added smith2020"
+
+    # And the arguments reached the seam the CLI and the HTTP API also use.
+    capture_input, capture_options = capture.call_args.args
+    assert capture_input.value == "10.1/x"
+    assert capture_input.record_overrides == {"tags": ["nlp"]}
+    assert capture_input.bib_selector == "ml"
+    assert (capture_options.dry_run, capture_options.force_new) == (False, False)
+
+
+def test_add_raises_the_classified_failure_rather_than_returning_it(
+    tmp_path: Path,
+) -> None:
+    """The other half of the same pass: a failed capture is an exception."""
+    failed = _capture_result(
+        status="error",
+        message="no metadata for 10.1/x",
+        errors=["no metadata for 10.1/x"],
+        reason="not_found",
+    )
+    with patch("pzi.api.capture_to_bib", return_value=failed):
+        with pytest.raises(PziError) as excinfo:
+            pzi.add("10.1/x", config_path=_library(tmp_path))
+
+    assert (excinfo.value.code, excinfo.value.reason) == (3, "not_found")
+    assert excinfo.value.details == ["no metadata for 10.1/x"]

@@ -23,7 +23,9 @@ from pzi.bib_repository import (
     batch_write_session,
     delete_bib_entry,
     execute_write_plan,
+    merge_bib_entries,
     plan_bib_write,
+    preview_write_plan,
     read_bib_file,
     update_bib_entry,
     with_bib_lock,
@@ -763,3 +765,100 @@ def test_a_batch_dry_run_refuses_what_the_real_write_would_refuse(tmp_path: Path
                     existing_entries=session.entries,
                 )
             )
+
+
+# ---------------------------------------------------------------------------
+# A failed write leaves no `.bak`
+# ---------------------------------------------------------------------------
+
+
+def _retitle(entry: BibtexEntry, _record: object) -> BibtexEntry:
+    return {**entry, "fields": {**entry["fields"], "title": "Changed"}}
+
+
+#: Every function that copies the bib to a `.bak` under its own lock, keyed by
+#: name so a failure names the site. `reindex_service` unlinks its backup when
+#: the write it guards raises; these three are the same shape and must too — a
+#: `.bak` that survives a failed write is a snapshot of a file nothing replaced,
+#: and `backup_path_for` then hands the *next* run `.bak2`.
+BACKUP_WRITERS = {
+    "delete_bib_entry": lambda path, backup: delete_bib_entry(
+        path, "smith2020", backup_path=backup
+    ),
+    "merge_bib_entries": lambda path, backup: merge_bib_entries(
+        path, citekey_a="smith2020", citekey_b="jones2021", backup_path=backup
+    ),
+    "update_bib_entry": lambda path, backup: update_bib_entry(
+        path, "smith2020", _retitle, backup_path=backup
+    ),
+}
+
+
+@pytest.mark.parametrize("writer_name", sorted(BACKUP_WRITERS))
+def test_a_failed_write_leaves_no_stale_backup(
+    writer_name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The `.bak` is removed when the write it was taken for does not happen."""
+    bib_path = _write(tmp_path / "lib.bib", TWO_ENTRIES)
+    backup = Path(bib_path + ".bak")
+
+    def explode(_path: str, _text: str) -> None:
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr("pzi.bib_repository._write_bib_text_atomic", explode)
+
+    with pytest.raises(OSError):
+        BACKUP_WRITERS[writer_name](bib_path, backup)
+
+    assert not backup.exists(), f"{writer_name} left a stale backup at {backup}"
+    assert Path(bib_path).read_text(encoding="utf-8") == TWO_ENTRIES
+
+
+@pytest.mark.parametrize("writer_name", sorted(BACKUP_WRITERS))
+def test_a_successful_write_keeps_its_backup(
+    writer_name: str, tmp_path: Path
+) -> None:
+    """The other half of the invariant: the undo survives a write that happens."""
+    bib_path = _write(tmp_path / "lib.bib", TWO_ENTRIES)
+    backup = Path(bib_path + ".bak")
+
+    BACKUP_WRITERS[writer_name](bib_path, backup)
+
+    assert backup.read_text(encoding="utf-8") == TWO_ENTRIES
+    assert Path(bib_path).read_text(encoding="utf-8") != TWO_ENTRIES
+
+
+@pytest.mark.parametrize("action", ["insert", "update"])
+def test_the_preview_and_the_write_render_the_same_source(
+    action: str, tmp_path: Path
+) -> None:
+    """One plan, one rendering: the preview must predict the write exactly.
+
+    `preview_write_plan` and `execute_write_plan` were byte-identical from the
+    read to the render and now share `_prepare_write`. This asserts the property
+    that sharing exists to hold — the pair that drifted before is the pair the
+    dry run's whole value rests on.
+    """
+    original = (
+        "@article{smith2020,\n  title = {A Title},\n  year = {2020},\n"
+        "  doi = {10.1000/one},\n}\n"
+    )
+    bib_path = _write(tmp_path / "lib.bib", original)
+    read = read_bib_file(bib_path)
+    record = (
+        {"citekey": "ignored", "doi": "10.1000/one", "abstract": "New."}
+        if action == "update"
+        else {"citekey": "fresh2022", "doi": "10.1000/two", "title": "Fresh"}
+    )
+    plan = plan_bib_write(
+        record, read["records"], existing_entries=read["entries"]
+    )
+    assert plan["action"] == action
+
+    preview = preview_write_plan(bib_path, plan)
+    assert Path(bib_path).read_text(encoding="utf-8") == original, "preview wrote"
+
+    execute_write_plan(bib_path, plan)
+
+    assert preview["changed"] is True
+    assert preview["new_source"] == Path(bib_path).read_text(encoding="utf-8")

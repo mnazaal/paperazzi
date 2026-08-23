@@ -456,7 +456,7 @@ def compute_similarity_hint(
             continue
 
         score = similarity + 0.1 * overlap
-        if score > best_score:  # pragma: no branch — covered by integration/browser tests
+        if score > best_score:
             best_score = score
             best_key = citekey
 

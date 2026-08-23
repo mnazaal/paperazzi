@@ -57,13 +57,6 @@ def resolve_target(
     return config, target
 
 
-# Re-exported, not redefined. It moved to `pzi.errors` beside the `REASON_*`
-# vocabulary it maps: `pzi.api` needed it and importing it from here dragged in
-# `cli_parser`, which made `pzi.__init__ -> api -> commands.common -> cli_parser
-# -> pzi.__init__` a real import cycle and put argparse in the closure of a bare
-# `import pzi`. The command runners keep importing it from here.
-
-
 def target_list(target: Sequence[str] | None) -> list[str | None]:
     """Normalize optional repeated --target values for command loops."""
     return list(target) if target else [None]
@@ -218,10 +211,6 @@ def write_atomic(output_path: Path, content: str) -> None:
         raise
 
 
-#: Exit code per structured failure reason. Anything absent from this table —
-#: including a missing ``reason`` — means "the command could not run", which is
-#: the safe default: it is never ``1``, so a script can still tell a failure to
-#: run from a successful run that found something.
 #: Sub-command attributes, in the order the CLI nests them. `pzi library clean`
 #: parses as `command="library"`, `library_command="clean"`, and the runners
 #: label their envelopes with the joined form.
@@ -336,3 +325,17 @@ def print_read_warnings(result: Mapping[str, Any], stderr: TextIO) -> None:
     """
     for warning in result.get("warnings") or ():
         print(f"warning: {warning}", file=stderr)
+
+
+def has_read_warnings(result: Mapping[str, Any]) -> bool:
+    """Whether *result* came from a read the parser could only partly complete.
+
+    The exit-code half of `print_read_warnings`, and it lives beside it because
+    printing the warning and scoring it were decided separately: five runners
+    printed "the library file is not there" or "duplicate citekey — only the
+    first occurrence is read" and then exited 0, a clean bill of health for a
+    library they had not read. `library check` is the one that wrote the rule
+    down (`commands/check.py`): the run happened, so it is not 5; it has
+    something to report, so it is 1.
+    """
+    return bool(result.get("warnings"))

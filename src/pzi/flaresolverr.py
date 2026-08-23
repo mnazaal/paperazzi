@@ -178,10 +178,10 @@ def _download_with_cookies(
         data = read_limited(
             response,
             max_bytes=max_bytes,
-        )  # pragma: no cover — covered by integration/browser tests
-        if data.startswith(b"%PDF-"):  # pragma: no cover — covered by integration/browser tests
-            return data  # pragma: no cover — covered by integration/browser tests
-        return None  # pragma: no cover — covered by integration/browser tests
+        )
+        if data.startswith(b"%PDF-"):
+            return data
+        return None
 
 
 def _post_json(
@@ -197,6 +197,5 @@ def _post_json(
         method="POST",
     )
     with urlopen(request, timeout=90) as response:
-# pragma: no cover — covered by integration/browser tests
         data = read_limited(response, max_bytes=max_bytes)
         return data.decode("utf-8")  # pragma: no cover

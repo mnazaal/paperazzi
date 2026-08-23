@@ -183,12 +183,9 @@ def _dominant_gap(source: str, pattern: re.Pattern[str], default: str) -> str:
     gaps = [match.group(1) for match in pattern.finditer(source)]
     if not gaps:
         return default
-    # The dominant gap *as written*, not "blank-separated or not". This used to
-    # collapse every gap to `""` or `"\n"`, which cannot reproduce a file that
-    # separates entries by two blank lines: each boundary lost one, so a
-    # five-entry file went 25 lines to 20 on a write that was asked to add one
-    # tag. `indent` above has always used this rule; the docstring here claimed
-    # it while the code counted a boolean.
+    # The dominant gap *as written*, not "blank-separated or not": collapsing
+    # every gap to `""` or `"\n"` cannot reproduce a file that separates entries
+    # by two blank lines.
     return Counter(gaps).most_common(1)[0][0]
 
 
@@ -263,13 +260,30 @@ def resolve_file_field(record: NormalizedRecord, entry: BibtexEntry, bib_path: s
     record["local_pdf_path"] = str(Path(bib_dir) / value)
 
 
-def _normalize_file_field(entry: BibtexEntry, bib_path: str) -> BibtexEntry:
+def resolved_bib_dir(bib_path: str) -> Path:
+    """The resolved directory *bib_path* sits in, for ``file``-field shortening.
+
+    One place, so a caller hoisting it out of a per-entry loop and
+    :func:`_normalize_file_field` computing it for a single entry cannot drift
+    into two different notions of "under the bib directory".
+    """
+    return Path(bib_path).parent.resolve()
+
+
+def _normalize_file_field(
+    entry: BibtexEntry, bib_path: str, bib_dir: Path | None = None
+) -> BibtexEntry:
     """Normalise an absolute ``file`` field to a relative path.
 
     Paths under the bib file directory are shortened (e.g.
     ``/home/alice/bibs/papers/x.pdf`` → ``papers/x.pdf``).
     Paths outside the bib directory, already-relative paths, and
     home-relative paths (``~/...``) are kept as-is.
+
+    *bib_dir* is the **resolved** parent directory of *bib_path*, computed here
+    when the caller has not already done it. Resolving is a syscall walk, and
+    the answer is the same for every entry in one write, so a bulk caller
+    rebuilding N blocks passes it in rather than paying it N times.
     """
     raw = entry.get("fields", {}).get("file")
     if not raw:
@@ -279,14 +293,15 @@ def _normalize_file_field(entry: BibtexEntry, bib_path: str) -> BibtexEntry:
     # would mean re-composing the field, which requires owning three producers'
     # escaping rules to gain nothing — and `merge_preserving_unchanged_source`
     # keeps the original text anyway whenever the attachment has not changed.
-    if len(parse_file_field(value)) != 1 or parse_file_field(value)[0] != value:
+    parts = parse_file_field(value)
+    if len(parts) != 1 or parts[0] != value:
         return entry
     if not value.startswith("/"):
         return entry  # already relative, home-relative, or non-path
-    bib_dir = str(Path(bib_path).parent)
-    file_path = Path(value)
+    if bib_dir is None:
+        bib_dir = resolved_bib_dir(bib_path)
     try:
-        rel = str(file_path.resolve().relative_to(Path(bib_dir).resolve()))
+        rel = str(Path(value).resolve().relative_to(bib_dir))
     except ValueError:
         return entry  # not under bib dir — keep absolute
     new_entry: BibtexEntry = dict(entry)  # type: ignore[assignment]
@@ -580,6 +595,16 @@ def serialize_library(library: Library, *, layout: BibLayout | None) -> str:
     answer: passing it must be a decision at every call site, because getting it
     wrong is the difference between a one-entry diff and a whole-file reformat,
     and the previous version of this bug was invisible for four reviews.
+
+    Layout is normalised **file-wide**: every block is written with the one
+    dominant indent and trailing-comma style, including blocks no write plan
+    touched. An entry in the file's minority style is therefore reformatted by a
+    write that never named it, and the preservation guarantee for an untouched
+    entry is over its *fields* — values, enclosings, order — not over its bytes.
+    Keeping each block's own source slice is deferred past 1.0 (decision
+    2026-08-23): the library this is for is 100% uniform, so the case cannot
+    arise there; it arises on an imported mixed-convention file. Pinned by
+    ``test_an_untouched_minority_style_entry_is_reformatted``.
     """
     layout = layout or BibLayout()
     fmt = BibtexFormat()
@@ -1089,15 +1114,20 @@ def bibtex_entry_to_library_entry(
     bib_path: str = "",
     *,
     file_path_style: str = "absolute",
+    bib_dir: Path | None = None,
 ) -> BibtexEntryV2:
     """Convert an internal BibtexEntry dict to a bibtexparser v2 Entry.
 
     When requested, absolute ``file`` fields are normalised to relative
     paths. When *bib_path* is empty, no normalisation is performed (used
     for round-trip validation).
+
+    *bib_dir* is :func:`resolved_bib_dir`'s answer for *bib_path*, passed by a
+    caller converting a whole library so the resolve happens once per write
+    rather than once per entry.
     """
     if bib_path and file_path_style == "relative":
-        entry = _normalize_file_field(entry, bib_path)
+        entry = _normalize_file_field(entry, bib_path, bib_dir)
     entry_type = _UNSAFE_ENTRY_TYPE.sub("", entry["entry_type"]) or "misc"
     return BibtexEntryV2(
         entry_type=entry_type,

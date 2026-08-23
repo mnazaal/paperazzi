@@ -128,7 +128,5 @@ def run_update_command(
         )
     if not ok:
         return exit_codes.ENVIRONMENT
-    # The shared batch contract — see `batch_exit_code`. `update` returns 4 too,
-    # which `exit_codes.py` and the `pzi --help` epilog both describe as
-    # import/bulk-add only.
+    # The shared batch contract — see `batch_exit_code`.
     return batch_exit_code(succeeded=items_succeeded, failed=items_failed)

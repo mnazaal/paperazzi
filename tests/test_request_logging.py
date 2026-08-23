@@ -171,3 +171,40 @@ def test_a_request_that_never_responded_logs_a_dash() -> None:
     sink = StringIO()
     _log_request(_Silent(), 0.0, sink)  # type: ignore[arg-type]
     assert "/capture -" in sink.getvalue()
+
+
+def test_a_request_that_reaches_no_handler_is_still_logged(served) -> None:
+    """`PUT` and an unparseable request line answer via `send_error`.
+
+    That path never enters the `do_*` wrapper that does the timing, so these
+    were the two requests `--log-requests` could not show you — precisely the
+    ones an operator is trying to see when something is sending this server
+    what it does not understand.
+    """
+    import socket
+
+    log = StringIO()
+    server, base = served(log)
+    port = server.server_port
+    try:
+        for payload in (
+            b"PUT /capture HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\n\r\n",
+            b"GET / HTTP/x\r\nHost: 127.0.0.1\r\n\r\n",
+        ):
+            sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+            try:
+                sock.sendall(payload)
+                while sock.recv(4096):
+                    pass
+            finally:
+                sock.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    lines = log.getvalue().strip().splitlines()
+    assert len(lines) == 2, lines
+    assert lines[0].startswith("PUT /capture 501 "), lines[0]
+    # No method and no path survived the parse failure; both log as `-` rather
+    # than the line going missing.
+    assert lines[1].startswith("- - 400 "), lines[1]

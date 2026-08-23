@@ -110,7 +110,7 @@ def list_tags(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector
     )
     if isinstance(resolved, BibResolutionFailure):
-        return {  # pragma: no cover — covered by integration/browser tests
+        return {
             "status": "error",
             "reason": REASON_CONFIG,
             "bib_name": None,
@@ -146,7 +146,7 @@ def list_tags(
     all_tags: set[str] = set()
     for record in records:
         for tag in record.get("tags") or []:
-            if isinstance(tag, str):  # pragma: no branch — covered by integration/browser tests
+            if isinstance(tag, str):
                 all_tags.add(tag)
     return {
         "status": "ok",
@@ -325,7 +325,7 @@ def _mutate_entry_tags(
             bib["path"], citekey, _updater, file_path_style=file_path_style
         )
         if not update_result["found"]:
-            return {  # pragma: no cover — covered by integration/browser tests
+            return {
                 "status": "error",
                 "bib_name": bib["name"],
                 "citekey": citekey,

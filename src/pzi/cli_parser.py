@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import NoReturn, TextIO
 
 from pzi import cli_version_text, exit_codes
+from pzi.bib_service import DEFAULT_LIMIT, MAX_LIMIT, MIN_LIMIT, SORT_FIELDS
 from pzi.capture_models import (
     AuthHints,
     CaptureInput,
@@ -225,7 +226,7 @@ def _top_level_epilog() -> str:
             (" ", "   a batch in which *nothing* succeeded is 5)"),
             (5, "could not run (bad config, unknown --target, locked bib,"),
             (" ", "   permission denied, service unreachable)"),
-            (130, "interrupted (SIGINT)"),
+            (130, "stopped by a signal (SIGINT, or SIGTERM to `pzi server`)"),
             (141, "downstream pipe closed (SIGPIPE)"),
         )
     )
@@ -668,10 +669,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--limit",
         type=_positive_int,
         default=None,
-        help="entries per page, 1-500 (default: 50; larger values are capped at 500)",
+        help=(
+            f"entries per page, {MIN_LIMIT}-{MAX_LIMIT} (default: {DEFAULT_LIMIT}; "
+            f"larger values are capped at {MAX_LIMIT})"
+        ),
     )
     entries_parser.add_argument(
-        "--sort", default=None, choices=["citekey", "title", "year", "author"],
+        "--sort", default=None, choices=sorted(SORT_FIELDS),
         help="sort field (default: citekey)",
     )
     add_single_target(entries_parser)
@@ -753,6 +757,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="overwrite an existing --report / --jsonl file",
+    )
+    check_parser.add_argument(
+        "--limit",
+        type=int,
+        metavar="N",
+        help="audit only the first N entries (a whole library takes hours)",
     )
     add_config(check_parser)
     add_single_target(check_parser)

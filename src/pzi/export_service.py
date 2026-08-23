@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import json as _json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypedDict
 
@@ -364,3 +365,24 @@ def export_ris(bib_path: str) -> ExportResult:
         "content_type": "application/x-research-info-systems",
         "errors": dropped,
     }
+
+
+#: Export format -> renderer, and the file extension the format is written as.
+#: One table, because the three front ends each had their own copy: the Python
+#: API, the `export` CLI runner, and the HTTP binary route. A format added to
+#: one and not the others is the failure this prevents.
+EXPORTERS: dict[str, Callable[[str], ExportResult]] = {
+    "bibtex": export_bibtex,
+    "csv": export_csv,
+    "json": export_json,
+    "ris": export_ris,
+}
+
+#: The extension each format is saved under. Kept beside `EXPORTERS` so a new
+#: format cannot be registered without one.
+EXPORT_SUFFIXES: dict[str, str] = {
+    "bibtex": "bib",
+    "csv": "csv",
+    "json": "json",
+    "ris": "ris",
+}

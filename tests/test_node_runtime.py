@@ -412,6 +412,69 @@ def test_download_node_passes_checksum_then_fails_extract(tmp_path: Path) -> Non
             node_runtime.download_node(tmp_path, stdout=io.StringIO())
 
 
+def test_a_failed_upgrade_keeps_the_working_cached_node(tmp_path: Path) -> None:
+    """A download that never extracts must not cost the user the Node they had.
+
+    The old extractions were rmtree'd *before* the new tarball was unpacked, so
+    any failure between the two — a truncated download, a bad tarball, a node
+    binary that will not start — left a machine that had a working cached Node
+    with none at all, and no network to get one back.
+    """
+    node_dir = node_runtime._node_bin_dir(tmp_path)
+    cached = node_dir / "node-v22.15.0-linux-x64" / "bin" / "node"
+    cached.parent.mkdir(parents=True)
+    cached.write_text("#!/bin/sh\n")
+
+    tarball = b"not-a-real-tarball"
+    good = hashlib.sha256(tarball).hexdigest()
+    shasums = f"{good}  node-v22.16.0-linux-x64.tar.gz\n"
+    with patch.dict("os.environ", {"PZI_NODE_VERSION": "22.16.0"}), \
+         patch("pzi.node_runtime._node_dist_name", return_value="linux-x64"), \
+         patch("pzi.node_runtime._node_binary_runs", return_value=False), \
+         patch(
+             "pzi.node_runtime.urlopen",
+             side_effect=[io.BytesIO(tarball), json_io(shasums)],
+         ):
+        with pytest.raises(RuntimeError, match="extract"):
+            node_runtime.download_node(tmp_path, stdout=io.StringIO())
+
+    assert cached.exists(), "the working cached Node was deleted by a failed upgrade"
+
+
+def test_a_successful_upgrade_drops_the_superseded_extraction(tmp_path: Path) -> None:
+    """The cleanup still happens — it just happens once the new Node runs."""
+    node_dir = node_runtime._node_bin_dir(tmp_path)
+    stale = node_dir / "node-v22.15.0-linux-x64"
+    (stale / "bin").mkdir(parents=True)
+    (stale / "bin" / "node").write_text("#!/bin/sh\n")
+
+    fresh_bin = node_dir / "node-v22.16.0-linux-x64" / "bin" / "node"
+
+    def fake_extractall(path, filter=None):  # noqa: A002 - mirrors tarfile's kwarg
+        fresh_bin.parent.mkdir(parents=True, exist_ok=True)
+        fresh_bin.write_text("#!/bin/sh\n")
+
+    tarball = b"not-a-real-tarball"
+    good = hashlib.sha256(tarball).hexdigest()
+    shasums = f"{good}  node-v22.16.0-linux-x64.tar.gz\n"
+    tar = MagicMock()
+    tar.__enter__ = lambda self: self
+    tar.__exit__ = lambda self, *a: False
+    tar.extractall = fake_extractall
+    with patch.dict("os.environ", {"PZI_NODE_VERSION": "22.16.0"}), \
+         patch("pzi.node_runtime._node_dist_name", return_value="linux-x64"), \
+         patch("pzi.node_runtime._node_binary_runs", return_value=True), \
+         patch("pzi.node_runtime.tarfile.open", return_value=tar), \
+         patch(
+             "pzi.node_runtime.urlopen",
+             side_effect=[io.BytesIO(tarball), json_io(shasums)],
+         ):
+        result_path = node_runtime.download_node(tmp_path, stdout=io.StringIO())
+
+    assert result_path == str(fresh_bin)
+    assert not stale.exists(), "the superseded extraction was left behind"
+
+
 def test_download_node_reuses_cached_binary(tmp_path: Path) -> None:
     """A previously extracted, runnable Node is reused without re-downloading."""
     node_dir = node_runtime._node_bin_dir(tmp_path)

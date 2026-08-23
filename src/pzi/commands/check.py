@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from collections.abc import Callable
@@ -9,7 +10,7 @@ from pathlib import Path
 from typing import TextIO
 
 from pzi import cli_json, exit_codes
-from pzi.check_service import CheckResult, check_bib
+from pzi.check_service import CheckItem, CheckResult, check_bib
 from pzi.cli_render import error_lines, render_check_items
 from pzi.commands.common import (
     emit_usage_error,
@@ -86,6 +87,19 @@ def run_check_command(
             stdout=stdout,
             stderr=stderr,
         )
+    if report_path == "-" and jsonl_path == "-":
+        # The third pair, and the one nothing guarded: each of `--report -` and
+        # `--jsonl -` was refused alongside `--json` and neither was refused
+        # alongside the other, so this wrote the whole report document and then
+        # an NDJSON stream to the same stdout — two documents where every other
+        # combination guarantees one.
+        return emit_usage_error(
+            args,
+            "--report - and --jsonl - both write to stdout and cannot be combined",
+            command_path=("library", "check"),
+            stdout=stdout,
+            stderr=stderr,
+        )
     if getattr(args, "force", False) and not report_path and not jsonl_path:
         # `--force` here means only "overwrite the file at --report/--jsonl", and
         # with neither given it was accepted and did nothing. This CLI refuses
@@ -96,6 +110,15 @@ def run_check_command(
         return emit_usage_error(
             args,
             "--force applies to --report/--jsonl and has no effect without one",
+            command_path=("library", "check"),
+            stdout=stdout,
+            stderr=stderr,
+        )
+    limit: int | None = getattr(args, "limit", None)
+    if limit is not None and limit < 1:
+        return emit_usage_error(
+            args,
+            "--limit must be at least 1",
             command_path=("library", "check"),
             stdout=stdout,
             stderr=stderr,
@@ -148,12 +171,44 @@ def run_check_command(
             return exit_codes.ENVIRONMENT
 
     strict: bool = getattr(args, "strict", False)
-    result = check_bib_fn(
-        config_path=config_path,
-        home_dir=home_dir,
-        bib_selector=bib_selector,
-        strict=strict,
-    )
+    # `--jsonl` is written as the audit goes, not after it returns. On the
+    # library this command exists for the run is hours long, so buffering meant
+    # an interrupt discarded every completed verdict — including the ones the
+    # user was watching scroll past.
+    with contextlib.ExitStack() as stack:
+        jsonl_stream: TextIO | None = None
+        if jsonl_path == "-":
+            jsonl_stream = stdout
+        elif jsonl_path:
+            # Not `write_atomic`: all-or-nothing is the opposite of what is
+            # wanted here. The up-front `--force` gate already established that
+            # this path is either new or one the user asked to replace.
+            jsonl_stream = stack.enter_context(
+                open(jsonl_path, "w", encoding="utf-8")
+            )
+        streamed = 0
+
+        def _on_item(item: CheckItem, index: int, total: int) -> None:
+            nonlocal streamed
+            if jsonl_stream is not None:
+                print(json.dumps(item, default=str), file=jsonl_stream)
+                jsonl_stream.flush()
+                streamed += 1
+            _print_progress(index, total, stderr)
+
+        result = check_bib_fn(
+            config_path=config_path,
+            home_dir=home_dir,
+            bib_selector=bib_selector,
+            strict=strict,
+            limit=limit,
+            on_item=_on_item,
+        )
+        if jsonl_stream is not None:
+            # Anything the audit produced but never handed over — a `check_bib`
+            # that does not stream still gets a complete file.
+            for item in result["items"][streamed:]:
+                print(json.dumps(item, default=str), file=jsonl_stream)
 
     # The audit never ran: no config, no library, nothing to report. An audit
     # that *did* run and reached no source is also `error` now (the service
@@ -191,15 +246,13 @@ def run_check_command(
         # one. The gate is applied up front, beside the writability probe.
         write_atomic(Path(report_path), json.dumps(result, indent=2, default=str))
 
-    if jsonl_path:
-        lines = [json.dumps(item, default=str) for item in result["items"]]
-        if jsonl_path == "-":
-            # `-` means stdout, the same marker the capture inputs already use,
-            # so the stream can be piped straight into jq.
-            for line in lines:
-                print(line, file=stdout)
-        else:
-            write_atomic(Path(jsonl_path), "".join(line + "\n" for line in lines))
+    if limit is not None and result["total"] >= limit:
+        # Say it, because every count below is of the audited slice and reads
+        # exactly like a count of the library.
+        print(
+            f"note: --limit {limit} — entries after the first {limit} were not audited",
+            file=stderr,
+        )
 
     if getattr(args, "json", False):
         cli_json.emit_result(result, stdout, command="library check")
@@ -233,3 +286,26 @@ def run_check_command(
     if result.get("warnings"):
         return exit_codes.FINDINGS
     return exit_codes.FINDINGS if findings else exit_codes.OK
+
+
+#: A run shorter than this finishes while the user is still looking at it.
+_PROGRESS_MIN_ENTRIES = 200
+#: One line per this many entries. At the measured 0.6-11.2 s/entry that is a
+#: line every 15 s to 5 min — often enough to show the run is alive, rare enough
+#: not to fill a terminal over the hours a whole-library audit takes.
+_PROGRESS_STEP = 25
+
+
+def _print_progress(index: int, total: int, stderr: TextIO) -> None:
+    """Say how far along a long audit is, on stderr.
+
+    `check` is the only command that can run for hours, and it printed nothing
+    at all until it finished — indistinguishable from a hang, which is what a
+    user reaching for Ctrl-C decides it is.
+    """
+    if total < _PROGRESS_MIN_ENTRIES:
+        return
+    done = index + 1
+    if done % _PROGRESS_STEP and done != total:
+        return
+    print(f"checked {done}/{total} entries", file=stderr)

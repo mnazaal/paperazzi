@@ -15,6 +15,7 @@ import pytest
 
 from pzi import exit_codes
 from pzi.cli import run_cli
+from pzi.errors import exit_code_for_error
 
 MINIMAL_CONFIG = """
 [[bibs]]
@@ -1054,6 +1055,64 @@ def test_every_json_failure_carries_a_reason(tmp_path: Path) -> None:
         assert code == exit_codes.ENVIRONMENT
 
 
+def test_every_json_failure_exits_the_code_its_reason_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The envelope and the exit status are two renderings of one classification.
+
+    `exit_code_for_error` is the mapping, and a runner that emits a `reason`
+    and then returns a hardcoded status has forked it: four sites said
+    `"reason": "usage"` on stdout and exited 5, so a script branching on
+    `.reason` and a script branching on `$?` disagreed about the same failure.
+    Spanning rather than per-site on purpose — the fix has to hold for the next
+    runner that reaches for `emit_error` too.
+    """
+    import contextlib
+    import json
+
+    import pzi.ts_backend
+
+    config_path, _ = _library(tmp_path, ARTICLE)
+    missing_bib = str(tmp_path / "nope.bib")
+    missing_file = str(tmp_path / "nope.txt")
+    empty_file = tmp_path / "empty.txt"
+    empty_file.write_text("# nothing but a comment\n", encoding="utf-8")
+
+    # The translation-server bootstrap, stubbed. `ready` is flipped per case
+    # because one of the failures below *is* "the backend is not up", and the
+    # rest have to get past it to reach the runner code they are about.
+    backend = {"ready": True}
+
+    @contextlib.contextmanager
+    def _backend(*_args, **_kwargs):
+        yield dict(backend)
+
+    monkeypatch.setattr(pzi.ts_backend, "backend_session", _backend)
+
+    for argv, backend_ready in (
+        # Boundary failures: raised or emitted by the runner itself.
+        (["entries", "--target", missing_bib], True),
+        (["entries", "--stats", "--target", missing_bib], True),
+        (["search", "--query", "x", "--target", missing_bib], True),
+        (["entries", "nosuchkey"], True),
+        (["entries", "a1", "--stats"], True),
+        (["import", missing_file], True),
+        (["add", "--from-file", missing_file, "--delay", "0"], True),
+        (["add", "--from-file", str(empty_file), "--delay", "0"], True),
+        # The commonest live failure: the translation server is not up.
+        (["add", "10.1234/x"], False),
+        # Service-reported failures, which already went through the mapper.
+        (["delete", "nosuchkey", "--force"], True),
+    ):
+        backend["ready"] = backend_ready
+        code, out, _err = _run([*argv, "--json", "--config", str(config_path)], tmp_path)
+        envelope = json.loads(out)
+        assert envelope["status"] == "error", (argv, envelope)
+        reason = envelope.get("reason")
+        assert isinstance(reason, str), (argv, envelope)
+        assert exit_code_for_error({"reason": reason}) == code, (argv, reason, code)
+
+
 def test_library_list_aligns_its_columns_and_marks_the_default(
     tmp_path: Path,
 ) -> None:
@@ -1115,3 +1174,100 @@ def test_export_says_a_missing_target_once(tmp_path: Path) -> None:
     assert stderr.count("does not exist") == 1, stderr
     assert stderr.count("\n") == 1, f"one line, not a headline plus a bullet: {stderr!r}"
 
+
+
+# ---------------------------------------------------------------------------
+# One verdict for a partial read (item 512)
+# ---------------------------------------------------------------------------
+
+#: Every read-only command that shows counts derived from a lenient parse.
+_PARTIAL_READ_COMMANDS = (
+    ["entries"],
+    ["entries", "--stats"],
+    ["library", "dedupe"],
+    ["library", "clean"],
+    ["library", "reindex"],
+    ["export"],
+)
+
+
+def _config_naming(tmp_path: Path, bib_path: Path) -> Path:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(MINIMAL_CONFIG.format(bib_path=bib_path), encoding="utf-8")
+    return config_path
+
+
+def test_a_partial_read_is_never_reported_as_a_clean_run(tmp_path: Path) -> None:
+    """Six runners, one library they could only partly read, one verdict.
+
+    `library check` writes the rule down — a block the parser dropped is
+    something to report, so exit 1, because the run happened and 1 is "ran fine,
+    has something to report". The other runners each answered separately:
+    measured on a bib the config names but that is not there, `entries`,
+    `entries --stats`, `library dedupe`, `library clean` and `library reindex`
+    all printed `warning: bib file does not exist yet` and then exited 0 — a
+    clean bill of health for a library none of them read.
+
+    `export` is the deliberate exception and is checked here so it stays one: it
+    classifies a partial read as an *error*, because its output replaces a
+    backup (`export_service._export_status`). What it must not do is exit 0.
+    """
+    missing = tmp_path / "not-there.bib"
+    config_path = _config_naming(tmp_path, missing)
+
+    for argv in _PARTIAL_READ_COMMANDS:
+        code, _out, err = _run([*argv, "--config", str(config_path)], tmp_path)
+        assert code != exit_codes.OK, (argv, err)
+        if argv == ["export"]:
+            assert code == exit_codes.ENVIRONMENT, (argv, err)
+        else:
+            assert code == exit_codes.FINDINGS, (argv, err)
+
+
+def test_a_dropped_duplicate_is_reported_by_every_command_that_reads_it(
+    tmp_path: Path,
+) -> None:
+    """The counts are wrong, not merely incomplete, and the exit code said fine.
+
+    A duplicate citekey is dropped by the lenient parser, so `entries` reports
+    one entry for a two-entry file and `library dedupe` — the command whose
+    entire job is finding duplicates — reports zero clusters. Both exited 0.
+    """
+    bib_path = tmp_path / "dup.bib"
+    bib_path.write_text(
+        "@article{a1,\n  title = {A},\n}\n@article{a1,\n  title = {A again},\n}\n",
+        encoding="utf-8",
+    )
+    config_path = _config_naming(tmp_path, bib_path)
+
+    for argv in (["entries"], ["entries", "--stats"], ["library", "dedupe"]):
+        code, _out, err = _run([*argv, "--config", str(config_path)], tmp_path)
+        assert code == exit_codes.FINDINGS, (argv, err)
+        assert "duplicate citekey" in err, (argv, err)
+
+
+def test_the_partial_read_verdict_is_the_same_under_json(tmp_path: Path) -> None:
+    """`--json` is a rendering choice, not a different classification.
+
+    Three of these runners compute their exit code twice — once in the `--json`
+    branch and once below it — which is exactly the shape that let the two
+    answers drift apart before.
+    """
+    import json
+
+    missing = tmp_path / "not-there.bib"
+    config_path = _config_naming(tmp_path, missing)
+
+    for argv in (
+        ["entries"],
+        ["entries", "--stats"],
+        ["library", "dedupe"],
+        ["library", "clean"],
+        ["library", "reindex"],
+    ):
+        code, out, err = _run(
+            [*argv, "--json", "--config", str(config_path)], tmp_path
+        )
+        envelope = json.loads(out)
+        assert envelope["status"] == "ok", (argv, envelope)
+        assert code == exit_codes.FINDINGS, (argv, err)

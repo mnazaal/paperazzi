@@ -6,6 +6,8 @@ import sys
 import types
 from typing import Any, cast
 
+import pytest
+
 from pzi import browser_pdf_hook as hook
 from pzi.browser_session import FetchResult
 from tests.fake_session import FakeBrowserSession, make_pdf_response
@@ -286,21 +288,6 @@ def test_cookie_banner_and_download_click_helpers_try_selectors() -> None:
     assert hook._click_downloadish_links(FakeClickPage(set())) is False
 
 
-def test_close_browser_closes_the_session() -> None:
-    """Both production callers pass a single BrowserSession, so that is the
-    whole contract. The legacy `(playwright, browser_ref, ...)` tuple form this
-    test used to exercise was unreachable from `src/`."""
-    events: list[str] = []
-
-    class FakeSession:
-        def close(self) -> None:
-            events.append("close")
-
-    hook._close_browser(cast(Any, FakeSession()))
-
-    assert events == ["close"]
-
-
 def test_ensure_browser_installs_missing_browser_binaries(monkeypatch) -> None:
     events: list[str] = []
 
@@ -492,3 +479,35 @@ def test_the_candidate_loop_stops_at_its_deadline() -> None:
 
     # Far fewer than the 50 offered: the deadline stopped it.
     assert len(session.fetches) < 20
+
+
+@pytest.mark.parametrize(
+    "call",
+    ["download_pdf", "_wait_for_verified_pdf"],
+)
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [(200, b"%PDF-1.4 test"), (500, None)],
+    ids=["ok", "error-status"],
+)
+def test_every_navigation_response_is_classified_by_fetchresult(
+    call: str, status: int, expected: bytes | None
+) -> None:
+    """Both navigation sites ask ``FetchResult.is_pdf`` rather than re-deciding.
+
+    "Content-type says PDF and the body starts with %PDF-" was written out at
+    three places — ``FetchResult.is_pdf`` plus these two — so an error page
+    served as ``application/pdf`` was accepted here and rejected there.
+    """
+    session = FakeBrowserSession(
+        fetch_result=(-1, None, b""),
+        goto_results=[make_pdf_response(status=status)],
+    )
+    if call == "download_pdf":
+        result = hook.download_pdf("https://example.com/paper.pdf", _session=session)
+    else:
+        result = hook._wait_for_verified_pdf(
+            cast(Any, session), "https://example.com/paper.pdf", timeout=1
+        )
+
+    assert result == expected

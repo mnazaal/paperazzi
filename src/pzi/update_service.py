@@ -27,7 +27,7 @@ from pzi.bibtex import (
     changed_fields,
 )
 from pzi.config import BibResolutionFailure, load_bib_target
-from pzi.errors import REASON_CONFIG
+from pzi.errors import REASON_CONFIG, REASON_UNAVAILABLE
 from pzi.identifiers import has_preprint_identity
 from pzi.protocols import SearchTranslationFetcher
 from pzi.resolution_match import score_match
@@ -116,7 +116,7 @@ def update_bib(
     for record in records:
         citekey = record.get("citekey")
         if not isinstance(citekey, str):
-            continue  # pragma: no cover — covered by integration/browser tests
+            continue
         if not _needs_update(record):
             continue
         # Isolate each record: a malformed candidate or a mid-update failure
@@ -160,16 +160,13 @@ def update_bib(
         if item is not None:
             items.append(item)
 
-    return {
-        # A run where *every* item failed is not `ok`. A partial failure stays
-        # `ok` and is reported through `errors` and each item's `failed`, which
-        # is what the CLI runner turns into PARTIAL — promoting that to `error`
-        # here would make one failed lookup exit 5.
-        "status": (
-            "error"
-            if items and all(item.get("failed") for item in items)
-            else "ok"
-        ),
+    # A run where *every* item failed is not `ok`. A partial failure stays
+    # `ok` and is reported through `errors` and each item's `failed`, which
+    # is what the CLI runner turns into PARTIAL — promoting that to `error`
+    # here would make one failed lookup exit 5.
+    all_failed = bool(items and all(item.get("failed") for item in items))
+    result: UpdateBibResult = {
+        "status": "error" if all_failed else "ok",
         "bib_name": bib["name"],
         "dry_run": dry_run,
         "items": items,
@@ -184,6 +181,14 @@ def update_bib(
             if item.get("failed")
         ],
     }
+    if all_failed:
+        # `unavailable`, not `config`: the library was read and the entries were
+        # there — the lookups or writes were not. An `error` without a `reason`
+        # left `http_status` no classification to make, so `POST /update`
+        # answered its documented fallback of 400. `promote_bib` classifies the
+        # same run the same way.
+        result["reason"] = REASON_UNAVAILABLE
+    return result
 
 
 def _plan_update_for_record(
@@ -252,7 +257,7 @@ def _plan_update_for_record(
         }
     changed_fields = _changed_fields_for_candidate(record, candidate)
     if not changed_fields:
-        return None  # pragma: no cover — covered by integration/browser tests
+        return None
 
     applied = False
     note: str | None = None
@@ -271,7 +276,7 @@ def _plan_update_for_record(
                 cast(NormalizedRecord, dict(candidate)),
             )
             if not _changed_fields(current_record, current_enriched):
-                return entry  # pragma: no cover — covered by integration/browser tests
+                return entry
             return apply_record_to_entry(entry, current_enriched)
 
         update_result = update_bib_entry(
@@ -287,7 +292,7 @@ def _plan_update_for_record(
             )
             applied = bool(changed_fields)
             if not changed_fields:
-                return None  # pragma: no cover — covered by integration/browser tests
+                return None
     else:
         # Target the entry the real run will target. `update_bib_entry` above
         # resolves by *citekey*; `plan_bib_write` resolves by *identity*. Those

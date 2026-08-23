@@ -526,3 +526,146 @@ def test_a_dropped_block_does_not_discard_the_whole_audit(tmp_path):
     # And the one it could not is reported, as a warning rather than an error.
     assert any("duplicate citekey" in w for w in result["warnings"]), result
     assert not any("not audited" in e for e in result["errors"]), result
+
+
+# ---------------------------------------------------------------------------
+# Running against a library the size of a real one (items 548-550)
+# ---------------------------------------------------------------------------
+
+
+def _seed_many(tmp_path, count):
+    bib_path = tmp_path / "ml.bib"
+    config_path = _write_config(tmp_path, bib_path)
+    for index in range(count):
+        _seed(
+            tmp_path,
+            config_path,
+            citekey=f"entry{index}",
+            title=f"A Paper About Topic Number {index}",
+            authors=["Doe, Jane"],
+            year=2020,
+        )
+    return config_path
+
+
+def test_a_provider_proven_unreachable_is_not_retried_for_every_entry(tmp_path):
+    """22,232 entries times five providers is the cost of not noticing.
+
+    A provider that is down is down for the whole run: the audit measured at
+    0.6-11.2 s/entry re-dialled a refused connection once per entry per source,
+    and reported the same "connection refused" under every one of them. Trip it
+    after a few consecutive transport failures, say so once, and stop paying.
+    """
+    config_path = _seed_many(tmp_path, 12)
+    calls = []
+
+    def _down(title):
+        calls.append(title)
+        raise OSError("connection refused")
+
+    result = check_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        fetch_crossref=_down,
+        fetch_openalex=_no_source,
+        fetch_dblp=_no_source,
+        fetch_openreview=_no_source,
+        fetch_s2=_no_source,
+    )
+
+    assert result["total"] == 12
+    assert len(calls) < 12, f"crossref was dialled {len(calls)} times for 12 entries"
+    tripped = [e for e in result["errors"] if "crossref" in e]
+    assert len(tripped) == 1, result["errors"]
+    assert "consecutive" in tripped[0], tripped[0]
+    # The entries after the trip still say the source was never reached — that
+    # distinction is what separates a fabricated reference from a bad network.
+    last = result["items"][-1]
+    assert "crossref" not in last["sources_checked"]
+    assert any("crossref" in e for e in last.get("source_errors", []))
+
+
+def test_a_provider_that_recovers_is_not_tripped(tmp_path):
+    """The counter is of *consecutive* failures, so a flaky source keeps working."""
+    config_path = _seed_many(tmp_path, 12)
+    calls = []
+
+    def _flaky(title):
+        calls.append(title)
+        if len(calls) % 2:
+            raise OSError("connection reset")
+        return {"title": title, "authors": ["Jane Doe"], "year": 2020}
+
+    result = check_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        fetch_crossref=_flaky,
+        fetch_openalex=_no_source,
+        fetch_dblp=_no_source,
+        fetch_openreview=_no_source,
+        fetch_s2=_no_source,
+    )
+
+    assert len(calls) == 12, "a source that answers every other call was tripped"
+    assert result["total"] == 12
+
+
+def test_limit_audits_only_the_first_n_entries(tmp_path):
+    """No `--limit` meant the only way to try `check` on a real library was hours."""
+    config_path = _seed_many(tmp_path, 6)
+    seen = []
+
+    def _crossref(title):
+        seen.append(title)
+        return None
+
+    result = check_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        limit=2,
+        fetch_crossref=_crossref,
+        fetch_openalex=_no_source,
+        fetch_dblp=_no_source,
+        fetch_openreview=_no_source,
+        fetch_s2=_no_source,
+    )
+
+    assert result["total"] == 2
+    assert len(result["items"]) == 2
+    assert len(seen) == 2
+
+
+def test_each_verdict_is_handed_over_as_it_is_reached(tmp_path):
+    """The whole point of streaming: an interrupted run keeps its finished work.
+
+    `on_item` fires per entry, before the next one is fetched, so the runner can
+    write the JSONL line and the progress counter while the audit is still
+    going. Buffering to the end meant a run killed at entry 20,000 of 22,232
+    wrote nothing at all.
+    """
+    config_path = _seed_many(tmp_path, 4)
+    streamed = []
+
+    def _crossref(title):
+        # Every call happens *after* the previous entry was handed over.
+        assert len(streamed) < 4
+        return None
+
+    result = check_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        on_item=lambda item, index, total: streamed.append((item["citekey"], index, total)),
+        fetch_crossref=_crossref,
+        fetch_openalex=_no_source,
+        fetch_dblp=_no_source,
+        fetch_openreview=_no_source,
+        fetch_s2=_no_source,
+    )
+
+    assert [c for c, _i, _t in streamed] == [i["citekey"] for i in result["items"]]
+    assert [i for _c, i, _t in streamed] == [0, 1, 2, 3]
+    assert {t for _c, _i, t in streamed} == {4}

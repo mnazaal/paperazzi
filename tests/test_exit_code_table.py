@@ -180,3 +180,37 @@ def test_no_two_codes_share_a_meaning() -> None:
     assert len(set(defined.values())) == len(defined), (
         f"two names share an exit code: {defined}"
     )
+
+
+def test_sigterm_to_the_server_is_the_documented_interrupted_code() -> None:
+    """`pzi server` catches SIGTERM, so it is 130 too — and 130 has to say so.
+
+    systemd's default stop signal is SIGTERM, so the supervised path is the one
+    that runs in production, and it went through a handler documented as SIGINT
+    only. Decided rather than left ambiguous: one code covers both, because the
+    only sender of SIGTERM here is a supervisor that already knows what it sent.
+    Delivered for real to this process, so the claim is about the handler the
+    server actually installs rather than about a hand-written mapping.
+    """
+    import os
+    import signal
+
+    from pzi.cli_parser import build_parser
+    from pzi.commands.server import _sigterm_as_keyboard_interrupt
+
+    raised = False
+    with _sigterm_as_keyboard_interrupt():
+        try:
+            os.kill(os.getpid(), signal.SIGTERM)
+        except KeyboardInterrupt:
+            raised = True
+    assert raised, "SIGTERM did not reach the handler `pzi server` installs"
+
+    # …and that is the interrupt `main` maps, so the process status is 130.
+    with patch("pzi.cli.run_cli", side_effect=KeyboardInterrupt), \
+            patch("sys.argv", ["pzi", "server"]):
+        assert main() == exit_codes.INTERRUPTED
+
+    # The `pzi --help` epilog is where a user reads this, so it names both.
+    epilog = build_parser().epilog or ""
+    assert "SIGTERM" in epilog and "SIGINT" in epilog, epilog

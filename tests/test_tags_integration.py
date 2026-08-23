@@ -87,6 +87,27 @@ def test_list_tags_citekey_not_found(tmp_path: Path) -> None:
     assert "not found" in result["errors"][0]
 
 
+def test_list_tags_reports_a_library_the_config_does_not_declare(tmp_path: Path) -> None:
+    """The plain config-broken path, which was hidden behind a false pragma.
+
+    It was marked `# pragma: no cover — covered by integration/browser tests`;
+    the browser-marked files import `browser_pdf_hook` and `browser_session`
+    and nothing else, so nothing covered it. Reaching it takes one wrong
+    `--library`.
+    """
+    config = _write_config_and_bib(tmp_path, VALID_BIB)
+    result = list_tags(
+        config_path=str(config),
+        home_dir=str(tmp_path),
+        bib_selector="nosuchlibrary",
+        citekey=None,
+    )
+    assert result["status"] == "error"
+    assert result["reason"] == "config"
+    assert result["tags"] == []
+    assert result["errors"]
+
+
 def test_list_tags_entry_without_tags_field(tmp_path: Path) -> None:
     config = _write_config_and_bib(tmp_path, VALID_BIB)
     result = list_tags(

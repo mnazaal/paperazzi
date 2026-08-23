@@ -193,7 +193,7 @@ def _normalize_creators(value: object) -> list[str]:
     authors: list[str] = []
     for creator in value:
         if not isinstance(creator, Mapping):
-            continue  # pragma: no cover — covered by integration/browser tests
+            continue
         name = _mapping_string(creator, "name")
         if name is not None:
             authors.append(name)
@@ -202,7 +202,7 @@ def _normalize_creators(value: object) -> list[str]:
         last_name = _mapping_string(creator, "lastName")
         if first_name and last_name:
             authors.append(f"{last_name}, {first_name}")
-        elif last_name:  # pragma: no branch — covered by integration/browser tests
+        elif last_name:
             authors.append(last_name)
     return repair_split_initials(authors)
 
@@ -234,7 +234,7 @@ def _extract_arxiv_id(item: Mapping[str, object]) -> str | None:
     for line in extra.splitlines():
         if ":" not in line:
             continue
-        key, value = line.split(":", 1)  # pragma: no branch — covered by integration/browser tests
+        key, value = line.split(":", 1)
         if key.strip().lower() == "arxiv":  # pragma: no branch
             return normalize_arxiv_id(value)
     return None

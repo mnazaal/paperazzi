@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from pzi.pdf import (
     fetch_and_store_pdf_with_fallbacks,
     fetch_unpaywall_pdf_url,
@@ -10,7 +12,7 @@ from pzi.pdf_download import (
     copy_pdf_to_papers_dir,
     fetch_and_store_pdf,
 )
-from pzi.pdf_planning import is_pdf_bytes, is_pdf_content_type, plan_pdf_path
+from pzi.pdf_planning import is_pdf_bytes, plan_pdf_path
 
 
 def test_is_pdf_bytes_detects_pdf_signature() -> None:
@@ -23,15 +25,6 @@ def test_plan_pdf_path_uses_deterministic_citekey_name() -> None:
         plan_pdf_path(papers_dir="/tmp/papers", citekey="smith2024graph")
         == "/tmp/papers/smith2024graph.pdf"
     )
-
-
-def testis_pdf_content_type_classifies_explicit_and_ambiguous_values() -> None:
-    assert is_pdf_content_type("application/pdf; charset=binary") is True
-    assert is_pdf_content_type("text/html") is False
-    assert is_pdf_content_type("application/json") is False
-    assert is_pdf_content_type("text/plain") is False
-    assert is_pdf_content_type("application/octet-stream") is None
-    assert is_pdf_content_type(None) is None
 
 
 def test_write_pdf_bytes_creates_parent_and_overwrites_atomically(tmp_path: Path) -> None:
@@ -377,3 +370,115 @@ def test_fetch_and_store_pdf_with_fallbacks_survives_a_raising_browser_step(
     assert error is None
     assert local_path == str(tmp_path / "papers" / "flare2024.pdf")
     assert (tmp_path / "papers" / "flare2024.pdf").read_bytes() == b"%PDF-flare"
+
+
+@pytest.mark.parametrize("rung", ["browser_pdf_cmd", "desktop"])
+def test_resolved_settings_reach_every_fallback_rung(
+    rung: str,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Every rung uses the *passed* settings, not a fresh read of os.environ.
+
+    ``fetch_and_store_pdf_with_fallbacks`` resolves ``PdfFallbackSettings`` once
+    and documents that the helpers no longer read the environment themselves.
+    Two rungs dropped the keyword and re-resolved, so a caller passing
+    ``disable_desktop_browser=True`` was ignored. The environment here says the
+    opposite of the injected settings at both rungs, so a rung that re-reads it
+    is visible in the assertion.
+    """
+    import pzi.browser_pdf
+    import pzi.pdf
+    from pzi.pdf_planning import PdfFallbackSettings
+
+    monkeypatch.setenv("PZI_BROWSER_PDF_CMD", "env-hook")
+    monkeypatch.setenv("PZI_DISABLE_DESKTOP_BROWSER_FALLBACK", "0")
+    monkeypatch.setenv("PZI_DOWNLOAD_DIR", str(tmp_path / "env-downloads"))
+    settings = PdfFallbackSettings(
+        disable_desktop_browser=True,
+        download_dir=tmp_path / "settings-downloads",
+        browser_pdf_cmd="settings-hook",
+    )
+
+    commands: list[str] = []
+
+    def record_command(*, command: str, pdf_url: str) -> bytes | None:
+        commands.append(command)
+        return None
+
+    monkeypatch.setattr(pzi.browser_pdf, "download_pdf_with_browser", record_command)
+    # If the desktop rung re-resolves from the environment it will find the
+    # fallback enabled and try to open a browser; make that observable rather
+    # than interactive.
+    monkeypatch.setattr(pzi.pdf.webbrowser, "open", lambda url: False)
+
+    local_path, _warning, error = fetch_and_store_pdf_with_fallbacks(
+        url="https://www.biorxiv.org/content/10.1101/2024.01.01.123456v1.full.pdf",
+        papers_dir=str(tmp_path / "papers"),
+        citekey="settings2024",
+        fetch_binary=lambda url: (b"<html>blocked</html>", "text/html"),
+        settings=settings,
+    )
+
+    assert local_path is None
+    assert error is not None
+    if rung == "browser_pdf_cmd":
+        assert commands == ["settings-hook"]
+    else:
+        assert "desktop browser download: skipped" in error
+
+
+def test_desktop_fallback_reports_an_unwritable_download_dir_instead_of_raising(
+    tmp_path: Path,
+) -> None:
+    """The last rung reports failure by returning None, like every other rung.
+
+    ``fetch_and_store_pdf_with_fallbacks`` has no exception handling, so an
+    OSError from ``download_dir.mkdir`` escaped the whole chain and discarded
+    the stage errors the earlier rungs had already recorded.
+    """
+    from pzi.pdf import fetch_pdf_via_desktop_browser_download
+    from pzi.pdf_planning import PdfFallbackSettings
+
+    blocker = tmp_path / "not-a-dir"
+    blocker.write_bytes(b"")
+
+    path, reason = fetch_pdf_via_desktop_browser_download(
+        url="https://www.biorxiv.org/content/paper.full.pdf",
+        papers_dir=str(tmp_path / "papers"),
+        citekey="blocked2024",
+        settings=PdfFallbackSettings(download_dir=blocker / "downloads"),
+    )
+
+    assert path is None
+    assert reason is not None
+    assert reason.startswith("desktop download dir unavailable: ")
+
+
+def test_unwritable_download_dir_keeps_the_earlier_stage_errors(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """The chain still reports what the earlier rungs learned."""
+    import pzi.browser_pdf
+    from pzi.pdf_planning import PdfFallbackSettings
+
+    blocker = tmp_path / "not-a-dir"
+    blocker.write_bytes(b"")
+    monkeypatch.setattr(
+        pzi.browser_pdf, "download_pdf_with_browser", lambda *, command, pdf_url: None
+    )
+
+    local_path, _warning, error = fetch_and_store_pdf_with_fallbacks(
+        url="https://www.biorxiv.org/content/10.1101/2024.01.01.123456v1.full.pdf",
+        papers_dir=str(tmp_path / "papers"),
+        citekey="blocked2024",
+        fetch_binary=lambda url: (b"<html>blocked</html>", "text/html"),
+        settings=PdfFallbackSettings(download_dir=blocker / "downloads"),
+    )
+
+    assert local_path is None
+    assert error is not None
+    assert "direct download: " in error
+    assert "browser_pdf_cmd: no PDF returned" in error
+    assert "desktop download dir unavailable: " in error

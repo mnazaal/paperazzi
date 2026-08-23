@@ -13,6 +13,7 @@ from pzi.add_planning import next_pdf_candidate_for_config
 from pzi.bib_repository import (
     BatchWriteSession,
     ConcurrentEditError,
+    StalePlanError,
     WritePlan,
     backup_path_for,
     batch_write_session,
@@ -37,7 +38,7 @@ from pzi.bibtex import (
 from pzi.bibtex import changed_fields as changed_fields_between
 from pzi.capture_context import resolve_contact_email, resolve_optional_value
 from pzi.config import BibResolutionFailure, load_bib_target
-from pzi.errors import REASON_CONFIG
+from pzi.errors import REASON_CONFIG, REASON_UNAVAILABLE
 from pzi.fetch_helpers import build_metadata_fetch_text
 from pzi.format_templates import format_citekey
 from pzi.identifiers import (
@@ -204,7 +205,7 @@ def promote_bib(
     for record in records:
         preprint_ck = record.get("citekey")
         if not isinstance(preprint_ck, str):
-            continue  # pragma: no cover — covered by integration/browser tests
+            continue
         # `has_preprint_identity`, not `is_preprint`: the latter calls any
         # record without a `venue` a preprint, which is a large share of an
         # ordinary library, so promotion forked a second entry out of plain
@@ -335,6 +336,14 @@ def promote_bib(
                     run_backup=run_backup,
                     **pdf_kwargs,
                 )
+        except (StalePlanError, ConcurrentEditError):
+            # Not a per-record problem: the bib changed underneath this run, so
+            # continuing to write the remaining preprints is unsafe. Swallowed,
+            # one lost write race was reported once per preprint as "promotion
+            # failed" on a run that still called itself ok. `update_bib` makes
+            # the same carve-out; the CLI and the HTTP API both classify these
+            # at their boundary.
+            raise
         except Exception as exc:  # one failing entry must not abort the run
             summary["skipped_failed"] += 1
             items.append(
@@ -345,7 +354,7 @@ def promote_bib(
         if metadata_diagnostics:
             item["metadata_diagnostics"] = metadata_diagnostics
 
-        items.append(item)  # pragma: no branch — covered by integration/browser tests
+        items.append(item)
         if item.get("action") in {"create", "update"}:
             # Keep mode leaves the preprint in place; tag it so a later
             # --mark-resolved run skips it.  Replace mode rewrites the entry to
@@ -392,8 +401,14 @@ def promote_bib(
         summary["marked_resolved"] = tagged
         errors.extend(tag_failures)
 
-    return {
-        "status": "ok",
+    # A run where *every* preprint failed is not `ok`. Derived, as `update_bib`
+    # and `check_bib` derive theirs: hardcoded `ok` here meant `pzi.promote()`
+    # returned normally and `POST /promote` answered 200 for a run that promoted
+    # nothing. A *partial* failure stays `ok` and is reported through `errors`
+    # and each item's `failed`, which is what the CLI runner turns into PARTIAL.
+    all_failed = bool(items and all(item.get("failed") for item in items))
+    result: PromoteResult = {
+        "status": "error" if all_failed else "ok",
         "bib_name": bib["name"],
         "dry_run": dry_run,
         "keep_preprint": keep_preprint,
@@ -403,6 +418,13 @@ def promote_bib(
         # run in which every promotion raised reported no errors at all.
         "errors": errors,
     }
+    if all_failed:
+        # `unavailable`, not `config`: the library was read and the preprints
+        # were there — the promotions were not writable. Both
+        # `exit_code_for_error` and `http_status` map it, so an unclassified
+        # failure cannot fall back to 400.
+        result["reason"] = REASON_UNAVAILABLE
+    return result
 
 
 def _empty_summary() -> dict[str, Any]:

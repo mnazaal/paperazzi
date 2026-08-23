@@ -321,9 +321,16 @@ def _all_module_paths() -> list[Path]:
     # front-end module now that it re-exports the public API, so it needs
     # classifying like any other. `__main__` stays out: it is the `python -m`
     # shim, imports `cli` and nothing imports it.
-    return sorted(
+    paths = sorted(
         path for path in _SRC.rglob("*.py") if path.stem != "__main__"
     )
+    # Every boundary test below is of the form `assert not offenders`, which an
+    # empty scan satisfies vacuously. They were protected only by
+    # `test_all_modules_classified` failing first — a sibling, so a reordering
+    # or a `-k` selection could run the four invariants against nothing and
+    # report four passes. Assert the walk found something, at the walk.
+    assert paths, f"module scan found no modules under {_SRC} — the boundary tests would pass vacuously"
+    return paths
 
 
 def _build_import_graph() -> dict[str, set[str]]:

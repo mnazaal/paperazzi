@@ -47,12 +47,12 @@ class AttachSessionStore:
             return self._sessions.pop(request_id, None)
 
     def restore(self, session: AttachSession) -> None:
-        """Put a claimed-but-not-successfully-used session back for retry."""
-        with self._lock:
-            self._prune_expired_locked()
-            if session.expires_at <= self._clock():
-                return
-            self._sessions[session.request_id] = session
+        """Put a claimed-but-not-successfully-used session back for retry.
+
+        Identical to ``put`` — the two names are kept apart because the call
+        sites mean different things by them, not because the storage differs.
+        """
+        self.put(session)
 
     def _prune_expired_locked(self) -> None:
         """Drop expired sessions. Caller must hold ``self._lock``."""

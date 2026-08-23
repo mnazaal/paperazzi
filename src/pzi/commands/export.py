@@ -13,7 +13,7 @@ from pzi.commands.common import (
     resolve_target,
     write_atomic,
 )
-from pzi.export_service import export_bibtex, export_csv, export_json, export_ris
+from pzi.export_service import EXPORTERS
 
 
 def run_export_command(
@@ -35,15 +35,15 @@ def run_export_command(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector,
     )
 
-    exporters = {
-        "bibtex": export_bibtex,
-        "csv": export_csv,
-        "json": export_json,
-        "ris": export_ris,
-    }
-    result = exporters[args.format](bib_path=target["path"])
+    result = EXPORTERS[args.format](target["path"])
 
     if result["status"] != "ok":
+        # The partial-read verdict, `export`'s way. The other four read commands
+        # report a lenient parse as a finding (exit 1) via `has_read_warnings`;
+        # the exporters have no `warnings` channel at all, because
+        # `_export_status` classifies a dropped block as an *error* — this
+        # output replaces a backup, so an export that silently omits entries
+        # must not be exit 0 and must not be exit 1 either.
         print_lines(error_lines("export failed", result.get("errors", [])), stderr)
         return exit_codes.ENVIRONMENT
 

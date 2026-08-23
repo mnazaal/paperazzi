@@ -176,7 +176,10 @@ def __getattr__(name: str) -> object:
 
 
 def __dir__() -> list[str]:
-    return sorted({*globals(), *__all__})
+    # `__all__` alone, not unioned with `globals()`: the union advertised nine
+    # module internals (`logging`, `TYPE_CHECKING`, `_PUBLIC_API`, ...) to
+    # tab-completion, contradicting this module's own docstring.
+    return sorted(__all__)
 
 
 __all__ = [

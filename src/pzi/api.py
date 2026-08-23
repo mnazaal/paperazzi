@@ -36,10 +36,12 @@ from typing import Any, NotRequired, TypedDict, cast
 from pzi import exit_codes
 from pzi.add_planning import AddResult
 from pzi.bib_service import (
+    SORT_FIELDS,
     BibInfo,
     DeleteEntryResult,
     EntryRecord,
     EntrySummary,
+    clamp_limit,
     delete_entry,
     entry_detail,
     list_entries,
@@ -68,7 +70,7 @@ from pzi.errors import (
     PziError,
     exit_code_for_error,
 )
-from pzi.export_service import export_bibtex, export_csv, export_json, export_ris
+from pzi.export_service import EXPORTERS
 from pzi.promote_service import PromoteItem, PromoteResult, promote_bib
 from pzi.search_service import SearchMatch, search_bib
 from pzi.tag_service import TagChangeResult, TagListResult
@@ -298,7 +300,7 @@ class EntryPage(TypedDict):
     paginating", and there is no other way to get it: the service computes it
     and the facade used to throw it away, so a caller looping over `offset` had
     to keep requesting until a short page came back. `offset` and `limit` are
-    echoed as *resolved* — `limit` is clamped to `_MIN_LIMIT.._MAX_LIMIT` and a
+    echoed as *resolved* — `limit` is clamped to `MIN_LIMIT..MAX_LIMIT` and a
     negative `offset` becomes zero, matching the other two front ends, so what
     comes back says what was actually used rather than what was asked for.
     """
@@ -340,25 +342,9 @@ def _report(result: Mapping[str, Any], *, keep_errors: bool = False) -> Any:
     return report
 
 
-_EXPORTERS = {
-    "bibtex": export_bibtex,
-    "json": export_json,
-    "csv": export_csv,
-    "ris": export_ris,
-}
-
-
-#: The sort fields `bib_service.list_entries` actually implements. It falls back
-#: to `citekey` for anything else *silently*, so an unvalidated typo returns
-#: plausible data in the wrong order. The CLI enforces the same set as argparse
-#: `choices` (the `--sort` argument in `cli_parser`); this is that guard for
-#: the library.
-_SORT_FIELDS = ("author", "citekey", "title", "year")
-
-#: The bounds the other two front ends clamp to (`_handle_entries_get` in
-#: `http_get_routes` and the entries runner in `commands/entries`). Clamped
-#: rather than rejected, matching them.
-_MIN_LIMIT, _MAX_LIMIT = 1, 500
+#: `bib_service` owns the export table, the sort fields and the page bounds;
+#: all three front ends import them from there rather than restating them.
+_SORT_FIELDS = tuple(sorted(SORT_FIELDS))
 
 
 def _home() -> str:
@@ -389,11 +375,12 @@ def _emit_warnings(result: Mapping[str, Any]) -> None:
     """Re-raise a service's read warnings through Python's own channel.
 
     Reading a *missing* bib is a warning rather than an error on purpose
-    (`export_service.py:105-113`): a freshly ``pzi init``-ed config names a bib
-    that does not exist until the first ``add``. The CLI prints those warnings
-    and the HTTP envelope carries them — but a facade returning only the items
-    dropped them, so a typo'd ``path =`` or an unmounted share came back as an
-    empty list, indistinguishable from a library with nothing in it.
+    (`bib_repository.describe_missing_bib`): a freshly ``pzi init``-ed config
+    names a bib that does not exist until the first ``add``. The CLI prints
+    those warnings and the HTTP envelope carries them — but a facade returning
+    only the items dropped them, so a typo'd ``path =`` or an unmounted share
+    came back as an empty list, indistinguishable from a library with nothing
+    in it.
 
     `warnings.warn` rather than a changed return type: it is the mechanism a
     Python caller already has, it is visible by default, and ``-W error``
@@ -614,7 +601,7 @@ def entries(
             reason=REASON_USAGE,
         )
     resolved_offset = max(0, offset)
-    resolved_limit = max(_MIN_LIMIT, min(limit, _MAX_LIMIT))
+    resolved_limit = clamp_limit(limit)
     result = list_entries(
         config_path=_resolved_config_path(config_path),
         home_dir=_home(),
@@ -643,11 +630,11 @@ def export(
 ) -> str:
     """Return the whole library serialized as ``bibtex``, ``json``, ``csv`` or
     ``ris``."""
-    exporter = _EXPORTERS.get(fmt)
+    exporter = EXPORTERS.get(fmt)
     if exporter is None:
         raise PziError(
             f"unknown export format {fmt!r} — expected one of "
-            f"{', '.join(sorted(_EXPORTERS))}",
+            f"{', '.join(sorted(EXPORTERS))}",
             code=exit_codes.USAGE,
             reason=REASON_USAGE,
         )

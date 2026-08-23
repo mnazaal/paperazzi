@@ -30,7 +30,7 @@ def _parse_embedded_metadata(html: str) -> tuple[dict[str, list[str]], list[obje
         if tag == "meta":
             name = (ad.get("name") or ad.get("property") or "").lower().strip()
             content = (ad.get("content") or "").strip()
-            if name and content:  # pragma: no cover — covered by integration/browser tests
+            if name and content:
                 meta.setdefault(name, []).append(content)
         elif tag == "script" and (ad.get("type") or "").strip() == "application/ld+json":
             in_ld_script = True

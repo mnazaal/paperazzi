@@ -11,12 +11,19 @@ test.
 
 from __future__ import annotations
 
+import http.client
 import inspect
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
+from http.server import HTTPServer
 from pathlib import Path
 
 from pzi import http_security
+from pzi.http_api import build_handler_class
 from pzi.http_get_routes import BINARY_GET_ROUTES, GET_PREFIX_ROUTES, GET_ROUTES
 from pzi.http_post_routes import POST_ROUTES
+from pzi.http_security import build_http_security_config
 
 #: Derived, not hand-written. The two binary GETs used to be matched by inline
 #: conditionals in `http_api`'s dispatcher, so no introspection could find them
@@ -178,3 +185,70 @@ def test_authentication_is_one_gate_in_front_of_every_route() -> None:
         "authentication is no longer one gate in front of everything and this "
         "file must pin each route's requirement individually."
     )
+
+
+#: The HTTP methods the handler class installs. Frozen for the same reason the
+#: route set is: a `do_PUT` added without wiring the gate is a hole, and the
+#: signature check above stays green for it because it never looks at the
+#: handler class at all.
+EXPECTED_HTTP_METHODS = {"do_GET", "do_POST", "do_OPTIONS"}
+
+#: CORS preflight cannot carry `X-Pzi-Token` — the browser sends it before the
+#: real request, without the custom headers — so OPTIONS is exempt from the
+#: token check by design. It is *not* exempt from the host and origin checks,
+#: which is what the second half of the test below pins.
+_TOKEN_EXEMPT = {"do_OPTIONS"}
+
+
+@contextmanager
+def _running(handler_cls: type) -> Iterator[int]:
+    server = HTTPServer(("127.0.0.1", 0), handler_cls)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server.server_address[1]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def _status(port: int, method: str, path: str, *, host: str | None = None) -> int:
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    try:
+        conn.request(
+            method,
+            path,
+            body=b"" if method == "POST" else None,
+            headers={"Host": host} if host is not None else {},
+        )
+        return conn.getresponse().status
+    finally:
+        conn.close()
+
+
+def test_every_installed_method_is_refused_without_credentials(tmp_path: Path) -> None:
+    """The wiring, not the signature — a `do_PUT` added without the gate fails here.
+
+    Two assertions, because the gate has two halves and only one applies to
+    every method. Without a token, GET and POST answer 401 and OPTIONS answers
+    204 (preflight is token-exempt by design). A `Host` the server does not
+    bind is refused for all three, preflight included.
+    """
+    handler_cls = build_handler_class(
+        config_path=str(tmp_path / "config.toml"),
+        home_dir=str(tmp_path),
+        security=build_http_security_config(auth_token="secret"),
+    )
+    installed = {name for name in vars(handler_cls) if name.startswith("do_")}
+    assert installed == EXPECTED_HTTP_METHODS, (
+        f"the handler class installs {sorted(installed)}. Every method it "
+        "handles must go through `request_security_error` — add it to "
+        "EXPECTED_HTTP_METHODS once it does."
+    )
+
+    with _running(handler_cls) as port:
+        for name in sorted(installed):
+            method = name.removeprefix("do_")
+            expected = 204 if name in _TOKEN_EXEMPT else 401
+            assert _status(port, method, "/bibs") == expected, name
+            assert _status(port, method, "/bibs", host="evil.example") == 403, name

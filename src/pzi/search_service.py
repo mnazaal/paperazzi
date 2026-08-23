@@ -96,7 +96,7 @@ def search_bib(
     for record in records:
         citekey = record.get("citekey")
         if not isinstance(citekey, str):
-            continue  # pragma: no cover — covered by integration/browser tests
+            continue
 
         match_result = _match_record(
             record,

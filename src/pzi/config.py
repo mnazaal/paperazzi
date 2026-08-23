@@ -131,6 +131,44 @@ def validate_bib_config(
 DEFAULT_API_LISTEN_HOST = "127.0.0.1"
 DEFAULT_API_LISTEN_PORT = 8765
 
+#: The browser Playwright drives unless the config names another. Written as a
+#: bare literal at the two sites that decide it — the validator's allowed set
+#: and the normalizer's fallback — which is one site too many for a default.
+DEFAULT_BROWSER_ENGINE = "chromium"
+
+#: The request-body ceiling the API applies when the config does not set one.
+#: Written as `64 * 1024 * 1024` at three sites here, a fourth time as
+#: `http_security.DEFAULT_MAX_BODY_BYTES`, and nothing tied the four together.
+#: Defined rather than imported because the layer guard
+#: (`tests/test_layer_boundaries.py`) classifies `http_security` as a front-end
+#: module and this one as core, so the import may only run the other way;
+#: `test_the_body_size_default_matches_the_http_layer` pins the two equal.
+DEFAULT_MAX_BODY_BYTES = 64 * 1024 * 1024
+
+#: Keys accepted as an optional string and nothing else. `_opt_str_from_raw`
+#: returns None for any non-string, so without a check here a wrong type reads
+#: as "unset" and the setting silently vanishes. Thirteen of these were written
+#: out longhand beside a loop already doing exactly this for five of them;
+#: `citekey_format` and `pdf_filename_format` stay out because they carry an
+#: extra template check that has to run on the string.
+OPTIONAL_STRING_KEYS = (
+    "api_auth_token",
+    "api_auth_token_cmd",
+    "api_url",
+    "browser_pdf_cmd",
+    "browser_profile_path",
+    "contact_email",
+    "contact_email_cmd",
+    "flaresolverr_url",
+    "inbox_path",
+    "node_path",
+    "page_metadata_cmd",
+    "semantic_scholar_api_key",
+    "semantic_scholar_api_key_cmd",
+    "unpaywall_email",
+    "unpaywall_email_cmd",
+)
+
 
 def _safe_int(value: object, default: int, *, min_value: int = 0) -> int:
     """Return an int from a trusted-or-unknown raw config value, or *default*."""
@@ -244,9 +282,9 @@ def _normalize_app_config(
     raw_translation_server_url = raw.get(
         "translation_server_url", DEFAULT_TRANSLATION_SERVER_URL
     )
-    raw_api_listen_host = raw.get("api_listen_host", "127.0.0.1")
-    raw_api_listen_port = raw.get("api_listen_port", 8765)
-    raw_api_max_body_bytes = raw.get("api_max_body_bytes", 64 * 1024 * 1024)
+    raw_api_listen_host = raw.get("api_listen_host", DEFAULT_API_LISTEN_HOST)
+    raw_api_listen_port = raw.get("api_listen_port", DEFAULT_API_LISTEN_PORT)
+    raw_api_max_body_bytes = raw.get("api_max_body_bytes", DEFAULT_MAX_BODY_BYTES)
     raw_metadata_confidence_min_score = raw.get("metadata_confidence_min_score", 0)
     raw_promote_confidence_threshold = raw.get(
         "promote_confidence_threshold", DEFAULT_PROMOTE_CONFIDENCE_THRESHOLD
@@ -254,7 +292,7 @@ def _normalize_app_config(
     raw_metadata_cache_ttl = raw.get("metadata_cache_ttl", 0)
     raw_browser_hook = raw.get("browser_hook", True)
     raw_pzi_data_home = raw.get("pzi_data_home")
-    raw_browser_engine = raw.get("browser_engine", "chromium")
+    raw_browser_engine = raw.get("browser_engine", DEFAULT_BROWSER_ENGINE)
     raw_pdf_discovery_parallel = raw.get("pdf_discovery_parallel", False)
     raw_pdf_file_path_style = raw.get("pdf_file_path_style", "absolute")
     raw_page_metadata_timeout_seconds = raw.get("page_metadata_timeout_seconds", 5)
@@ -278,7 +316,7 @@ def _normalize_app_config(
         "api_allowed_origins": normalized_api_allowed_origins,
         "capture_source_dirs": normalized_capture_source_dirs,
         "inbox_path": _expanded_opt(raw, "inbox_path"),
-        "api_max_body_bytes": _safe_int(raw_api_max_body_bytes, 64 * 1024 * 1024),
+        "api_max_body_bytes": _safe_int(raw_api_max_body_bytes, DEFAULT_MAX_BODY_BYTES),
         "contact_email": opt("contact_email"),
         "contact_email_cmd": opt("contact_email_cmd"),
         "unpaywall_email": opt("unpaywall_email"),
@@ -308,7 +346,7 @@ def _normalize_app_config(
         "node_path": opt("node_path"),
         "api_url": api_url,
         "browser_profile_path": opt("browser_profile_path"),
-        "browser_engine": str(raw_browser_engine).strip() or "chromium",
+        "browser_engine": str(raw_browser_engine).strip() or DEFAULT_BROWSER_ENGINE,
         "pdf_discovery_parallel": _safe_bool(raw_pdf_discovery_parallel, False),
         "desktop_fallback_hosts": (
             _normalize_host_list(raw_desktop_fallback_hosts)
@@ -322,7 +360,17 @@ def _normalize_app_config(
 def validate_app_config(
     raw: Mapping[str, object], *, home_dir: str, base_dir: str | None = None
 ) -> tuple[AppConfig | None, list[str]]:
-    """Validate application config into one plain normalized shape."""
+    """Validate application config into one plain normalized shape.
+
+    Every fault in one pass. This used to return at four staged gates, so a
+    config with a bad `api_listen_host` *and* a bad `browser_hook` reported the
+    first, and the user learned about the second only after fixing it — with no
+    way to tell how many rounds were left. Which tier a key landed in was an
+    accident of where its check happened to be written.
+
+    The one ordering constraint left is real: `_validate_bib_list` iterates
+    `raw_bibs`, so it runs only once that key is known to be a non-empty list.
+    """
     errors: list[str] = []
 
     raw_translation_server_url = raw.get(
@@ -333,11 +381,11 @@ def validate_app_config(
     ):
         errors.append("translation_server_url must be an http or https URL")
 
-    raw_api_listen_host = raw.get("api_listen_host", "127.0.0.1")
+    raw_api_listen_host = raw.get("api_listen_host", DEFAULT_API_LISTEN_HOST)
     if not isinstance(raw_api_listen_host, str) or not raw_api_listen_host.strip():
         errors.append("api_listen_host must be a non-empty string")
 
-    raw_api_listen_port = raw.get("api_listen_port", 8765)
+    raw_api_listen_port = raw.get("api_listen_port", DEFAULT_API_LISTEN_PORT)
     if (
         not isinstance(raw_api_listen_port, int)
         or isinstance(raw_api_listen_port, bool)
@@ -345,13 +393,13 @@ def validate_app_config(
     ):
         errors.append("api_listen_port must be an integer between 1 and 65535")
 
-    raw_api_auth_token = raw.get("api_auth_token")
-    if raw_api_auth_token is not None and not isinstance(raw_api_auth_token, str):
-        errors.append("api_auth_token must be a string when provided")
-
-    raw_api_auth_token_cmd = raw.get("api_auth_token_cmd")
-    if raw_api_auth_token_cmd is not None and not isinstance(raw_api_auth_token_cmd, str):
-        errors.append("api_auth_token_cmd must be a string when provided")
+    # `_opt_str_from_raw` returns None for any non-string, so a wrong type reads
+    # as "unset" and vanishes. That is exactly the silent fallback the
+    # `node_path` docs disclaim ("a set-but-broken value is a hard error").
+    for key in OPTIONAL_STRING_KEYS:
+        value = raw.get(key)
+        if value is not None and not isinstance(value, str):
+            errors.append(f"{key} must be a string when provided")
 
     raw_api_allowed_origins = raw.get("api_allowed_origins")
     if raw_api_allowed_origins is not None and not (
@@ -360,7 +408,7 @@ def validate_app_config(
     ):
         errors.append("api_allowed_origins must be a list of strings when provided")
 
-    raw_api_max_body_bytes = raw.get("api_max_body_bytes", 64 * 1024 * 1024)
+    raw_api_max_body_bytes = raw.get("api_max_body_bytes", DEFAULT_MAX_BODY_BYTES)
     if (
         not isinstance(raw_api_max_body_bytes, int)
         or isinstance(raw_api_max_body_bytes, bool)
@@ -405,25 +453,6 @@ def validate_app_config(
     if raw_pdf_file_path_style not in {"absolute", "relative"}:
         errors.append("pdf_file_path_style must be 'absolute' or 'relative'")
 
-    raw_page_metadata_cmd = raw.get("page_metadata_cmd")
-    if raw_page_metadata_cmd is not None and not isinstance(raw_page_metadata_cmd, str):
-        errors.append("page_metadata_cmd must be a string when provided")
-
-    # `_opt_str_from_raw` returns None for any non-string, so a wrong type reads
-    # as "unset" and vanishes. That is exactly the silent fallback the
-    # `node_path` docs disclaim ("a set-but-broken value is a hard error"), and
-    # it applied to all five of these keys.
-    for key in (
-        "flaresolverr_url",
-        "api_url",
-        "browser_pdf_cmd",
-        "node_path",
-        "browser_profile_path",
-    ):
-        value = raw.get(key)
-        if value is not None and not isinstance(value, str):
-            errors.append(f"{key} must be a string when provided")
-
     # Both are URLs and both were discarded in silence when malformed:
     # `flaresolverr_url` was nulled by the normalizer with no error at all,
     # which left the feature off while `add_planning` told the user to
@@ -442,45 +471,16 @@ def validate_app_config(
         errors.append("page_metadata_timeout_seconds must be a positive integer")
 
     raw_bibs = raw.get("bibs")
+    validated_bibs: list[BibConfig] | None = None
     if not isinstance(raw_bibs, list) or not raw_bibs:
         errors.append("bibs must be a non-empty list")
-
-    if errors:
-        return None, errors
-
-    validated_bibs, bib_errors = _validate_bib_list(
-        raw_bibs, home_dir=home_dir, base_dir=base_dir
-    )
-    if bib_errors:
-        return None, bib_errors
-    assert validated_bibs is not None
-
-    raw_unpaywall_email = raw.get("unpaywall_email")
-    if raw_unpaywall_email is not None and not isinstance(raw_unpaywall_email, str):
-        errors.append("unpaywall_email must be a string when provided")
-
-    raw_unpaywall_email_cmd = raw.get("unpaywall_email_cmd")
-    if raw_unpaywall_email_cmd is not None and not isinstance(raw_unpaywall_email_cmd, str):
-        errors.append("unpaywall_email_cmd must be a string when provided")
-
-    raw_contact_email = raw.get("contact_email")
-    if raw_contact_email is not None and not isinstance(raw_contact_email, str):
-        errors.append("contact_email must be a string when provided")
-
-    raw_contact_email_cmd = raw.get("contact_email_cmd")
-    if raw_contact_email_cmd is not None and not isinstance(raw_contact_email_cmd, str):
-        errors.append("contact_email_cmd must be a string when provided")
-
-    if errors:
-        return None, errors
-
-    raw_s2_key = raw.get("semantic_scholar_api_key")
-    if raw_s2_key is not None and not isinstance(raw_s2_key, str):
-        errors.append("semantic_scholar_api_key must be a string when provided")
-
-    raw_s2_key_cmd = raw.get("semantic_scholar_api_key_cmd")
-    if raw_s2_key_cmd is not None and not isinstance(raw_s2_key_cmd, str):
-        errors.append("semantic_scholar_api_key_cmd must be a string when provided")
+    else:
+        # The one ordering constraint: this iterates the list, so it runs only
+        # once the check above has confirmed there is one.
+        validated_bibs, bib_errors = _validate_bib_list(
+            raw_bibs, home_dir=home_dir, base_dir=base_dir
+        )
+        errors.extend(bib_errors)
 
     raw_capture_source_dirs = raw.get("capture_source_dirs")
     if raw_capture_source_dirs is not None and (
@@ -488,10 +488,6 @@ def validate_app_config(
         or not all(isinstance(d, str) for d in raw_capture_source_dirs)
     ):
         errors.append("capture_source_dirs must be a list of strings when provided")
-
-    raw_inbox_path = raw.get("inbox_path")
-    if raw_inbox_path is not None and not isinstance(raw_inbox_path, str):
-        errors.append("inbox_path must be a string when provided")
 
     raw_citekey_format = raw.get("citekey_format")
     if raw_citekey_format is not None and not isinstance(raw_citekey_format, str):
@@ -529,7 +525,7 @@ def validate_app_config(
     if not isinstance(raw_pdf_discovery_parallel, bool):
         errors.append("pdf_discovery_parallel must be a boolean")
 
-    raw_browser_engine = raw.get("browser_engine", "chromium")
+    raw_browser_engine = raw.get("browser_engine", DEFAULT_BROWSER_ENGINE)
     if (
         not isinstance(raw_browser_engine, str)
         or raw_browser_engine.strip() not in {"chromium", "firefox", "webkit"}
@@ -542,16 +538,15 @@ def validate_app_config(
     if raw_desktop_fallback_hosts is not None and not isinstance(raw_desktop_fallback_hosts, list):
         errors.append("desktop_fallback_hosts must be a list when provided")
 
-    if errors:
-        return None, errors
-
     raw_pzi_data_home = raw.get("pzi_data_home")
     if raw_pzi_data_home is not None and (
         not isinstance(raw_pzi_data_home, str) or not raw_pzi_data_home.strip()
     ):
         errors.append("pzi_data_home must be a non-empty string")
-        return None, errors
 
+    if errors:
+        return None, errors
+    assert validated_bibs is not None  # no errors means the bib list validated
     return _normalize_app_config(raw, validated_bibs, home_dir=home_dir), []
 
 

@@ -26,8 +26,6 @@ from pzi.capture_models import AuthHints, CaptureInput, CaptureOptions, PageArti
 from pzi.config import (
     DEFAULT_API_LISTEN_HOST,
     DEFAULT_API_LISTEN_PORT,
-    BibResolutionFailure,
-    load_bib_target,
     load_config_file,
 )
 from pzi.http_binary_routes import path_confined_to
@@ -38,9 +36,13 @@ from pzi.http_payloads import (
     tag_change_payload,
     update_payload,
 )
-from pzi.http_security import DEFAULT_MAX_BODY_BYTES, safe_public_http_url
+from pzi.http_security import DEFAULT_MAX_BODY_BYTES
 from pzi.http_status import (
+    JsonError,
+    bib_selector_of,
     reject_unconfigured_bib_selector,
+    require_object,
+    resolve_bib_or_error,
     status_for_service_result,
 )
 from pzi.pdf_acquisition_plan import build_pdf_acquisition_plan
@@ -50,6 +52,7 @@ from pzi.pdf_service import attach_pdf_bytes, attach_pdf_raw_bytes
 from pzi.promote_service import promote_bib
 from pzi.tag_service import add_tags, remove_tags
 from pzi.update_service import update_bib
+from pzi.url_safety import safe_public_http_url
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -196,7 +199,7 @@ def capture_input_from_http_body(
     return CaptureInput(
         value=value_override if value_override is not None else str(body["url"]).strip(),
         record_overrides=record_overrides_from_capture_body(body),
-        bib_selector=body.get("bib") if isinstance(body.get("bib"), str) else None,
+        bib_selector=bib_selector_of(body),
         pdf_candidates=tuple(
             PdfCandidate(value=value, source="http")
             for value in (pdf_candidates or [])
@@ -478,8 +481,8 @@ POST_ROUTES: tuple[PostRoute, ...] = (
 def _handle_browser_discover_post(
     body: Any, browser_manager: object | None,
 ) -> tuple[int, dict[str, Any]]:
-    if not isinstance(body, dict):
-        return 400, {"error": "body must be a JSON object"}
+    if (error := require_object(body)) is not None:
+        return error
     if browser_manager is None:
         return 503, {"error": "browser session not available"}
     page_url = body.get("page_url")
@@ -503,8 +506,8 @@ def _handle_browser_discover_post(
 def _handle_browser_download_post(
     body: Any, browser_manager: object | None, *, max_pdf_bytes: int = MAX_BROWSER_PDF_BYTES,
 ) -> tuple[int, dict[str, Any]]:
-    if not isinstance(body, dict):
-        return 400, {"error": "body must be a JSON object"}
+    if (error := require_object(body)) is not None:
+        return error
     if browser_manager is None:
         return 503, {"error": "browser session not available"}
     pdf_url = body.get("pdf_url")
@@ -527,12 +530,12 @@ def _handle_browser_download_post(
 def _handle_delete_post(
     body: Any, config_path: str, home_dir: str,
 ) -> tuple[int, dict[str, Any]]:
-    if not isinstance(body, dict):
-        return 400, {"error": "body must be a JSON object"}
+    if (error := require_object(body)) is not None:
+        return error
     citekey = body.get("citekey")
     if not isinstance(citekey, str) or not citekey.strip():
         return 400, {"error": "citekey required"}
-    bib_selector = body.get("bib") if isinstance(body.get("bib"), str) else None
+    bib_selector = bib_selector_of(body)
     force = body.get("force") is True
     raw_dry_run = body.get("dry_run")
     if raw_dry_run is False and not force:
@@ -543,11 +546,11 @@ def _handle_delete_post(
     # with it, the default is the delete the caller came for.
     dry_run = body_flag(body, "dry_run", default=not force)
 
-    resolved = load_bib_target(
+    resolved = resolve_bib_or_error(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector,
     )
-    if isinstance(resolved, BibResolutionFailure):
-        return 400, {"status": "error", "errors": resolved.errors}
+    if isinstance(resolved, JsonError):
+        return resolved
 
     _config, bib = resolved
     result = delete_entry(
@@ -594,8 +597,8 @@ def _handle_capture_post(
     token_factory: Callable[[], str],
     now: Callable[[], float],
 ) -> tuple[int, dict[str, Any]]:
-    if not isinstance(body, dict):
-        return 400, {"error": "capture body must be a JSON object"}
+    if (error := require_object(body)) is not None:
+        return error
     url = body.get("url")
     if not isinstance(url, str) or not url.strip():
         return 400, {"error": "url required"}
@@ -762,8 +765,8 @@ def _handle_attach_pdf_post(
     attach_session_store: AttachSessionStore | None,
     now: Callable[[], float],
 ) -> tuple[int, dict[str, Any]]:
-    if not isinstance(body, dict):
-        return 400, {"error": "attach body must be a JSON object"}
+    if (error := require_object(body)) is not None:
+        return error
     citekey = body.get("citekey")
     pdf_base64 = body.get("pdf_base64")
     if not isinstance(citekey, str) or not citekey.strip():
@@ -793,7 +796,7 @@ def _handle_attach_pdf_post(
             request_id=request_id,
             token=token,
             citekey=citekey,
-            bib=body.get("bib") if isinstance(body.get("bib"), str) else None,
+            bib=bib_selector_of(body),
             pdf_bytes=pdf_bytes,
             source_url=source_url,
             origin_candidate=_origin_candidate(body),
@@ -819,7 +822,7 @@ def _handle_attach_pdf_post(
     result = attach_pdf_bytes(
         config_path=config_path,
         home_dir=home_dir,
-        bib_selector=body.get("bib") if isinstance(body.get("bib"), str) else None,
+        bib_selector=bib_selector_of(body),
         citekey=citekey,
         pdf_base64=pdf_base64,
         source_url=source_url,
@@ -852,8 +855,8 @@ def _handle_attach_pdf_raw_post(
     attach_session_store: AttachSessionStore | None,
     now: Callable[[], float],
 ) -> tuple[int, dict[str, Any]]:
-    if not isinstance(body, dict):
-        return 400, {"error": "attach body must be a JSON object"}
+    if (error := require_object(body)) is not None:
+        return error
     citekey = body.get("citekey")
     pdf_bytes = body.get("pdf_bytes")
     if not isinstance(citekey, str) or not citekey.strip():
@@ -883,7 +886,7 @@ def _handle_attach_pdf_raw_post(
         request_id=request_id,
         token=token,
         citekey=citekey,
-        bib=body.get("bib") if isinstance(body.get("bib"), str) else None,
+        bib=bib_selector_of(body),
         pdf_bytes=pdf_bytes,
         source_url=source_url,
         origin_candidate=_origin_candidate(body),
@@ -895,7 +898,7 @@ def _handle_attach_pdf_raw_post(
     result = attach_pdf_raw_bytes(
         config_path=config_path,
         home_dir=home_dir,
-        bib_selector=body.get("bib") if isinstance(body.get("bib"), str) else None,
+        bib_selector=bib_selector_of(body),
         citekey=citekey,
         pdf_bytes=pdf_bytes,
         source_url=source_url,
@@ -915,8 +918,8 @@ def _handle_tags_post(
     called, which is the kind of duplication where a validation fix lands in
     one of them.
     """
-    if not isinstance(body, dict):
-        return 400, {"error": "tags body must be a JSON object"}
+    if (error := require_object(body)) is not None:
+        return error
     citekey = body.get("citekey")
     tags = body.get("tags")
     if not isinstance(citekey, str) or not citekey.strip():
@@ -926,7 +929,7 @@ def _handle_tags_post(
     result = mutate(
         config_path=config_path,
         home_dir=home_dir,
-        bib_selector=body.get("bib") if isinstance(body.get("bib"), str) else None,
+        bib_selector=bib_selector_of(body),
         citekey=citekey,
         tags=tags,
         dry_run=body_flag(body, "dry_run", default=False),
@@ -949,13 +952,13 @@ def _handle_tags_remove_post(
 def _handle_update_post(
     body: Any, config_path: str, home_dir: str,
 ) -> tuple[int, dict[str, Any]]:
-    if not isinstance(body, dict):
-        return 400, {"error": "update body must be a JSON object"}
+    if (error := require_object(body)) is not None:
+        return error
     try:
         result = update_bib(
             config_path=config_path,
             home_dir=home_dir,
-            bib_selector=body.get("bib") if isinstance(body.get("bib"), str) else None,
+            bib_selector=bib_selector_of(body),
             dry_run=body_flag(body, "dry_run", default=True),
         )
     except StalePlanError as exc:
@@ -973,13 +976,13 @@ def _handle_update_post(
 def _handle_promote_post(
     body: Any, config_path: str, home_dir: str,
 ) -> tuple[int, dict[str, Any]]:
-    if not isinstance(body, dict):
-        return 400, {"error": "promote body must be a JSON object"}
+    if (error := require_object(body)) is not None:
+        return error
     try:
         result = promote_bib(
             config_path=config_path,
             home_dir=home_dir,
-            bib_selector=body.get("bib") if isinstance(body.get("bib"), str) else None,
+            bib_selector=bib_selector_of(body),
             keep_preprint=not body_flag(body, "replace", default=False),
             dry_run=body_flag(body, "dry_run", default=True),
         )
@@ -999,8 +1002,8 @@ def _handle_promote_post(
 def _handle_inbox_drain_post(
     body: Any, config_path: str, home_dir: str,
 ) -> tuple[int, dict[str, Any]]:
-    if not isinstance(body, dict):
-        return 400, {"error": "inbox body must be a JSON object"}
+    if (error := require_object(body)) is not None:
+        return error
     inbox_path = body.get("file")
     if not isinstance(inbox_path, str) or not inbox_path.strip():
         return 400, {"error": "inbox body must include a 'file' path string"}

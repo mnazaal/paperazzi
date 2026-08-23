@@ -124,9 +124,9 @@ def public_ip_address(value: str) -> bool:
 def origin_of(url: str) -> str | None:
     """``scheme://host[:port]`` for an http(s) URL, or None.
 
-    One copy of what `pdf_attach_session._origin` and `pdf_discovery._origin_of`
-    each implemented — identically apart from one of them stripping whitespace
-    first, which is the version kept.
+    The one implementation: `pdf_attach_session` and `pdf_discovery` each had
+    their own, identical apart from one stripping whitespace first, which is the
+    behaviour kept here.
     """
     parts = urlsplit(url.strip())
     if parts.scheme not in ("http", "https") or not parts.netloc:

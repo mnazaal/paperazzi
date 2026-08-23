@@ -86,8 +86,8 @@ def _maybe_publisher_gateway(url: str, referrer: str) -> CandidatePlan | None:
     Gateway pages serve HTML that redirects to the real PDF after
     JavaScript execution in a logged-in browser session.
     """
-    timeout, reason = _gateway_timeout(url)
-    if reason is not None:
+    timeout = _gateway_timeout(url)
+    if timeout is not None:
         return {
             "url": url,
             "kind": "pdf_gateway",
@@ -203,16 +203,16 @@ def _looks_like_direct_pdf(url: str) -> bool:
 # Master table: (base domain, path pattern) → timeout_ms
 # Path patterns are matched against the URL path (case-insensitive).
 # ``None`` as the domain is the generic catch-all (any host).
-# Listed in order of specificity — first match wins.
+# Listed in order of specificity — first match wins.  A publisher row is
+# only worth its line when its timeout differs from the generic row that
+# would otherwise match the same path; ScienceDirect, Taylor & Francis and
+# SAGE each named a timeout the catch-all already gave them.
 _GATEWAY_PATTERNS: tuple[tuple[str | None, str, int], ...] = (
     # -- major publishers ------------------------------------------------------------------
     ("dl.acm.org",            r"/doi/pdf/",        20000),  # ACM
-    ("sciencedirect.com",     r"/pdfft",            15000),  # ScienceDirect
     ("onlinelibrary.wiley.com", r"/doi/epdf/",      20000),  # Wiley ePDF
     ("onlinelibrary.wiley.com", r"/doi/pdf/",       20000),  # Wiley PDF
     ("onlinelibrary.wiley.com", r"/doi/pdfdirect/", 20000),  # Wiley PDF Direct
-    ("tandfonline.com",       r"/doi/pdf/",         15000),  # Taylor & Francis
-    ("sagepub.com",           r"/doi/pdf/",         15000),  # SAGE
     ("academic.oup.com",      r"/article-pdf/",     15000),  # Oxford
     ("academic.oup.com",      r"/pdf/",             15000),  # Oxford (alt)
 
@@ -236,21 +236,17 @@ def _host_matches_domain(hostname: str, domain: str) -> bool:
     return hostname == domain or hostname.endswith("." + domain)
 
 
-def _gateway_timeout(url: str) -> tuple[int, str | None]:
-    """Return (timeout_ms, reason_string) if *url* is a publisher gateway.
-
-    ``reason_string`` is a short label used for diagnostics/debugging.
-    Returns ``(0, None)`` when the URL does not match any known gateway.
-    """
+def _gateway_timeout(url: str) -> int | None:
+    """Navigation timeout for *url*, or None when it is not a known gateway."""
     try:
         parts = urlsplit(url)
         hostname = parts.hostname or ""
         path = parts.path.lower() if parts.path else ""
     except ValueError:
-        return (0, None)
+        return None
 
     for domain, path_fragment, timeout_ms in _GATEWAY_PATTERNS:
         host_ok = domain is None or _host_matches_domain(hostname, domain)
         if host_ok and path_fragment in path:
-            return (timeout_ms, f"{domain or '*'}:{path_fragment}")
-    return (0, None)
+            return timeout_ms
+    return None

@@ -10,6 +10,7 @@ from pzi.pdf_discovery import (
     apply_pdf_discovery_parallel,
     arxiv_step,
     browser_pdf_step,
+    discovery_diagnostics,
     discovery_phase,
     doi_pdf_step,
     pdf_url_candidates_step,
@@ -692,3 +693,135 @@ def test_a_public_landing_page_url_is_still_sent() -> None:
     web_attachment_step(record, context)
 
     assert fetched == ["https://example.org/paper"]
+
+
+@pytest.mark.parametrize(
+    "apply", [apply_pdf_discovery, apply_pdf_discovery_parallel], ids=["sequential", "parallel"]
+)
+def test_a_late_pure_step_does_not_outrank_the_http_sources_above_it(apply) -> None:
+    """Parallel mode ranks sources by chain position, exactly as sequential does.
+
+    Phase 1 used to run *every* ``"pure"`` step before any HTTP step, so
+    ``pdf_url_candidates_step`` — chain position 7 — pre-empted the DOI and
+    Unpaywall lookups at 5 and 6. The same record then produced a different
+    ``pdf_source`` depending only on the ``pdf_discovery_parallel`` flag.
+    """
+    context: PdfDiscoveryContext = {}
+
+    @discovery_phase("pure")
+    def early_pure(r, c):
+        return r  # finds nothing, like arxiv/preprint on a journal DOI
+
+    @discovery_phase("http")
+    def doi_like(r, c):
+        return {**r, "pdf_url": "https://doi.example.com/paper.pdf", "pdf_source": "doi"}
+
+    @discovery_phase("pure")
+    def candidates_like(r, c):
+        return {
+            **r,
+            "pdf_url": "https://page.example.com/candidate.pdf",
+            "pdf_source": "pdf_url_candidates",
+        }
+
+    @discovery_phase("browser")
+    def browser_like(r, c):
+        return {**r, "pdf_url": "https://browser.example.com/x.pdf", "pdf_source": "browser"}
+
+    steps = [early_pure, doi_like, candidates_like, browser_like]
+    result = apply(cast(dict, {"title": "Paper"}), steps, context)
+
+    assert result["pdf_source"] == "doi"
+    assert result["pdf_url"] == "https://doi.example.com/paper.pdf"
+
+
+@pytest.mark.parametrize(
+    "apply", [apply_pdf_discovery, apply_pdf_discovery_parallel], ids=["sequential", "parallel"]
+)
+def test_a_late_pure_step_still_runs_when_the_http_sources_find_nothing(apply) -> None:
+    """Cutting phase 1 at the first HTTP step must not drop the steps below it."""
+    context: PdfDiscoveryContext = {}
+
+    @discovery_phase("http")
+    def doi_like(r, c):
+        return r
+
+    @discovery_phase("pure")
+    def candidates_like(r, c):
+        return {
+            **r,
+            "pdf_url": "https://page.example.com/candidate.pdf",
+            "pdf_source": "pdf_url_candidates",
+        }
+
+    @discovery_phase("browser")
+    def browser_like(r, c):
+        return {**r, "pdf_url": "https://browser.example.com/x.pdf", "pdf_source": "browser"}
+
+    result = apply(
+        cast(dict, {"title": "Paper"}), [doi_like, candidates_like, browser_like], context
+    )
+
+    assert result["pdf_source"] == "pdf_url_candidates"
+
+
+# ── A broken DOI provider is reported, not silently "no PDF" ────────────
+#
+# `record_discovery_failure` only fires for a step that *raises*. The three DOI
+# resolvers swallow instead: they answer "no open-access copy" and "I am broken"
+# with the same `None`. They take an `errors` list so the two can be told apart;
+# these tests pin that `doi_pdf_step` actually supplies one and surfaces what
+# comes back.
+
+
+def _resolver_that_reports(detail: str):
+    """A resolver shaped like the real ones: reports on `errors`, returns None."""
+
+    def fetch(doi: str, *, errors: list[str] | None = None) -> str | None:
+        if errors is not None:
+            errors.append(detail)
+        return None
+
+    return fetch
+
+
+@pytest.mark.parametrize(
+    "seam, provider",
+    [
+        ("fetch_crossref_pdf", "crossref"),
+        ("fetch_europepmc_pdf", "europepmc"),
+        ("fetch_doaj_pdf", "doaj"),
+    ],
+)
+def test_a_broken_doi_provider_is_named_in_the_diagnostics(seam: str, provider: str) -> None:
+    record = {"title": "Paper", "doi": "10.1000/abc"}
+    context: PdfDiscoveryContext = cast(
+        PdfDiscoveryContext,
+        {
+            "fetch_crossref_pdf": lambda doi, **kw: None,
+            "fetch_europepmc_pdf": lambda doi, **kw: None,
+            "fetch_doaj_pdf": lambda doi, **kw: None,
+        },
+    )
+    context[seam] = _resolver_that_reports("HTTP 503")  # type: ignore[literal-required]
+
+    result = doi_pdf_step(record, context)
+
+    assert result == record, "a reporting provider still yields no pdf_url"
+    assert discovery_diagnostics(context) == [f"{provider}: HTTP 503"]
+
+
+def test_a_provider_that_simply_has_no_pdf_reports_nothing() -> None:
+    """The contrast: silence must stay silent, or every capture grows noise."""
+    record = {"title": "Paper", "doi": "10.1000/abc"}
+    context: PdfDiscoveryContext = cast(
+        PdfDiscoveryContext,
+        {
+            "fetch_crossref_pdf": lambda doi, **kw: None,
+            "fetch_europepmc_pdf": lambda doi, **kw: None,
+            "fetch_doaj_pdf": lambda doi, **kw: None,
+        },
+    )
+
+    assert doi_pdf_step(record, context) == record
+    assert discovery_diagnostics(context) == []

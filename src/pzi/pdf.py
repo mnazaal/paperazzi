@@ -36,13 +36,18 @@ FetchText = Callable[[str], str]
 # ---------------------------------------------------------------------------
 
 
-def _wait_for_stable_file(path: Path, *, stable_seconds: float = 0.35) -> bool:
+def _wait_for_stable_file(
+    path: Path,
+    *,
+    stable_seconds: float = 0.35,
+    sleep: Callable[[float], None] = _time.sleep,
+) -> bool:
     """Return True after file size/mtime stay unchanged briefly."""
     try:
         first = path.stat()
     except OSError:
         return False
-    _time.sleep(stable_seconds)
+    sleep(stable_seconds)
     try:
         second = path.stat()
     except OSError:
@@ -78,8 +83,16 @@ def fetch_pdf_via_desktop_browser_download(
     filename_format: str | None = None,
     timeout: int | None = None,
     settings: PdfFallbackSettings | None = None,
+    sleep: Callable[[float], None] = _time.sleep,
+    monotonic: Callable[[], float] = _time.monotonic,
 ) -> tuple[str | None, str | None]:
-    """Open URL in user's browser and import newly downloaded matching PDF."""
+    """Open URL in user's browser and import newly downloaded matching PDF.
+
+    *sleep* and *monotonic* are the watch loop's clock. They are injectable so a
+    test can drive the loop to its deadline without spending real seconds in it;
+    the mtime comparison against ``started_at`` stays on the wall clock, because
+    it is compared against timestamps the filesystem writes.
+    """
     settings = settings or PdfFallbackSettings.from_environment()
     if settings.disable_desktop_browser:
         # A *skipped* stage, not one that ran and found nothing. Returning a
@@ -97,7 +110,16 @@ def fetch_pdf_via_desktop_browser_download(
         return None, f"refusing to open a non-http(s) URL in the browser: {url!r}"
 
     download_dir = settings.download_dir
-    download_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        download_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        # This is the *last* rung. `fetch_and_store_pdf_with_fallbacks` has no
+        # exception handling of its own, so raising here discarded every
+        # stage_error the earlier rungs had recorded and the caller saw a
+        # traceback instead of "here is what each stage tried". An unwritable
+        # PZI_DOWNLOAD_DIR (or $HOME/Downloads) reports like any other stage
+        # failure: return None with a reason.
+        return None, f"desktop download dir unavailable: {exc}"
     timeout = timeout or settings.desktop_timeout
     started_at = _time.time()
     existing_downloads = set(download_dir.glob("*.pdf"))
@@ -115,9 +137,9 @@ def fetch_pdf_via_desktop_browser_download(
         # for. "No PDF appeared" describes a wait that did not happen.
         return None, "could not open a desktop browser"
 
-    deadline = _time.monotonic() + timeout
+    deadline = monotonic() + timeout
     seen: set[Path] = set()
-    while _time.monotonic() < deadline:
+    while monotonic() < deadline:
         candidates = _newest_first(download_dir)
         for candidate in candidates:
             if candidate in seen:
@@ -146,7 +168,7 @@ def fetch_pdf_via_desktop_browser_download(
                 )
                 seen.add(candidate)
                 continue
-            if not _wait_for_stable_file(candidate):
+            if not _wait_for_stable_file(candidate, sleep=sleep):
                 continue
             try:
                 data = candidate.read_bytes()
@@ -173,7 +195,7 @@ def fetch_pdf_via_desktop_browser_download(
                 f"was blocked."
             )
             return local_path, warning
-        _time.sleep(1)
+        sleep(1)
 
     print(
         "Timed out waiting for a downloaded PDF. If the PDF opened in a viewer, "
@@ -236,7 +258,10 @@ def fetch_and_store_pdf_with_fallbacks(
         stage_errors.append(f"direct download: {direct_error}")
 
     effective_browser_pdf_cmd = browser_pdf_cmd or _auto_browser_pdf_cmd_for_url(
-        url, browser=browser, desktop_fallback_hosts=desktop_fallback_hosts
+        url,
+        browser=browser,
+        desktop_fallback_hosts=desktop_fallback_hosts,
+        settings=settings,
     )
     # When the request originates from the browser extension (browser is set),
     # skip the Playwright hook: the extension handles authenticated PDF download
@@ -321,9 +346,7 @@ def fetch_and_store_pdf_with_fallbacks(
             return local_path, warning, None
 
     if (
-        _needs_desktop_browser_fallback(
-            url, desktop_fallback_hosts=desktop_fallback_hosts
-        )
+        needs_desktop_browser_fallback(url, hosts=desktop_fallback_hosts)
         and not extension_capture
     ):
         desktop_path, desktop_warning = fetch_pdf_via_desktop_browser_download(
@@ -332,6 +355,7 @@ def fetch_and_store_pdf_with_fallbacks(
             citekey=citekey,
             record=record,
             filename_format=filename_format,
+            settings=settings,
         )
         if desktop_path is not None:
             return desktop_path, desktop_warning, None
@@ -436,6 +460,7 @@ def _auto_browser_pdf_cmd_for_url(
     url: str,
     browser: str | None = None,
     desktop_fallback_hosts: set[str] | None = None,
+    settings: PdfFallbackSettings | None = None,
 ) -> str | None:
     """Return built-in browser fallback command for hosts that block direct PDF fetches."""
     from pzi.config import DEFAULT_DESKTOP_FALLBACK_HOSTS
@@ -451,15 +476,8 @@ def _auto_browser_pdf_cmd_for_url(
         else desktop_fallback_hosts
     )
     if hostname in effective_hosts:
-        return _auto_browser_pdf_cmd(browser=browser)
+        return _auto_browser_pdf_cmd(browser=browser, settings=settings)
     return None
-
-
-def _needs_desktop_browser_fallback(
-    url: str,
-    desktop_fallback_hosts: set[str] | None = None,
-) -> bool:
-    return needs_desktop_browser_fallback(url, hosts=desktop_fallback_hosts)
 
 
 def _auto_browser_pdf_cmd(

@@ -8,7 +8,7 @@ import subprocess
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from pzi.errors import PziError
+from pzi.errors import REASON_CONFIG, PziError
 
 
 def run_page_metadata_cmd(
@@ -45,14 +45,15 @@ def run_page_metadata_cmd(
         # nothing caught it: a raw traceback on the CLI and a 500 on the HTTP
         # API, for a typo in config.toml.
         raise PziError(
-            f"page_metadata_cmd could not be parsed: {exc}"
+            f"page_metadata_cmd could not be parsed: {exc}", reason=REASON_CONFIG
         ) from exc
     if not argv:
         # A whitespace-only config value. `shlex.split(" ") == []`, and
         # `subprocess.run([])` raises IndexError — the one failure mode that
         # does not even name the command it came from.
         raise PziError(
-            "page_metadata_cmd is empty; remove it or give it a command"
+            "page_metadata_cmd is empty; remove it or give it a command",
+            reason=REASON_CONFIG,
         )
     try:
         result = run(
@@ -70,7 +71,7 @@ def run_page_metadata_cmd(
         # `TimeoutExpired` was caught, so this was a traceback rather than the
         # "your hook is misconfigured" message it is.
         raise PziError(
-            f"page_metadata_cmd could not be run: {exc}"
+            f"page_metadata_cmd could not be run: {exc}", reason=REASON_CONFIG
         ) from exc
     if getattr(result, "returncode", 1) != 0:
         return {}

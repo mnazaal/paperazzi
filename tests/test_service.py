@@ -482,6 +482,15 @@ default = true
     )
 
     result.pop("diff", None)
+    # PDF discovery is incidental to this test and reaches the network, which
+    # `_block_non_loopback_sockets` refuses — and the refusal text names the
+    # resolved IP, so pinning it would make this test depend on DNS. Drop those
+    # lines; the source-attribution line below is the one being pinned.
+    result["metadata_diagnostics"] = [
+        line
+        for line in result.get("metadata_diagnostics", [])
+        if not line.startswith("pdf discovery failed:")
+    ]
 
     assert result == {
         "status": "ok",

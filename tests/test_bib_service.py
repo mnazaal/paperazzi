@@ -8,6 +8,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import pytest
+
 from pzi.bib_service import (
     delete_entry,
     entry_detail,
@@ -88,6 +90,42 @@ def test_list_entries_sort_author_handles_bibtex_author_strings(tmp_path: Path, 
 
     assert result["status"] == "ok"
     assert [item["citekey"] for item in result["items"]] == ["alpha2024", "zeta2024"]
+
+
+@pytest.mark.parametrize("sort", ["citekey", "title", "year", "author"])
+def test_list_entries_keeps_each_entry_type_with_its_record(
+    sort: str, tmp_path: Path, write_app_config
+) -> None:
+    """`entry_type` comes off the parsed entry, so the sort must carry it along.
+
+    The records and the parsed entries are two positionally parallel lists;
+    sorting one of them is the only step that loses the correspondence. Every
+    sort order is exercised because a correlation bug shows up only in the
+    orders that actually permute.
+    """
+    config_path = write_app_config(tmp_path)
+    Path(os.path.join(str(tmp_path), "ml.bib")).write_text(
+        "@inproceedings{zeta2020,\n  title = {Zeta},\n  author = {Zeta, Zoe},\n"
+        "  year = {2020}\n}\n\n"
+        "@book{alpha2024,\n  title = {Alpha},\n  author = {Alpha, Amy},\n"
+        "  year = {2024}\n}\n\n"
+        "@article{mid2022,\n  title = {Mid},\n  author = {Mid, Moe},\n"
+        "  year = {2022}\n}\n"
+    )
+
+    result = list_entries(
+        config_path=config_path,
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        sort=sort,
+    )
+
+    assert result["status"] == "ok"
+    assert {item["citekey"]: item["entry_type"] for item in result["items"]} == {
+        "zeta2020": "inproceedings",
+        "alpha2024": "book",
+        "mid2022": "article",
+    }
 
 
 def test_list_entries_respects_pagination(tmp_path: Path, write_app_config) -> None:

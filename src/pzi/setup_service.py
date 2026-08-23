@@ -10,7 +10,7 @@ from pathlib import Path
 
 from pzi import exit_codes
 from pzi.config import escape_toml_string, tildify_path
-from pzi.errors import PziError
+from pzi.errors import REASON_UNAVAILABLE, PziError
 
 
 def _quote_token(token: str) -> str:
@@ -73,6 +73,10 @@ def _existing_token(token_path: Path) -> str | None:
             f"cannot read the existing API token at {token_path}: {exc.strerror}"
             " — fix its permissions, or pass --rotate-token to replace it",
             code=exit_codes.ENVIRONMENT,
+            # `unavailable`, not `config`: the token file is exactly where the
+            # config says, and the process cannot read it. Without a reason the
+            # HTTP API answers its 400 fallback for what is a 503.
+            reason=REASON_UNAVAILABLE,
         ) from exc
     return existing or None
 

@@ -1,11 +1,18 @@
+import pytest
+
 import pzi.promote_service as promote_service
+import pzi.update_service as update_service
 from pzi.add_service import add_record_to_bib
+from pzi.bib_repository import ConcurrentEditError, StalePlanError
+from pzi.errors import REASON_UNAVAILABLE
+from pzi.http_status import status_for_service_result
 from pzi.promote_service import (
     _published_candidate_diagnostics,
     _score_published_candidate,
     _select_best_published_candidate,
     promote_bib,
 )
+from pzi.update_service import update_bib
 
 #: The real candidate set for `jing-understanding-2022`, taken from a
 #: `--verbose` run against the user's library on 2026-08-14. The arXiv record
@@ -1686,3 +1693,127 @@ def test_promoting_several_preprints_leaves_one_backup(tmp_path):
     assert backups[0].read_text() == before
     # Every promoted entry points at that one file, so the undo is findable.
     assert {item.get("backup_path") for item in promoted} == {str(backups[0])}
+
+
+# === the sweep contract, spanning `promote` and `update` (2026-08-23 audit) ===
+#
+# Both services run one library-wide sweep, isolate each record behind a broad
+# `except Exception`, and hand the same dict to three front ends. So the two
+# rules below belong to *the sweep*, not to either service: `promote` had
+# neither, and reported a run in which every promotion raised as
+# `status: "ok"` — `pzi.promote()` returned normally and `POST /promote`
+# answered 200.
+
+
+def _seed_two_preprints(tmp_path, config_path) -> None:
+    for index in (1, 2):
+        add_record_to_bib(
+            config_path=str(config_path),
+            home_dir=str(tmp_path),
+            record={
+                "citekey": f"smith2024graph{index}",
+                "title": f"Graph Parsers Volume {index}",
+                "arxiv_id": f"2401.1234{index}",
+                "year": 2024,
+                "authors": ["Smith, Jane"],
+            },
+            bib_selector=None,
+            dry_run=False,
+        )
+
+
+def _run_promote_with_failing_record(tmp_path, monkeypatch, exc: Exception):
+    """`promote_bib` over two preprints where every write raises *exc*."""
+    bib_path = tmp_path / "ml.bib"
+    config_path = _write_config(tmp_path, bib_path)
+    _seed_two_preprints(tmp_path, config_path)
+
+    def _raise(**kwargs):
+        raise exc
+
+    monkeypatch.setattr(promote_service, "_handle_update_in_place", _raise)
+    return promote_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        keep_preprint=False,
+        dry_run=False,
+        fetch_search=_distinct_published_candidate,
+    )
+
+
+def _run_update_with_failing_record(tmp_path, monkeypatch, exc: Exception):
+    """`update_bib` over two records where every plan raises *exc*."""
+    bib_path = tmp_path / "ml.bib"
+    config_path = _write_config(tmp_path, bib_path)
+    _seed_two_preprints(tmp_path, config_path)
+
+    def _raise(*args, **kwargs):
+        raise exc
+
+    monkeypatch.setattr(update_service, "_plan_update_for_record", _raise)
+    return update_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        dry_run=False,
+        fetch_search=_distinct_published_candidate,
+    )
+
+
+#: Each sweep, its harness, and the write-race failures its write path can
+#: actually raise. `update` writes through `update_bib_entry` and previews
+#: through `preview_write_plan`, and only the latter refuses — as a
+#: `StalePlanError` (see the carve-out in `update_service`). `promote` also
+#: forks an entry through a batch session, which refuses a citekey that
+#: appeared mid-run with `ConcurrentEditError`.
+_SWEEPS = [
+    ("promote", _run_promote_with_failing_record, (StalePlanError, ConcurrentEditError)),
+    ("update", _run_update_with_failing_record, (StalePlanError,)),
+]
+_SWEEP_RUNNERS = [(name, run) for name, run, _races in _SWEEPS]
+_SWEEP_RACES = [
+    (name, run, race)
+    for name, run, races in _SWEEPS
+    for race in races
+]
+
+
+@pytest.mark.parametrize(
+    "sweep_name,run_sweep", _SWEEP_RUNNERS, ids=[name for name, _run in _SWEEP_RUNNERS]
+)
+def test_a_sweep_where_every_record_failed_is_not_ok(sweep_name, run_sweep, tmp_path, monkeypatch):
+    """No item done is `status: "error"`, with a `reason` both front ends map.
+
+    Without the `reason` the HTTP route falls back to 400, which
+    `http_status.status_for_service_result` documents as "a bug in that
+    service".
+    """
+    result = run_sweep(tmp_path, monkeypatch, RuntimeError("kaboom"))
+
+    assert result["status"] == "error", f"{sweep_name} reported a wholly-failed run as ok"
+    assert result["reason"] == REASON_UNAVAILABLE
+    assert status_for_service_result(result) == 503
+    assert len(result["items"]) == 2
+    assert all(item.get("failed") for item in result["items"])
+    assert len(result["errors"]) == 2, result["errors"]
+    assert all("kaboom" in error for error in result["errors"])
+
+
+@pytest.mark.parametrize(
+    "sweep_name,run_sweep,race_error",
+    _SWEEP_RACES,
+    ids=[f"{name}-{race.__name__}" for name, _run, race in _SWEEP_RACES],
+)
+def test_a_sweep_that_loses_a_write_race_stops_instead_of_skipping_the_record(
+    sweep_name, run_sweep, race_error, tmp_path, monkeypatch
+):
+    """Losing the race is not a per-record fault, so the broad catch must not eat it.
+
+    The bib moved underneath the run: every remaining record was planned
+    against a snapshot that no longer describes the file, so continuing to
+    write is unsafe. Swallowed, it read as N separate "promotion failed" notes
+    on a run that still called itself ok.
+    """
+    with pytest.raises(race_error):
+        run_sweep(tmp_path, monkeypatch, race_error("the bib changed under this run"))

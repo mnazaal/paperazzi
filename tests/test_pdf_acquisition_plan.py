@@ -1,3 +1,5 @@
+import pytest
+
 from pzi.pdf_acquisition_plan import build_pdf_acquisition_plan, classify_pdf_candidate
 
 
@@ -79,26 +81,89 @@ def _gateway_assert(candidate: dict, *, url: str, referrer: str) -> None:
     assert candidate["referrer"] == referrer
 
 
-def test_classify_acm_pdf_gateway() -> None:
-    _gateway_assert(
-        classify_pdf_candidate(
+@pytest.mark.parametrize(
+    ("url", "page_url", "timeout_ms"),
+    [
+        pytest.param(
             "https://dl.acm.org/doi/pdf/10.1145/3590000.3590001?download=true",
-            page_url="https://dl.acm.org/doi/10.1145/3590000.3590001",
+            "https://dl.acm.org/doi/10.1145/3590000.3590001",
+            20000,
+            id="acm",
         ),
-        url="https://dl.acm.org/doi/pdf/10.1145/3590000.3590001?download=true",
-        referrer="https://dl.acm.org/doi/10.1145/3590000.3590001",
-    )
-
-
-def test_classify_sciencedirect_pdfft_gateway() -> None:
-    _gateway_assert(
-        classify_pdf_candidate(
+        pytest.param(
             "https://www.sciencedirect.com/science/article/pii/S0167811623000123/pdfft?download=true",
-            page_url="https://www.sciencedirect.com/science/article/pii/S0167811623000123",
+            "https://www.sciencedirect.com/science/article/pii/S0167811623000123",
+            15000,
+            id="sciencedirect-pdfft",
         ),
-        url="https://www.sciencedirect.com/science/article/pii/S0167811623000123/pdfft?download=true",
-        referrer="https://www.sciencedirect.com/science/article/pii/S0167811623000123",
-    )
+        pytest.param(
+            "https://onlinelibrary.wiley.com/doi/epdf/10.1002/adma.202300123",
+            "https://onlinelibrary.wiley.com/doi/10.1002/adma.202300123",
+            20000,
+            id="wiley-epdf",
+        ),
+        pytest.param(
+            "https://onlinelibrary.wiley.com/doi/pdf/10.1002/adma.202300123",
+            "https://onlinelibrary.wiley.com/doi/10.1002/adma.202300123",
+            20000,
+            id="wiley-pdf",
+        ),
+        pytest.param(
+            "https://www.tandfonline.com/doi/pdf/10.1080/01621459.2023.1234567",
+            "https://www.tandfonline.com/doi/full/10.1080/01621459.2023.1234567",
+            15000,
+            id="tandfonline",
+        ),
+        pytest.param(
+            "https://journals.sagepub.com/doi/pdf/10.1177/09567976231234567",
+            "https://journals.sagepub.com/doi/10.1177/09567976231234567",
+            15000,
+            id="sagepub",
+        ),
+        pytest.param(
+            "https://academic.oup.com/bioinformatics/article-pdf/39/1/btac700/12345678/btac700.pdf",
+            "https://academic.oup.com/bioinformatics/article/39/1/btac700",
+            15000,
+            id="oxford-article-pdf",
+        ),
+        pytest.param(
+            "https://some-publisher.example/doi/pdf/10.1234/foo.bar",
+            "https://some-publisher.example/article/10.1234/foo.bar",
+            15000,
+            id="generic-doi-pdf",
+        ),
+        pytest.param(
+            "https://some-publisher.example/doi/epdf/10.1234/foo.bar",
+            "https://some-publisher.example/article/10.1234/foo.bar",
+            15000,
+            id="generic-epdf",
+        ),
+        pytest.param(
+            "https://example.com/article/pii/S1234/pdfft",
+            "https://example.com/article/pii/S1234",
+            15000,
+            id="generic-pdfft",
+        ),
+        pytest.param(
+            "https://onlinelibrary.wiley.com/doi/pdfdirect/10.1002/adma.202300123",
+            "https://onlinelibrary.wiley.com/doi/10.1002/adma.202300123",
+            20000,
+            id="wiley-pdfdirect",
+        ),
+    ],
+)
+def test_classify_publisher_gateway(url: str, page_url: str, timeout_ms: int) -> None:
+    """Every known gateway URL classifies as a navigate-and-monitor candidate.
+
+    The generic rows matter as much as the publisher-specific ones: they are
+    what a host absent from the table falls back to, and three publisher rows
+    were deleted because the generic row already gave them the same timeout.
+    """
+    candidate = classify_pdf_candidate(url, page_url=page_url)
+    _gateway_assert(candidate, url=url, referrer=page_url)
+    # Pinned per host, so deleting a publisher row is only safe while the
+    # generic row it falls back to names the same timeout.
+    assert candidate["timeout_ms"] == timeout_ms
 
 
 def test_classify_lookalike_host_is_not_treated_as_publisher_gateway() -> None:
@@ -116,95 +181,6 @@ def test_classify_lookalike_host_is_not_treated_as_publisher_gateway() -> None:
     )
 
     assert candidate["kind"] == "article_page"
-
-
-def test_classify_wiley_epdf_gateway() -> None:
-    _gateway_assert(
-        classify_pdf_candidate(
-            "https://onlinelibrary.wiley.com/doi/epdf/10.1002/adma.202300123",
-            page_url="https://onlinelibrary.wiley.com/doi/10.1002/adma.202300123",
-        ),
-        url="https://onlinelibrary.wiley.com/doi/epdf/10.1002/adma.202300123",
-        referrer="https://onlinelibrary.wiley.com/doi/10.1002/adma.202300123",
-    )
-
-
-def test_classify_wiley_pdf_gateway() -> None:
-    _gateway_assert(
-        classify_pdf_candidate(
-            "https://onlinelibrary.wiley.com/doi/pdf/10.1002/adma.202300123",
-            page_url="https://onlinelibrary.wiley.com/doi/10.1002/adma.202300123",
-        ),
-        url="https://onlinelibrary.wiley.com/doi/pdf/10.1002/adma.202300123",
-        referrer="https://onlinelibrary.wiley.com/doi/10.1002/adma.202300123",
-    )
-
-
-def test_classify_tandfonline_pdf_gateway() -> None:
-    _gateway_assert(
-        classify_pdf_candidate(
-            "https://www.tandfonline.com/doi/pdf/10.1080/01621459.2023.1234567",
-            page_url="https://www.tandfonline.com/doi/full/10.1080/01621459.2023.1234567",
-        ),
-        url="https://www.tandfonline.com/doi/pdf/10.1080/01621459.2023.1234567",
-        referrer="https://www.tandfonline.com/doi/full/10.1080/01621459.2023.1234567",
-    )
-
-
-def test_classify_sagepub_pdf_gateway() -> None:
-    _gateway_assert(
-        classify_pdf_candidate(
-            "https://journals.sagepub.com/doi/pdf/10.1177/09567976231234567",
-            page_url="https://journals.sagepub.com/doi/10.1177/09567976231234567",
-        ),
-        url="https://journals.sagepub.com/doi/pdf/10.1177/09567976231234567",
-        referrer="https://journals.sagepub.com/doi/10.1177/09567976231234567",
-    )
-
-
-def test_classify_oxford_article_pdf_gateway() -> None:
-    _gateway_assert(
-        classify_pdf_candidate(
-            "https://academic.oup.com/bioinformatics/article-pdf/39/1/btac700/12345678/btac700.pdf",
-            page_url="https://academic.oup.com/bioinformatics/article/39/1/btac700",
-        ),
-        url="https://academic.oup.com/bioinformatics/article-pdf/39/1/btac700/12345678/btac700.pdf",
-        referrer="https://academic.oup.com/bioinformatics/article/39/1/btac700",
-    )
-
-
-def test_classify_generic_doi_pdf_gateway() -> None:
-    """Unknown host with /doi/pdf/ path → still classified as pdf_gateway."""
-    _gateway_assert(
-        classify_pdf_candidate(
-            "https://some-publisher.example/doi/pdf/10.1234/foo.bar",
-            page_url="https://some-publisher.example/article/10.1234/foo.bar",
-        ),
-        url="https://some-publisher.example/doi/pdf/10.1234/foo.bar",
-        referrer="https://some-publisher.example/article/10.1234/foo.bar",
-    )
-
-
-def test_classify_generic_epdf_gateway() -> None:
-    _gateway_assert(
-        classify_pdf_candidate(
-            "https://some-publisher.example/doi/epdf/10.1234/foo.bar",
-            page_url="https://some-publisher.example/article/10.1234/foo.bar",
-        ),
-        url="https://some-publisher.example/doi/epdf/10.1234/foo.bar",
-        referrer="https://some-publisher.example/article/10.1234/foo.bar",
-    )
-
-
-def test_classify_generic_pdfft_gateway() -> None:
-    _gateway_assert(
-        classify_pdf_candidate(
-            "https://example.com/article/pii/S1234/pdfft",
-            page_url="https://example.com/article/pii/S1234",
-        ),
-        url="https://example.com/article/pii/S1234/pdfft",
-        referrer="https://example.com/article/pii/S1234",
-    )
 
 
 # ── Non-gateway URLs still fall through correctly ─────────────────────────
@@ -226,17 +202,6 @@ def test_classify_direct_pdf_still_works() -> None:
     )
     assert candidate["kind"] == "direct_pdf"
     assert candidate["method"] == "direct_fetch"
-
-
-def test_classify_wiley_pdfdirect_gateway() -> None:
-    _gateway_assert(
-        classify_pdf_candidate(
-            "https://onlinelibrary.wiley.com/doi/pdfdirect/10.1002/adma.202300123",
-            page_url="https://onlinelibrary.wiley.com/doi/10.1002/adma.202300123",
-        ),
-        url="https://onlinelibrary.wiley.com/doi/pdfdirect/10.1002/adma.202300123",
-        referrer="https://onlinelibrary.wiley.com/doi/10.1002/adma.202300123",
-    )
 
 
 # ── Plan: gateways sort before article_page ──────────────────────────────

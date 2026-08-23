@@ -18,6 +18,7 @@ from urllib.parse import urlsplit
 from pzi import add_planning as _add_planning
 from pzi.add_planning import (
     AddResult,
+    MetadataExhausted,
     build_discovery_context,
     fallback_record_for_input,
     fetch_record_for_input,
@@ -321,6 +322,111 @@ def add_input_to_bib(
             file_path_style=config.get("pdf_file_path_style", "absolute"),
         ))
 
+    def _metadata_cascade_failure(exc: Exception, *, settled: bool) -> AddRecordResult:
+        """The one exit for a metadata cascade that produced no record.
+
+        *settled* separates the two shapes the classification must not merge:
+        every source answered and none had this paper, versus a source that
+        could not be reached. Only the second is `unavailable` — "retry later"
+        — and both used to be reported as it, so a nonexistent DOI came back
+        as HTTP 503 forever.
+        """
+        # The cascade raised, so it never returned the errors it had already
+        # accumulated and the strict gate inside the `try` never ran. That
+        # inverted the flag's severity: a *partial* provider failure returned
+        # normally and failed the add, while a *total* one landed here and — if
+        # the user had supplied enough metadata by hand — succeeded silently via
+        # the fallback below, which is the "falling back silently" the flag
+        # exists to prevent.
+        # The cascade's own accumulated errors, which used to die with it: only
+        # the success path returned them, so a total failure reported one
+        # sentence and no evidence.
+        provider_errors.extend(getattr(exc, "provider_errors", []))
+        provider_errors.append(str(exc))
+        if effective_strict:
+            return _error_result(
+                message="metadata provider error (--strict-metadata)",
+                errors=list(provider_errors),
+                dry_run=dry_run,
+                warnings=[],
+                reason=None if settled else REASON_UNAVAILABLE,
+            )
+        manual_record = _manual_record_from_overrides(record_overrides)
+        if classified["kind"] in {"doi", "url", "pdf_url"} and has_minimum_metadata(manual_record):
+            fallback_record = merge_record_sources(
+                fallback_record_for_input(
+                    kind=cast(str, classified["kind"]),
+                    normalized=cast(str | None, classified["normalized"]),
+                    raw_value=value,
+                ),
+                manual_record,
+            )
+            fallback_record = apply_pdf_discovery(
+                fallback_record,
+                # The translation server is unreachable here, so skip the step
+                # that depends on its /web attachments; everything else still
+                # runs against the shared discovery context.
+                # Compare the step object, not its name: this path already
+                # fetched the landing page, so re-running the /web translator
+                # would repeat that work.
+                [step for step in DEFAULT_DISCOVERY_STEPS if step is not web_attachment_step],
+                build_discovery_context(
+                    raw_value=value,
+                    server_url=config["translation_server_url"],
+                    unpaywall_email=unpaywall_email,
+                    contact_email=contact_email,
+                    s2_api_key=s2_api_key,
+                    flaresolverr_url=config.get("flaresolverr_url"),
+                    browser_pdf_cmd=effective_browser_pdf_cmd,
+                    pdf_url_candidates=pdf_url_candidates,
+                    cookies=cookies,
+                    fetch_web=fetch_web,
+                    fetch_unpaywall=fetch_unpaywall,
+                    fetch_crossref=fetch_crossref,
+                    fetch_openalex=fetch_openalex,
+                    fetch_s2=fetch_s2,
+                    fetch_flaresolverr=fetch_flaresolverr,
+                    api_url=api_url,
+                    api_auth_token=api_auth_token,
+                    desktop_fallback_hosts=desktop_fallback_hosts,
+                ),
+            )
+            return _finalize(_add(fallback_record))
+        # `URLError` and `ConnectionError` are both `OSError` subclasses, so the
+        # test is just "a transport error that is not an HTTP status" — and a
+        # settled verdict is not a transport error at all.
+        is_conn_err = (
+            not settled
+            and isinstance(exc, OSError)
+            and not isinstance(exc, urllib.error.HTTPError)
+        )
+        if is_conn_err:
+            parts = urlsplit(config["translation_server_url"])
+            host_port = parts.port or 1969
+            err_msg = (
+                f"translation server not reachable at {config['translation_server_url']} — "
+                f"run 'pzi server' (it starts the translation-server) and wait for it "
+                f"to be ready (expected port {host_port})."
+            )
+        else:
+            err_msg = str(exc)
+        fallback_warnings = minimum_metadata_diagnostics(manual_record)
+        return _error_result(
+            # Only a connection failure is a translation-server problem. An
+            # HTTP status or a malformed response means the server answered and
+            # the lookup failed, and calling that "translation server error"
+            # sent users to restart a service that was running fine.
+            message="translation server error" if is_conn_err else "metadata lookup failed",
+            errors=[err_msg],
+            dry_run=dry_run,
+            warnings=fallback_warnings,
+            # A dependency is not answering; retrying later is reasonable, which
+            # is exactly what `unavailable` means. On HTTP this becomes 503
+            # rather than the unclassified 400. A settled verdict gets no reason:
+            # nothing about retrying it will produce a different answer.
+            reason=None if settled else REASON_UNAVAILABLE,
+        )
+
     try:
         fetched_record, _fetched_provider_errors, translation_results = fetch_record_for_input(
             raw_value=value,
@@ -403,102 +509,22 @@ def add_input_to_bib(
                     dry_run=dry_run,
                     warnings=[],
                 )
-    except (urllib.error.URLError, OSError, ValueError) as exc:
+    except MetadataExhausted as exc:
+        # Every source was tried and answered; none had this paper. It is a
+        # `ValueError`, so it used to fall into the clause below and be
+        # labelled `unavailable` — HTTP 503, retry later — for a verdict that
+        # will not change on a retry. The same verdict reached from the other
+        # direction (`identifies_a_paper`, below) carries no reason at all;
+        # `add_planning.error_result` argues for why that is the honest answer.
+        return _metadata_cascade_failure(exc, settled=True)
+    except (OSError, ValueError) as exc:
         # Narrowly scoped to what the translation-server / metadata-provider
-        # fetchers actually raise for network and malformed-response
-        # failures, so a genuine bug elsewhere in this block (KeyError,
-        # AttributeError, TypeError, ...) surfaces as a crash instead of
-        # being silently misreported as "translation server error".
-        # The cascade raised, so it never returned the errors it had already
-        # accumulated and the strict gate inside the `try` never ran. That
-        # inverted the flag's severity: a *partial* provider failure returned
-        # normally and failed the add, while a *total* one landed here and — if
-        # the user had supplied enough metadata by hand — succeeded silently via
-        # the fallback below, which is the "falling back silently" the flag
-        # exists to prevent.
-        # The cascade's own accumulated errors, which used to die with it: only
-        # the success path returned them, so a total failure reported one
-        # sentence and no evidence.
-        provider_errors.extend(getattr(exc, "provider_errors", []))
-        provider_errors.append(str(exc))
-        if effective_strict:
-            return _error_result(
-                message="metadata provider error (--strict-metadata)",
-                errors=list(provider_errors),
-                dry_run=dry_run,
-                warnings=[],
-                reason=REASON_UNAVAILABLE,
-            )
-        manual_record = _manual_record_from_overrides(record_overrides)
-        if classified["kind"] in {"doi", "url", "pdf_url"} and has_minimum_metadata(manual_record):
-            fallback_record = merge_record_sources(
-                fallback_record_for_input(
-                    kind=cast(str, classified["kind"]),
-                    normalized=cast(str | None, classified["normalized"]),
-                    raw_value=value,
-                ),
-                manual_record,
-            )
-            fallback_record = apply_pdf_discovery(
-                fallback_record,
-                # The translation server is unreachable here, so skip the step
-                # that depends on its /web attachments; everything else still
-                # runs against the shared discovery context.
-                # Compare the step object, not its name: this path already
-                # fetched the landing page, so re-running the /web translator
-                # would repeat that work.
-                [step for step in DEFAULT_DISCOVERY_STEPS if step is not web_attachment_step],
-                build_discovery_context(
-                    raw_value=value,
-                    server_url=config["translation_server_url"],
-                    unpaywall_email=unpaywall_email,
-                    contact_email=contact_email,
-                    s2_api_key=s2_api_key,
-                    flaresolverr_url=config.get("flaresolverr_url"),
-                    browser_pdf_cmd=effective_browser_pdf_cmd,
-                    pdf_url_candidates=pdf_url_candidates,
-                    cookies=cookies,
-                    fetch_web=fetch_web,
-                    fetch_unpaywall=fetch_unpaywall,
-                    fetch_crossref=fetch_crossref,
-                    fetch_openalex=fetch_openalex,
-                    fetch_s2=fetch_s2,
-                    fetch_flaresolverr=fetch_flaresolverr,
-                    api_url=api_url,
-                    api_auth_token=api_auth_token,
-                    desktop_fallback_hosts=desktop_fallback_hosts,
-                ),
-            )
-            return _finalize(_add(fallback_record))
-        is_conn_err = (
-            isinstance(exc, (urllib.error.URLError, ConnectionError, OSError))
-            and not isinstance(exc, urllib.error.HTTPError)
-        )
-        if is_conn_err:
-            parts = urlsplit(config["translation_server_url"])
-            host_port = parts.port or 1969
-            err_msg = (
-                f"translation server not reachable at {config['translation_server_url']} — "
-                f"run 'pzi server' (it starts the translation-server) and wait for it "
-                f"to be ready (expected port {host_port})."
-            )
-        else:
-            err_msg = str(exc)
-        fallback_warnings = minimum_metadata_diagnostics(manual_record)
-        return _error_result(
-            # Only a connection failure is a translation-server problem. An
-            # HTTP status or a malformed response means the server answered and
-            # the lookup failed, and calling that "translation server error"
-            # sent users to restart a service that was running fine.
-            message="translation server error" if is_conn_err else "metadata lookup failed",
-            errors=[err_msg],
-            dry_run=dry_run,
-            warnings=fallback_warnings,
-            # A dependency is not answering; retrying later is reasonable, which
-            # is exactly what `unavailable` means. On HTTP this becomes 503
-            # rather than the unclassified 400.
-            reason=REASON_UNAVAILABLE,
-        )
+        # fetchers actually raise for network and malformed-response failures,
+        # so a genuine bug in that block (KeyError, AttributeError, TypeError,
+        # ...) surfaces as a crash instead of being silently misreported as
+        # "translation server error". `urllib.error.URLError` is an `OSError`
+        # subclass, so naming it as well read as a distinction that is not one.
+        return _metadata_cascade_failure(exc, settled=False)
 
     merged_record = _merge_fetched_record_with_overrides(fetched_record, record_overrides)
     # The acceptance gate, shared with the local-PDF branch above — see
@@ -642,23 +668,14 @@ def add_record_with_bib(
     # Build the identity index once and reuse it across the several exact-match
     # lookups this write performs, instead of rebuilding it per call.
     existing_index = build_identity_index(typed_existing_records)
-    typed_record = ensure_citekey_for_write(
+    typed_record = prepare_record(
         cast(NormalizedRecord, dict(record)),
         typed_existing_records,
-        citekey_format=citekey_format,
-        force_new=force_new,
-        index=existing_index,
-    )
-    typed_record = reuse_existing_pdf_fields_for_exact_match(
-        typed_record,
-        typed_existing_records,
-        force_new=force_new,
-        index=existing_index,
-    )
-    typed_record = reuse_orphan_pdf_for_planned_path(
-        typed_record,
         papers_dir=bib["papers_dir"],
+        citekey_format=citekey_format,
         pdf_filename_format=pdf_filename_format,
+        force_new=force_new,
+        index=existing_index,
     )
     existing_pdf_paths = _snapshot_pdf_paths(bib["papers_dir"])
     # The PDF download happens exactly once, before planning. The plan+write
@@ -698,15 +715,10 @@ def add_record_with_bib(
         against a snapshot of ``existing_records``. Pure apart from the orphan
         PDF probe; safe to call repeatedly (no network, no re-download)."""
         index = build_identity_index(existing_records)
-        rec = ensure_citekey_for_write(
+        rec = prepare_record(
             record_with_pdf, existing_records,
-            citekey_format=citekey_format, force_new=force_new, index=index,
-        )
-        rec = reuse_existing_pdf_fields_for_exact_match(
-            rec, existing_records, force_new=force_new, index=index,
-        )
-        rec = reuse_orphan_pdf_for_planned_path(
-            rec, papers_dir=bib["papers_dir"], pdf_filename_format=pdf_filename_format,
+            papers_dir=bib["papers_dir"], citekey_format=citekey_format,
+            pdf_filename_format=pdf_filename_format, force_new=force_new, index=index,
         )
         rec = _add_planning.attach_similarity_hint(
             rec, existing_records, index=index, force_new=force_new,
@@ -869,15 +881,11 @@ def add_records_to_bib_batch(
                     else None
                 )
                 try:
-                    typed = ensure_citekey_for_write(
+                    typed = prepare_record(
                         cast(NormalizedRecord, dict(raw)), existing_records,
-                        citekey_format=citekey_format, force_new=force_new, index=index,
-                    )
-                    typed = reuse_existing_pdf_fields_for_exact_match(
-                        typed, existing_records, force_new=force_new, index=index,
-                    )
-                    typed = reuse_orphan_pdf_for_planned_path(
-                        typed, papers_dir=papers_dir, pdf_filename_format=pdf_filename_format,
+                        papers_dir=papers_dir, citekey_format=citekey_format,
+                        pdf_filename_format=pdf_filename_format, force_new=force_new,
+                        index=index,
                     )
                     typed, warnings = attach_pdf_if_available(
                         record=typed, papers_dir=papers_dir, dry_run=dry_run,
@@ -943,6 +951,37 @@ def add_records_to_bib_batch(
 # ---------------------------------------------------------------------------
 # Identity and existing-PDF reuse helpers (merged from capture_identity.py)
 # ---------------------------------------------------------------------------
+
+
+def prepare_record(
+    record: NormalizedRecord,
+    existing_records: list[NormalizedRecord],
+    *,
+    papers_dir: str,
+    citekey_format: str | None = None,
+    pdf_filename_format: str | None = None,
+    force_new: bool = False,
+    index: dict | None = None,
+) -> NormalizedRecord:
+    """Settle a record's citekey and the PDF it should already own.
+
+    The three steps every write path runs before planning, in the order they
+    depend on each other: the citekey first (the orphan probe needs it to know
+    what path to look at), then the PDF fields of an exact match, then a PDF
+    already sitting where this record's would go. Written out three times
+    before this, and two of the copies had already drifted apart by a step —
+    with nothing to say which of the two was right.
+    """
+    prepared = ensure_citekey_for_write(
+        record, existing_records,
+        citekey_format=citekey_format, force_new=force_new, index=index,
+    )
+    prepared = reuse_existing_pdf_fields_for_exact_match(
+        prepared, existing_records, force_new=force_new, index=index,
+    )
+    return reuse_orphan_pdf_for_planned_path(
+        prepared, papers_dir=papers_dir, pdf_filename_format=pdf_filename_format,
+    )
 
 
 def ensure_citekey_for_write(

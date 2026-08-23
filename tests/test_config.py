@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from pzi import config as config_module
 from pzi.config import (
     default_config_path,
@@ -694,3 +696,168 @@ def test_a_directory_is_not_a_library(tmp_path: Path) -> None:
     directory.mkdir()
 
     assert resolve_library_target([], str(directory), home_dir=str(tmp_path)) is None
+
+
+# === one bad value per key, and one gate (2026-08-23 audit, item 539) ===
+
+#: One rejectable value per config key, with the message the user is owed.
+#: Derived-from-source completeness is asserted below, so a key added to
+#: `AppConfig` without a validation rule fails here rather than loading
+#: whatever the user wrote. 24 of these `errors.append` lines had never been
+#: executed by a test.
+_BAD_VALUES: list[tuple[str, object, str]] = [
+    ("api_allowed_origins", "*", "api_allowed_origins must be a list of strings when provided"),
+    ("api_auth_token", 7, "api_auth_token must be a string when provided"),
+    ("api_auth_token_cmd", 7, "api_auth_token_cmd must be a string when provided"),
+    ("api_listen_host", "", "api_listen_host must be a non-empty string"),
+    ("api_listen_port", 70000, "api_listen_port must be an integer between 1 and 65535"),
+    ("api_max_body_bytes", -1, "api_max_body_bytes must be a non-negative integer"),
+    ("api_url", "ftp://example.com", "api_url must be an http or https URL"),
+    ("bibs", [], "bibs must be a non-empty list"),
+    ("browser_engine", "opera", "browser_engine must be 'chromium', 'firefox', or 'webkit'"),
+    ("browser_hook", "yes", "browser_hook must be a boolean"),
+    ("browser_pdf_cmd", 7, "browser_pdf_cmd must be a string when provided"),
+    ("browser_profile_path", 7, "browser_profile_path must be a string when provided"),
+    (
+        "capture_source_dirs",
+        ["/tmp", 7],
+        "capture_source_dirs must be a list of strings when provided",
+    ),
+    (
+        "citekey_format",
+        '{{ author truncate="8 }}',
+        "citekey_format is not a valid template",
+    ),
+    ("contact_email", 7, "contact_email must be a string when provided"),
+    ("contact_email_cmd", 7, "contact_email_cmd must be a string when provided"),
+    (
+        "desktop_fallback_hosts",
+        "example.com",
+        "desktop_fallback_hosts must be a list when provided",
+    ),
+    ("ezproxy_host", "https://proxy.example.edu", "ezproxy_host must be a bare hostname"),
+    ("flaresolverr_url", "ftp://example.com", "flaresolverr_url must be an http or https URL"),
+    ("inbox_path", 7, "inbox_path must be a string when provided"),
+    ("metadata_cache_ttl", -1, "metadata_cache_ttl must be a non-negative integer"),
+    (
+        "metadata_confidence_min_score",
+        1000,
+        "metadata_confidence_min_score must be between 0 and 100 (got 1000)",
+    ),
+    ("node_path", 7, "node_path must be a string when provided"),
+    ("page_metadata_cmd", 7, "page_metadata_cmd must be a string when provided"),
+    (
+        "page_metadata_timeout_seconds",
+        0,
+        "page_metadata_timeout_seconds must be a positive integer",
+    ),
+    ("pdf_discovery_parallel", "yes", "pdf_discovery_parallel must be a boolean"),
+    ("pdf_file_path_style", "somewhere", "pdf_file_path_style must be 'absolute' or 'relative'"),
+    (
+        "pdf_filename_format",
+        '{{ title truncate="100 }}',
+        "pdf_filename_format is not a valid template",
+    ),
+    (
+        "promote_confidence_threshold",
+        101,
+        "promote_confidence_threshold must be an integer between 0 and 100",
+    ),
+    ("pzi_data_home", "   ", "pzi_data_home must be a non-empty string"),
+    ("semantic_scholar_api_key", 7, "semantic_scholar_api_key must be a string when provided"),
+    (
+        "semantic_scholar_api_key_cmd",
+        7,
+        "semantic_scholar_api_key_cmd must be a string when provided",
+    ),
+    (
+        "translation_server_url",
+        "ftp://example.com",
+        "translation_server_url must be an http or https URL",
+    ),
+    ("unpaywall_email", 7, "unpaywall_email must be a string when provided"),
+    ("unpaywall_email_cmd", 7, "unpaywall_email_cmd must be a string when provided"),
+]
+
+
+def _valid_raw() -> dict[str, object]:
+    return {"bibs": [{"name": "ml", "path": "~/ml.bib"}]}
+
+
+def test_every_config_key_has_a_rejectable_value_in_the_table() -> None:
+    """The table is exhaustive by construction, not by memory.
+
+    A key added to `AppConfig` with no row here is either unvalidated — the
+    defect this item is about — or validated with nothing exercising it.
+    """
+    covered = {key for key, _value, _message in _BAD_VALUES}
+    declared = set(config_module.AppConfig.__annotations__)
+    assert covered == declared, (
+        f"config keys with no rejection test: {sorted(declared - covered)}; "
+        f"rows naming no config key: {sorted(covered - declared)}"
+    )
+
+
+@pytest.mark.parametrize(
+    "key,value,message", _BAD_VALUES, ids=[key for key, _v, _m in _BAD_VALUES]
+)
+def test_a_bad_value_is_rejected_and_named(key: str, value: object, message: str) -> None:
+    config, errors = validate_app_config({**_valid_raw(), key: value}, home_dir=HOME)
+
+    assert config is None, f"{key}={value!r} loaded"
+    assert any(message in error for error in errors), (
+        f"{key}={value!r} was rejected without saying why: {errors}"
+    )
+
+
+def test_unrelated_faults_are_all_reported_in_one_pass() -> None:
+    """Four keys, one from each of the validator's four former staged gates.
+
+    The gates returned at the first non-empty `errors`, so a user with faults in
+    two of them fixed one, re-ran, and was told about the next — with no way to
+    tell how many rounds were left. Which tier a key landed in was an accident
+    of where its check was written.
+    """
+    config, errors = validate_app_config(
+        {
+            **_valid_raw(),
+            "api_listen_host": "",  # gate 1
+            "contact_email": 7,  # gate 2
+            "browser_hook": "yes",  # gate 3
+            "pzi_data_home": "   ",  # gate 4
+        },
+        home_dir=HOME,
+    )
+
+    assert config is None
+    assert errors == [
+        "api_listen_host must be a non-empty string",
+        "contact_email must be a string when provided",
+        "browser_hook must be a boolean",
+        "pzi_data_home must be a non-empty string",
+    ]
+
+
+def test_a_bad_bib_entry_does_not_hide_a_bad_top_level_key() -> None:
+    """The bib list used to *replace* the error list, not extend it."""
+    config, errors = validate_app_config(
+        {"api_listen_host": "", "bibs": [{"name": "ml"}]}, home_dir=HOME
+    )
+
+    assert config is None
+    assert "api_listen_host must be a non-empty string" in errors
+    assert any("path" in error for error in errors), errors
+
+
+def test_the_body_size_default_matches_the_http_layer() -> None:
+    """One number, two modules that may not import each other.
+
+    `64 * 1024 * 1024` was written at three sites in `config` and once more in
+    `http_security`, so a raised ceiling could have been applied by the loader
+    and refused by the server. The import that would make this structural runs
+    the wrong way past the layer guard — `http_security` is a front-end module
+    — so the equality is asserted instead.
+    """
+    from pzi.http_security import DEFAULT_MAX_BODY_BYTES as http_default
+
+    assert config_module.DEFAULT_MAX_BODY_BYTES == http_default

@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import ipaddress
+from collections.abc import Sequence
 from typing import TypedDict
 from urllib.parse import urlsplit
 
 from pzi.token_compare import tokens_match
-from pzi.url_safety import DEFAULT_DNS_LOOKUP_TIMEOUT_SECONDS
-from pzi.url_safety import safe_public_http_url as _shared_safe_public_http_url
 
 DEFAULT_ALLOWED_ORIGINS = (
     "http://127.0.0.1",
@@ -18,10 +17,6 @@ DEFAULT_ALLOWED_ORIGINS = (
 )
 DEFAULT_MAX_BODY_BYTES = 64 * 1024 * 1024
 AUTH_HEADER = "X-Pzi-Token"
-#: Re-exported from `url_safety`, which owns DNS resolution. Three modules
-#: each defined their own `0.25`, so tuning the timeout meant finding all
-#: three — and two of them drifting apart would be invisible.
-DNS_LOOKUP_TIMEOUT_SECONDS = DEFAULT_DNS_LOOKUP_TIMEOUT_SECONDS
 
 
 class HttpSecurityConfig(TypedDict):
@@ -74,11 +69,6 @@ def loopback_bind_host(value: str | None) -> bool:
         return False
 
 
-def safe_public_http_url(value: str, *, dns_timeout: float = DNS_LOOKUP_TIMEOUT_SECONDS) -> bool:
-    """Return True for public http(s) URLs, rejecting localhost/private networks."""
-    return _shared_safe_public_http_url(value, dns_timeout=dns_timeout)
-
-
 def _host_only(value: str) -> str | None:
     """Strip a port (and IPv6 brackets) from a Host-header-shaped string.
 
@@ -121,6 +111,21 @@ def host_header_allowed(host: str | None, listen_host: str) -> bool:
     if loopback_bind_host(listen_host):
         return loopback_bind_host(request_host)
     return request_host == _host_only(listen_host)
+
+
+def duplicate_host_error(host_values: Sequence[str]) -> tuple[int, str] | None:
+    """Refuse a request carrying more than one ``Host`` header (RFC 7230 §5.4).
+
+    The dispatchers flatten headers with ``dict(headers.items())``, which keeps
+    the *last* value, and ``host_header_allowed`` then judges that one. So
+    ``Host: evil.example`` followed by ``Host: 127.0.0.1`` passed the rebinding
+    guard while the same pair in the opposite order was refused: the answer
+    depended on header order rather than on the request. No browser emits two,
+    but a proxy in front of the server can be made to.
+    """
+    if len(host_values) > 1:
+        return 400, "more than one Host header"
+    return None
 
 
 def origin_allowed(origin: str | None, allowed_origins: tuple[str, ...]) -> bool:
