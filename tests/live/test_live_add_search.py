@@ -73,9 +73,13 @@ def test_live_add_oa_doi_metadata(live_config_path: str) -> None:
         pytest.skip("translation-server returned no metadata for the test DOI (third-party)")
     assert record.get("doi") == OA_DOI
     assert record.get("authors"), "expected authors"
-    # The point of this job. A capture the fallback answered is a fine capture
-    # and a useless observation: it says nothing about the path pzi actually
-    # leads with, which is the standing gap PLAN item 412 records.
+    # The point of this job, and the input that can carry it. A bare DOI reaches
+    # the translation server's *search* endpoint every run, so this assertion is
+    # deterministic — unlike the arXiv-URL test below, where the identifier is
+    # extracted and the DOI cascade may answer first. A capture the fallback
+    # answered is a fine capture and a useless observation: it says nothing about
+    # the path pzi actually leads with, which is the standing gap item 412
+    # records.
     provider = _answering_provider(result)
     assert provider == "translation_server", (
         f"capture succeeded but {provider or 'no provider'} answered, not the "
@@ -104,10 +108,25 @@ def test_live_add_arxiv_url_metadata(live_config_path: str) -> None:
     assert record.get("year"), "expected a year"
     assert record.get("arxiv_id") == ARXIV_ID or record.get("doi"), \
         "expected arXiv ID or DOI"
+    # Deliberately *not* asserting which provider answered, unlike the DOI test
+    # above. An arXiv URL is classified `doi` — the identifier is extracted from
+    # the URL — so it goes down the DOI cascade first and only falls back to
+    # web-translating the original URL when that comes up empty. Which of the two
+    # answers is a third-party race, so pinning `translation_server` here made
+    # this test fail on days when Crossref or OpenAlex happened to know the DOI.
+    # The translation-server path is asserted where it is deterministic: the DOI
+    # test above, which reaches the server's *search* endpoint every time.
+    #
+    # What is asserted is that *something* claimed the capture. That is not a
+    # weaker version of the same check — it is the one that would have caught
+    # the real bug here: two of the three translation-server return sites set no
+    # provider at all, so a capture the server answered was indistinguishable
+    # from one nothing answered.
     provider = _answering_provider(result)
-    assert provider == "translation_server", (
-        f"capture succeeded but {provider or 'no provider'} answered, not the "
-        "translation server — the path this job exists to exercise did not run"
+    assert provider is not None, (
+        "capture succeeded but no provider claimed it — every metadata path must "
+        "name itself, or a translation-server capture cannot be told from a "
+        "fallback (see `metadata_provider` in add_planning)"
     )
 
 
