@@ -54,6 +54,7 @@ CORE: frozenset[str] = frozenset(
         "capture_models",
         "pdf_planning",
         "protocols",
+        "bib_merge",
         "bib_serialize",
         "format_templates",
         "identifiers",
@@ -74,6 +75,11 @@ CORE: frozenset[str] = frozenset(
         "capture_context",
         "html_metadata",
         "metadata_sources",
+        # Promotion's candidate discovery, split out of `promote_service`.
+        # CORE rather than SERVICE beside the service it came from: it only
+        # queries providers and scores what they return, so nothing it imports
+        # reaches a front end or a browser hook, and this graph keeps it so.
+        "promote_planning",
         # The package root. It re-exports the public API, but *lazily* — nothing
         # is imported at module scope, so at load time it is a leaf, which is
         # what this graph measures. Eager re-export made it a front end that
@@ -301,6 +307,41 @@ def _imported_pzi_modules(path: Path) -> set[str]:
     return names
 
 
+def _all_imported_names(path: Path) -> set[str]:
+    """Every module *path* imports, anywhere in the file — pzi or third-party.
+
+    Two differences from :func:`_imported_pzi_modules`, both because this feeds
+    a purity claim rather than a load-order one. It keeps non-pzi names, since
+    ``import os`` is the thing being looked for; and it walks function bodies,
+    since a deferred ``import os`` is still a route to the disk even though it
+    is not a load-time edge.
+
+    pzi names come back fully dotted (``pzi.bibtex``), which is what tells them
+    apart from stdlib here.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level == 0 and node.module:
+                names.add(node.module)
+                if node.module == "pzi":
+                    names.update(f"pzi.{alias.name}" for alias in node.names)
+            elif node.level > 0:
+                package = list(_package_of(path))
+                for _ in range(node.level - 1):
+                    if package:
+                        package.pop()
+                prefix = ".".join(["pzi", *package])
+                if node.module:
+                    names.add(f"{prefix}.{node.module}")
+                else:
+                    names.update(f"{prefix}.{alias.name}" for alias in node.names)
+    return names
+
+
 def _module_name(path: Path) -> str:
     """Dotted name of a module file relative to the pzi package."""
     relative = path.relative_to(_SRC).with_suffix("")
@@ -468,6 +509,146 @@ def test_no_import_cycles() -> None:
                 stack.append((dep, [*path, dep]))
 
     assert not cycles, "import cycles:\n" + "\n".join(" -> ".join(c) for c in cycles)
+
+
+# ---------------------------------------------------------------------------
+# `bib_merge` is purer than its tier. CORE is a layering promise, not a purity
+# one — `config`, `fileio` and `safe_http` are all CORE and all touch the
+# outside world — so membership above does not say what this module claims.
+# ---------------------------------------------------------------------------
+
+#: Modules through which a Python process reaches the outside world. Not
+#: exhaustive over the stdlib, and it does not need to be: it names the routes
+#: the rest of pzi actually uses to read a bib, take a lock, run a browser or
+#: fetch metadata, which are the ones the merge cluster must not acquire.
+#: `urllib.parse` is deliberately absent — `identifiers` uses it for string
+#: surgery on DOIs and URLs, and the I/O lives in `urllib.request`.
+_IO_MODULES = frozenset(
+    {
+        "asyncio",
+        "fcntl",
+        "fileinput",
+        "ftplib",
+        "glob",
+        "http",
+        "io",
+        "mmap",
+        "multiprocessing",
+        "os",
+        "pathlib",
+        "select",
+        "selectors",
+        "shutil",
+        "smtplib",
+        "socket",
+        "sqlite3",
+        "ssl",
+        "subprocess",
+        "tempfile",
+        "urllib.request",
+        "webbrowser",
+        # Third-party, all of which read or write something.
+        "bibtexparser",
+        "httpx",
+        "playwright",
+        "portalocker",
+        "pypdf",
+        "requests",
+        "urllib3",
+    }
+)
+
+#: Everything `bib_merge` imports, pinned. Equality rather than a subset check:
+#: the point of the extraction is that a new dependency here is a decision, and
+#: a subset check would wave through the one import that ends the purity.
+_BIB_MERGE_IMPORTS = frozenset(
+    {
+        "__future__",
+        "typing",
+        "pzi.bibtex",
+        "pzi.identifiers",
+        "pzi.similarity",
+    }
+)
+
+
+def _reaches_io(name: str) -> bool:
+    return any(name == mod or name.startswith(f"{mod}.") for mod in _IO_MODULES)
+
+
+def _bib_merge_closure() -> dict[str, Path]:
+    """`bib_merge` and every pzi module reachable from it, by any import."""
+    start = _SRC / "bib_merge.py"
+    reached: dict[str, Path] = {}
+    queue: deque[Path] = deque([start])
+    while queue:
+        path = queue.popleft()
+        name = _module_name(path)
+        if name in reached:
+            continue
+        reached[name] = path
+        for imported in _all_imported_names(path):
+            # The bare package name, from `from pzi import exit_codes`. Not an
+            # edge worth following: `pzi/__init__.py` imports nothing at module
+            # scope (that is the fix that broke the API cycle), and its lazy
+            # `__getattr__` is the public front end, which nothing in this
+            # closure calls. The dotted sibling name in the same statement is
+            # the real edge and is followed below.
+            if not imported.startswith("pzi.") or imported == "pzi":
+                continue
+            candidate = _SRC.joinpath(*imported.removeprefix("pzi.").split("."))
+            candidate = candidate.with_suffix(".py")
+            if candidate.exists():
+                queue.append(candidate)
+    return reached
+
+
+def test_bib_merge_imports_exactly_its_three_pure_dependencies() -> None:
+    """The merge cluster's whole import list, pinned.
+
+    It was extracted from `bib_repository` precisely so that adding `fileio` or
+    `pathlib` to it is a diff someone has to defend, rather than a line that
+    reads like every other line in a 1,700-line module.
+    """
+    assert _all_imported_names(_SRC / "bib_merge.py") == _BIB_MERGE_IMPORTS
+
+
+def test_nothing_bib_merge_reaches_can_perform_io() -> None:
+    """No module in `bib_merge`'s closure opens a file, a socket or a process.
+
+    This is the property the extraction exists to make mechanical: the merge
+    decides what a write *will say* and `bib_repository` performs it, so a bug
+    here rewrites the user's metadata with nothing raised anywhere. Checked
+    over the transitive closure, function bodies included — a deferred `import
+    os` reaches the disk just as well as a top-level one — and `open()` is
+    checked directly, since it needs no import at all.
+    """
+    closure = _bib_merge_closure()
+    # The walk is the whole check, and `assert not offenders` passes vacuously
+    # on an empty one. `errors` is two hops out (via `bibtex`), so requiring it
+    # pins that the walk is transitive and not just a direct-import scan.
+    assert {"bib_merge", "bibtex", "errors"} <= set(closure), (
+        f"the closure walk is not reaching transitively: {sorted(closure)}"
+    )
+
+    offenders: dict[str, list[str]] = {}
+    for name, path in sorted(closure.items()):
+        reached = sorted(n for n in _all_imported_names(path) if _reaches_io(n))
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        if any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "open"
+            for node in ast.walk(tree)
+        ):
+            reached.append("open()")
+        if reached:
+            offenders[name] = reached
+
+    assert not offenders, (
+        "bib_merge's closure can perform I/O:\n"
+        + "\n".join(f"  {m} → {hits}" for m, hits in sorted(offenders.items()))
+    )
 
 
 # ---------------------------------------------------------------------------

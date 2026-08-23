@@ -5,6 +5,19 @@ Public API:
     add_record_to_bib — capture a pre-built record
 
 Metadata fetching is delegated to add_planning.py.
+
+**Where the pure record logic lives is split, and the module names do not say
+so.** `add_planning` owns record merging, citekey *formatting* and diagnostics;
+this module owns the record-preparation helpers at the bottom of the file —
+`prepare_record`, `ensure_citekey_for_write`, `existing_citekeys`,
+`reuse_existing_pdf_fields_for_exact_match`, `reuse_orphan_pdf_for_planned_path`
+— which are pure functions over their arguments despite sitting in the
+orchestration module. Two of them have callers outside it (`promote_service`
+imports `existing_citekeys`; five test modules import
+`ensure_citekey_for_write`), so they are part of the internal surface, not
+private scaffolding. They were left here rather than moved because the move
+costs seven files of import churn and buys only a tidier taxonomy — recorded as
+item 560's decision, 2026-08-23.
 """
 
 from __future__ import annotations

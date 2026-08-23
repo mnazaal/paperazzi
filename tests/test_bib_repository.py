@@ -999,10 +999,10 @@ def test_every_user_owned_field_is_protected_by_the_merge() -> None:
     Two definitions of "user-owned" is what caused it; this pins that the merge
     honours the single one in `bibtex`.
     """
-    from pzi import bib_repository
+    from pzi import bib_merge
     from pzi.bibtex import USER_OWNED_FIELDS
 
-    overlap = USER_OWNED_FIELDS & bib_repository._PREFER_LONGER_TEXT_FIELDS
+    overlap = USER_OWNED_FIELDS & bib_merge._PREFER_LONGER_TEXT_FIELDS
     assert not overlap, f"user-owned fields must not prefer the longer value: {overlap}"
 
 

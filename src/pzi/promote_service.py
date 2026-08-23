@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import functools
 import re
-from collections.abc import Callable, Mapping
+from contextlib import ExitStack
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict, cast
-from urllib.error import HTTPError
 
 from pzi.add_planning import next_pdf_candidate_for_config
 from pzi.bib_repository import (
@@ -47,27 +46,22 @@ from pzi.identifiers import (
     is_preprint_url,
     names_a_preprint_server,
 )
-from pzi.metadata_sources import (
-    fetch_crossref_record_by_title,
-    fetch_dblp_record_by_title,
-    fetch_openalex_record_by_title,
-    fetch_openreview_record_by_title,
-    fetch_semantic_scholar_record_by_title_with_error,
-)
 from pzi.pdf import NextPdfCandidate, fetch_and_store_pdf_trying_sources
 from pzi.pdf import remove_new_pdf as _remove_new_pdf
 from pzi.pdf import snapshot_pdf_paths as _snapshot_pdf_paths
+from pzi.promote_planning import (
+    find_published_candidate_with_diagnostics,
+    published_candidate_confidence_warnings,
+)
 from pzi.protocols import (
     BinaryFetcher,
     MetadataRecordFetcher,
     S2RecordWithErrorFetcher,
     SearchTranslationFetcher,
-    accepts_keyword,
 )
 from pzi.resolution_match import score_match
 from pzi.similarity import canonical_doi, normalize_title
 from pzi.tag_service import add_tags
-from pzi.translation_server import fetch_search_translations
 
 
 class PromoteItem(TypedDict):
@@ -189,8 +183,6 @@ def promote_bib(
     }
 
     items: list[PromoteItem] = []
-
-    errors: list[str] = []
     summary = _empty_summary()
     resolved_preprints: list[str] = []
     # One backup for the run, not one per promoted entry. `backup_path_for` never
@@ -202,6 +194,15 @@ def promote_bib(
     # `library merge` do — and the rest pass None.
     run_backup = _RunBackup(bib["path"])
 
+    # Phase 1 decides every promotion with no lock held, because deciding one
+    # means going out to the network: candidate discovery calls rate-limited
+    # providers (Semantic Scholar is gated at 6 s per request) and attaching the
+    # PDF downloads a file. `bib_repository.LOCK_TIMEOUT_SECONDS` is 300, so a
+    # sweep that did that work while holding the run's exclusive bib lock made a
+    # concurrent `pzi add` — the browser extension talking to `pzi server` —
+    # *fail* rather than wait. Keep mode's writes are collected here as
+    # `_PendingFork`s and applied together in phase 2.
+    pending: list[tuple[int, _PendingFork]] = []
     for record in records:
         preprint_ck = record.get("citekey")
         if not isinstance(preprint_ck, str):
@@ -221,7 +222,7 @@ def promote_bib(
             continue
         summary["checked"] += 1
 
-        candidate_result = _find_published_candidate_with_diagnostics(
+        candidate_result = find_published_candidate_with_diagnostics(
             record=record,
             server_url=config["translation_server_url"],
             fetch_search=fetch_search,
@@ -269,7 +270,7 @@ def promote_bib(
             item = _skip_item(preprint_ck, reason)
             if metadata_diagnostics:
                 item["metadata_diagnostics"] = metadata_diagnostics
-            metadata_warnings = _published_candidate_confidence_warnings(
+            metadata_warnings = published_candidate_confidence_warnings(
                 score=score, min_score=effective_confidence_threshold
             )
             if metadata_warnings:
@@ -310,13 +311,13 @@ def promote_bib(
             next_candidate=next_pdf_candidate_for_config(config, bib),
         )
 
-        # Isolate the write/handler for one preprint: an unexpected failure here
-        # (malformed candidate, mid-write error) must surface as an explainable
+        # Isolate the handler for one preprint: an unexpected failure here
+        # (malformed candidate, failed download) must surface as an explainable
         # skip and let the rest of the library promote, not abort the whole run.
         # The handlers clean up any downloaded PDF before raising.
         try:
             if keep_preprint:
-                item = _handle_keep_preprint(
+                item, fork = _handle_keep_preprint(
                     bib_path=bib["path"],
                     preprint_record=record,
                     candidate=candidate,
@@ -327,6 +328,10 @@ def promote_bib(
                     **pdf_kwargs,
                 )
             else:
+                # `--replace` still writes per candidate through
+                # `update_bib_entry`, which takes and releases the lock around
+                # each write. Nothing to defer.
+                fork = None
                 item = _handle_update_in_place(
                     bib_path=bib["path"],
                     preprint_record=record,
@@ -349,28 +354,90 @@ def promote_bib(
             items.append(
                 _skip_item(preprint_ck, f"promotion failed: {exc}", failed=True)
             )
-            errors.append(f"{preprint_ck}: promotion failed: {exc}")
             continue
         if metadata_diagnostics:
             item["metadata_diagnostics"] = metadata_diagnostics
 
         items.append(item)
-        if item.get("action") in {"create", "update"}:
-            # Keep mode leaves the preprint in place; tag it so a later
-            # --mark-resolved run skips it.  Replace mode rewrites the entry to
-            # the published version (no longer a preprint), so no tag is needed.
-            if keep_preprint:
-                resolved_preprints.append(preprint_ck)
-        if item.get("action") == "create":
-            summary["created"] += 1
-        elif item.get("action") == "update":
-            summary["updated"] += 1
+        if fork is not None:
+            # Counted in phase 2 instead: whether this promotion happened is not
+            # known until its writes have gone into the session.
+            pending.append((len(items) - 1, fork))
+        else:
+            if item.get("action") in {"create", "update"}:
+                # Keep mode leaves the preprint in place; tag it so a later
+                # --mark-resolved run skips it.  Replace mode rewrites the entry to
+                # the published version (no longer a preprint), so no tag is needed.
+                if keep_preprint:
+                    resolved_preprints.append(preprint_ck)
+            if item.get("action") == "create":
+                summary["created"] += 1
+            elif item.get("action") == "update":
+                summary["updated"] += 1
+        # Both of these feed the *next* record's decisions — the citekey
+        # generator and `_find_duplicate_citekey` — so they are recorded as soon
+        # as this record resolves, before phase 2 knows whether the write lands.
+        # The alternative is a sweep that forks two entries for one paper.
         if item["published_citekey"] is not None:  # pragma: no branch
             existing_citekeys.add(item["published_citekey"])
             if item["action"] in {"create", "update"}:
                 published_record = dict(candidate)
                 published_record["citekey"] = item["published_citekey"]
                 known_records.append(published_record)
+
+    # Phase 2 — the only part that holds the lock, and it makes no network call.
+    #
+    # One `batch_write_session` for the whole run, for the same reason the
+    # backup above is taken once. Keep mode used to open a session per promoted
+    # preprint, and each one takes the lock, re-reads the file, re-parses every
+    # entry and re-serialises the library: a sweep that promoted K preprints did
+    # K full parse-and-serialise cycles over a 15.8 MB, 22,232-entry library.
+    # On a synthetic 4,010-entry library, 10 promotions took 7.4 s with a session
+    # each and 1.0 s with one for the run, writing the same bytes either way.
+    #
+    # Only the write path reaches here: the dry run needs a per-preprint diff,
+    # and the only way to render one is `preview_batch_write`, which opens the
+    # file itself.
+    with ExitStack() as run_writes:
+        session: BatchWriteSession | None = None
+        for item_index, fork in pending:
+            try:
+                if session is None:
+                    # Opened at the first promotion, not before the loop:
+                    # opening it eagerly took the lock and refused a malformed
+                    # library on runs that were never going to write anything —
+                    # a sweep that skips every preprint must still report its
+                    # skips.
+                    session = run_writes.enter_context(
+                        batch_write_session(
+                            bib["path"], file_path_style=file_path_style
+                        )
+                    )
+                _apply_published_fork(
+                    session, fork.published, fork.preprint_ck, fork.published_ck,
+                    bib_path=bib["path"], check_collision=True,
+                )
+            except (StalePlanError, ConcurrentEditError):
+                raise  # see the carve-out in phase 1
+            except Exception as exc:  # one failing write must not abort the run
+                _remove_new_pdf(_local_pdf_path(fork.published), fork.existing_pdf_paths)
+                summary["skipped_failed"] += 1
+                items[item_index] = _skip_item(
+                    fork.preprint_ck, f"promotion failed: {exc}", failed=True
+                )
+                continue
+            summary["created"] += 1
+            resolved_preprints.append(fork.preprint_ck)
+
+    # Derived from the item outcomes rather than accumulated beside them, as
+    # `update_bib` derives its own: a verdict is settled in phase 1 for a skip
+    # and in phase 2 for a write, and reading them back off `items` keeps the
+    # errors in record order whichever phase produced them.
+    errors = [
+        f"{item['preprint_citekey']}: {item['note']}"
+        for item in items
+        if item.get("failed")
+    ]
 
     # Emit a top-level warning when S2 rate-limit failures accumulate.
     s2_rate_count = sum(
@@ -473,377 +540,7 @@ def _tag_resolved(
 
 
 # ---------------------------------------------------------------------------
-# Candidate discovery
-# ---------------------------------------------------------------------------
-
-
-def _find_published_candidate_with_diagnostics(
-    *,
-    record: NormalizedRecord,
-    server_url: str,
-    fetch_search: SearchTranslationFetcher | None,
-    fetch_crossref: MetadataRecordFetcher | None,
-    fetch_openalex: MetadataRecordFetcher | None,
-    fetch_s2: S2RecordWithErrorFetcher | None,
-    s2_api_key: str | None,
-    contact_email: str | None = None,
-    fetch_dblp: MetadataRecordFetcher | None = None,
-    fetch_openreview: MetadataRecordFetcher | None = None,
-    metadata_fetch_text: Callable[..., str] | None = None,
-) -> dict[str, Any]:
-    provider_errors: list[str] = []
-    search_fn = fetch_search or fetch_search_translations
-    query = _build_query(record)
-    if not query.strip():
-        return {"candidate": None, "provider_errors": provider_errors, "reason": "no_query"}
-
-    # 1. Translation server
-    try:
-        results = search_fn(query, server_url=server_url)
-    except (OSError, ValueError):
-        provider_errors.append("translation-server")
-        results = []
-    translation_candidates = _translation_candidates(results)
-    candidate = _select_best_published_candidate(record, translation_candidates)
-    if candidate is not None:
-        return {
-            "candidate": candidate,
-            "provider_errors": provider_errors,
-            "metadata_diagnostics": _published_candidate_diagnostics(
-                record, translation_candidates
-            ),
-        }
-
-    # 2. Fallback providers (title-based search for published version)
-    title = record.get("title")
-    if not isinstance(title, str) or not title.strip():
-        return {"candidate": None, "provider_errors": provider_errors}
-
-    # One loop, not five near-identical blocks. The blocks differed only in the
-    # function called and the name reported, and each carried its own copy of
-    # the `candidate.get("venue")` test — six copies in this function once the
-    # translation-server path is counted. That repetition is why nothing ever
-    # asked whether a candidate was *itself a preprint*: there was no single
-    # place to ask it. Provider order is preserved (it is the tie-break in
-    # `_select_best_published_candidate`), and DBLP/OpenReview still follow the
-    # polite-pool providers as the CS-conference / ML-venue authorities that
-    # confirm proceedings versions the DOI-based sources leave unresolved.
-    provider_candidates: list[NormalizedRecord] = []
-    title_providers: tuple[tuple[str, MetadataRecordFetcher | None, Any], ...] = (
-        ("crossref", fetch_crossref, fetch_crossref_record_by_title),
-        ("openalex", fetch_openalex, fetch_openalex_record_by_title),
-        ("dblp", fetch_dblp, fetch_dblp_record_by_title),
-        ("openreview", fetch_openreview, fetch_openreview_record_by_title),
-    )
-    for name, override, base_fn in title_providers:
-        provider_fn = override or _default_provider_fn(base_fn, metadata_fetch_text)
-        candidate = _try_provider(
-            provider_fn, title, name=name,
-            contact_email=contact_email, provider_errors=provider_errors,
-        )
-        # No venue means there is nothing to promote *to*; such a result was
-        # never a candidate and is not reported as a rejection.
-        if candidate is not None and candidate.get("venue"):
-            provider_candidates.append(cast(NormalizedRecord, dict(candidate)))
-
-    s2_fn: S2RecordWithErrorFetcher
-    if fetch_s2 is not None:
-        s2_fn = fetch_s2  # override already returns (record, error) tuple
-    else:
-        def _default_s2(t: str) -> tuple[NormalizedRecord | None, str | None]:
-            return fetch_semantic_scholar_record_by_title_with_error(
-                t, api_key=s2_api_key, fetch_text=metadata_fetch_text
-            )
-        s2_fn = _default_s2
-    try:
-        s2_candidate, s2_err = s2_fn(title)
-    except HTTPError as exc:
-        if exc.code in (403, 429):
-            msg = "semantic-scholar (rate-limited"
-            if s2_api_key is None:
-                msg += " — configure semantic_scholar_api_key_cmd)"
-            else:
-                msg += " — check API key validity)"
-            provider_errors.append(msg)
-        else:
-            provider_errors.append(f"semantic-scholar (HTTP {exc.code})")
-        s2_candidate = None
-        s2_err = None
-    except (OSError, ValueError):
-        provider_errors.append("semantic-scholar")
-        s2_candidate = None
-        s2_err = None
-    if s2_candidate is not None and s2_candidate.get("venue"):
-        provider_candidates.append(cast(NormalizedRecord, dict(s2_candidate)))
-    elif s2_candidate is None and s2_err:
-        err_lower = s2_err.lower()
-        if "rate" in err_lower or "quota" in err_lower:
-            msg = "semantic-scholar (rate-limited"
-        elif "api key" in err_lower or "authorization" in err_lower:
-            msg = "semantic-scholar (auth required"
-        else:
-            msg = f"semantic-scholar ({s2_err})"
-        if s2_api_key is None:
-            msg += " — configure semantic_scholar_api_key_cmd)"
-        else:
-            msg += ")"
-        provider_errors.append(msg)
-
-    candidate = _select_best_published_candidate(record, provider_candidates)
-    if candidate is not None:
-        return {
-            "candidate": candidate,
-            "provider_errors": provider_errors,
-            "metadata_diagnostics": _published_candidate_diagnostics(record, provider_candidates),
-        }
-
-    # Nothing publishable — but say *why* when candidates were seen and all of
-    # them were preprints. "no candidate" and "the only thing found was the
-    # preprint again" are different answers, and the second is the common one
-    # for a paper that genuinely was never published.
-    if provider_candidates:
-        return {
-            "candidate": None,
-            "provider_errors": provider_errors,
-            "metadata_diagnostics": _published_candidate_diagnostics(
-                record, provider_candidates
-            ),
-        }
-    return {"candidate": None, "provider_errors": provider_errors}
-
-
-def _default_provider_fn(
-    base_fn: Callable[..., NormalizedRecord | None],
-    fetch_text: Callable[..., str] | None,
-) -> Callable[..., NormalizedRecord | None]:
-    """Bind the composed (cached / rate-limited) fetcher to a title-search provider."""
-    if fetch_text is None:
-        return base_fn
-    return functools.partial(base_fn, fetch_text=fetch_text)
-
-
-def _call_provider(fn, value: str, *, contact_email: str | None, errors=None):
-    kwargs: dict[str, Any] = {}
-    if contact_email and accepts_keyword(fn, "contact_email"):
-        kwargs["contact_email"] = contact_email
-    # The real fetchers catch transport failures internally and return None, so
-    # the errors channel is the only thing that separates "no match" from "never
-    # reached". Injected fetchers need not accept it.
-    if errors is not None and accepts_keyword(fn, "errors"):
-        kwargs["errors"] = errors
-    return fn(value, **kwargs)
-
-
-def _try_provider(
-    fn,
-    title: str,
-    *,
-    name: str,
-    contact_email: str | None,
-    provider_errors: list[str],
-) -> NormalizedRecord | None:
-    """Query one title-search provider, recording why it produced nothing.
-
-    A provider that could not be reached must not be silently equivalent to one
-    that answered "unknown": the first leaves the preprint unpromoted for a
-    fixable reason, and only a recorded error says which.
-    """
-    errors: list[str] = []
-    try:
-        candidate = _call_provider(
-            fn, title, contact_email=contact_email, errors=errors
-        )
-    except (OSError, ValueError) as exc:
-        provider_errors.append(f"{name} ({exc})")
-        return None
-    if errors:
-        provider_errors.append(f"{name} ({errors[0]})")
-        return None
-    return candidate
-
-
-def _build_query(record: NormalizedRecord) -> str:
-    parts: list[str] = []
-    title = record.get("title")
-    if isinstance(title, str) and title.strip():
-        parts.append(title.strip())
-    authors = record.get("authors")
-    if isinstance(authors, list):
-        for author in authors[:2]:
-            if isinstance(author, str) and author.strip():
-                parts.append(author.strip())
-    year = record.get("year")
-    if isinstance(year, int):
-        parts.append(str(year))
-    return " ".join(parts)
-
-
-def _translation_candidates(results: Any) -> list[NormalizedRecord]:
-    if not isinstance(results, list):
-        return []
-    candidates: list[NormalizedRecord] = []
-    for result in results:
-        if not isinstance(result, Mapping):
-            continue
-        rec = result.get("record")
-        if isinstance(rec, Mapping) and rec.get("venue"):
-            candidate = dict(rec)
-            # The translation server reports the item type alongside the record,
-            # not inside it. Carry it in, or `resolve_entry_type` has nothing to
-            # go on and every promotion lands as `@article` — including
-            # conference papers.
-            item_type = result.get("item_type")
-            if isinstance(item_type, str) and item_type.strip():
-                candidate.setdefault("item_type", item_type.strip())
-            candidates.append(cast(NormalizedRecord, candidate))
-    return candidates
-
-
-def _is_publishable_candidate(candidate: NormalizedRecord) -> bool:
-    """Is this something a preprint can be promoted *to*?
-
-    Two conditions, and the second is the one that was missing. A candidate must
-    name a venue — there is nothing to promote to otherwise — and it must not
-    itself carry preprint identity. `promote` already tests its *source* records
-    with `has_preprint_identity` to decide what is worth promoting at all
-    (see `promote_bib`); applying the same test to the candidate is the whole
-    fix. Without it, "has a venue" stood in for "is published", and an arXiv
-    record has a venue: `CoRR`, or `arXiv (Cornell University)`. Against 20 real
-    preprints that produced 18 promotions of which only 3 were genuine
-    publications — the rest were the preprint, relabelled as its own published
-    version and cross-linked back to itself.
-    """
-    return bool(candidate.get("venue")) and not has_preprint_identity(candidate)
-
-
-def _partition_candidates(
-    candidates: list[NormalizedRecord],
-) -> tuple[list[NormalizedRecord], list[NormalizedRecord]]:
-    """Split into (promotable, preprints-that-cannot-be-a-published-version)."""
-    publishable = [c for c in candidates if _is_publishable_candidate(c)]
-    preprints = [c for c in candidates if not _is_publishable_candidate(c)]
-    return publishable, preprints
-
-
-def _select_best_published_candidate(
-    preprint: NormalizedRecord,
-    candidates: list[NormalizedRecord],
-) -> NormalizedRecord | None:
-    # Filtered here rather than at each provider, so no call site can forget.
-    publishable, _ = _partition_candidates(candidates)
-    if not publishable:
-        return None
-    return max(
-        enumerate(publishable),
-        key=lambda item: (_score_published_candidate(preprint, item[1]), -item[0]),
-    )[1]
-
-
-def _score_published_candidate(
-    preprint: NormalizedRecord,
-    candidate: NormalizedRecord,
-) -> int:
-    # Same 0–100 scale the acceptance gate uses, so the selected candidate and
-    # the reported confidence can never disagree. The completeness bonuses stay
-    # small: they break ties between comparably-matching candidates, they do not
-    # promote a poor match over a good one.
-    score = score_match(preprint, candidate)["score"]
-    if candidate.get("venue"):
-        score += 2
-    # A DOI is evidence of a *publisher* record, which is the thing being looked
-    # for — so arXiv's own DataCite DOI must not earn it. Rewarding it inverted
-    # the comparison this function exists to make: for one real preprint the
-    # arXiv record scored 105 with `10.48550/arxiv.2110.09348` while the actual
-    # ICLR version, which carries no DOI at all, scored 103 and lost by exactly
-    # this bonus. The published version was found and then rejected in favour of
-    # the preprint it was supposed to replace.
-    if candidate.get("doi") and not is_preprint_doi(candidate.get("doi")):
-        score += 2
-    if candidate.get("pdf_url"):
-        score += 1
-    return score
-
-
-def _published_candidate_diagnostics(
-    preprint: NormalizedRecord,
-    candidates: list[NormalizedRecord],
-) -> list[str]:
-    publishable, preprints = _partition_candidates(candidates)
-    total = len(candidates)
-    # Preprint candidates are *reported*, not silently dropped. A filter with no
-    # output turns "we considered the arXiv record and declined it" into an
-    # unexplained absence, and this project's history is that a silent gate is
-    # indistinguishable from a broken one.
-    lines = [
-        _published_candidate_diagnostic_line(
-            "rejected (preprint)",
-            index,
-            total,
-            _score_published_candidate(preprint, candidate),
-            candidate,
-        )
-        for index, candidate in enumerate(preprints)
-    ]
-    if not publishable:
-        return lines
-
-    scored = [
-        (index, candidate, _score_published_candidate(preprint, candidate))
-        for index, candidate in enumerate(publishable)
-    ]
-    best_index, best_candidate, best_score = max(
-        scored,
-        key=lambda item: (item[2], -item[0]),
-    )
-    return [
-        _published_candidate_diagnostic_line(
-            "selected", best_index, total, best_score, best_candidate
-        ),
-        *(
-            _published_candidate_diagnostic_line("rejected", index, total, score, candidate)
-            for index, candidate, score in scored
-            if index != best_index
-        ),
-        *lines,
-    ]
-
-
-def _published_candidate_confidence_warnings(
-    *, score: int, min_score: int
-) -> list[str]:
-    if score >= min_score:
-        return []
-    return [
-        "metadata confidence low: "
-        f"published candidate score={score} below {min_score}; verify promotion candidate"
-    ]
-
-
-def _published_candidate_diagnostic_line(
-    status: str,
-    index: int,
-    total: int,
-    score: int,
-    candidate: NormalizedRecord,
-) -> str:
-    parts = [f"{status} candidate {index + 1}/{total}: score={score}"]
-    doi = candidate.get("doi")
-    title = candidate.get("title")
-    venue = candidate.get("venue")
-    year = candidate.get("year")
-    if isinstance(doi, str) and doi.strip():
-        parts.append(f"doi={doi.strip()}")
-    if isinstance(title, str) and title.strip():
-        parts.append(f"title={title.strip()}")
-    if isinstance(venue, str) and venue.strip():
-        parts.append(f"venue={venue.strip()}")
-    if isinstance(year, int):
-        parts.append(f"year={year}")
-    return "; ".join(parts)
-
-
-# ---------------------------------------------------------------------------
-# Scoring and deduplication
+# Deduplication (candidate scoring lives in `promote_planning`)
 # ---------------------------------------------------------------------------
 
 
@@ -914,6 +611,24 @@ def _skip_item(
     return item
 
 
+@dataclass(frozen=True)
+class _PendingFork:
+    """A keep-mode promotion decided outside the lock, waiting for the session.
+
+    The decision costs network — discovery, then the PDF download — and the run
+    holds one exclusive `batch_write_session` for its writes. So the two are
+    kept apart: `_handle_keep_preprint` returns this instead of writing, and
+    `promote_bib`'s phase 2 folds the pair of writes into the session.
+    """
+
+    preprint_ck: str
+    published: NormalizedRecord
+    published_ck: str
+    #: The papers directory as it was before this promotion's download, so a
+    #: write that never lands can delete the PDF it pulled in and nothing else.
+    existing_pdf_paths: set[Path]
+
+
 def _handle_keep_preprint(
     *,
     bib_path: str,
@@ -930,7 +645,12 @@ def _handle_keep_preprint(
     browser_hook: bool = True,
     file_path_style: str = "absolute",
     next_candidate: NextPdfCandidate | None = None,
-) -> PromoteItem:
+) -> tuple[PromoteItem, _PendingFork | None]:
+    """The item this promotion produces, and the write it still owes the run.
+
+    A dry run renders its diff here and owes nothing; a real run owes a
+    `_PendingFork`, because every write is deferred to phase 2.
+    """
     preprint_ck = cast(str, preprint_record.get("citekey", ""))
 
     published = _merge_published_metadata(preprint_record, candidate)
@@ -967,6 +687,7 @@ def _handle_keep_preprint(
     changed_fields = changed_fields_between(preprint_record, published) or ["venue", "doi"]
 
     diff: str | None = None
+    pending: _PendingFork | None = None
     if dry_run:
         # Same `force_new` as the real write, so the preview shows the insert
         # the run will actually perform rather than a spurious in-place update.
@@ -975,28 +696,26 @@ def _handle_keep_preprint(
         # stamped onto the preprint.
         diff = preview_batch_write(
             bib_path,
-            lambda session: _apply_published_fork(
-                session, published, preprint_ck, published_ck,
+            lambda preview: _apply_published_fork(
+                preview, published, preprint_ck, published_ck,
                 bib_path=bib_path, check_collision=False,
             ),
             file_path_style=file_path_style,
         )["diff"]
     else:
-        try:
-            _write_published_fork(
-                bib_path, published, preprint_ck, published_ck,
-                file_path_style=file_path_style,
-            )
-        except Exception:
-            _remove_new_pdf(_local_pdf_path(published), existing_pdf_paths)
-            raise
+        pending = _PendingFork(
+            preprint_ck=preprint_ck,
+            published=published,
+            published_ck=published_ck,
+            existing_pdf_paths=existing_pdf_paths,
+        )
 
     return _promote_item(
         preprint_ck, published_ck, "create",
         changed_fields=changed_fields,
         pdf_attached=pdf_attached,
         diff=diff,
-    )
+    ), pending
 
 
 def _relocate_venue_for_entry_type(entry: BibtexEntry) -> BibtexEntry:
@@ -1023,34 +742,6 @@ def _relocate_venue_for_entry_type(entry: BibtexEntry) -> BibtexEntry:
     return entry
 
 
-def _write_published_fork(
-    bib_path: str,
-    published: NormalizedRecord,
-    preprint_ck: str,
-    published_ck: str,
-    *,
-    file_path_style: str = "absolute",
-) -> None:
-    """Insert the published entry and cross-reference the preprint, atomically.
-
-    Both edits go through one batch session so the pair cannot half-apply. The
-    old sequence committed the insert first and stamped the preprint's note
-    after, and only the note path refuses to patch a library containing a
-    malformed block — so one broken entry anywhere in the file left the
-    published entry committed (with a ``file =`` pointing at the PDF the
-    rollback had just deleted) behind a reported ``created 0``.
-    """
-    with batch_write_session(bib_path, file_path_style=file_path_style) as session:
-        _apply_published_fork(
-            session,
-            published,
-            preprint_ck,
-            published_ck,
-            bib_path=bib_path,
-            check_collision=True,
-        )
-
-
 def _apply_published_fork(
     session: BatchWriteSession,
     published: NormalizedRecord,
@@ -1063,7 +754,13 @@ def _apply_published_fork(
     """Fold both of the fork's writes into *session*.
 
     Shared by the real write and the dry-run preview, so the preview cannot
-    show a different pair of writes than the run performs.
+    show a different pair of writes than the run performs. Both edits go into
+    one session so the pair cannot half-apply: the old sequence committed the
+    insert first and stamped the preprint's note after, and only the note path
+    refuses to patch a library containing a malformed block — so one broken
+    entry anywhere in the file left the published entry committed (with a
+    ``file =`` pointing at the PDF the rollback had just deleted) behind a
+    reported ``created 0``.
     """
     if check_collision and any(
         record.get("citekey") == published_ck for record in session.records

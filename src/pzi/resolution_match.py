@@ -119,7 +119,7 @@ def _doi_mismatch(entry: Mapping[str, object], candidate: Mapping[str, object]) 
     would flag almost everything.
 
     A preprint entry is excluded: its DOI legitimately differs from the
-    published version's, and `promote_service` scores exactly that pairing with
+    published version's, and `promote_planning` scores exactly that pairing with
     this function. Penalizing it there would suppress valid promotions, which is
     the failure mode this guard exists to prevent.
     """

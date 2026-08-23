@@ -578,7 +578,7 @@ def carry_item_type(record: dict[str, Any], selected: Mapping[str, Any]) -> None
     conference paper captured through the translation-server became
     ``@article`` with ``journal = {proceedings title}``, and since Crossref,
     OpenAlex and DBLP *do* put ``item_type`` inside their records, the entry type
-    silently depended on which provider answered. ``promote_service`` has always
+    silently depended on which provider answered. ``promote_planning`` has always
     carried it correctly; this is the same move.
     """
     item_type = selected.get("item_type")

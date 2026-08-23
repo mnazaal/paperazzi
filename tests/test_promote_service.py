@@ -1,3 +1,5 @@
+from contextlib import contextmanager
+
 import pytest
 
 import pzi.promote_service as promote_service
@@ -6,12 +8,13 @@ from pzi.add_service import add_record_to_bib
 from pzi.bib_repository import ConcurrentEditError, StalePlanError
 from pzi.errors import REASON_UNAVAILABLE
 from pzi.http_status import status_for_service_result
-from pzi.promote_service import (
+from pzi.pdf import PdfSourceOutcome
+from pzi.promote_planning import (
     _published_candidate_diagnostics,
     _score_published_candidate,
     _select_best_published_candidate,
-    promote_bib,
 )
+from pzi.promote_service import promote_bib
 from pzi.update_service import update_bib
 
 #: The real candidate set for `jing-understanding-2022`, taken from a
@@ -1817,3 +1820,154 @@ def test_a_sweep_that_loses_a_write_race_stops_instead_of_skipping_the_record(
     """
     with pytest.raises(race_error):
         run_sweep(tmp_path, monkeypatch, race_error("the bib changed under this run"))
+
+
+def _two_preprints_bib_text() -> str:
+    return "".join(
+        f"@unpublished{{smith2024graph{n},\n"
+        f"  title = {{Graph Parsers Volume {n}}},\n"
+        f"  author = {{Smith, Jane}},\n"
+        f"  year = {{2024}},\n"
+        f"  eprint = {{2401.1234{n}}},\n"
+        f"  archiveprefix = {{arXiv}},\n"
+        f"}}\n\n"
+        for n in (1, 2)
+    )
+
+
+def _fake_search_echoing_title(query: str, *, server_url: str):
+    """A published version of whichever preprint is being looked up."""
+    title = query.split(" Smith")[0]
+    return [
+        {
+            "item_type": "conferencePaper",
+            "record": {
+                "title": title,
+                "venue": "Proceedings of Parsing",
+                "doi": "10.9/pop." + title.rsplit(" ", 1)[-1],
+                "year": 2024,
+                "authors": ["Smith, Jane"],
+            },
+            "attachments": [],
+        }
+    ]
+
+
+def test_promote_keep_mode_opens_one_batch_session_for_the_whole_run(
+    tmp_path, monkeypatch
+):
+    """K promotions, one parse-and-serialise cycle — not K of them.
+
+    Each `batch_write_session` takes the lock, reads the source, parses every
+    entry, validates the round trip and re-serialises the library. Opening one
+    per promoted preprint made a sweep's cost K full cycles over the whole file;
+    measured on a synthetic 4,010-entry library, promoting 10 preprints took
+    8.5 s with a session each and 1.1 s with one for the run.
+
+    Two preprints, not one: with a single promotion the per-promotion and
+    per-run counts are both 1, so the assertion could not fail.
+    """
+    bib_path = tmp_path / "ml.bib"
+    config_path = _write_config(tmp_path, bib_path)
+    bib_path.write_text(_two_preprints_bib_text())
+
+    sessions = []
+    real_session = promote_service.batch_write_session
+
+    def _counting_session(*args, **kwargs):
+        sessions.append(args[0] if args else kwargs.get("path"))
+        return real_session(*args, **kwargs)
+
+    monkeypatch.setattr(promote_service, "batch_write_session", _counting_session)
+
+    result = promote_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        keep_preprint=True,
+        dry_run=False,
+        fetch_search=_fake_search_echoing_title,
+    )
+
+    assert result["summary"]["created"] == 2, result["items"]
+    assert len(sessions) == 1, f"{len(sessions)} batch sessions for 2 promotions"
+    # Both promotions landed: one session must not mean one write.
+    written = bib_path.read_text()
+    assert written.count("Proceedings of Parsing") == 2, written
+    assert "Published version: " in written
+
+
+def _fake_search_echoing_title_with_pdf(query: str, *, server_url: str):
+    """As `_fake_search_echoing_title`, but the candidate offers a PDF to fetch."""
+    results = _fake_search_echoing_title(query, server_url=server_url)
+    results[0]["record"]["pdf_url"] = "https://example.com/paper.pdf"
+    return results
+
+
+def test_promote_makes_no_network_call_while_holding_the_bib_lock(tmp_path, monkeypatch):
+    """A sweep's provider calls must all be over before the run's session opens.
+
+    That session holds the *exclusive* bib lock for as long as it is open, and
+    `bib_repository.LOCK_TIMEOUT_SECONDS` is 300 — so a concurrent `pzi add`
+    (the browser extension talking to `pzi server`) does not queue behind it, it
+    gives up and fails. Promotion's network work is slow enough to reach that
+    ceiling on its own: Semantic Scholar alone is gated at 6 s per request.
+
+    Spans both of the sweep's network sites, not just the one that regressed:
+    candidate discovery and the PDF download. Two preprints, not one, because
+    with a single promotion there is no discovery left to do once the session is
+    open and the assertion could not fail.
+    """
+    bib_path = tmp_path / "ml.bib"
+    config_path = _write_config(tmp_path, bib_path)
+    bib_path.write_text(_two_preprints_bib_text())
+
+    holding_lock = False
+    under_lock: list[str] = []
+    real_session = promote_service.batch_write_session
+    real_discovery = promote_service.find_published_candidate_with_diagnostics
+
+    @contextmanager
+    def _lock_tracking_session(*args, **kwargs):
+        nonlocal holding_lock
+        with real_session(*args, **kwargs) as session:
+            holding_lock = True
+            try:
+                yield session
+            finally:
+                holding_lock = False
+
+    def _tracked_discovery(**kwargs):
+        if holding_lock:
+            under_lock.append("candidate discovery")
+        return real_discovery(**kwargs)
+
+    def _tracked_pdf_fetch(**kwargs):
+        if holding_lock:
+            under_lock.append("pdf fetch")
+        return PdfSourceOutcome(
+            local_pdf_path=None, warning=None, errors=[], record=kwargs["record"]
+        )
+
+    monkeypatch.setattr(promote_service, "batch_write_session", _lock_tracking_session)
+    monkeypatch.setattr(
+        promote_service, "find_published_candidate_with_diagnostics", _tracked_discovery
+    )
+    monkeypatch.setattr(
+        promote_service, "fetch_and_store_pdf_trying_sources", _tracked_pdf_fetch
+    )
+
+    result = promote_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        keep_preprint=True,
+        dry_run=False,
+        fetch_search=_fake_search_echoing_title_with_pdf,
+    )
+
+    # The run has to have done the work, or "no network under the lock" is only
+    # a statement about a run that promoted nothing.
+    assert result["summary"]["created"] == 2, result["items"]
+    assert bib_path.read_text().count("Proceedings of Parsing") == 2
+    assert under_lock == [], f"network under the exclusive bib lock: {under_lock}"
