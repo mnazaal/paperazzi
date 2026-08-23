@@ -2189,3 +2189,65 @@ def test_an_s2_that_answers_is_never_tripped(monkeypatch) -> None:
     breaker = _s2_probe(monkeypatch, s2)
     assert len(dials) == 10, "a working provider keeps being asked"
     assert not breaker.is_open("s2")
+
+
+# ── Where a promote sweep's time actually goes ──────────────────────────
+#
+# A real run measured ~40 s per candidate against a ~6 s rate-limit floor, and
+# the other 34 s could only be guessed at. Three cost models were built on that
+# guess and all three were wrong, so the breakdown is now reported per candidate
+# rather than inferred.
+
+
+def test_the_slowest_provider_is_named_first(monkeypatch) -> None:
+    import time
+
+    import pzi.promote_planning as pp
+
+    def costing(seconds):
+        def fn(_title, **_kw):
+            time.sleep(seconds)
+            return None
+        return fn
+
+    result = pp.find_published_candidate_with_diagnostics(
+        record={"citekey": "p1", "title": "A Preprint", "authors": ["Doe, J"]},
+        server_url="http://127.0.0.1:1",
+        fetch_search=lambda *a, **k: [],
+        fetch_crossref=costing(0.01),
+        fetch_openalex=costing(0.01),
+        fetch_dblp=costing(0.20),
+        fetch_openreview=costing(0.01),
+        fetch_s2=lambda _t: (None, None),
+        s2_api_key=None,
+    )
+    timing = next(
+        (line for line in result.get("metadata_diagnostics") or []
+         if line.startswith("timing:")),
+        None,
+    )
+    assert timing is not None, result.get("metadata_diagnostics")
+    # Slowest first, so the line answers "what should I fix" at a glance.
+    after_dash = timing.split("—", 1)[1]
+    assert after_dash.strip().startswith("dblp"), timing
+
+
+def test_a_candidate_that_found_nothing_still_reports_its_cost() -> None:
+    """The expensive case is the one that finds nothing, so it must be measured."""
+    import pzi.promote_planning as pp
+
+    result = pp.find_published_candidate_with_diagnostics(
+        record={"citekey": "p1", "title": "A Preprint", "authors": ["Doe, J"]},
+        server_url="http://127.0.0.1:1",
+        fetch_search=lambda *a, **k: [],
+        fetch_crossref=lambda *a, **k: None,
+        fetch_openalex=lambda *a, **k: None,
+        fetch_dblp=lambda *a, **k: None,
+        fetch_openreview=lambda *a, **k: None,
+        fetch_s2=lambda _t: (None, None),
+        s2_api_key=None,
+    )
+    assert result["candidate"] is None
+    assert any(
+        line.startswith("timing:") for line in result.get("metadata_diagnostics") or []
+    ), result.get("metadata_diagnostics")

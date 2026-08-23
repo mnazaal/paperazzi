@@ -10,6 +10,7 @@ there a published version of this preprint, and which one".
 from __future__ import annotations
 
 import functools
+import time
 from collections.abc import Callable, Mapping
 from typing import Any, cast
 from urllib.error import HTTPError
@@ -34,6 +35,32 @@ from pzi.resolution_match import score_match
 from pzi.translation_server import fetch_search_translations
 
 
+def _format_timings(timings: list[tuple[str, float]]) -> str | None:
+    """One line naming what each provider cost, slowest first.
+
+    Added because the cost of a promote sweep could not be attributed. A real
+    run measured ~40 s per candidate against a ~6 s rate-limit floor, and the
+    remaining 34 s could only be guessed at — translation-server timeout, HTTP
+    latency across five providers, or retries on a slow-but-not-failing one.
+    Three cost models were built on that guess and all three were wrong, so the
+    breakdown is reported instead of inferred.
+    """
+    if not timings:
+        return None
+    ranked = sorted(timings, key=lambda pair: pair[1], reverse=True)
+    total = sum(seconds for _name, seconds in timings)
+    parts = ", ".join(f"{name} {seconds:.1f}s" for name, seconds in ranked)
+    return f"timing: {total:.1f}s total — {parts}"
+
+
+def _with_timing(
+    diagnostics: list[str], timings: list[tuple[str, float]]
+) -> list[str]:
+    """Append the per-provider breakdown, if there is one, to *diagnostics*."""
+    line = _format_timings(timings)
+    return [*diagnostics, line] if line else diagnostics
+
+
 def find_published_candidate_with_diagnostics(
     *,
     record: NormalizedRecord,
@@ -55,27 +82,37 @@ def find_published_candidate_with_diagnostics(
     if not query.strip():
         return {"candidate": None, "provider_errors": provider_errors, "reason": "no_query"}
 
+    timings: list[tuple[str, float]] = []
+
     # 1. Translation server
+    _started = time.monotonic()
     try:
         results = search_fn(query, server_url=server_url)
     except (OSError, ValueError):
         provider_errors.append("translation-server")
         results = []
+    finally:
+        timings.append(("translation_server", time.monotonic() - _started))
     translation_candidates = _translation_candidates(results)
     candidate = _select_best_published_candidate(record, translation_candidates)
     if candidate is not None:
         return {
             "candidate": candidate,
             "provider_errors": provider_errors,
-            "metadata_diagnostics": _published_candidate_diagnostics(
-                record, translation_candidates
+            "metadata_diagnostics": _with_timing(
+                _published_candidate_diagnostics(record, translation_candidates),
+                timings,
             ),
         }
 
     # 2. Fallback providers (title-based search for published version)
     title = record.get("title")
     if not isinstance(title, str) or not title.strip():
-        return {"candidate": None, "provider_errors": provider_errors}
+        return {
+            "candidate": None,
+            "provider_errors": provider_errors,
+            "metadata_diagnostics": _with_timing([], timings),
+        }
 
     # One loop, not five near-identical blocks. The blocks differed only in the
     # function called and the name reported, and each carried its own copy of
@@ -95,11 +132,13 @@ def find_published_candidate_with_diagnostics(
     )
     for name, override, base_fn in title_providers:
         provider_fn = override or _default_provider_fn(base_fn, metadata_fetch_text)
+        _started = time.monotonic()
         candidate = _try_provider(
             provider_fn, title, name=name,
             contact_email=contact_email, provider_errors=provider_errors,
             breaker=breaker,
         )
+        timings.append((name, time.monotonic() - _started))
         # No venue means there is nothing to promote *to*; such a result was
         # never a candidate and is not reported as a rejection.
         if candidate is not None and candidate.get("venue"):
@@ -130,6 +169,7 @@ def find_published_candidate_with_diagnostics(
             "semantic-scholar (skipped — rate-limited earlier in this run)"
         )
     else:
+        _started = time.monotonic()
         try:
             s2_candidate, s2_err = s2_fn(title)
         except HTTPError as exc:
@@ -161,6 +201,8 @@ def find_published_candidate_with_diagnostics(
                     breaker.record_failure("s2", s2_err)
                 else:
                     breaker.record_answer("s2")
+        finally:
+            timings.append(("s2", time.monotonic() - _started))
     if s2_candidate is not None and s2_candidate.get("venue"):
         provider_candidates.append(cast(NormalizedRecord, dict(s2_candidate)))
     elif s2_candidate is None and s2_err:
@@ -182,7 +224,9 @@ def find_published_candidate_with_diagnostics(
         return {
             "candidate": candidate,
             "provider_errors": provider_errors,
-            "metadata_diagnostics": _published_candidate_diagnostics(record, provider_candidates),
+            "metadata_diagnostics": _with_timing(
+                _published_candidate_diagnostics(record, provider_candidates), timings
+            ),
         }
 
     # Nothing publishable — but say *why* when candidates were seen and all of
@@ -193,11 +237,15 @@ def find_published_candidate_with_diagnostics(
         return {
             "candidate": None,
             "provider_errors": provider_errors,
-            "metadata_diagnostics": _published_candidate_diagnostics(
-                record, provider_candidates
+            "metadata_diagnostics": _with_timing(
+                _published_candidate_diagnostics(record, provider_candidates), timings
             ),
         }
-    return {"candidate": None, "provider_errors": provider_errors}
+    return {
+            "candidate": None,
+            "provider_errors": provider_errors,
+            "metadata_diagnostics": _with_timing([], timings),
+        }
 
 
 def _default_provider_fn(
