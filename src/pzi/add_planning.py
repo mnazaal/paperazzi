@@ -819,6 +819,13 @@ def fetch_record_for_input(
                 selected = select_best_metadata_result(usable_web, fallback)
                 best = dict(merge_record_sources(fallback, selected["record"]))
                 carry_item_type(best, selected)
+                # Attributed here too. The key was added to the DOI-search
+                # branch alone, so a capture the translation server answered
+                # *through the web endpoint* — which is every plain URL — looked
+                # exactly like a capture nothing answered, and the live smoke
+                # job could not tell them apart. Three return sites reach the
+                # translation server; this is the second.
+                best["metadata_provider"] = "translation_server"
                 return (
                     _with_pdf_discovery(
                         cast(NormalizedRecord, best),
@@ -869,7 +876,13 @@ def fetch_record_for_input(
             best = _with_pdf_discovery(
                 cast(NormalizedRecord, best), translation_attachments=selected.get("attachments")
             )
-            return merge_record_sources(fallback, best), provider_errors, translation_results
+            # The third and last translation-server return site. Set on the
+            # merged record rather than on `best`, because `merge_record_sources`
+            # decides which side wins per key and this is not a bibliographic
+            # field to be merged — it is a note about who answered.
+            merged = dict(merge_record_sources(fallback, best))
+            merged["metadata_provider"] = "translation_server"
+            return cast(NormalizedRecord, merged), provider_errors, translation_results
 
         if flaresolverr_url is not None:
             html = _fetch_flaresolverr_guarded(

@@ -2141,3 +2141,183 @@ def test_a_pdf_failure_does_not_lose_the_metadata(tmp_path, monkeypatch) -> None
     assert result["citekey"] == "smith2024graph"
     assert "Graph Parsers" in bib_path.read_text(encoding="utf-8")
     assert any("No space left" in w for w in result["warnings"]), result["warnings"]
+
+
+# ── Every translation-server path says it answered ──────────────────────
+#
+# `metadata_provider` exists because the translation-server path was otherwise
+# identifiable only by this key's *absence* — so "the translation server
+# answered" and "nothing answered" were the same observation, and the live smoke
+# job could not tell them apart. It was added to the DOI-search branch alone.
+# There are three return sites that reach the translation server; a plain URL
+# uses the web endpoint, which is two of them, and neither attributed.
+
+
+def _capture_provider(tmp_path, value: str, *, dead_port) -> str | None:
+    """Capture `value` with only the translation server able to answer."""
+    config_path = tmp_path / f"c{abs(hash(value))}.toml"
+    bib_path = tmp_path / f"b{abs(hash(value))}.bib"
+    bib_path.write_text("")
+    config_path.write_text(
+        f'translation_server_url = "http://127.0.0.1:{dead_port}"\n\n'
+        f'[[bibs]]\nname = "m"\npath = "{bib_path}"\ndefault = true\n'
+    )
+
+    def answered(record: dict) -> list[dict]:
+        return [{"item_type": "journalArticle", "record": record, "attachments": []}]
+
+    result = add_input_to_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        value=value,
+        record_overrides={},
+        bib_selector=None,
+        dry_run=True,
+        fetch_web=lambda url, **_kw: answered(
+            {"title": "Web Answer", "authors": ["Doe, Jane"], "year": 2024,
+             "doi": "10.1000/web.1", "canonical_url": url}
+        ),
+        fetch_search=lambda query, **_kw: answered(
+            {"title": "Search Answer", "authors": ["Doe, Jane"], "year": 2024,
+             "doi": "10.1000/search.1"}
+        ),
+    )
+    assert result["status"] == "ok", result.get("message")
+    for line in result.get("metadata_diagnostics") or []:
+        if isinstance(line, str) and line.startswith("metadata from "):
+            return line.removeprefix("metadata from ").strip()
+    return None
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "https://example.com/journal/article-page",
+        "https://www.publisher.test/articles/abc123",
+    ],
+)
+def test_a_url_the_translation_server_answered_says_so(
+    tmp_path: Path, dead_port, value: str
+) -> None:
+    """The web endpoint is what a plain URL uses, and it is two of three sites."""
+    assert _capture_provider(tmp_path, value, dead_port=dead_port) == "translation_server"
+
+
+def test_a_pdf_url_the_translation_server_answered_says_so(
+    tmp_path: Path, dead_port
+) -> None:
+    """`pdf_url` shares the second web return site with `url`."""
+    provider = _capture_provider(
+        tmp_path, "https://example.com/paper.pdf", dead_port=dead_port
+    )
+    assert provider == "translation_server"
+
+
+def test_an_arxiv_url_the_translation_server_answered_says_so(
+    tmp_path: Path, dead_port, monkeypatch
+) -> None:
+    """The third return site, and the one the live smoke job actually hits.
+
+    An arXiv URL is classified `doi` — the identifier is extracted from the URL —
+    so it goes down the DOI cascade first. When that finds nothing, it falls back
+    to web-translating the *original URL*, which is a different return site from
+    both the DOI-search branch and the plain-URL branch. That site had no
+    attribution, so a capture the translation server answered reported no
+    provider at all, and `tests/live/test_live_add_search.py` failed with
+    "capture succeeded but no provider answered".
+
+    The web result must not contradict the arXiv identity, or
+    `drop_contradicting_candidates` discards it before this point.
+    """
+    import pzi.add_planning as ap
+
+    for name in ("fetch_crossref_record", "fetch_openalex_record",
+                 "fetch_semantic_scholar_record"):
+        if hasattr(ap, name):
+            monkeypatch.setattr(ap, name, lambda *a, **k: None)
+
+    config_path = tmp_path / "arxiv.toml"
+    bib_path = tmp_path / "arxiv.bib"
+    bib_path.write_text("")
+    config_path.write_text(
+        f'translation_server_url = "http://127.0.0.1:{dead_port}"\n\n'
+        f'[[bibs]]\nname = "m"\npath = "{bib_path}"\ndefault = true\n'
+    )
+
+    result = add_input_to_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        value="https://arxiv.org/abs/2301.07041",
+        record_overrides={},
+        bib_selector=None,
+        dry_run=True,
+        fetch_web=lambda url, **_kw: [{
+            "item_type": "journalArticle",
+            "record": {
+                "title": "An arXiv Paper The Server Translated",
+                "authors": ["Doe, Jane"], "year": 2023,
+                "arxiv_id": "2301.07041",
+                "doi": "10.48550/arXiv.2301.07041",
+                "canonical_url": url,
+            },
+            "attachments": [],
+        }],
+        fetch_search=lambda query, **_kw: [],
+    )
+
+    assert result["status"] == "ok", result.get("message")
+    diagnostics = result.get("metadata_diagnostics") or []
+    provider = next(
+        (line.removeprefix("metadata from ").strip() for line in diagnostics
+         if isinstance(line, str) and line.startswith("metadata from ")),
+        None,
+    )
+    assert provider == "translation_server", diagnostics
+
+
+def test_a_doi_the_translation_server_answered_says_so(tmp_path: Path, dead_port) -> None:
+    """The first return site — the DOI-search endpoint, and the only one that
+    already attributed.
+
+    Pinned so all three translation-server returns are covered together. It was
+    the *only* one attributing, which is exactly why a plain-URL or arXiv-URL
+    capture looked like nothing had answered. As with the others, the returned
+    record must not contradict the looked-up DOI, or it is dropped before the
+    attribution.
+    """
+    config_path = tmp_path / "doi.toml"
+    bib_path = tmp_path / "doi.bib"
+    bib_path.write_text("")
+    config_path.write_text(
+        f'translation_server_url = "http://127.0.0.1:{dead_port}"\n\n'
+        f'[[bibs]]\nname = "m"\npath = "{bib_path}"\ndefault = true\n'
+    )
+
+    result = add_input_to_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        value="10.1145/1327452.1327492",
+        record_overrides={},
+        bib_selector=None,
+        dry_run=True,
+        fetch_search=lambda query, **_kw: [{
+            "item_type": "journalArticle",
+            "record": {
+                "title": "MapReduce: Simplified Data Processing",
+                "authors": ["Dean, Jeffrey", "Ghemawat, Sanjay"],
+                "year": 2008, "doi": "10.1145/1327452.1327492",
+                "journal": "Communications of the ACM",
+            },
+            "attachments": [],
+        }],
+        fetch_web=lambda url, **_kw: [],
+    )
+
+    assert result["status"] == "ok", result.get("message")
+    diagnostics = result.get("metadata_diagnostics") or []
+    provider = next(
+        (line.removeprefix("metadata from ").strip() for line in diagnostics
+         if isinstance(line, str) and line.startswith("metadata from ")),
+        None,
+    )
+    assert provider == "translation_server", diagnostics
