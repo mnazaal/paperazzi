@@ -27,23 +27,29 @@ Result = Mapping[str, Any]
 Service = Callable[..., Result]
 
 
-#: A promote sweep over a large library runs for a long time before it prints
-#: anything, and the providers are rate-limited, so silence is indistinguishable
-#: from a hang. Matches `library check`'s thresholds rather than inventing a
-#: second convention.
-_PROGRESS_MIN_CANDIDATES = 200
-_PROGRESS_STEP = 25
+#: Below this many candidates a run finishes fast enough that progress would be
+#: noise — and this CLI's convention, asserted across a dozen tests, is that a
+#: successful command prints nothing to stderr. Above it, silence is the problem:
+#: `promote` spends ~6 s per candidate waiting out the providers' polite
+#: intervals, so a 100-candidate run is ten minutes.
+_PROGRESS_MIN_CANDIDATES = 10
 
 
 def _progress_printer(stderr: TextIO):
-    """Report progress for a sweep long enough that silence would look like a hang."""
+    """Report each verdict as it is reached, for a run long enough to need it.
 
-    def report(_item: Mapping[str, Any], done: int, total: int) -> None:
+    One line per candidate rather than `check`'s every-25: `check` audits an
+    entry in well under a second, `promote` takes seconds on each, so a line per
+    candidate is about a line every six seconds — a readable pace, and the only
+    thing that shows a long sweep is alive rather than hung.
+    """
+
+    def report(item: Mapping[str, Any], done: int, total: int) -> None:
         if total < _PROGRESS_MIN_CANDIDATES:
             return
-        if done % _PROGRESS_STEP and done != total:
-            return
-        print(f"  checked {done}/{total} preprints", file=stderr)
+        note = item.get("note") or item.get("action") or ""
+        citekey = item.get("preprint_citekey") or "?"
+        print(f"  [{done}/{total}] {citekey}: {note}", file=stderr)
 
     return report
 

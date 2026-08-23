@@ -137,3 +137,87 @@ def test_run_promote_command_returns_failure_when_any_target_fails(tmp_path: Pat
     assert exit_code == exit_codes.ENVIRONMENT
     assert "no preprints to promote" in stdout.getvalue()
     assert stderr.getvalue() == "promote failed (bad)\n- missing bib\n"
+
+
+# ── Progress: a sweep that prints nothing looks like a hang ─────────────
+
+
+def _promote_args(**over):
+    from argparse import Namespace
+    base = dict(target=None, dry_run=True, replace=False, verbose=False,
+                promote=True, mark_resolved=False, limit=12, json=False)
+    base.update(over)
+    return Namespace(**base)
+
+
+def _stub_result(n: int):
+    from pzi.promote_service import _empty_summary
+
+    return {
+        "status": "ok", "bib_name": "main", "dry_run": True, "warnings": [], "errors": [],
+        "items": [
+            {"preprint_citekey": f"pre{i}", "note": "no published candidate found",
+             "action": "skip", "failed": False, "changed_fields": [],
+             "published_citekey": None, "pdf_attached": False}
+            for i in range(n)
+        ],
+        # Built from the service's own empty summary rather than a literal, so
+        # this stub cannot drift out of the shape the renderer expects.
+        "summary": {**_empty_summary(), "checked": n, "eligible": n + 4, "remaining": 4},
+    }
+
+
+def test_each_candidate_is_reported_as_it_is_decided(tmp_path: Path) -> None:
+    """One line per candidate, because each costs seconds.
+
+    `check` batches progress every 25 entries; it audits one in well under a
+    second. `promote` waits out the providers' polite intervals at ~6 s each, so
+    batching would leave a ten-minute run silent for its first two minutes —
+    which is what the first version of this did.
+    """
+    from io import StringIO
+
+    from pzi.commands.update import run_update_command
+
+    def fake_promote_bib(**kwargs):
+        on_item = kwargs.get("on_item")
+        result = _stub_result(12)
+        for index, item in enumerate(result["items"], start=1):
+            if on_item is not None:
+                on_item(item, index, 12)
+        return result
+
+    config = tmp_path / "config.toml"
+    config.write_text('[[bibs]]\nname = "main"\npath = "x.bib"\ndefault = true\n')
+    stderr = StringIO()
+    run_update_command(
+        _promote_args(), home_dir=str(tmp_path), config_path=str(config),
+        stdout=StringIO(), stderr=stderr, promote_bib_fn=fake_promote_bib,
+    )
+    lines = stderr.getvalue().splitlines()
+    assert "[1/12] pre0" in lines[0], lines
+    assert "[12/12] pre11" in lines[11]
+    assert any("4 preprints not checked" in line for line in lines)
+
+
+def test_json_mode_streams_nothing_to_stderr(tmp_path: Path) -> None:
+    """`--json` promises one document; progress chatter is not part of it."""
+    from io import StringIO
+
+    from pzi.commands.update import run_update_command
+
+    captured: dict = {}
+
+    def fake_promote_bib(**kwargs):
+        captured["on_item"] = kwargs.get("on_item")
+        return _stub_result(2)
+
+    config = tmp_path / "config.toml"
+    config.write_text('[[bibs]]\nname = "main"\npath = "x.bib"\ndefault = true\n')
+    stderr = StringIO()
+    run_update_command(
+        _promote_args(json=True), home_dir=str(tmp_path), config_path=str(config),
+        stdout=StringIO(), stderr=stderr, promote_bib_fn=fake_promote_bib,
+    )
+    assert captured["on_item"] is None
+    assert stderr.getvalue() == ""

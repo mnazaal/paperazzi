@@ -216,6 +216,20 @@ def promote_bib(
     #: interval, so an unbounded run is hours. `remaining` is reported so a
     #: bounded pass reads as resumable rather than as silently incomplete.
     budget = limit if limit is not None and limit >= 0 else None
+
+    def _is_candidate(record: NormalizedRecord) -> bool:
+        if not isinstance(record.get("citekey"), str):
+            return False
+        if not has_preprint_identity(record):
+            return False
+        return not (mark_resolved and _RESOLVED_TAG in (record.get("tags") or []))
+
+    # Counted before the loop, not accumulated inside it. `on_item` reports
+    # `done/total`, and a total that grows as the loop runs is not a denominator
+    # — it made every progress line read `1/1`, `2/2`, and never reached the
+    # threshold that would have printed one.
+    eligible_total = sum(1 for record in records if _is_candidate(record))
+    planned = eligible_total if budget is None else min(budget, eligible_total)
     eligible = 0
     started = time.monotonic()
 
@@ -228,7 +242,7 @@ def promote_bib(
         """
         items.append(item)
         if on_item is not None:
-            on_item(item, len(items), eligible)
+            on_item(item, len(items), planned)
 
     for record in records:
         preprint_ck = record.get("citekey")
@@ -480,8 +494,8 @@ def promote_bib(
     # incomplete one. The timing is not decoration: the default bound is chosen
     # from it (PLAN.md section F, Step 3), and item 577's worth is judged against
     # the resolve rate, so both are reported rather than guessed at later.
-    summary["eligible"] = eligible
-    summary["remaining"] = max(0, eligible - summary["checked"])
+    summary["eligible"] = eligible_total
+    summary["remaining"] = max(0, eligible_total - summary["checked"])
     elapsed = time.monotonic() - started
     summary["elapsed_seconds"] = round(elapsed, 1)
     if summary["checked"]:
