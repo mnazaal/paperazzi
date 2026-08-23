@@ -440,7 +440,7 @@ def _update_library_blocks(
     *,
     file_path_style: str = "absolute",
     touched_indices: Collection[int] | None = None,
-) -> Library:
+) -> tuple[Library, frozenset[int]]:
     """Replace entry blocks in a Library with updated entries, preserving
     comments, strings, and preambles.
 
@@ -469,12 +469,12 @@ def _update_library_blocks(
     # Resolved once for the whole library: it is the same answer for every
     # entry, and `Path.resolve()` is a syscall walk paid per entry per write.
     bib_dir = resolved_bib_dir(bib_path) if bib_path else None
-    new_entry_blocks: list[BibtexEntryV2] = [
-        bibtex_entry_to_library_entry(
-            e, bib_path, file_path_style=file_path_style, bib_dir=bib_dir
+    remaining_entries = list(entries)
+
+    def rebuild(entry: BibtexEntry) -> BibtexEntryV2:
+        return bibtex_entry_to_library_entry(
+            entry, bib_path, file_path_style=file_path_style, bib_dir=bib_dir
         )
-        for e in entries
-    ]
     # ``entries`` comes from ``apply_write_plan``, which only ever replaces an
     # entry in place or appends one at the end. It is therefore in the same
     # order as the on-disk entry blocks, with inserts trailing. We replace
@@ -485,28 +485,44 @@ def _update_library_blocks(
     strings = {definition.key: definition.value for definition in library.strings}
 
     new_blocks: list = []
+    #: Output positions holding a block this call did not touch, so
+    #: `serialize_library` can write their original bytes back instead of
+    #: re-rendering them. Only ever a position whose block object is the one the
+    #: parser produced and nothing mutated — `raw` goes stale on mutation, so a
+    #: rebuilt or merged position must never be listed here.
+    verbatim: set[int] = set()
     position = 0
     for block in library.blocks:
         if isinstance(block, BibtexEntryV2):
             # Each existing entry block must have a corresponding updated entry;
             # a shortfall would mean this path is silently dropping an entry.
-            if not new_entry_blocks:  # pragma: no cover — invariant guard
+            if not remaining_entries:  # pragma: no cover — invariant guard
                 raise ValueError(
                     "internal error: fewer updated entries than existing blocks "
                     "while rendering BibTeX write plan"
                 )
-            rebuilt = new_entry_blocks.pop(0)
+            entry = remaining_entries.pop(0)
             keep_original = touched_indices is not None and position not in touched_indices
-            new_blocks.append(
-                block if keep_original
-                else merge_preserving_unchanged_source(block, rebuilt, strings)
-            )
+            if keep_original:
+                # Not rebuilt at all: on a 22k-entry library a one-field write
+                # used to project every entry back through
+                # `bibtex_entry_to_library_entry` and then discard all but one.
+                verbatim.add(len(new_blocks))
+                new_blocks.append(block)
+            else:
+                new_blocks.append(
+                    merge_preserving_unchanged_source(block, rebuild(entry), strings)
+                )
             position += 1
         else:
+            # Comments, `@string` definitions and preambles are passed through
+            # untouched by every write, so they are verbatim whenever anything is.
+            if touched_indices is not None:
+                verbatim.add(len(new_blocks))
             new_blocks.append(block)
     # Append any remaining new entries (inserts beyond original count).
-    new_blocks.extend(new_entry_blocks)
-    return build_library(new_blocks)
+    new_blocks.extend(rebuild(entry) for entry in remaining_entries)
+    return build_library(new_blocks), frozenset(verbatim)
 
 
 def _touched_index(plan: WritePlan) -> int | None:
@@ -546,14 +562,16 @@ def _render_updated_library(
     guards the exact entry list that gets serialized, rather than a first-pass
     list that merely matched the written one by determinism.
     """
-    updated_library = _update_library_blocks(
+    updated_library, verbatim = _update_library_blocks(
         library,
         updated_entries,
         path,
         file_path_style=file_path_style,
         touched_indices=set() if updated_index is None else {updated_index},
     )
-    return serialize_library(updated_library, layout=detect_bib_layout(source))
+    return serialize_library(
+        updated_library, layout=detect_bib_layout(source), verbatim_positions=verbatim
+    )
 
 
 @contextmanager
@@ -789,14 +807,16 @@ def _render_batch(
     file_path_style: str,
 ) -> str:
     """Render what a gated batch session would write."""
-    new_library = _update_library_blocks(
+    new_library, verbatim = _update_library_blocks(
         library,
         session.entries,
         path,
         file_path_style=file_path_style,
         touched_indices=session.touched,
     )
-    return serialize_library(new_library, layout=detect_bib_layout(source))
+    return serialize_library(
+        new_library, layout=detect_bib_layout(source), verbatim_positions=verbatim
+    )
 
 
 @contextmanager
@@ -1391,10 +1411,15 @@ def rewrite_entries_in_order_locked(
     validate_bibtex_roundtrip(entries)
     # No `touched_indices`: reindex rewrites the `file` field of every entry, so
     # every block really is touched and rebuilding all of them is correct here.
-    new_library = _update_library_blocks(
+    new_library, verbatim = _update_library_blocks(
         library, entries, path, file_path_style=file_path_style
     )
-    new_source = serialize_library(new_library, layout=detect_bib_layout(source))
+    # `verbatim` is empty here by construction — no `touched_indices` means
+    # every block is rebuilt — but it is threaded rather than dropped so this
+    # site cannot drift from the other two.
+    new_source = serialize_library(
+        new_library, layout=detect_bib_layout(source), verbatim_positions=verbatim
+    )
     if new_source != source:
         _write_bib_text_atomic(path, new_source)
     return entries

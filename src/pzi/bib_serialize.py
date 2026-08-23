@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -567,7 +567,12 @@ def library_to_entries_records(
     return entries, records
 
 
-def serialize_library(library: Library, *, layout: BibLayout | None) -> str:
+def serialize_library(
+    library: Library,
+    *,
+    layout: BibLayout | None,
+    verbatim_positions: Collection[int] | None = None,
+) -> str:
     """Serialize a v2 Library to BibTeX text, preserving enclosings and layout.
 
     ``parse_bib_library`` strips enclosings with ``RemoveEnclosingMiddleware``,
@@ -596,15 +601,25 @@ def serialize_library(library: Library, *, layout: BibLayout | None) -> str:
     wrong is the difference between a one-entry diff and a whole-file reformat,
     and the previous version of this bug was invisible for four reviews.
 
-    Layout is normalised **file-wide**: every block is written with the one
-    dominant indent and trailing-comma style, including blocks no write plan
-    touched. An entry in the file's minority style is therefore reformatted by a
-    write that never named it, and the preservation guarantee for an untouched
-    entry is over its *fields* — values, enclosings, order — not over its bytes.
-    Keeping each block's own source slice is deferred past 1.0 (decision
-    2026-08-23): the library this is for is 100% uniform, so the case cannot
-    arise there; it arises on an imported mixed-convention file. Pinned by
-    ``test_an_untouched_minority_style_entry_is_reformatted``.
+    *verbatim_positions* names positions in ``library.blocks`` whose block the
+    caller has **not** modified, and which are therefore written back as the
+    exact bytes they were read as, via ``block.raw``, instead of being
+    re-rendered. Without it, every block is rendered with the one *dominant*
+    indent and trailing-comma style, so an entry written in a file's minority
+    style was reformatted by a write that never named it — and a one-field edit
+    to a 22k-entry library re-rendered all 22k.
+
+    Two properties make this safe, both pinned by tests:
+
+    - On a file whose layout is uniform, ``block.raw + "\\n"`` is *byte-identical*
+      to the rendered form for every block kind, so passing the set changes
+      nothing. (The trailing newline is the whole difference: the writer appends
+      one, ``raw`` carries none.)
+    - ``raw`` goes **stale** the moment a block is mutated in place — it still
+      shows the pre-edit text. So it may only be used for a position the caller
+      knows it left alone, which is why this is an explicit argument rather than
+      something inferred from ``raw`` being present. A position whose block was
+      rebuilt or merged must never appear here.
     """
     layout = layout or BibLayout()
     fmt = BibtexFormat()
@@ -627,6 +642,7 @@ def serialize_library(library: Library, *, layout: BibLayout | None) -> str:
             enclose_integers=True,
         )
     ]
+    verbatim = frozenset(verbatim_positions or ())
     pieces: list[str] = []
     previous: Block | None = None
     for position, block in enumerate(library.blocks):
@@ -642,13 +658,20 @@ def serialize_library(library: Library, *, layout: BibLayout | None) -> str:
                 pieces.append(layout.after_comment_separator)
             else:
                 pieces.append(layout.block_separator)
-        pieces.append(
-            write_string(
-                Library(blocks=[block]),
-                unparse_stack=unparse_stack,
-                bibtex_format=fmt,
+        raw = getattr(block, "raw", None)
+        if position in verbatim and isinstance(raw, str):
+            # The bytes this block was read as. `raw` excludes the newline the
+            # writer appends after a block, and nothing else differs on a
+            # uniformly formatted file.
+            pieces.append(raw + "\n")
+        else:
+            pieces.append(
+                write_string(
+                    Library(blocks=[block]),
+                    unparse_stack=unparse_stack,
+                    bibtex_format=fmt,
+                )
             )
-        )
         previous = block
     return "".join(pieces)
 

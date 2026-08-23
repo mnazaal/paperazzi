@@ -453,16 +453,16 @@ def test_a_library_with_no_comments_is_written_exactly_as_before(
     assert serialize_library(parse_bib_library(compact), layout=compact_layout) == compact
 
 
-def test_an_untouched_minority_style_entry_is_reformatted(tmp_path: Path) -> None:
-    """The limit of the untouched-entry guarantee: it is field-level, not bytes.
+def test_an_untouched_minority_style_entry_keeps_its_own_bytes(tmp_path: Path) -> None:
+    """The untouched-entry guarantee is byte-level, including on a mixed file.
 
-    `serialize_library` renders every block with the one indent and
-    trailing-comma style `detect_bib_layout` found dominant, so an entry written
-    in the file's minority style is reformatted by a write that never named it.
-    This test pins the behaviour that actually ships — the source-slice fix that
-    would make the guarantee byte-level is deferred past 1.0 (decision
-    2026-08-23), and until it lands a reader must not take the docstrings for a
-    byte-level promise.
+    This test asserted the *defect* until 2026-08-23: `serialize_library` used to
+    render every block with the one indent and trailing-comma style
+    `detect_bib_layout` found dominant, so an entry in the file's minority style
+    was reformatted by a write that never named it. `serialize_library` now
+    writes an untouched block back as the bytes it was read as
+    (`verbatim_positions`), which fixes that and — the same change — stops a
+    one-field edit re-rendering every entry in the library.
     """
     bib_path = tmp_path / "mixed.bib"
     bib_path.write_text(
@@ -485,12 +485,22 @@ def test_an_untouched_minority_style_entry_is_reformatted(tmp_path: Path) -> Non
     assert result["found"] is True
     after = bib_path.read_text()
 
-    # The layout of the entry nobody named did change.
-    assert "    title = {C}," in before
-    assert "    title = {C}," not in after
-    assert "  title = {C},\n  year = {2022}\n}" in after
+    # The entry nobody named keeps its own layout, byte for byte.
+    assert "@article{c2022,\n    title = {C},\n    year = {2022},\n}" in after
+    # And the untouched majority-style entry is equally unchanged.
+    assert "@article{b2021,\n  title = {B},\n  year = {2021}\n}" in after
 
-    # What *is* guaranteed for it: the fields, their values and their order.
+    # The only entry whose bytes moved is the one that was edited.
+    def entry_text(text: str, key: str) -> str:
+        start = text.index("@article{" + key)
+        return text[start : text.index("\n}", start) + 2]
+
+    assert entry_text(before, "c2022") == entry_text(after, "c2022")
+    assert entry_text(before, "b2021") == entry_text(after, "b2021")
+    assert entry_text(before, "a2020") != entry_text(after, "a2020")
+    assert "Touched." in entry_text(after, "a2020")
+
+    # Fields, values and order still survive for the untouched minority entry.
     entry_c = next(e for e in parse_bib_library(after).entries if e.key == "c2022")
     assert [field.key for field in entry_c.fields] == ["title", "year"]
     assert [field.value for field in entry_c.fields] == ["C", "2022"]
