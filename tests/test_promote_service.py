@@ -2119,3 +2119,73 @@ def test_a_skipped_provider_still_says_why_the_preprint_was_not_promoted(tmp_pat
         contact_email=None, provider_errors=errors, breaker=breaker,
     )
     assert errors and "skipped" in errors[0]
+
+
+# ── The provider that needed the breaker most was the one bypassing it ──
+#
+# Semantic Scholar is not routed through `_try_provider` (it alone returns a
+# `(record, error)` pair), so item 576's breaker did not cover it. Keyless it is
+# the slowest interval *and* the one that 429s, and a 429 is retried twice
+# honouring Retry-After up to 30 s — up to a minute per candidate, paid on every
+# candidate of a 13,462-entry sweep. Found by a real run taking >30 minutes for
+# `--limit 100`.
+
+
+def _s2_probe(monkeypatch, s2_fn):
+    """Drive discovery with only S2 live, and count how often it is dialled."""
+    import pzi.promote_planning as pp
+    from pzi.fetch_helpers import ProviderBreaker
+
+    monkeypatch.setattr(pp, "fetch_search_translations", lambda *a, **k: [])
+    breaker = ProviderBreaker(threshold=3)
+    record = {"citekey": "pre1", "title": "A Preprint Title", "authors": ["Doe, J"]}
+    for _ in range(10):
+        pp.find_published_candidate_with_diagnostics(
+            record=record, server_url="http://127.0.0.1:1",
+            fetch_search=lambda *a, **k: [],
+            fetch_crossref=lambda *a, **k: None,
+            fetch_openalex=lambda *a, **k: None,
+            fetch_dblp=lambda *a, **k: None,
+            fetch_openreview=lambda *a, **k: None,
+            fetch_s2=s2_fn, s2_api_key=None, breaker=breaker,
+        )
+    return breaker
+
+
+def test_a_rate_limited_s2_is_dropped_for_the_rest_of_the_sweep(monkeypatch) -> None:
+    from urllib.error import HTTPError
+
+    dials = []
+
+    def s2(_title):
+        dials.append(1)
+        raise HTTPError("https://api.semanticscholar.org/x", 429, "Too Many", {}, None)
+
+    breaker = _s2_probe(monkeypatch, s2)
+    assert len(dials) == 3, "S2 is dialled until it trips, then skipped"
+    assert breaker.is_open("s2")
+
+
+def test_an_s2_quota_refusal_sent_as_http_200_also_trips_it(monkeypatch) -> None:
+    """S2 answers a quota refusal with 200 and an error body, so status is not the test."""
+    dials = []
+
+    def s2(_title):
+        dials.append(1)
+        return None, "rate limit exceeded"
+
+    breaker = _s2_probe(monkeypatch, s2)
+    assert len(dials) == 3
+    assert breaker.is_open("s2")
+
+
+def test_an_s2_that_answers_is_never_tripped(monkeypatch) -> None:
+    dials = []
+
+    def s2(_title):
+        dials.append(1)
+        return {"title": "A Preprint Title", "venue": "A Journal", "year": 2024}, None
+
+    breaker = _s2_probe(monkeypatch, s2)
+    assert len(dials) == 10, "a working provider keeps being asked"
+    assert not breaker.is_open("s2")

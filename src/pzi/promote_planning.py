@@ -114,24 +114,53 @@ def find_published_candidate_with_diagnostics(
                 t, api_key=s2_api_key, fetch_text=metadata_fetch_text
             )
         s2_fn = _default_s2
-    try:
-        s2_candidate, s2_err = s2_fn(title)
-    except HTTPError as exc:
-        if exc.code in (403, 429):
-            msg = "semantic-scholar (rate-limited"
-            if s2_api_key is None:
-                msg += " — configure semantic_scholar_api_key_cmd)"
+    # Semantic Scholar is not routed through `_try_provider`, because it alone
+    # returns a `(record, error)` pair — so it needs the breaker wired by hand,
+    # and it is the provider that needs it most. Keyless it is gated at 6 s per
+    # request, which is the slowest interval here and therefore the one setting a
+    # sweep's whole floor; and a 429 is retried twice inside `fetch_helpers`,
+    # each retry honouring `Retry-After` up to `MAX_RETRY_AFTER` (30 s). So one
+    # rate-limited candidate can cost a minute on this provider alone, and
+    # without the breaker that was paid on *every* candidate of a 13,462-entry
+    # sweep for a quota that is not going to clear.
+    s2_candidate: NormalizedRecord | None = None
+    s2_err: str | None = None
+    if breaker is not None and breaker.is_open("s2"):
+        provider_errors.append(
+            "semantic-scholar (skipped — rate-limited earlier in this run)"
+        )
+    else:
+        try:
+            s2_candidate, s2_err = s2_fn(title)
+        except HTTPError as exc:
+            if exc.code in (403, 429):
+                msg = "semantic-scholar (rate-limited"
+                if s2_api_key is None:
+                    msg += " — configure semantic_scholar_api_key_cmd)"
+                else:
+                    msg += " — check API key validity)"
+                provider_errors.append(msg)
             else:
-                msg += " — check API key validity)"
-            provider_errors.append(msg)
+                provider_errors.append(f"semantic-scholar (HTTP {exc.code})")
+            if breaker is not None:
+                breaker.record_failure("s2", f"HTTP {exc.code}")
+            s2_candidate = None
+            s2_err = None
+        except (OSError, ValueError) as exc:
+            provider_errors.append("semantic-scholar")
+            if breaker is not None:
+                breaker.record_failure("s2", str(exc) or "transport error")
+            s2_candidate = None
+            s2_err = None
         else:
-            provider_errors.append(f"semantic-scholar (HTTP {exc.code})")
-        s2_candidate = None
-        s2_err = None
-    except (OSError, ValueError):
-        provider_errors.append("semantic-scholar")
-        s2_candidate = None
-        s2_err = None
+            # A quota refusal arrives as HTTP *200* with an error body, so the
+            # status code is not the whole test — `s2_err` is where that lands.
+            if breaker is not None:
+                lowered = (s2_err or "").lower()
+                if s2_err and ("rate" in lowered or "quota" in lowered):
+                    breaker.record_failure("s2", s2_err)
+                else:
+                    breaker.record_answer("s2")
     if s2_candidate is not None and s2_candidate.get("venue"):
         provider_candidates.append(cast(NormalizedRecord, dict(s2_candidate)))
     elif s2_candidate is None and s2_err:
