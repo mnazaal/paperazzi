@@ -223,6 +223,13 @@ class EntryRecord(TypedDict):
     venue: str | None
     doi: str | None
     arxiv_id: str | None
+    #: The arXiv id of the preprint this entry *replaced*, set by
+    #: `update --promote --replace`. Distinct from `arxiv_id` on purpose: this
+    #: entry is the published version, so it does not carry preprint identity —
+    #: `has_preprint_identity` reads `arxiv_id` and would re-select it for
+    #: promotion on every future sweep. Stored as `pzi-preprint-arxiv-id`, and
+    #: declared here because its siblings `pdf_url` and `abstract_url` are.
+    preprint_arxiv_id: str | None
     canonical_url: str | None
     source_url: str | None
     pdf_url: str | None

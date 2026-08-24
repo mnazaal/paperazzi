@@ -2251,3 +2251,68 @@ def test_a_candidate_that_found_nothing_still_reports_its_cost() -> None:
     assert any(
         line.startswith("timing:") for line in result.get("metadata_diagnostics") or []
     ), result.get("metadata_diagnostics")
+
+
+# ── A replaced entry keeps a pointer to the preprint it came from ────────
+#
+# `--replace` stripped `arxiv_id`, which lost the one useful pointer back to the
+# preprint. It cannot simply be kept: `has_preprint_identity` reads `arxiv_id`,
+# and `eprint` round-trips into it, so a restored id re-selects the entry on
+# every future sweep — the loop promotion exists to end. So it is kept under a
+# name nothing classifies on.
+
+
+def _promoted_record():
+    from pzi.promote_service import _merge_published_metadata
+
+    preprint = {
+        "citekey": "yeh-decoupled-2021", "title": "Decoupled Contrastive Learning",
+        "authors": ["Yeh, Chun-Hsiao"], "year": 2021, "arxiv_id": "2110.06848",
+        "doi": "10.48550/arXiv.2110.06848", "venue": "arXiv",
+    }
+    candidate = {
+        "title": "Decoupled Contrastive Learning", "authors": ["Yeh, Chun-Hsiao"],
+        "year": 2022, "doi": "10.1007/978-3-031-19809-0_38",
+        "venue": "Lecture Notes in Computer Science", "item_type": "conferencePaper",
+    }
+    return _merge_published_metadata(preprint, candidate)
+
+
+def test_a_replaced_entry_keeps_a_pointer_to_its_preprint() -> None:
+    merged = _promoted_record()
+    assert merged.get("preprint_arxiv_id") == "2110.06848"
+    assert "arxiv_id" not in merged, "the identity field must still go"
+
+
+def test_the_kept_pointer_does_not_make_it_a_candidate_again() -> None:
+    """The whole reason it is not stored as `arxiv_id` or `eprint`."""
+    from pzi.identifiers import has_preprint_identity
+
+    assert has_preprint_identity(_promoted_record()) is False
+
+
+def test_the_pointer_survives_a_write_and_read_without_re_flagging() -> None:
+    """Round-trip, because `eprint` round-trips *into* `arxiv_id` and this must not."""
+    from pzi.bib_merge import resolve_entry_type
+    from pzi.bibtex import bibtex_entry_to_record, record_to_bibtex_entry
+    from pzi.identifiers import has_preprint_identity
+
+    merged = _promoted_record()
+    entry = record_to_bibtex_entry(merged, entry_type=resolve_entry_type(merged))
+    assert "pzi-preprint-arxiv-id" in entry["fields"]
+    assert "eprint" not in entry["fields"], (
+        "must not render in a bibliography, and must not round-trip into arxiv_id"
+    )
+    back = bibtex_entry_to_record(entry)
+    assert back.get("preprint_arxiv_id") == "2110.06848"
+    assert has_preprint_identity(back) is False
+
+
+def test_a_preprint_with_no_arxiv_id_gains_no_empty_pointer() -> None:
+    from pzi.promote_service import _merge_published_metadata
+
+    merged = _merge_published_metadata(
+        {"citekey": "x-2021", "title": "T", "venue": "biorxiv.org"},
+        {"title": "T", "year": 2022, "doi": "10.1000/pub.1", "venue": "A Journal"},
+    )
+    assert "preprint_arxiv_id" not in merged

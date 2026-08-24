@@ -26,6 +26,12 @@ class NormalizedRecord(TypedDict, total=False):
     venue: str | None
     doi: str | None
     arxiv_id: str | None
+    #: The arXiv id a `--promote --replace` took *off* this record when it
+    #: became the published version. Kept as a pointer back to the preprint, and
+    #: deliberately not `arxiv_id`: `has_preprint_identity` reads that one, so
+    #: restoring it would re-select the entry as a promotion candidate on every
+    #: future sweep — the loop promotion exists to end.
+    preprint_arxiv_id: str | None
     canonical_url: str | None
     source_url: str | None
     abstract_url: str | None
@@ -167,6 +173,14 @@ def record_to_bibtex_entry(
     if abstract_url is not None:
         fields["pzi-abstract-url"] = abstract_url
 
+    # Namespaced, so BibTeX and biber ignore it: this is a reference for the
+    # reader and for pzi, not a citation field. It is *not* written as `eprint`,
+    # which would round-trip back into `arxiv_id` and make a promoted entry look
+    # like a preprint again.
+    preprint_arxiv_id = _empty_to_none(record.get("preprint_arxiv_id"))
+    if preprint_arxiv_id is not None:
+        fields["pzi-preprint-arxiv-id"] = preprint_arxiv_id
+
     arxiv_id = _empty_to_none(record.get("arxiv_id"))
     if arxiv_id is not None:
         fields["eprint"] = arxiv_id
@@ -206,6 +220,7 @@ _RECORD_OWNED_FIELDS = (
     "note",
     "pzi-pdf-url",
     "pzi-abstract-url",
+    "pzi-preprint-arxiv-id",
 )
 
 # Fields a record may *fill* but never owns. `record_to_bibtex_entry` emits
@@ -389,6 +404,9 @@ def bibtex_entry_to_record(entry: BibtexEntry) -> NormalizedRecord:
         "source_url": _empty_to_none(fields.get("url")),
         "pdf_url": _empty_to_none(fields.get("pzi-pdf-url")),
         "abstract_url": _empty_to_none(fields.get("pzi-abstract-url")),
+        # Read back under its own name. Mapping this to `arxiv_id` would undo
+        # the whole point: `has_preprint_identity` reads that key.
+        "preprint_arxiv_id": _empty_to_none(fields.get("pzi-preprint-arxiv-id")),
         "tags": _parse_keywords(fields.get("keywords")),
         "note": _empty_to_none(fields.get("note")),
         # The *path*, not the raw field: a Zotero/JabRef composite carries a

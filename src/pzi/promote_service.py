@@ -1133,6 +1133,11 @@ def _local_pdf_path(record: NormalizedRecord) -> str | None:
     return path if isinstance(path, str) else None
 
 
+def _empty_to_none_str(value: object) -> str | None:
+    """A non-blank string, or None — so a blank `arxiv_id` is not kept as one."""
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
 def _merge_published_metadata(
     preprint: NormalizedRecord, candidate: NormalizedRecord,
 ) -> NormalizedRecord:
@@ -1154,6 +1159,14 @@ def _merge_published_metadata(
     # kept URL makes the published insert collide with the preprint it came
     # from, and `resolve_entry_type` keys on the preprint hosts, so it would
     # type the published entry `@unpublished`.
+    # Kept as a pointer before it goes, under a name `has_preprint_identity`
+    # does not read (`pzi-preprint-arxiv-id` in the file). The published entry
+    # should still say which preprint it came from — losing that was the one
+    # thing `--replace` gave up — but restoring it as `arxiv_id` would re-select
+    # the entry on every future sweep, which is the loop promotion ends.
+    stripped_arxiv_id = _empty_to_none_str(merged.get("arxiv_id"))
+    if stripped_arxiv_id is not None:
+        merged["preprint_arxiv_id"] = stripped_arxiv_id
     merged.pop("arxiv_id", None)
     # `10.48550/arXiv.…` is arXiv's own DataCite DOI: it identifies the
     # *preprint*, so keeping it labels the published entry with the version it

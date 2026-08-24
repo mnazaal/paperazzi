@@ -158,6 +158,7 @@ def test_read_bib_file_returns_entries_and_records(tmp_path: Path) -> None:
             "source_url": None,
             "pdf_url": None,
             "abstract_url": None,
+            "preprint_arxiv_id": None,
             "tags": [],
             "note": None,
             "local_pdf_path": None,

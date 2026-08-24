@@ -212,6 +212,7 @@ BibTeX field any style file reads:
 |-------|---------------|
 | `pzi-pdf-url` | The PDF URL a capture discovered, so `pzi pdf retry` need not find it again. |
 | `pzi-abstract-url` | The landing page the metadata came from. |
+| `pzi-preprint-arxiv-id` | Set by `update --promote --replace`: the arXiv id of the preprint this entry replaced. A pointer back, not a citation field — it is deliberately not written as `eprint`, because `eprint` reads back as the record's arXiv id and would make the promoted entry look like a preprint again on the next sweep. |
 
 Both round-trip: pzi writes them and reads them back, and no other tool needs
 them. BibTeX and biber ignore unknown fields, so they are inert in a LaTeX build

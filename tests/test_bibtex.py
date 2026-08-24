@@ -159,6 +159,7 @@ def test_bibtex_entry_to_record_maps_fields_back() -> None:
         "source_url": "https://example.com/paper",
         "pdf_url": "https://example.com/paper.pdf",
         "abstract_url": None,
+        "preprint_arxiv_id": None,
         "tags": ["graphs", "ml"],
         "note": "Possibly similar to smith2023graph | PDF: not-a-real-url",
         "local_pdf_path": "papers/smith2024graph.pdf",
