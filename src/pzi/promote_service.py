@@ -1360,11 +1360,6 @@ def _is_arxiv_locator(value: object) -> bool:
     return isinstance(value, str) and bool(_ARXIV_LOCATOR_RE.match(value.strip()))
 
 
-#: arXiv's DataCite prefix. Deliberately just this one: bioRxiv and medRxiv
-#: share `10.1101/` with Cold Spring Harbor Laboratory Press's journals, so the
-#: prefix alone cannot tell a preprint from a published paper there.
-
-
 def _append_note(existing: object, text: str) -> str | None:
     """Append *text* to a note, or return None when it is already there."""
     note_str = str(existing) if existing is not None else ""

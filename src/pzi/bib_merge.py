@@ -68,6 +68,14 @@ class MergeDecision(TypedDict):
     changed_fields: list[str]
 
 
+#: `bibtex.USER_OWNED_FIELDS` in BibTeX spelling. These are the fields a rebase
+#: restores from the on-disk entry, because their absence from a plan means "the
+#: writer had no opinion", never "delete it" — unlike the identity fields
+#: promote's replace mode strips deliberately. `citekey` is the entry key, not a
+#: field, and is validated separately.
+_USER_OWNED_ENTRY_FIELDS = ("note", "keywords", "file")
+
+
 def _apply_untouched_fields_from_current(
     rebased: BibtexEntry,
     *,

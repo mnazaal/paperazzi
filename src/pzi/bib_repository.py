@@ -28,6 +28,7 @@ from bibtexparser.model import Entry as BibtexEntryV2
 
 from pzi import exit_codes
 from pzi.bib_merge import (
+    _USER_OWNED_ENTRY_FIELDS,
     MergeableEntry,
     WritePlan,
     _apply_untouched_fields_from_current,
@@ -85,7 +86,7 @@ class ConcurrentEditError(RuntimeError):
     """
 
 
-def find_entry_index(entries: Sequence[dict[str, Any]], citekey: str) -> int | None:
+def find_entry_index(entries: Sequence[BibtexEntry], citekey: str) -> int | None:
     """Return index of first entry with the given citekey, or None."""
     return next(
         (i for i, entry in enumerate(entries) if entry["citekey"] == citekey),
@@ -1077,14 +1078,6 @@ def _validate_update_plan_against_current(
         raise _stale_plan("the entry it targets now has a different citekey")
 
 
-#: `bibtex.USER_OWNED_FIELDS` in BibTeX spelling. These are the fields a rebase
-#: restores from the on-disk entry, because their absence from a plan means "the
-#: writer had no opinion", never "delete it" — unlike the identity fields
-#: promote's replace mode strips deliberately. `citekey` is the entry key, not a
-#: field, and is validated separately.
-_USER_OWNED_ENTRY_FIELDS = ("note", "keywords", "file")
-
-
 def _rebase_update_plan_against_current(
     current_records: list[NormalizedRecord],
     current_entries: list[BibtexEntry],
@@ -1258,7 +1251,7 @@ def update_bib_entry(
         validate_library_parseable(library)
         entries, records = library_to_entries_records(library, path)
 
-        index = find_entry_index(entries, citekey)  # type: ignore[arg-type]
+        index = find_entry_index(entries, citekey)
         if index is None:
             return {"found": False, "entries": entries, "entry": None, "record": None}
 
@@ -1400,8 +1393,8 @@ def merge_bib_entries(
         validate_library_parseable(library)
         entries, records = library_to_entries_records(library, path)
 
-        idx_a = find_entry_index(entries, citekey_a)  # type: ignore[arg-type]
-        idx_b = find_entry_index(entries, citekey_b)  # type: ignore[arg-type]
+        idx_a = find_entry_index(entries, citekey_a)
+        idx_b = find_entry_index(entries, citekey_b)
         if idx_a is None or idx_b is None:
             return {"found": False, "merged_record": None, "changed_fields": []}
 

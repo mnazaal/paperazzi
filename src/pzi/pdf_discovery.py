@@ -23,7 +23,7 @@ from urllib.parse import urlsplit, urlunsplit
 from pzi.bibtex import NormalizedRecord
 from pzi.identifiers import detect_preprint_source
 from pzi.protocols import accepts_keyword
-from pzi.url_safety import DEFAULT_DNS_LOOKUP_TIMEOUT_SECONDS, origin_of, safe_public_http_url
+from pzi.url_safety import origin_of, safe_public_http_url
 
 PdfDiscoveryContext: TypeAlias = dict[str, Any]
 
@@ -177,7 +177,7 @@ def _validated_discovery(
     pdf_url = record.get("pdf_url")
     if not pdf_url:
         return record
-    if _safe_public_http_url(str(pdf_url)) and str(pdf_url) not in excluded_pdf_urls(context):
+    if safe_public_http_url(str(pdf_url)) and str(pdf_url) not in excluded_pdf_urls(context):
         return record
     cleaned = dict(record)
     cleaned.pop("pdf_url", None)
@@ -277,7 +277,7 @@ def translation_attachment_step(
         if not isinstance(url, str) or not url.strip():
             continue
         normalized = url.strip()
-        if not _safe_public_http_url(normalized):
+        if not safe_public_http_url(normalized):
             continue
 
         updated = dict(record)
@@ -300,7 +300,7 @@ def pdf_url_candidates_step(
     for candidate in candidates:
         if isinstance(candidate, str) and candidate.strip():
             normalized = candidate.strip()
-            if not _safe_public_http_url(normalized) and not _existing_pdf_path(normalized):
+            if not safe_public_http_url(normalized) and not _existing_pdf_path(normalized):
                 continue
             updated = dict(record)
             updated["pdf_url"] = normalized
@@ -308,12 +308,6 @@ def pdf_url_candidates_step(
             return cast(NormalizedRecord, updated)
 
     return record
-
-
-def _safe_public_http_url(
-    value: str, *, dns_timeout: float = DEFAULT_DNS_LOOKUP_TIMEOUT_SECONDS
-) -> bool:
-    return safe_public_http_url(value, dns_timeout=dns_timeout)
 
 
 def _existing_pdf_path(value: str) -> bool:
@@ -366,7 +360,7 @@ def web_attachment_step(
         # one going in was not, and `safe_public_http_url` is applied at 18
         # other call sites. EZProxy is unaffected: its rewrite and its
         # `allow_host` exemption live in `pdf_download`, not here.
-        if not _safe_public_http_url(url):
+        if not safe_public_http_url(url):
             continue
         try:
             cookies = cookies_for_url(context, url)
@@ -390,7 +384,7 @@ def web_attachment_step(
                 if not isinstance(pdf_url, str) or not pdf_url.strip():
                     continue
                 normalized_pdf_url = pdf_url.strip()
-                if not _safe_public_http_url(normalized_pdf_url):
+                if not safe_public_http_url(normalized_pdf_url):
                     continue
 
                 updated = dict(record)
@@ -445,7 +439,7 @@ def browser_pdf_step(
                 doi=doi,
             )
 
-        if pdf_url and _safe_public_http_url(pdf_url):
+        if pdf_url and safe_public_http_url(pdf_url):
             updated = dict(record)
             updated["pdf_url"] = pdf_url
             updated["pdf_source"] = "browser_pdf"
