@@ -175,7 +175,7 @@ pzi.UpdatePlanItem {
 pzi.__version__: str
 pzi.add(source: 'str', *, tags: 'list[str] | None' = None, dry_run: 'bool' = False, force_new: 'bool' = False, config_path: 'str | None' = None, library: 'str | None' = None) -> 'AddReport'
 pzi.add_tags(citekey: 'str', tags: 'list[str]', *, dry_run: 'bool' = False, config_path: 'str | None' = None, library: 'str | None' = None) -> 'TagChangeReport'
-pzi.check(*, strict: 'bool' = False, config_path: 'str | None' = None, library: 'str | None' = None) -> 'CheckReport'
+pzi.check(*, strict: 'bool' = False, limit: 'int | None' = None, config_path: 'str | None' = None, library: 'str | None' = None) -> 'CheckReport'
 pzi.dedupe(*, config_path: 'str | None' = None, library: 'str | None' = None) -> 'DedupeReport'
 pzi.delete(citekey: 'str', *, dry_run: 'bool' = True, config_path: 'str | None' = None, library: 'str | None' = None) -> 'DeleteEntryReport'
 pzi.entries(*, offset: 'int' = 0, limit: 'int' = 50, sort: 'str' = 'citekey', config_path: 'str | None' = None, library: 'str | None' = None) -> 'EntryPage'

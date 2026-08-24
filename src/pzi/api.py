@@ -747,15 +747,23 @@ def add(
 def check(
     *,
     strict: bool = False,
+    limit: int | None = None,
     config_path: str | None = None,
     library: str | None = None,
 ) -> CheckReport:
-    """Verify entries against metadata providers. Makes network requests."""
+    """Verify entries against metadata providers. Makes network requests.
+
+    *limit* audits only the first N entries. The politeness gate floors this
+    command at 0.6 s/entry best case, so a whole-library run is hours; without
+    this the programmatic front end had no way to ask for a smaller one, while
+    the CLI has had ``--limit`` since item 550.
+    """
     result = check_bib(
         config_path=_resolved_config_path(config_path),
         home_dir=_home(),
         bib_selector=library,
         strict=strict,
+        limit=limit,
     )
     typed = result.copy()
     _unwrap(typed, "status")

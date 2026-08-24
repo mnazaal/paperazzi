@@ -33,6 +33,7 @@ from unittest.mock import patch
 import pytest
 
 import pzi
+import pzi.api as pzi_api
 from pzi.errors import PziError
 
 SNAPSHOT = Path(__file__).parent / "fixtures" / "public_api.txt"
@@ -1176,3 +1177,27 @@ def test_add_raises_the_classified_failure_rather_than_returning_it(
 
     assert (excinfo.value.code, excinfo.value.reason) == (3, "not_found")
     assert excinfo.value.details == ["no metadata for 10.1/x"]
+
+
+def test_check_accepts_the_bound_the_cli_has_had_since_item_550(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A whole-library audit is hours, so both front ends need an escape hatch.
+
+    `check_bib` has taken `limit` since the CLI gained `--limit`; only the
+    Python wrapper dropped it on the floor, leaving the programmatic surface
+    with no way to ask for a smaller run.
+    """
+    config = _library(tmp_path)
+    seen: list[object] = []
+
+    def _fake_check_bib(**kwargs):
+        seen.append(kwargs.get("limit"))
+        return {"status": "ok", "bib_name": "ml", "items": [], "warnings": [], "errors": []}
+
+    monkeypatch.setattr(pzi_api, "check_bib", _fake_check_bib)
+
+    pzi.check(config_path=config)
+    pzi.check(limit=5, config_path=config)
+
+    assert seen == [None, 5]
