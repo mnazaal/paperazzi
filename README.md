@@ -203,6 +203,25 @@ and `pzi init --force`'s undo is gone.
 | `metadata-cache/` | Provider responses, only when `metadata_cache_ttl > 0` (off by default). Swept on write and capped. | small |
 | `config-backups/` | Timestamped copies of a config replaced by `pzi init --force`. **Not rebuildable.** | tiny |
 
+#### Fields pzi adds to an entry
+
+Two fields carry pzi's own bookkeeping, namespaced so they cannot collide with a
+BibTeX field any style file reads:
+
+| Field | What it holds |
+|-------|---------------|
+| `pzi-pdf-url` | The PDF URL a capture discovered, so `pzi pdf retry` need not find it again. |
+| `pzi-abstract-url` | The landing page the metadata came from. |
+
+Both round-trip: pzi writes them and reads them back, and no other tool needs
+them. BibTeX and biber ignore unknown fields, so they are inert in a LaTeX build
+— but they *are* in your `.bib`, which is why they are listed here. Deleting one
+costs only a re-discovery.
+
+Note that `pzi update --promote` also writes a `note` field on both sides of a
+promotion (`Published version: <citekey>` and `Preprint version: <citekey>`), so
+the two entries point at each other.
+
 Beside the library itself, writes leave: `<bib>.lock` and `<inbox>.lock` while a
 command holds them, `<bib>.<citekey>.bak` from `delete`/`library merge`,
 `<bib>.promote.bak` from one `update --promote --replace` run, the

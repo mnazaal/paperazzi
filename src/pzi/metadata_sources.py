@@ -806,17 +806,48 @@ def _openreview_normalize(note: dict[str, object]) -> NormalizedRecord:
             year = time.gmtime(ts / 1000).tm_year
             break
 
+    venue_text = str(venue) if isinstance(venue, str) and venue else None
     record: NormalizedRecord = {
         "title": str(title) if isinstance(title, str) and title else None,
         "authors": authors,
         "year": year,
-        "venue": str(venue) if isinstance(venue, str) and venue else None,
+        "venue": venue_text,
         "doi": None,
+        # Supplied so the entry type does not depend on which provider answered.
+        # Crossref, OpenAlex and DBLP all carry `item_type`; OpenReview did not,
+        # so `carry_item_type` had nothing to carry and an ICLR paper was written
+        # as `@article` with `journal = {ICLR 2022 Poster}` — a conference paper
+        # typed as a journal one, whose journal is a submission decision.
+        "item_type": _openreview_item_type(venue_text),
     }
     pdf = _openreview_field(content, "pdf")
     if isinstance(pdf, str) and pdf.startswith("/"):
         record["pdf_url"] = f"https://openreview.net{pdf}"
     return record
+
+
+#: Venue words that mean OpenReview is hosting a *journal* rather than a
+#: conference. OpenReview runs both — TMLR is the one this library already had a
+#: fixture for — so a blanket "conferencePaper" would mis-type every TMLR paper
+#: as `@inproceedings`. Deliberately a short, literal list rather than a clever
+#: rule: it is checked against the venue string a human would read, and a word
+#: not on it means conference, which is what the overwhelming majority of
+#: OpenReview submissions are.
+_OPENREVIEW_JOURNAL_VENUE_WORDS = ("tmlr", "transactions", "journal")
+
+
+def _openreview_item_type(venue: str | None) -> str:
+    """`journalArticle` for OpenReview's journals, `conferencePaper` otherwise.
+
+    OpenReview supplies no type of its own, so this is inferred from the venue
+    string. Getting it wrong picks the wrong BibTeX entry type and puts the venue
+    in the wrong field (`journal` vs `booktitle`), which is why it is inferred
+    narrowly and not guessed at more cleverly.
+    """
+    lowered = (venue or "").lower()
+    if any(word in lowered for word in _OPENREVIEW_JOURNAL_VENUE_WORDS):
+        return "journalArticle"
+    return "conferencePaper"
 
 
 # ============================================================================
