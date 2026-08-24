@@ -1,9 +1,11 @@
 from contextlib import contextmanager
+from datetime import timedelta
 
 import pytest
 
 import pzi.promote_service as promote_service
 import pzi.update_service as update_service
+from pzi import promote_ledger
 from pzi.add_service import add_record_to_bib
 from pzi.bib_repository import ConcurrentEditError, StalePlanError
 from pzi.errors import REASON_UNAVAILABLE
@@ -2316,3 +2318,167 @@ def test_a_preprint_with_no_arxiv_id_gains_no_empty_pointer() -> None:
         {"title": "T", "year": 2022, "doi": "10.1000/pub.1", "venue": "A Journal"},
     )
     assert "preprint_arxiv_id" not in merged
+
+
+# --- The negative-lookup ledger (item 578) --------------------------------
+#
+# `promote` is a periodic audit over ~13k candidates, most of which answer
+# "not published yet". These pin that the answer is remembered, that it is
+# only remembered when it is really an answer, and that the horizon governs
+# when it is asked again.
+
+def _search_finds_nothing(query: str, *, server_url: str):
+    return []
+
+
+def _provider_finds_nothing(title: str):
+    return None
+
+
+def _s2_finds_nothing(title: str):
+    return (None, None)
+
+
+def _s2_is_rate_limited(title: str):
+    return (None, "rate limit exceeded")
+
+
+#: Every provider stubbed to "asked, found nothing" — a genuine negative.
+_NOTHING_FOUND = {
+    "fetch_search": _search_finds_nothing,
+    "fetch_crossref": _provider_finds_nothing,
+    "fetch_openalex": _provider_finds_nothing,
+    "fetch_dblp": _provider_finds_nothing,
+    "fetch_openreview": _provider_finds_nothing,
+    "fetch_s2": _s2_finds_nothing,
+}
+
+
+def _ledger_setup(tmp_path, **config_kwargs):
+    """A library with one preprint and an isolated `pzi_data_home`.
+
+    `pzi_data_home` is pinned rather than defaulted: the default honours
+    `$XDG_DATA_HOME`, so a defaulted test would write the developer's real
+    data directory on any machine that sets it.
+    """
+    bib_path = tmp_path / "ml.bib"
+    data_home = tmp_path / "data"
+    config_path = _write_config(
+        tmp_path, bib_path, pzi_data_home=str(data_home), **config_kwargs
+    )
+    _seed_bib_with_preprint(tmp_path, bib_path, config_path)
+    return config_path, promote_ledger.ledger_path(data_home)
+
+
+def _promote(config_path, tmp_path, **kwargs):
+    kwargs.setdefault("dry_run", True)
+    kwargs.setdefault("keep_preprint", False)
+    return promote_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        **kwargs,
+    )
+
+
+def test_promote_records_a_preprint_that_is_still_unpublished(tmp_path):
+    config_path, ledger_file = _ledger_setup(tmp_path)
+
+    result = _promote(config_path, tmp_path, **_NOTHING_FOUND)
+
+    assert result["summary"]["skipped_no_candidate"] == 1
+    assert promote_ledger.load(ledger_file)["bibs"]["ml"].keys() == {"smith2024graph"}
+
+
+def test_promote_skips_a_preprint_it_checked_inside_the_horizon(tmp_path):
+    """The whole point: the second sweep must not redo the first sweep's work."""
+    config_path, ledger_file = _ledger_setup(tmp_path)
+    _promote(config_path, tmp_path, **_NOTHING_FOUND)
+    assert promote_ledger.load(ledger_file)["bibs"]["ml"]
+
+    def _must_not_be_called(query: str, *, server_url: str):
+        raise AssertionError("a recently-checked preprint was looked up again")
+
+    second = _promote(config_path, tmp_path, fetch_search=_must_not_be_called)
+
+    summary = second["summary"]
+    assert summary["skipped_recently_checked"] == 1
+    assert summary["checked"] == 0
+    # Not merely unchecked — not *eligible*, so the progress denominator and
+    # `remaining` describe the work a follow-up run would really face.
+    assert summary["eligible"] == 0
+    assert summary["remaining"] == 0
+    assert second["items"] == []
+
+
+def test_promote_re_asks_once_the_horizon_has_passed(tmp_path):
+    config_path, ledger_file = _ledger_setup(tmp_path, promote_recheck_after_days=30)
+    _promote(config_path, tmp_path, **_NOTHING_FOUND)
+
+    # Age the recorded answer past the horizon, exactly as the clock would.
+    stale = promote_ledger.record_checked(
+        {}, "ml", "smith2024graph",
+        now=promote_ledger.utc_now() - timedelta(days=31),
+    )
+    promote_ledger.save(ledger_file, stale)
+
+    result = _promote(config_path, tmp_path, **_NOTHING_FOUND)
+
+    assert result["summary"]["skipped_recently_checked"] == 0
+    assert result["summary"]["checked"] == 1
+
+
+def test_promote_does_not_record_when_a_provider_failed(tmp_path):
+    """An outage is not an answer.
+
+    Recording it would freeze a transient failure into a month of silence over
+    exactly the entries the sweep exists to surface — the same reasoning that
+    keeps `_is_transient_error_body` out of the HTTP cache.
+    """
+    config_path, ledger_file = _ledger_setup(tmp_path)
+
+    result = _promote(
+        config_path, tmp_path, **{**_NOTHING_FOUND, "fetch_s2": _s2_is_rate_limited}
+    )
+
+    assert result["summary"]["skipped_no_candidate"] == 1
+    assert result["summary"]["provider_errors"] >= 1
+    assert promote_ledger.load(ledger_file) == {}
+
+
+def test_promote_records_under_dry_run_but_still_does_not_touch_the_bib(tmp_path):
+    """The lookup really happened, and the sidecar is not the library."""
+    config_path, ledger_file = _ledger_setup(tmp_path)
+    bib_path = tmp_path / "ml.bib"
+    before = bib_path.read_text()
+
+    _promote(config_path, tmp_path, dry_run=True, **_NOTHING_FOUND)
+
+    assert promote_ledger.load(ledger_file)["bibs"]["ml"]
+    assert bib_path.read_text() == before
+
+
+def test_a_zero_horizon_writes_no_ledger_and_skips_nothing(tmp_path):
+    """Off means off at both ends, so the setting fully restores the old behaviour."""
+    config_path, ledger_file = _ledger_setup(tmp_path, promote_recheck_after_days=0)
+
+    first = _promote(config_path, tmp_path, **_NOTHING_FOUND)
+    second = _promote(config_path, tmp_path, **_NOTHING_FOUND)
+
+    assert not ledger_file.exists()
+    assert first["summary"]["checked"] == 1
+    assert second["summary"]["checked"] == 1
+    assert second["summary"]["skipped_recently_checked"] == 0
+
+
+def test_a_corrupt_ledger_does_not_fail_the_run(tmp_path):
+    config_path, ledger_file = _ledger_setup(tmp_path)
+    ledger_file.parent.mkdir(parents=True, exist_ok=True)
+    ledger_file.write_text("{ not json", encoding="utf-8")
+
+    result = _promote(config_path, tmp_path, **_NOTHING_FOUND)
+
+    assert result["status"] == "ok"
+    assert result["summary"]["checked"] == 1
+    # And the run repairs it on the way out.
+    assert promote_ledger.load(ledger_file)["bibs"]["ml"]

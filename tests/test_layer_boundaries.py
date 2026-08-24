@@ -75,6 +75,10 @@ CORE: frozenset[str] = frozenset(
         "capture_context",
         "html_metadata",
         "metadata_sources",
+        # Promotion's negative-lookup ledger. CORE like `config` and
+        # `metadata_cache`: it reads and writes one JSON file and imports
+        # nothing but stdlib and `fileio`.
+        "promote_ledger",
         # Promotion's candidate discovery, split out of `promote_service`.
         # CORE rather than SERVICE beside the service it came from: it only
         # queries providers and scores what they return, so nothing it imports

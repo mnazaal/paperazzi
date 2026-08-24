@@ -42,6 +42,8 @@ next to the diff it explains.
 
 ### Added
 
+- **`update --promote` remembers preprints that are still unpublished**, in `<pzi_data_home>/promote-checked.json`, and skips them for `promote_recheck_after_days` (new config option, default 30). A sweep over a large library no longer redoes the whole search every run. Recorded under `--dry-run` too, but never when a provider errored or was dropped by the circuit breaker; `promote_recheck_after_days = 0` disables it.
+- `update --promote`'s summary gains `skipped_recently_checked`.
 - **`pzi.update()` and `pzi.list_tags()`**, completing the Python API's coverage
   of the read and write paths. `update` previews by default like `promote`;
   `list_tags` with no citekey returns the library's whole tag vocabulary.

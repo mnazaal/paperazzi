@@ -201,6 +201,7 @@ and `pzi init --force`'s undo is gone.
 | `ts.install.lock` | Guards concurrent installs. | tiny |
 | `ts-stderr.log` | The translation-server child's stderr — the first place to look when a capture fails. Truncated each time the backend starts, so it covers the current run only. | small |
 | `metadata-cache/` | Provider responses, only when `metadata_cache_ttl > 0` (off by default). Swept on write and capped. | small |
+| `promote-checked.json` | Preprints `update --promote` asked about and found still unpublished, so a later sweep can skip them. Pruned to `promote_recheck_after_days`; delete it to force a full re-check. | small |
 | `config-backups/` | Timestamped copies of a config replaced by `pzi init --force`. **Not rebuildable.** | tiny |
 
 #### Fields pzi adds to an entry
@@ -444,6 +445,7 @@ paperazzi treats citekeys as stable external handles and never renames existing 
 - New paper with an occupied citekey → add a numeric suffix (`smith2024graph-2`).
 - Promotion **replaces the preprint in place by default**, keeping its citekey so existing citations still resolve; `--keep-preprint` creates the published entry beside it instead.
 - `--mark-resolved` tags each promoted preprint (`promoted`) and skips already-tagged entries on later runs, so re-running promotion over a large library only revisits what is new.
+- A preprint that providers say is **still unpublished** is remembered for `promote_recheck_after_days` (default 30) in `<pzi_data_home>/promote-checked.json`, and skipped until then. This is what makes promotion a periodic audit rather than a one-off: without it every run redoes the whole search. Two deliberate details — the answer is recorded under `--dry-run` too (the lookup really happened, and the sidecar is not your `.bib`), and it is **not** recorded when any provider errored or was dropped by the circuit breaker, since an outage is not an answer. Set `promote_recheck_after_days = 0` to disable it and re-check everything.
 
 ### Validate references (`pzi library check`)
 

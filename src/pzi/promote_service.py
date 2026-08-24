@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict, cast
 
+from pzi import promote_ledger
 from pzi.add_planning import next_pdf_candidate_for_config
 from pzi.bib_repository import (
     BatchWriteSession,
@@ -121,6 +122,10 @@ _MIN_TITLE_SIMILARITY = 85
 
 # Tag written to a preprint by `--mark-resolved` so re-runs can skip it.
 _RESOLVED_TAG = "promoted"
+#: Skip reasons that are also summary keys. A record with no citekey, or
+#: with no preprint identity, is not a *skip* the user asked about — it was
+#: never a candidate — so those two are deliberately not counted.
+_COUNTED_SKIPS = frozenset({"skipped_already_resolved", "skipped_recently_checked"})
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -179,6 +184,16 @@ def promote_bib(
     # providers unless a fetcher override is injected (e.g. by tests).
     metadata_fetch_text = build_metadata_fetch_text(config, api_key=s2_api_key)
 
+    # The negative-lookup ledger. Loaded before the read so a disabled horizon
+    # costs nothing at all: nothing is consulted and nothing is written.
+    recheck_after_days = config["promote_recheck_after_days"]
+    ledger_file = promote_ledger.ledger_path(config["pzi_data_home"])
+    ledger = promote_ledger.load(ledger_file) if recheck_after_days > 0 else {}
+    ledger_now = promote_ledger.utc_now()
+    #: Citekeys this run confirmed are still unpublished, written once at the
+    #: end rather than per item.
+    checked_negative: list[str] = []
+
     read_result = read_bib_file(bib["path"])
     records = read_result["records"]
     known_records = list(records)
@@ -217,21 +232,60 @@ def promote_bib(
     #: bounded pass reads as resumable rather than as silently incomplete.
     budget = limit if limit is not None and limit >= 0 else None
 
-    def _is_candidate(record: NormalizedRecord) -> bool:
+    def _skip_reason(record: NormalizedRecord) -> str | None:
+        """Why this record is not a candidate for this run, or None if it is.
+
+        One predicate, deliberately. The count taken before the loop and the
+        decision taken inside it were two copies of the same conditions, so a
+        new skip rule had to land in both — and if it landed in one, the
+        progress denominator disagreed with the work actually done, silently.
+        """
         if not isinstance(record.get("citekey"), str):
-            return False
+            return "no_citekey"
+        # `has_preprint_identity`, not `is_preprint`: the latter calls any
+        # record without a `venue` a preprint, which is a large share of an
+        # ordinary library, so promotion forked a second entry out of plain
+        # @articles that merely lacked a `journal` field — manufacturing the
+        # duplicates `pzi library dedupe` exists to report. `update_service`
+        # refuses `is_preprint` here for exactly this reason and says so at its
+        # own call site; the two commands now agree.
         if not has_preprint_identity(record):
-            return False
-        return not (mark_resolved and _RESOLVED_TAG in (record.get("tags") or []))
+            return "not_preprint"
+        if mark_resolved and _RESOLVED_TAG in (record.get("tags") or []):
+            # Already promoted on a previous --mark-resolved run.
+            return "skipped_already_resolved"
+        if promote_ledger.is_recently_checked(
+            ledger,
+            bib["name"],
+            str(record.get("citekey")),
+            now=ledger_now,
+            horizon_days=recheck_after_days,
+        ):
+            # Asked inside the horizon and the answer was "not published yet".
+            return "skipped_recently_checked"
+        return None
 
     # Counted before the loop, not accumulated inside it. `on_item` reports
     # `done/total`, and a total that grows as the loop runs is not a denominator
     # — it made every progress line read `1/1`, `2/2`, and never reached the
     # threshold that would have printed one.
-    eligible_total = sum(1 for record in records if _is_candidate(record))
+    eligible_total = sum(1 for record in records if _skip_reason(record) is None)
     planned = eligible_total if budget is None else min(budget, eligible_total)
     eligible = 0
     started = time.monotonic()
+
+    def note_still_unpublished(citekey: str, provider_errors: list[str]) -> None:
+        """Record a negative answer for the ledger — if it is really an answer.
+
+        A provider error means the search was incomplete, so "found nothing" is
+        not a finding and must not suppress the next sweep. This covers the
+        breaker too: a provider it skipped appends to `provider_errors`, so an
+        outage cannot freeze into a month of silence over exactly the entries
+        this command exists to surface.
+        """
+        if provider_errors:
+            return
+        checked_negative.append(citekey)
 
     def record_item(item: PromoteItem) -> None:
         """Append a verdict and stream it, in one place.
@@ -245,21 +299,15 @@ def promote_bib(
             on_item(item, len(items), planned)
 
     for record in records:
+        reason = _skip_reason(record)
+        if reason is not None:
+            if reason in _COUNTED_SKIPS:
+                summary[reason] += 1
+            continue
+        # Narrowing for the type checker; `_skip_reason` already rejected the
+        # records where this is not a string.
         preprint_ck = record.get("citekey")
         if not isinstance(preprint_ck, str):
-            continue
-        # `has_preprint_identity`, not `is_preprint`: the latter calls any
-        # record without a `venue` a preprint, which is a large share of an
-        # ordinary library, so promotion forked a second entry out of plain
-        # @articles that merely lacked a `journal` field — manufacturing the
-        # duplicates `pzi library dedupe` exists to report. `update_service` refuses
-        # `is_preprint` here for exactly this reason and says so at its own call
-        # site; the two commands now agree.
-        if not has_preprint_identity(record):
-            continue
-        if mark_resolved and _RESOLVED_TAG in (record.get("tags") or []):
-            # Already promoted on a previous --mark-resolved run; skip re-checking.
-            summary["skipped_already_resolved"] += 1
             continue
         # Eligible whether or not this run has budget left, so `remaining` counts
         # what a follow-up run would still face rather than what this loop saw.
@@ -290,6 +338,7 @@ def promote_bib(
                 continue
             summary["provider_errors"] += len(provider_errors)
             summary["skipped_no_candidate"] += 1
+            note_still_unpublished(preprint_ck, provider_errors)
             note = "no published candidate found"
             if provider_errors:
                 note = f"{note} (provider errors: {', '.join(provider_errors)})"
@@ -308,6 +357,7 @@ def promote_bib(
         title_similarity = match["title_similarity"]
         if score < effective_confidence_threshold or title_similarity < _MIN_TITLE_SIMILARITY:
             summary["skipped_low_confidence"] += 1
+            note_still_unpublished(preprint_ck, provider_errors)
             reason = (
                 f"low confidence ({score} < {effective_confidence_threshold})"
                 if score < effective_confidence_threshold
@@ -489,6 +539,22 @@ def promote_bib(
     # candidate — the same rule `check` applies to the same providers.
     errors.extend(breaker.tripped.values())
 
+    # Persist the negatives once, not per item, and *including* under
+    # `--dry-run`: the lookups really happened and "still unpublished" is just
+    # as true for a preview, while the sidecar is not the library, so a dry run
+    # stays read-only against the `.bib`. Pruning here is what bounds the file.
+    if recheck_after_days > 0 and checked_negative:
+        for citekey in checked_negative:
+            ledger = promote_ledger.record_checked(
+                ledger, bib["name"], citekey, now=ledger_now
+            )
+        promote_ledger.save(
+            ledger_file,
+            promote_ledger.prune(
+                ledger, now=ledger_now, horizon_days=recheck_after_days
+            ),
+        )
+
     # What a follow-up run still faces, and what this one cost per candidate.
     # `remaining` is the difference between a bounded pass and a silently
     # incomplete one. The timing is not decoration: the default bound is chosen
@@ -567,6 +633,7 @@ def _empty_summary() -> dict[str, Any]:
         "skipped_low_confidence": 0,
         "skipped_existing": 0,
         "skipped_already_resolved": 0,
+        "skipped_recently_checked": 0,
         "skipped_failed": 0,
         "provider_errors": 0,
     }

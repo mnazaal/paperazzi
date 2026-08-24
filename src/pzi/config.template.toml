@@ -75,6 +75,10 @@ api_listen_port = 8765
 
 # Metadata confidence tuning
 # promote_confidence_threshold = 60  # min 0-100 match score to promote a preprint → published (default 60)
+# promote_recheck_after_days = 30  # days before --promote re-asks about a preprint that
+# answered "not published yet" (default 30). Those answers are kept in
+# <pzi_data_home>/promote-checked.json so a periodic sweep does not redo the whole
+# search every run; 0 disables the ledger entirely and re-checks everything.
 # metadata_confidence_min_score = 0  # 0-100; default 0 (off)
 # `add` warns when the selected candidate scores below this. `update` does not
 # warn — it *refuses* the entry, leaving it unchanged and reporting it as

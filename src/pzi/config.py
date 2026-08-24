@@ -18,6 +18,11 @@ from pzi.format_templates import describe_template_error
 # three places — the loader, the validator, and `config.template.toml` — and a
 # copy that drifts out of step silently loosens or tightens the gate.
 DEFAULT_PROMOTE_CONFIDENCE_THRESHOLD = 60
+#: Days before `update --promote` re-asks about a preprint that answered
+#: "not published yet". One month: ML publication decisions land on
+#: conference cycles, so a shorter window mostly re-asks a question that
+#: cannot have changed. Zero disables the ledger at both ends.
+DEFAULT_PROMOTE_RECHECK_AFTER_DAYS = 30
 
 # Where the translation-server is assumed to be when the config does not say.
 # Named for the same reason as the threshold above — it was written out twice,
@@ -67,6 +72,7 @@ class AppConfig(TypedDict):
     page_metadata_timeout_seconds: int
     metadata_confidence_min_score: int
     promote_confidence_threshold: int
+    promote_recheck_after_days: int
     metadata_cache_ttl: int
     browser_hook: bool
     pzi_data_home: str
@@ -289,6 +295,9 @@ def _normalize_app_config(
     raw_promote_confidence_threshold = raw.get(
         "promote_confidence_threshold", DEFAULT_PROMOTE_CONFIDENCE_THRESHOLD
     )
+    raw_promote_recheck_after_days = raw.get(
+        "promote_recheck_after_days", DEFAULT_PROMOTE_RECHECK_AFTER_DAYS
+    )
     raw_metadata_cache_ttl = raw.get("metadata_cache_ttl", 0)
     raw_browser_hook = raw.get("browser_hook", True)
     raw_pzi_data_home = raw.get("pzi_data_home")
@@ -335,6 +344,12 @@ def _normalize_app_config(
         "metadata_confidence_min_score": _safe_int(raw_metadata_confidence_min_score, 0),
         "promote_confidence_threshold": _safe_int(
             raw_promote_confidence_threshold, DEFAULT_PROMOTE_CONFIDENCE_THRESHOLD
+        ),
+        "promote_recheck_after_days": max(
+            0,
+            _safe_int(
+                raw_promote_recheck_after_days, DEFAULT_PROMOTE_RECHECK_AFTER_DAYS
+            ),
         ),
         "metadata_cache_ttl": max(0, _safe_int(raw_metadata_cache_ttl, 0)),
         "browser_hook": _safe_bool(raw_browser_hook, True),
@@ -440,6 +455,16 @@ def validate_app_config(
         or not 0 <= raw_promote_confidence_threshold <= 100
     ):
         errors.append("promote_confidence_threshold must be an integer between 0 and 100")
+
+    raw_promote_recheck_after_days = raw.get(
+        "promote_recheck_after_days", DEFAULT_PROMOTE_RECHECK_AFTER_DAYS
+    )
+    if (
+        not isinstance(raw_promote_recheck_after_days, int)
+        or isinstance(raw_promote_recheck_after_days, bool)
+        or raw_promote_recheck_after_days < 0
+    ):
+        errors.append("promote_recheck_after_days must be a non-negative integer")
 
     raw_metadata_cache_ttl = raw.get("metadata_cache_ttl", 0)
     if (

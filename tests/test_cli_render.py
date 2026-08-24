@@ -249,3 +249,53 @@ def test_control_characters_are_stripped_from_rendered_output() -> None:
 
     assert "\x1b" not in lines[0]
     assert "\x07" not in lines[0]
+
+
+def test_render_bib_promote_items_explains_a_run_that_only_skipped() -> None:
+    """"Nothing to do" and "nothing done yet" must not read the same.
+
+    A sweep whose candidates were all checked inside the recheck horizon has no
+    items, and reporting that as "no preprints to promote" told the user the
+    library held none — the opposite of the truth.
+    """
+    summary = {
+        "checked": 0,
+        "created": 0,
+        "updated": 0,
+        "skipped_no_candidate": 0,
+        "skipped_low_confidence": 0,
+        "skipped_existing": 0,
+        "skipped_recently_checked": 12,
+        "skipped_already_resolved": 3,
+        "provider_errors": 0,
+    }
+
+    lines = render_bib_promote_items(
+        {"dry_run": True, "items": [], "summary": summary}
+    )
+
+    assert lines[0] == "DRY RUN: no preprints left to promote (15 skipped)"
+    assert "recently checked 12" in lines[1]
+    assert "already resolved 3" in lines[1]
+
+
+def test_render_bib_promote_items_omits_skip_counters_that_are_zero() -> None:
+    """A skip that never happened is noise, like `failed`."""
+    summary = {
+        "checked": 1,
+        "created": 0,
+        "updated": 1,
+        "skipped_no_candidate": 0,
+        "skipped_low_confidence": 0,
+        "skipped_existing": 0,
+        "skipped_recently_checked": 0,
+        "skipped_already_resolved": 0,
+        "provider_errors": 0,
+    }
+
+    lines = render_bib_promote_items(
+        {"dry_run": False, "items": [], "summary": summary}
+    )
+
+    assert "recently checked" not in lines[-1]
+    assert "already resolved" not in lines[-1]

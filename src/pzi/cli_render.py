@@ -145,9 +145,21 @@ def render_bib_promote_items(result: Mapping[str, Any]) -> list[str]:
             # An undo the user cannot find is not an undo — `delete` says the
             # same thing for the same reason.
             lines.append(f"{prefix}  backup saved to {backup}")
-    if not lines:
-        lines = [f"{prefix}no preprints to promote"]
     summary = result.get("summary")
+    if not lines:
+        # "no preprints to promote" is false when there were preprints and the
+        # run deliberately passed over them. Saying which is the difference
+        # between "nothing to do" and "nothing done yet".
+        skipped = 0
+        if isinstance(summary, Mapping):
+            skipped = (summary.get("skipped_recently_checked") or 0) + (
+                summary.get("skipped_already_resolved") or 0
+            )
+        lines = [
+            f"{prefix}no preprints to promote"
+            if not skipped
+            else f"{prefix}no preprints left to promote ({skipped} skipped)"
+        ]
     if isinstance(summary, Mapping):
         lines.append(
             f"{prefix}summary: checked {summary['checked']}; "
@@ -157,6 +169,18 @@ def render_bib_promote_items(result: Mapping[str, Any]) -> list[str]:
             f"existing {summary['skipped_existing']}; "
             f"provider errors {summary['provider_errors']}"
             + (f"; failed {summary['skipped_failed']}" if summary.get("skipped_failed") else "")
+            # Shown only when non-zero, like `failed`: a skip the user did not
+            # ask for needs explaining, and one that never happened is noise.
+            + (
+                f"; recently checked {summary['skipped_recently_checked']}"
+                if summary.get("skipped_recently_checked")
+                else ""
+            )
+            + (
+                f"; already resolved {summary['skipped_already_resolved']}"
+                if summary.get("skipped_already_resolved")
+                else ""
+            )
         )
         s2_warning = summary.get("s2_warning")
         if isinstance(s2_warning, str) and s2_warning:
