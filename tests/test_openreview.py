@@ -91,23 +91,53 @@ def test_a_journal_submission_is_not_typed_as_a_conference_paper() -> None:
         "An Older Paper", fetch_text=lambda _: json.dumps(_OPENREVIEW_V1)
     )
     assert result is not None
-    assert result["item_type"] == "journalArticle"
+    assert "item_type" not in result, (
+        "an undated venue must not be typed at all, so the caller's `article` "
+        "default stands — which is right for OpenReview's journals"
+    )
 
 
 @pytest.mark.parametrize(
     "venue, expected",
     [
+        # A dated venue instance is a conference occurrence.
         ("ICLR 2022 Poster", "conferencePaper"),
         ("NeurIPS 2023 Oral", "conferencePaper"),
         ("ICML 2021", "conferencePaper"),
-        ("TMLR", "journalArticle"),
-        ("Transactions on Machine Learning Research", "journalArticle"),
-        ("Journal of Machine Learning Research", "journalArticle"),
-        ("", "conferencePaper"),
-        (None, "conferencePaper"),
+        # Undated: OpenReview's journals, and anything this cannot read. `None`
+        # keeps the caller's `article` default rather than guessing.
+        ("TMLR", None),
+        ("Transactions on Machine Learning Research", None),
+        ("Journal of Machine Learning Research", None),
+        ("", None),
+        (None, None),
+        # Field-agnostic on purpose: no venue abbreviation is hardcoded, so a
+        # dated conference outside ML types correctly and an undated journal
+        # outside ML is not mistyped.
+        ("Conference on Human Factors in Computing Systems 2019", "conferencePaper"),
+        ("Annual Meeting of the Association for Computational Linguistics 2020",
+         "conferencePaper"),
+        ("The Lancet", None),
+        ("Nature", None),
+        ("Journal of Finance", None),
     ],
 )
-def test_the_venue_string_decides_the_entry_type(venue, expected) -> None:
+def test_a_dated_venue_instance_is_a_conference_and_nothing_else_is_guessed(
+    venue, expected
+) -> None:
+    """No venue abbreviation is hardcoded — the year is the whole signal.
+
+    An earlier version of this listed "tmlr" among journal-indicating words. pzi
+    captures papers from any discipline, so a list of venue abbreviations is a
+    list that works for whoever wrote it. The year is a property of how a venue
+    *instance* is named, not of a field's vocabulary.
+
+    The signal is not universal, and the limit is worth naming: a *journal* whose
+    title carries a year — "Proceedings of the Royal Society B 1998" — would be
+    read as a conference. That case is out of reach here because this function
+    only ever sees OpenReview `venue` strings, and OpenReview names its journals
+    without a year. It is deliberately not asserted as correct above.
+    """
     from pzi.metadata_sources import _openreview_item_type
 
     assert _openreview_item_type(venue) == expected

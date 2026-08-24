@@ -813,41 +813,57 @@ def _openreview_normalize(note: dict[str, object]) -> NormalizedRecord:
         "year": year,
         "venue": venue_text,
         "doi": None,
-        # Supplied so the entry type does not depend on which provider answered.
-        # Crossref, OpenAlex and DBLP all carry `item_type`; OpenReview did not,
-        # so `carry_item_type` had nothing to carry and an ICLR paper was written
-        # as `@article` with `journal = {ICLR 2022 Poster}` — a conference paper
-        # typed as a journal one, whose journal is a submission decision.
-        "item_type": _openreview_item_type(venue_text),
     }
+    # Supplied so the entry type does not depend on which provider answered.
+    # Crossref, OpenAlex and DBLP all carry `item_type`; OpenReview did not, so
+    # `carry_item_type` had nothing to carry and an ICLR paper was written as
+    # `@article` with `journal = {ICLR 2022 Poster}` — a conference paper typed
+    # as a journal one, whose journal is a submission decision. Set only when it
+    # can be told, so an unreadable venue keeps the caller's `article` default.
+    item_type = _openreview_item_type(venue_text)
+    if item_type is not None:
+        record["item_type"] = item_type
     pdf = _openreview_field(content, "pdf")
     if isinstance(pdf, str) and pdf.startswith("/"):
         record["pdf_url"] = f"https://openreview.net{pdf}"
     return record
 
 
-#: Venue words that mean OpenReview is hosting a *journal* rather than a
-#: conference. OpenReview runs both — TMLR is the one this library already had a
-#: fixture for — so a blanket "conferencePaper" would mis-type every TMLR paper
-#: as `@inproceedings`. Deliberately a short, literal list rather than a clever
-#: rule: it is checked against the venue string a human would read, and a word
-#: not on it means conference, which is what the overwhelming majority of
-#: OpenReview submissions are.
-_OPENREVIEW_JOURNAL_VENUE_WORDS = ("tmlr", "transactions", "journal")
+#: A conference instance is dated — "ICLR 2022 Poster", "NeurIPS 2023 Oral" —
+#: and a journal is not: OpenReview names TMLR simply "TMLR". So the year is the
+#: signal, and it is a property of how a venue *instance* is named rather than of
+#: any one field's vocabulary.
+#:
+#: This deliberately replaced a word list that included "tmlr". pzi captures
+#: papers from any discipline, and a list of venue abbreviations is a list that
+#: works for whoever wrote it: it would have typed a dated conference in another
+#: field correctly by luck and an undated journal in another field wrongly by
+#: default. Naming a preprint *server* is unavoidable (see
+#: `_PREPRINT_VENUE_NAMES`, which derives its names from the domain map for the
+#: same reason); naming individual venues is not.
+_VENUE_YEAR_RE = re.compile(r"\b(1[6-9]|20)\d{2}\b")
 
 
-def _openreview_item_type(venue: str | None) -> str:
-    """`journalArticle` for OpenReview's journals, `conferencePaper` otherwise.
+def _openreview_item_type(venue: str | None) -> str | None:
+    """`conferencePaper` for a dated venue instance; `None` when it cannot tell.
 
-    OpenReview supplies no type of its own, so this is inferred from the venue
-    string. Getting it wrong picks the wrong BibTeX entry type and puts the venue
-    in the wrong field (`journal` vs `booktitle`), which is why it is inferred
-    narrowly and not guessed at more cleverly.
+    OpenReview supplies no type of its own, which left `carry_item_type` nothing
+    to carry, so an ICLR paper became `@article` with the venue in `journal`.
+
+    `None` rather than a guess when there is no year: the caller's existing
+    default is `article`, which is right for OpenReview's journals and is the
+    honest answer for a venue string this cannot read. Getting it wrong picks the
+    wrong entry type *and* the wrong field (`journal` vs `booktitle`), so it
+    only answers where the evidence is structural.
+
+    Scope: this reads OpenReview `venue` strings and nothing else. A journal
+    whose *title* contains a year would be misread as a conference, which is out
+    of reach here only because OpenReview names its journals without one. Do not
+    reuse this on venue strings from another provider without rechecking that.
     """
-    lowered = (venue or "").lower()
-    if any(word in lowered for word in _OPENREVIEW_JOURNAL_VENUE_WORDS):
-        return "journalArticle"
-    return "conferencePaper"
+    if venue and _VENUE_YEAR_RE.search(venue):
+        return "conferencePaper"
+    return None
 
 
 # ============================================================================
