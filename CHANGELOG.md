@@ -15,6 +15,10 @@ next to the diff it explains.
 
 ## [Unreleased]
 
+### Fixed
+
+- `update --promote --keep-preprint` no longer leaves a published entry in the library when the promotion is reported as failed. Its two writes — the new entry and the preprint's cross-reference note — are now planned together, so a failure between them writes neither. Previously the entry was committed while the run deleted the PDF its `file =` pointed at.
+
 ### Changed
 
 - **Breaking:** `pzi import <missing-file>` and `pzi add --from-file <missing-file>` now exit `2` (usage), not `5`. Their `--json` envelopes already said `"reason": "usage"`, which maps to `2`; the code and the field now agree.

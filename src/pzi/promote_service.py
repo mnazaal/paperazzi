@@ -558,8 +558,16 @@ def promote_bib(
                 _flush_pending(pending)
         # Both of these feed the *next* record's decisions — the citekey
         # generator and `_find_duplicate_citekey` — so they are recorded as soon
-        # as this record resolves, before phase 2 knows whether the write lands.
-        # The alternative is a sweep that forks two entries for one paper.
+        # as this record resolves, before the write lands.
+        #
+        # Accepted, deliberately, with its cost stated: a later record that
+        # duplicates a promotion whose write then *failed* is skipped as
+        # already-existing, so that paper goes unpromoted until the next sweep.
+        # Recording on commit instead would fork two entries for one paper
+        # whenever two records resolve to the same publication, which is the
+        # ordinary case rather than the failure case. A missed promotion is
+        # recoverable by re-running; a duplicated entry is manual cleanup in the
+        # user's library.
         if item["published_citekey"] is not None:  # pragma: no branch
             existing_citekeys.add(item["published_citekey"])
             if item["action"] in {"create", "update"}:
@@ -983,10 +991,19 @@ def _apply_published_fork(
     # turn this insert into an in-place update of the preprint itself. The
     # candidate was already checked against the library by
     # `_find_duplicate_citekey`, so there is nothing legitimate to match.
-    session.apply_plan(plan_bib_write(published, session.records, force_new=True))
+    #
+    # Both plans are built before either is applied, so a builder that raises
+    # leaves the session exactly as it found it. Applying the insert first and
+    # then planning the note meant a failure in between committed the published
+    # entry anyway — the session goes on to write — while the caller reported
+    # the promotion `failed` and `_remove_new_pdf` deleted the PDF that
+    # committed entry's `file =` now pointed at. The order is free: the insert
+    # appends, so it cannot move the index the note plan resolves.
+    insert_plan = plan_bib_write(published, session.records, force_new=True)
     note_plan = _plan_note_update(
         session, preprint_ck, f"Published version: {published_ck}"
     )
+    session.apply_plan(insert_plan)
     if note_plan is not None:
         session.apply_plan(note_plan)
 

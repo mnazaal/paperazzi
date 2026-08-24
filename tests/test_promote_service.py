@@ -2653,3 +2653,37 @@ def test_a_preprint_that_vanished_before_the_write_is_reported_not_counted(tmp_p
     assert "disappeared" in result["items"][0]["note"]
     assert result["summary"]["updated"] == 0
     assert result["summary"]["skipped_failed"] == 0
+
+
+def test_a_fork_whose_second_plan_fails_inserts_nothing(tmp_path):
+    """Keep mode's two writes are one unit, or a failure leaves a live orphan.
+
+    The insert used to be applied before the note was planned, so a failure in
+    between still committed the published entry — the session goes on to write —
+    while the run reported the promotion failed and deleted the PDF that
+    committed entry's `file =` pointed at.
+    """
+    bib_path = tmp_path / "ml.bib"
+    config_path = _write_config(tmp_path, bib_path, promote_recheck_after_days=0)
+    _seed_bib_with_preprint(tmp_path, bib_path, config_path)
+
+    def _second_plan_fails(*args, **kwargs):
+        raise RuntimeError("planning the cross-reference note failed")
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(promote_service, "_plan_note_update", _second_plan_fails)
+        result = promote_bib(
+            config_path=str(config_path),
+            home_dir=str(tmp_path),
+            bib_selector=None,
+            keep_preprint=True,
+            dry_run=False,
+            fetch_search=_fake_search_with_venue,
+        )
+
+    assert result["summary"]["created"] == 0
+    assert result["summary"]["skipped_failed"] == 1
+    # The published entry must not be in the library behind a reported failure.
+    written = bib_path.read_text()
+    assert "Journal of Parsing" not in written
+    assert written.count("@") == 1
