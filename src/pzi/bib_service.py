@@ -224,7 +224,7 @@ class EntryRecord(TypedDict):
     doi: str | None
     arxiv_id: str | None
     #: The arXiv id of the preprint this entry *replaced*, set by
-    #: `update --promote --replace`. Distinct from `arxiv_id` on purpose: this
+    #: `update --promote` in its default replace mode. Distinct from `arxiv_id` on purpose: this
     #: entry is the published version, so it does not carry preprint identity —
     #: `has_preprint_identity` reads `arxiv_id` and would re-select it for
     #: promotion on every future sweep. Stored as `pzi-preprint-arxiv-id`, and

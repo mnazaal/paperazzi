@@ -26,7 +26,7 @@ class NormalizedRecord(TypedDict, total=False):
     venue: str | None
     doi: str | None
     arxiv_id: str | None
-    #: The arXiv id a `--promote --replace` took *off* this record when it
+    #: The arXiv id a promote replace took *off* this record when it
     #: became the published version. Kept as a pointer back to the preprint, and
     #: deliberately not `arxiv_id`: `has_preprint_identity` reads that one, so
     #: restoring it would re-select the entry as a promotion candidate on every

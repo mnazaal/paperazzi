@@ -53,7 +53,7 @@ class WritePlan(TypedDict):
     #: stale copy of a field it never touched, and silently reverts a
     #: concurrent writer's edit. Only
     #: :func:`plan_bib_write` sets it — a plan assembled by hand (promote's
-    #: ``--replace`` preview) deliberately has no base, and rebases as before.
+    #: replace-mode preview) deliberately has no base, and rebases as before.
     base_entry: NotRequired[BibtexEntry]
 
 
@@ -81,7 +81,7 @@ def _apply_untouched_fields_from_current(
     planned value still equals its base value was never decided by this writer —
     it is a copy carried along — so a concurrent writer's version of it must
     survive. A field the plan did change wins, which is what makes a deliberate
-    edit (and `promote --replace`'s deliberate *deletions*) still apply.
+    edit (and promote's deliberate *deletions*) still apply.
 
     Field order is taken from the current entry first, so the result does not
     depend on set-iteration order: `PYTHONHASHSEED` varying between runs would

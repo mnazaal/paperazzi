@@ -212,7 +212,7 @@ BibTeX field any style file reads:
 |-------|---------------|
 | `pzi-pdf-url` | The PDF URL a capture discovered, so `pzi pdf retry` need not find it again. |
 | `pzi-abstract-url` | The landing page the metadata came from. |
-| `pzi-preprint-arxiv-id` | Set by `update --promote --replace`: the arXiv id of the preprint this entry replaced. A pointer back, not a citation field — it is deliberately not written as `eprint`, because `eprint` reads back as the record's arXiv id and would make the promoted entry look like a preprint again on the next sweep. |
+| `pzi-preprint-arxiv-id` | Set when `update --promote` replaces a preprint (the default): the arXiv id of the preprint this entry replaced. A pointer back, not a citation field — it is deliberately not written as `eprint`, because `eprint` reads back as the record's arXiv id and would make the promoted entry look like a preprint again on the next sweep. |
 
 Both round-trip: pzi writes them and reads them back, and no other tool needs
 them. BibTeX and biber ignore unknown fields, so they are inert in a LaTeX build
@@ -225,7 +225,7 @@ the two entries point at each other.
 
 Beside the library itself, writes leave: `<bib>.lock` and `<inbox>.lock` while a
 command holds them, `<bib>.<citekey>.bak` from `delete`/`library merge`,
-`<bib>.promote.bak` from one `update --promote --replace` run, the
+`<bib>.promote.bak` from one `update --promote` run, the
 `--failures-out` file from a bulk `add`, and `papers/.orphans/` from
 `library clean --fix`.
 
@@ -273,7 +273,7 @@ the command that made it.
 |---|---|---|
 | `<bib>.<citekey>.bak` | `pzi delete`, `pzi library merge` | The path is printed as `backup saved to …`. Repeats become `.bak2`, `.bak3`, … rather than overwriting. |
 | `<bib>.reindex.bak` | `pzi library reindex --rename-citekeys` | Removed again if the run changed nothing. |
-| `<bib>.promote.bak` | `pzi update --promote --replace` | One per **run**, taken by the first write, not one per entry. |
+| `<bib>.promote.bak` | `pzi update --promote` | One per **run**, taken by the first write, not one per entry. |
 | `<data-home>/config-backups/config.toml.<UTC-timestamp>` | `pzi init --force` | Mode 0600, timestamped, so repeated `--force` runs keep a history instead of clobbering the first backup. |
 | `papers/.orphans/` | `pzi library clean --fix` | PDFs no entry references are **moved here, not deleted**. `mv` one back to restore it. |
 
@@ -355,7 +355,7 @@ pzi tag list [citekey] [--json]
 pzi search [--query <text>] [--author <name>] [--year <int>] [--tag <tag>]
 pzi library check [--strict] [--report PATH] [--jsonl PATH] [--force] [--json]   # validate references; --force overwrites an existing report
 pzi update [--dry-run]                        # fill missing metadata
-pzi update --promote [--dry-run] [--replace] [--mark-resolved]  # replace preprints with published versions
+pzi update --promote [--dry-run] [--keep-preprint] [--limit N]   # replace preprints with published versions
 pzi entries [--offset N] [--limit N] [--sort citekey|title|year|author]
 pzi entries <citekey>                         # show the full record for one entry
 pzi entries --stats                           # library statistics
@@ -442,7 +442,7 @@ paperazzi treats citekeys as stable external handles and never renames existing 
 
 - Same paper as an existing entry → reuse the existing citekey.
 - New paper with an occupied citekey → add a numeric suffix (`smith2024graph-2`).
-- Promotion keeps the preprint key by default; `--replace` updates in place.
+- Promotion **replaces the preprint in place by default**, keeping its citekey so existing citations still resolve; `--keep-preprint` creates the published entry beside it instead.
 - `--mark-resolved` tags each promoted preprint (`promoted`) and skips already-tagged entries on later runs, so re-running promotion over a large library only revisits what is new.
 
 ### Validate references (`pzi library check`)

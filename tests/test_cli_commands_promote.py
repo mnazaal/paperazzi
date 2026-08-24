@@ -28,7 +28,7 @@ def test_run_promote_command_calls_service_for_each_target(tmp_path: Path) -> No
 
     stdout = StringIO()
     stderr = StringIO()
-    args = Namespace(target=["main", "ml"], dry_run=True, replace=True, verbose=False)
+    args = Namespace(target=["main", "ml"], dry_run=True, keep_preprint=False, verbose=False)
 
     exit_code = run_promote_command(
         args,
@@ -91,7 +91,7 @@ def test_run_promote_command_prints_diffs_and_diagnostics(tmp_path: Path) -> Non
 
     stdout = StringIO()
     stderr = StringIO()
-    args = Namespace(target=None, dry_run=True, replace=False, verbose=True)
+    args = Namespace(target=None, dry_run=True, keep_preprint=False, verbose=True)
 
     exit_code = run_promote_command(
         args,
@@ -123,7 +123,7 @@ def test_run_promote_command_returns_failure_when_any_target_fails(tmp_path: Pat
 
     stdout = StringIO()
     stderr = StringIO()
-    args = Namespace(target=["good", "bad"], dry_run=False, replace=False, verbose=False)
+    args = Namespace(target=["good", "bad"], dry_run=False, keep_preprint=False, verbose=False)
 
     exit_code = run_promote_command(
         args,
@@ -144,7 +144,7 @@ def test_run_promote_command_returns_failure_when_any_target_fails(tmp_path: Pat
 
 def _promote_args(**over):
     from argparse import Namespace
-    base = dict(target=None, dry_run=True, replace=False, verbose=False,
+    base = dict(target=None, dry_run=True, keep_preprint=False, verbose=False,
                 promote=True, mark_resolved=False, limit=12, json=False)
     base.update(over)
     return Namespace(**base)

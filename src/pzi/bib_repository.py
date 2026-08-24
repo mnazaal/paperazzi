@@ -1069,7 +1069,7 @@ def _validate_update_plan_against_current(
 #: `bibtex.USER_OWNED_FIELDS` in BibTeX spelling. These are the fields a rebase
 #: restores from the on-disk entry, because their absence from a plan means "the
 #: writer had no opinion", never "delete it" — unlike the identity fields
-#: `promote --replace` strips deliberately. `citekey` is the entry key, not a
+#: promote's replace mode strips deliberately. `citekey` is the entry key, not a
 #: field, and is validated separately.
 _USER_OWNED_ENTRY_FIELDS = ("note", "keywords", "file")
 
@@ -1105,7 +1105,7 @@ def _rebase_update_plan_against_current(
     (see :func:`_apply_untouched_fields_from_current`): planned-differs-from-base
     means this writer decided the field and it wins, planned-equals-base means it
     is a carried copy and the current entry wins. A plan built by hand carries no
-    base — `promote --replace`'s preview is the one that matters — and keeps the
+    base — promote's replace-mode preview is the one that matters — and keeps the
     older entry-level behaviour, which is what its deliberate identity-field
     stripping depends on.
     """
@@ -1128,7 +1128,7 @@ def _rebase_update_plan_against_current(
     # everything it sets.
     rebased = merge_projected_entry(current_entry, planned_entry)
     # `merge_projected_entry` keeps the *existing* entry's type, which is right
-    # when filling a gap and wrong here: `promote --replace` retypes
+    # when filling a gap and wrong here: promote's replace mode retypes
     # `@unpublished` to `@article` on purpose, and the plan is authoritative.
     rebased["entry_type"] = planned_entry["entry_type"]
 
@@ -1143,7 +1143,7 @@ def _rebase_update_plan_against_current(
             rebased["entry_type"] = current_entry["entry_type"]
 
     # `merge_projected_entry` treats a record-owned field the projection omits
-    # as a deletion, which is correct for `promote --replace` — it strips
+    # as a deletion, which is correct for promote's replace mode — it strips
     # `arxiv_id`, the arXiv DOI and the preprint URLs on purpose — but wrong for
     # the user's own content, which the writer had no opinion about and simply
     # did not know existed yet. Restore exactly the user-owned fields, and only
@@ -1238,7 +1238,7 @@ def update_bib_entry(
     *backup_path*, when given, is written from the on-disk file **inside this
     lock** and only when the write actually changes something, exactly as
     :func:`delete_bib_entry` does. Most updates add or fill a field and need no
-    undo; `update --promote --replace` is the one that overwrites an entry's
+    undo; `update --promote` is the one that overwrites an entry's
     identity with a different paper's, which is a loss of the same kind.
     """
     with with_bib_lock(path):

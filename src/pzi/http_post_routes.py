@@ -98,7 +98,7 @@ def body_flag(body: Mapping[str, Any], key: str, *, default: bool) -> bool:
     ``bool(body.get(key, default))`` decides on Python truthiness, which is not
     what a JSON API means. Two consequences were live: ``{"dry_run": null}``
     authorized a *real* update (``bool(None)`` is False, and False means "not a
-    preview"), and ``{"replace": "false"}`` selected replace mode, because a
+    preview"), and ``{"keep_preprint": "false"}`` selected keep-both mode, because a
     non-empty string is truthy. JSON has real booleans; anything else is a
     caller mistake, and for a flag that gates a write the safe reading of a
     mistake is the default, not the destructive branch.
@@ -983,7 +983,7 @@ def _handle_promote_post(
             config_path=config_path,
             home_dir=home_dir,
             bib_selector=bib_selector_of(body),
-            keep_preprint=not body_flag(body, "replace", default=False),
+            keep_preprint=body_flag(body, "keep_preprint", default=False),
             dry_run=body_flag(body, "dry_run", default=True),
         )
     except (ConcurrentEditError, StalePlanError) as exc:

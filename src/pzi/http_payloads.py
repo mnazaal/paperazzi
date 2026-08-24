@@ -150,7 +150,7 @@ def promote_payload(
     return _base_payload(
         result,
         dry_run=result.get("dry_run", True),
-        keep_preprint=result.get("keep_preprint", True),
+        keep_preprint=result.get("keep_preprint", False),
         items=_items_payload(
             result.get("items", []), include_diagnostics=include_diagnostics
         ),

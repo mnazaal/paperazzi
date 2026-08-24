@@ -132,7 +132,7 @@ def promote_bib(
     config_path: str,
     home_dir: str,
     bib_selector: str | None,
-    keep_preprint: bool = True,
+    keep_preprint: bool = False,
     dry_run: bool = True,
     fetch_search: SearchTranslationFetcher | None = None,
     fetch_crossref: MetadataRecordFetcher | None = None,

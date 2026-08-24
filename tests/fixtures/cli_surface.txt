@@ -183,9 +183,9 @@ pzi update
     --config dest=config
     --dry-run dest=dry_run nargs=0
     --json dest=json nargs=0
+    --keep-preprint dest=keep_preprint nargs=0
     --limit dest=limit
     --mark-resolved dest=mark_resolved nargs=0
     --promote dest=promote nargs=0
-    --replace dest=replace nargs=0
     --target dest=target action=append
     --verbose dest=verbose nargs=0

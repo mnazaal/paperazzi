@@ -777,7 +777,7 @@ def dedupe(
 @_public
 def promote(
     *,
-    replace: bool = False,
+    keep_preprint: bool = False,
     dry_run: bool = True,
     config_path: str | None = None,
     library: str | None = None,
@@ -790,15 +790,21 @@ def promote(
     caller saw anything. `promote_bib` and ``POST /promote`` both preview by
     default for the same reason; the CLI writes because you typed the command.
 
-    By default the preprint is kept and a published entry created beside it;
-    ``replace=True`` updates the preprint in place instead.
+    By default the preprint is **replaced in place**, keeping its citekey so
+    existing citations still resolve; ``keep_preprint=True`` creates the
+    published entry beside it instead.
+
+    The parameter is named for what it does rather than inverted into
+    ``replace``: the service, the CLI flag and the HTTP body key are all
+    ``keep_preprint`` now, so there is one name and no double negative to read
+    through.
     """
     result = promote_bib(
         config_path=_resolved_config_path(config_path),
         home_dir=_home(),
         bib_selector=library,
         dry_run=dry_run,
-        keep_preprint=not replace,
+        keep_preprint=keep_preprint,
     )
     typed = result.copy()
     _unwrap(typed, "status")

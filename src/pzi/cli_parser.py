@@ -514,15 +514,15 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Conservatively enrich entries by filling missing metadata. By default this only "
             "fills gaps and never replaces a preprint with its published version. Pass "
-            "--promote to find published versions of preprint entries; by default that keeps "
-            "the preprint and creates a published entry, and with --replace it updates the "
-            "preprint entry in place."
+            "--promote to find published versions of preprint entries; by default that "
+            "replaces the preprint in place, keeping its citekey so existing citations still "
+            "resolve, and with --keep-preprint it creates the published entry beside it."
         ),
         formatter_class=_PziHelpFormatter,
         epilog=_subcommand_epilog((
             "pzi update",
             "pzi update --promote --dry-run",
-            "pzi update --promote --replace",
+            "pzi update --promote --keep-preprint",
         )),
     )
     add_config(update_parser)
@@ -539,8 +539,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="find published versions of preprints and update/create entries",
     )
     update_parser.add_argument(
-        "--replace", action="store_true",
-        help="with --promote, update the preprint entry in place instead of keeping both",
+        "--keep-preprint", action="store_true",
+        help=(
+            "with --promote, keep the preprint and create the published entry beside "
+            "it (the default replaces the preprint in place, keeping its citekey)"
+        ),
     )
     update_parser.add_argument(
         "--mark-resolved", action="store_true",

@@ -1106,8 +1106,11 @@ def test_cli_update_promote_dispatches_to_promote_service(tmp_path: Path) -> Non
 
     stdout = StringIO()
     stderr = StringIO()
-    # `update --promote --replace` routes to the promotion service in place.
-    args = Namespace(target=None, dry_run=False, replace=True, verbose=False, promote=True)
+    # `update --promote` routes to the promotion service, which replaces the
+    # preprint in place by default.
+    args = Namespace(
+        target=None, dry_run=False, keep_preprint=False, verbose=False, promote=True,
+    )
 
     exit_code = run_update_command(
         args,
@@ -1136,9 +1139,46 @@ def test_cli_update_promote_dispatches_to_promote_service(tmp_path: Path) -> Non
     assert stderr.getvalue() == ""
 
 
-def test_cli_update_replace_without_promote_is_rejected(tmp_path: Path) -> None:
+def test_cli_update_keep_preprint_reaches_the_service(tmp_path: Path) -> None:
+    # The default flipped to replace-in-place, so the only thing that can still
+    # select keep-both is this flag. Nothing else pinned that it arrives as
+    # `True`, and the runner reads it with `getattr`, so a rename on either side
+    # would silently downgrade every `--keep-preprint` run to a replace.
+    calls: list[dict] = []
+
+    def fake_promote_bib(**kwargs):
+        calls.append(kwargs)
+        return {
+            "status": "ok",
+            "bib_name": "ml",
+            "dry_run": kwargs["dry_run"],
+            "items": [],
+            "warnings": [],
+            "errors": [],
+        }
+
+    args = Namespace(
+        target=None, dry_run=False, keep_preprint=True, verbose=False, promote=True,
+    )
+
+    exit_code = run_update_command(
+        args,
+        home_dir=str(tmp_path),
+        config_path=str(tmp_path / "config.toml"),
+        stdout=StringIO(),
+        stderr=StringIO(),
+        promote_bib_fn=fake_promote_bib,
+    )
+
+    assert exit_code == 0
+    assert [call["keep_preprint"] for call in calls] == [True]
+
+
+def test_cli_update_keep_preprint_without_promote_is_rejected(tmp_path: Path) -> None:
     stderr = StringIO()
-    args = Namespace(target=None, dry_run=False, replace=True, verbose=False, promote=False)
+    args = Namespace(
+        target=None, dry_run=False, keep_preprint=True, verbose=False, promote=False,
+    )
 
     exit_code = run_update_command(
         args,
@@ -1149,13 +1189,13 @@ def test_cli_update_replace_without_promote_is_rejected(tmp_path: Path) -> None:
     )
 
     assert exit_code == 2
-    assert "--replace only applies with --promote" in stderr.getvalue()
+    assert "--keep-preprint only applies with --promote" in stderr.getvalue()
 
 
 def test_cli_update_mark_resolved_without_promote_is_rejected(tmp_path: Path) -> None:
     stderr = StringIO()
     args = Namespace(
-        target=None, dry_run=False, replace=False, verbose=False,
+        target=None, dry_run=False, keep_preprint=False, verbose=False,
         promote=False, mark_resolved=True,
     )
 
@@ -1772,7 +1812,7 @@ def test_add_from_file_checks_the_path_before_starting_the_backend(
         ["pdf", "retry", "nosuch2024"],
         # Conditional usage errors argparse cannot express.
         ["search"],
-        ["update", "--replace"],
+        ["update", "--keep-preprint"],
         ["pdf", "retry"],
         ["library", "check", "--jsonl", "-"],
         # Missing input file.

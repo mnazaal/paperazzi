@@ -67,13 +67,13 @@ def run_update_command(
     """Run `pzi update`, dispatching to promotion when --promote is given.
 
     Without --promote, conservatively fills missing metadata.  With --promote,
-    replaces preprints with their published versions (keeping both by default,
-    or in place with --replace).
+    replaces preprints with their published versions in place by default,
+    keeping the citekey; --keep-preprint creates the published entry beside it.
     """
     promote = getattr(args, "promote", False)
-    if getattr(args, "replace", False) and not promote:
+    if getattr(args, "keep_preprint", False) and not promote:
         return emit_usage_error(
-            args, "--replace only applies with --promote",
+            args, "--keep-preprint only applies with --promote",
             command_path=("update",), stdout=stdout, stderr=stderr,
         )
     mark_resolved = getattr(args, "mark_resolved", False)
@@ -107,7 +107,7 @@ def run_update_command(
                 home_dir=home_dir,
                 bib_selector=target,
                 dry_run=args.dry_run,
-                keep_preprint=not args.replace,
+                keep_preprint=getattr(args, "keep_preprint", False),
                 mark_resolved=mark_resolved,
                 limit=limit,
                 on_item=None if as_json else _progress_printer(stderr),
