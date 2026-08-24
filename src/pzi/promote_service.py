@@ -53,6 +53,7 @@ from pzi.pdf import NextPdfCandidate, fetch_and_store_pdf_trying_sources
 from pzi.pdf import remove_new_pdf as _remove_new_pdf
 from pzi.pdf import snapshot_pdf_paths as _snapshot_pdf_paths
 from pzi.promote_planning import (
+    AcceptanceGate,
     find_published_candidate_with_diagnostics,
     published_candidate_confidence_warnings,
 )
@@ -150,6 +151,7 @@ def promote_bib(
     browser_pdf_cmd: str | None = None,
     mark_resolved: bool = False,
     limit: int | None = None,
+    best_of: int = 1,
     on_item: Callable[[PromoteItem, int, int], None] | None = None,
 ) -> PromoteResult:
     resolved = load_bib_target(
@@ -179,6 +181,12 @@ def promote_bib(
     # to `score_match`'s 0-100 scale (where the default is 60) and would have
     # meant an effectively open gate had it ever been reachable.
     effective_confidence_threshold = config["promote_confidence_threshold"]
+    # The same gate applied below, handed to discovery so it knows when it may
+    # stop asking providers — one rule, one place it is defined.
+    gate = AcceptanceGate(
+        min_score=effective_confidence_threshold,
+        min_title_similarity=_MIN_TITLE_SIMILARITY,
+    )
     # Compose the metadata fetcher once (opt-in disk cache + per-host rate
     # limiting); the resolver uses it as the default for its title-search
     # providers unless a fetcher override is injected (e.g. by tests).
@@ -329,6 +337,8 @@ def promote_bib(
             contact_email=contact_email,
             metadata_fetch_text=metadata_fetch_text,
             breaker=breaker,
+            best_of=best_of,
+            gate=gate,
         )
         candidate = candidate_result["candidate"]
         provider_errors = candidate_result["provider_errors"]

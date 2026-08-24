@@ -52,6 +52,7 @@ def test_run_promote_command_calls_service_for_each_target(tmp_path: Path) -> No
             "keep_preprint": False,
             "mark_resolved": False,
             "limit": None,
+            "best_of": 1,
         },
         {
             "config_path": str(tmp_path / "config.toml"),
@@ -61,6 +62,7 @@ def test_run_promote_command_calls_service_for_each_target(tmp_path: Path) -> No
             "keep_preprint": False,
             "mark_resolved": False,
             "limit": None,
+            "best_of": 1,
         },
     ]
     assert "DRY RUN: no preprints to promote" in stdout.getvalue()

@@ -180,6 +180,7 @@ pzi tag remove
     <tags> dest=tags nargs='+' required
 
 pzi update
+    --best-of dest=best_of default=1
     --config dest=config
     --dry-run dest=dry_run nargs=0
     --json dest=json nargs=0

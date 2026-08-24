@@ -12,6 +12,7 @@ from __future__ import annotations
 import functools
 import time
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from typing import Any, cast
 from urllib.error import HTTPError
 
@@ -33,6 +34,28 @@ from pzi.protocols import (
 )
 from pzi.resolution_match import score_match
 from pzi.translation_server import fetch_search_translations
+
+
+@dataclass(frozen=True)
+class AcceptanceGate:
+    """The test `promote_service` will apply to whichever candidate wins.
+
+    Passed in rather than restated here, so "good enough to stop looking" and
+    "good enough to write" cannot drift apart. Discovery needs it for two
+    reasons: to know when it may stop querying providers (`best_of`), and to
+    avoid handing back a candidate that the caller will only reject when a
+    passing one was also in hand.
+    """
+
+    min_score: int
+    min_title_similarity: int
+
+    def accepts(self, preprint: NormalizedRecord, candidate: NormalizedRecord) -> bool:
+        match = score_match(preprint, candidate)
+        return (
+            match["score"] >= self.min_score
+            and match["title_similarity"] >= self.min_title_similarity
+        )
 
 
 def _format_timings(timings: list[tuple[str, float]]) -> str | None:
@@ -75,7 +98,18 @@ def find_published_candidate_with_diagnostics(
     fetch_openreview: MetadataRecordFetcher | None = None,
     metadata_fetch_text: Callable[..., str] | None = None,
     breaker: ProviderBreaker | None = None,
+    best_of: int = 1,
+    gate: AcceptanceGate | None = None,
 ) -> dict[str, Any]:
+    """Find the published version of *record*, or explain why there is none.
+
+    *best_of* is how many **acceptable** candidates to gather before choosing
+    between them. Counting acceptable ones rather than every answer is what
+    makes `best_of=1` safe: the cascade stops only once it already holds a
+    candidate good enough to promote, so a short-circuit can never resolve
+    fewer entries than an exhaustive search would. With no *gate* there is
+    nothing to count, and every provider is asked.
+    """
     provider_errors: list[str] = []
     search_fn = fetch_search or fetch_search_translations
     query = _build_query(record)
@@ -94,7 +128,7 @@ def find_published_candidate_with_diagnostics(
     finally:
         timings.append(("translation_server", time.monotonic() - _started))
     translation_candidates = _translation_candidates(results)
-    candidate = _select_best_published_candidate(record, translation_candidates)
+    candidate = _select_best_published_candidate(record, translation_candidates, gate)
     if candidate is not None:
         return {
             "candidate": candidate,
@@ -130,7 +164,18 @@ def find_published_candidate_with_diagnostics(
         ("dblp", fetch_dblp, fetch_dblp_record_by_title),
         ("openreview", fetch_openreview, fetch_openreview_record_by_title),
     )
+    #: Acceptable candidates held so far. `best_of` is a bound on this, not on
+    #: the number of providers asked: a provider that answers with a poor match
+    #: has not answered the question, so it must not stop the search.
+    accepted = 0
+    wanted = max(1, best_of)
+
+    def _is_enough() -> bool:
+        return gate is not None and accepted >= wanted
+
     for name, override, base_fn in title_providers:
+        if _is_enough():
+            break
         provider_fn = override or _default_provider_fn(base_fn, metadata_fetch_text)
         _started = time.monotonic()
         candidate = _try_provider(
@@ -142,7 +187,14 @@ def find_published_candidate_with_diagnostics(
         # No venue means there is nothing to promote *to*; such a result was
         # never a candidate and is not reported as a rejection.
         if candidate is not None and candidate.get("venue"):
-            provider_candidates.append(cast(NormalizedRecord, dict(candidate)))
+            found = cast(NormalizedRecord, dict(candidate))
+            provider_candidates.append(found)
+            if (
+                gate is not None
+                and _is_publishable_candidate(found)
+                and gate.accepts(record, found)
+            ):
+                accepted += 1
 
     s2_fn: S2RecordWithErrorFetcher
     if fetch_s2 is not None:
@@ -164,7 +216,13 @@ def find_published_candidate_with_diagnostics(
     # sweep for a quota that is not going to clear.
     s2_candidate: NormalizedRecord | None = None
     s2_err: str | None = None
-    if breaker is not None and breaker.is_open("s2"):
+    if _is_enough():
+        # Not an error and not a skip worth reporting: the question was already
+        # answered. This is where `--best-of 1` earns most of its keep — keyless
+        # S2 is gated at 6 s and retries a 429 twice, so a candidate resolved by
+        # crossref no longer pays for a provider it does not need.
+        pass
+    elif breaker is not None and breaker.is_open("s2"):
         provider_errors.append(
             "semantic-scholar (skipped — rate-limited earlier in this run)"
         )
@@ -219,7 +277,7 @@ def find_published_candidate_with_diagnostics(
             msg += ")"
         provider_errors.append(msg)
 
-    candidate = _select_best_published_candidate(record, provider_candidates)
+    candidate = _select_best_published_candidate(record, provider_candidates, gate)
     if candidate is not None:
         return {
             "candidate": candidate,
@@ -381,11 +439,26 @@ def _partition_candidates(
 def _select_best_published_candidate(
     preprint: NormalizedRecord,
     candidates: list[NormalizedRecord],
+    gate: AcceptanceGate | None = None,
 ) -> NormalizedRecord | None:
+    """Pick the candidate to promote to, preferring ones the caller will accept.
+
+    Ranking and acceptance are not the same number: `_score_published_candidate`
+    adds up to five points of completeness bonuses on top of the raw
+    `score_match` score that the gate tests. So a candidate a few points *below*
+    the threshold could out-rank one above it, win here, and then be rejected —
+    reporting "low confidence" while a promotable candidate sat in the same
+    list, unexamined. Narrowing to the acceptable ones first can only turn a
+    rejection into a promotion; among them the ranking is unchanged.
+    """
     # Filtered here rather than at each provider, so no call site can forget.
     publishable, _ = _partition_candidates(candidates)
     if not publishable:
         return None
+    if gate is not None:
+        acceptable = [c for c in publishable if gate.accepts(preprint, c)]
+        if acceptable:
+            publishable = acceptable
     return max(
         enumerate(publishable),
         key=lambda item: (_score_published_candidate(preprint, item[1]), -item[0]),

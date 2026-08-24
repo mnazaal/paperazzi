@@ -1134,9 +1134,76 @@ def test_cli_update_promote_dispatches_to_promote_service(tmp_path: Path) -> Non
             "keep_preprint": False,
             "mark_resolved": False,
             "limit": None,
+            "best_of": 1,
         }
     ]
     assert stderr.getvalue() == ""
+
+
+def test_cli_update_best_of_is_rejected_without_promote(tmp_path: Path) -> None:
+    stderr = StringIO()
+    args = Namespace(
+        target=None, dry_run=False, verbose=False, promote=False, best_of=3,
+    )
+
+    exit_code = run_update_command(
+        args,
+        home_dir=str(tmp_path),
+        config_path=str(tmp_path / "config.toml"),
+        stdout=StringIO(),
+        stderr=stderr,
+    )
+
+    assert exit_code == 2
+    assert "--best-of only applies with --promote" in stderr.getvalue()
+
+
+def test_cli_update_best_of_below_one_is_rejected(tmp_path: Path) -> None:
+    """`--best-of 0` would mean "stop before looking", which is not a search."""
+    stderr = StringIO()
+    args = Namespace(
+        target=None, dry_run=False, verbose=False, promote=True, best_of=0,
+    )
+
+    exit_code = run_update_command(
+        args,
+        home_dir=str(tmp_path),
+        config_path=str(tmp_path / "config.toml"),
+        stdout=StringIO(),
+        stderr=stderr,
+    )
+
+    assert exit_code == 2
+    assert "--best-of must be at least 1" in stderr.getvalue()
+
+
+def test_cli_update_best_of_reaches_the_service(tmp_path: Path) -> None:
+    """The runner reads it with `getattr`, so pin that it arrives."""
+    calls: list[dict] = []
+
+    def fake_promote_bib(**kwargs):
+        calls.append(kwargs)
+        return {
+            "status": "ok", "bib_name": "ml", "dry_run": kwargs["dry_run"],
+            "items": [], "warnings": [], "errors": [],
+        }
+
+    args = Namespace(
+        target=None, dry_run=False, keep_preprint=False, verbose=False,
+        promote=True, best_of=5,
+    )
+
+    exit_code = run_update_command(
+        args,
+        home_dir=str(tmp_path),
+        config_path=str(tmp_path / "config.toml"),
+        stdout=StringIO(),
+        stderr=StringIO(),
+        promote_bib_fn=fake_promote_bib,
+    )
+
+    assert exit_code == 0
+    assert [call["best_of"] for call in calls] == [5]
 
 
 def test_cli_update_keep_preprint_reaches_the_service(tmp_path: Path) -> None:

@@ -356,7 +356,7 @@ pzi tag list [citekey] [--json]
 pzi search [--query <text>] [--author <name>] [--year <int>] [--tag <tag>]
 pzi library check [--strict] [--report PATH] [--jsonl PATH] [--force] [--json]   # validate references; --force overwrites an existing report
 pzi update [--dry-run]                        # fill missing metadata
-pzi update --promote [--dry-run] [--keep-preprint] [--limit N]   # replace preprints with published versions
+pzi update --promote [--dry-run] [--keep-preprint] [--limit N] [--best-of N]  # replace preprints with published versions
 pzi entries [--offset N] [--limit N] [--sort citekey|title|year|author]
 pzi entries <citekey>                         # show the full record for one entry
 pzi entries --stats                           # library statistics
@@ -445,6 +445,7 @@ paperazzi treats citekeys as stable external handles and never renames existing 
 - New paper with an occupied citekey → add a numeric suffix (`smith2024graph-2`).
 - Promotion **replaces the preprint in place by default**, keeping its citekey so existing citations still resolve; `--keep-preprint` creates the published entry beside it instead.
 - `--mark-resolved` tags each promoted preprint (`promoted`) and skips already-tagged entries on later runs, so re-running promotion over a large library only revisits what is new.
+- `--best-of N` (default 1) stops the provider cascade once N candidates **good enough to promote** have been found. It counts acceptable candidates, not answers received, so stopping early cannot resolve fewer entries than an exhaustive search: the run only stops once it already holds a promotable candidate. The saving is largest on entries that do resolve — a crossref hit means Semantic Scholar is never dialled, and keyless S2 is the slowest provider here. `--best-of 5` asks every provider every time, as pzi did before the flag existed.
 - A preprint that providers say is **still unpublished** is remembered for `promote_recheck_after_days` (default 30) in `<pzi_data_home>/promote-checked.json`, and skipped until then. This is what makes promotion a periodic audit rather than a one-off: without it every run redoes the whole search. Two deliberate details — the answer is recorded under `--dry-run` too (the lookup really happened, and the sidecar is not your `.bib`), and it is **not** recorded when any provider errored or was dropped by the circuit breaker, since an outage is not an answer. Set `promote_recheck_after_days = 0` to disable it and re-check everything.
 
 ### Validate references (`pzi library check`)

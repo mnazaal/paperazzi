@@ -95,6 +95,20 @@ def run_update_command(
             command_path=("update",), stdout=stdout, stderr=stderr,
         )
 
+    # Defaulted rather than optional, so "was it passed" is a comparison against
+    # the default, not a None check.
+    best_of: int = getattr(args, "best_of", 1)
+    if best_of != 1 and not promote:
+        return emit_usage_error(
+            args, "--best-of only applies with --promote",
+            command_path=("update",), stdout=stdout, stderr=stderr,
+        )
+    if best_of < 1:
+        return emit_usage_error(
+            args, "--best-of must be at least 1",
+            command_path=("update",), stdout=stdout, stderr=stderr,
+        )
+
     as_json = getattr(args, "json", False)
     ok = True
     items_succeeded = 0
@@ -110,6 +124,7 @@ def run_update_command(
                 keep_preprint=getattr(args, "keep_preprint", False),
                 mark_resolved=mark_resolved,
                 limit=limit,
+                best_of=best_of,
                 on_item=None if as_json else _progress_printer(stderr),
             )
             render = render_bib_promote_items

@@ -556,6 +556,13 @@ def build_parser() -> argparse.ArgumentParser:
             "(a full sweep of a large library is hours: the providers are rate-limited)"
         ),
     )
+    update_parser.add_argument(
+        "--best-of", type=int, default=1, metavar="N",
+        help=(
+            "with --promote, stop searching once N candidates good enough to promote "
+            "have been found (default 1; 5 asks every provider every time)"
+        ),
+    )
 
     # ── doctor ───────────────────────────────────────────────────────────
     doctor_parser = subparsers.add_parser("doctor", help="Check configuration and service health")
