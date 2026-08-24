@@ -44,6 +44,7 @@ next to the diff it explains.
 
 - **`update --promote` remembers preprints that are still unpublished**, in `<pzi_data_home>/promote-checked.json`, and skips them for `promote_recheck_after_days` (new config option, default 30). A sweep over a large library no longer redoes the whole search every run. Recorded under `--dry-run` too, but never when a provider errored or was dropped by the circuit breaker; `promote_recheck_after_days = 0` disables it.
 - `update --promote`'s summary gains `skipped_recently_checked`.
+- `update --promote` writes its promotions in batches rather than one locked read-modify-write per entry. Measured on a synthetic 4,010-entry library, 60 promotions went from ~11.8 s to ~0.85 s, writing the same bytes. Batches are committed as the sweep runs, so an interrupted sweep keeps the promotions it already wrote.
 - **`update --promote --best-of N`** (default 1) stops searching once N candidates good enough to promote have been found, so a resolving entry no longer pays for providers it does not need. `--best-of 5` restores the previous exhaustive behaviour.
 - **`pzi.update()` and `pzi.list_tags()`**, completing the Python API's coverage
   of the read and write paths. `update` previews by default like `promote`;

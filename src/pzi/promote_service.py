@@ -24,7 +24,6 @@ from pzi.bib_repository import (
     preview_write_plan,
     read_bib_file,
     resolve_entry_type,
-    update_bib_entry,
 )
 from pzi.bibtex import (
     USER_OWNED_FIELDS,
@@ -127,6 +126,14 @@ _RESOLVED_TAG = "promoted"
 #: with no preprint identity, is not a *skip* the user asked about — it was
 #: never a candidate — so those two are deliberately not counted.
 _COUNTED_SKIPS = frozenset({"skipped_already_resolved", "skipped_recently_checked"})
+#: Promotions written per session. Each session takes the lock, re-reads and
+#: re-serialises the whole library — about 2.5 s against the 15.8 MB library
+#: configured here — so writing one at a time made a sweep's writes cost more
+#: than its lookups. Batching them all instead would mean an interrupted
+#: sweep, and these run for hours, threw away every promotion it had found.
+#: At 25 the write overhead is ~0.1 s per promotion and an interrupt costs at
+#: most 24.
+_WRITE_CHUNK = 25
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -227,9 +234,9 @@ def promote_bib(
     # PDF downloads a file. `bib_repository.LOCK_TIMEOUT_SECONDS` is 300, so a
     # sweep that did that work while holding the run's exclusive bib lock made a
     # concurrent `pzi add` — the browser extension talking to `pzi server` —
-    # *fail* rather than wait. Keep mode's writes are collected here as
-    # `_PendingFork`s and applied together in phase 2.
-    pending: list[tuple[int, _PendingFork]] = []
+    # *fail* rather than wait. Both modes collect their writes here and a
+    # session applies them in chunks.
+    pending: list[tuple[int, _PendingWrite]] = []
     #: One breaker for the run. Five providers over 13,462 candidates means a
     #: provider that has stopped answering costs a timeout 13,462 times for an
     #: answer already known.
@@ -281,6 +288,88 @@ def promote_bib(
     planned = eligible_total if budget is None else min(budget, eligible_total)
     eligible = 0
     started = time.monotonic()
+
+    def _flush_pending(queue: list[tuple[int, _PendingWrite]]) -> None:
+        """Write everything queued, in one session, and empty the queue.
+
+        One session per chunk rather than one per promotion: each takes the
+        lock, re-reads the file, re-parses every entry and re-serialises the
+        library, so a sweep that promoted K preprints did K full
+        parse-and-serialise cycles over a 15.8 MB, 22,232-entry library. On a
+        synthetic 4,010-entry library, 10 promotions took 7.4 s with a session
+        each and 1.0 s with one between them, writing the same bytes either way.
+
+        The session is opened only if something is queued: opening it eagerly
+        took the lock and refused a malformed library on runs that were never
+        going to write anything, and a sweep that skips every preprint must
+        still report its skips.
+        """
+        if not queue:
+            return
+        #: Item indices whose write landed, so their backup path can be filled in
+        #: once the session has actually written it.
+        written: list[int] = []
+        with ExitStack() as chunk_writes:
+            session: BatchWriteSession | None = None
+            for item_index, write in queue:
+                try:
+                    if session is None:
+                        # Opened inside the try, so a library that cannot be
+                        # rewritten at all — a malformed block anywhere in the
+                        # file — is reported as these promotions failing rather
+                        # than raised through the whole run.
+                        session = chunk_writes.enter_context(
+                            batch_write_session(
+                                bib["path"],
+                                file_path_style=file_path_style,
+                                # Only the first session of the run receives a
+                                # path — `take()` yields it once — so the `.bak`
+                                # is the library as it stood before the run,
+                                # which is the state an undo wants. Copied
+                                # inside the session's lock, immediately before
+                                # the write.
+                                backup_path=run_backup.take(),
+                            )
+                        )
+                    write.apply(session)
+                except (StalePlanError, ConcurrentEditError):
+                    raise  # see the carve-out in phase 1
+                except _PreprintVanished as exc:
+                    # Nothing was written and nothing was lost; the target is
+                    # simply gone. Reported as that rather than as a failure.
+                    _remove_new_pdf(
+                        _local_pdf_path(write.record), write.existing_pdf_paths
+                    )
+                    items[item_index] = _promote_item(
+                        write.preprint_ck, write.preprint_ck, "error", note=str(exc)
+                    )
+                    continue
+                except Exception as exc:  # one failing write must not abort the run
+                    _remove_new_pdf(
+                        _local_pdf_path(write.record), write.existing_pdf_paths
+                    )
+                    summary["skipped_failed"] += 1
+                    items[item_index] = _skip_item(
+                        write.preprint_ck, f"promotion failed: {exc}", failed=True
+                    )
+                    continue
+                summary[write.counter] += 1
+                # Keep mode leaves the preprint in place, so tag it for a later
+                # `--mark-resolved` run. Replace mode rewrote the entry into the
+                # published version, which is no longer a preprint at all.
+                if keep_preprint:
+                    resolved_preprints.append(write.preprint_ck)
+                else:
+                    written.append(item_index)
+        # Only now: the session writes on exit, so inside the block above the
+        # `.bak` does not exist yet and `run_backup.path` reads as None.
+        backup = run_backup.path
+        if backup is not None:
+            # Every promoted entry reports the same path — it is the one file
+            # that undoes the run.
+            for item_index in written:
+                items[item_index]["backup_path"] = str(backup)
+        queue.clear()
 
     def note_still_unpublished(citekey: str, provider_errors: list[str]) -> None:
         """Record a negative answer for the ledger — if it is really an answer.
@@ -424,7 +513,7 @@ def promote_bib(
         # The handlers clean up any downloaded PDF before raising.
         try:
             if keep_preprint:
-                item, fork = _handle_keep_preprint(
+                item, write = _handle_keep_preprint(
                     bib_path=bib["path"],
                     preprint_record=record,
                     candidate=candidate,
@@ -435,17 +524,12 @@ def promote_bib(
                     **pdf_kwargs,
                 )
             else:
-                # `--replace` still writes per candidate through
-                # `update_bib_entry`, which takes and releases the lock around
-                # each write. Nothing to defer.
-                fork = None
-                item = _handle_update_in_place(
+                item, write = _handle_update_in_place(
                     bib_path=bib["path"],
                     preprint_record=record,
                     candidate=candidate,
                     dry_run=dry_run,
                     file_path_style=file_path_style,
-                    run_backup=run_backup,
                     **pdf_kwargs,
                 )
         except (StalePlanError, ConcurrentEditError):
@@ -466,21 +550,12 @@ def promote_bib(
             item["metadata_diagnostics"] = metadata_diagnostics
 
         record_item(item)
-        if fork is not None:
-            # Counted in phase 2 instead: whether this promotion happened is not
-            # known until its writes have gone into the session.
-            pending.append((len(items) - 1, fork))
-        else:
-            if item.get("action") in {"create", "update"}:
-                # Keep mode leaves the preprint in place; tag it so a later
-                # --mark-resolved run skips it.  Replace mode rewrites the entry to
-                # the published version (no longer a preprint), so no tag is needed.
-                if keep_preprint:
-                    resolved_preprints.append(preprint_ck)
-            if item.get("action") == "create":
-                summary["created"] += 1
-            elif item.get("action") == "update":
-                summary["updated"] += 1
+        if write is not None:
+            # Counted when the write lands, not here: whether this promotion
+            # happened is not known until its edits have gone into a session.
+            pending.append((len(items) - 1, write))
+            if len(pending) >= _WRITE_CHUNK:
+                _flush_pending(pending)
         # Both of these feed the *next* record's decisions — the citekey
         # generator and `_find_duplicate_citekey` — so they are recorded as soon
         # as this record resolves, before phase 2 knows whether the write lands.
@@ -492,49 +567,13 @@ def promote_bib(
                 published_record["citekey"] = item["published_citekey"]
                 known_records.append(published_record)
 
-    # Phase 2 — the only part that holds the lock, and it makes no network call.
-    #
-    # One `batch_write_session` for the whole run, for the same reason the
-    # backup above is taken once. Keep mode used to open a session per promoted
-    # preprint, and each one takes the lock, re-reads the file, re-parses every
-    # entry and re-serialises the library: a sweep that promoted K preprints did
-    # K full parse-and-serialise cycles over a 15.8 MB, 22,232-entry library.
-    # On a synthetic 4,010-entry library, 10 promotions took 7.4 s with a session
-    # each and 1.0 s with one for the run, writing the same bytes either way.
+    # Phase 2 — whatever the last chunk left over. The writes are the only part
+    # that holds the lock, and they make no network call.
     #
     # Only the write path reaches here: the dry run needs a per-preprint diff,
     # and the only way to render one is `preview_batch_write`, which opens the
     # file itself.
-    with ExitStack() as run_writes:
-        session: BatchWriteSession | None = None
-        for item_index, fork in pending:
-            try:
-                if session is None:
-                    # Opened at the first promotion, not before the loop:
-                    # opening it eagerly took the lock and refused a malformed
-                    # library on runs that were never going to write anything —
-                    # a sweep that skips every preprint must still report its
-                    # skips.
-                    session = run_writes.enter_context(
-                        batch_write_session(
-                            bib["path"], file_path_style=file_path_style
-                        )
-                    )
-                _apply_published_fork(
-                    session, fork.published, fork.preprint_ck, fork.published_ck,
-                    bib_path=bib["path"], check_collision=True,
-                )
-            except (StalePlanError, ConcurrentEditError):
-                raise  # see the carve-out in phase 1
-            except Exception as exc:  # one failing write must not abort the run
-                _remove_new_pdf(_local_pdf_path(fork.published), fork.existing_pdf_paths)
-                summary["skipped_failed"] += 1
-                items[item_index] = _skip_item(
-                    fork.preprint_ck, f"promotion failed: {exc}", failed=True
-                )
-                continue
-            summary["created"] += 1
-            resolved_preprints.append(fork.preprint_ck)
+    _flush_pending(pending)
 
     # Derived from the item outcomes rather than accumulated beside them, as
     # `update_bib` derives its own: a verdict is settled in phase 1 for a skip
@@ -752,22 +791,40 @@ def _skip_item(
     return item
 
 
-@dataclass(frozen=True)
-class _PendingFork:
-    """A keep-mode promotion decided outside the lock, waiting for the session.
+class _PreprintVanished(Exception):
+    """The entry to promote was gone by the time the write session opened.
 
-    The decision costs network — discovery, then the PDF download — and the run
-    holds one exclusive `batch_write_session` for its writes. So the two are
-    kept apart: `_handle_keep_preprint` returns this instead of writing, and
-    `promote_bib`'s phase 2 folds the pair of writes into the session.
+    Distinct from an ordinary failed write: nothing was malformed and nothing
+    was lost, the target simply is not there any more, so it is reported as
+    that rather than counted as a failure.
+    """
+
+
+@dataclass
+class _PendingWrite:
+    """A promotion decided outside the lock, waiting for a write session.
+
+    Deciding one costs network — discovery, then the PDF download — while a
+    write session holds the bib's exclusive lock. So the two are kept apart:
+    the handlers return one of these instead of writing, and `promote_bib`
+    folds them into sessions in chunks.
+
+    Both modes produce these. They differ only in what `apply` folds into the
+    session — an insert plus a cross-reference note, or an in-place update —
+    so the run has one write path to schedule, count and recover rather than
+    two that drift.
     """
 
     preprint_ck: str
-    published: NormalizedRecord
-    published_ck: str
-    #: The papers directory as it was before this promotion's download, so a
-    #: write that never lands can delete the PDF it pulled in and nothing else.
+    #: The record whose freshly downloaded PDF is removed if the write never
+    #: lands, so a rollback deletes what this promotion pulled in and nothing
+    #: else.
+    record: NormalizedRecord
     existing_pdf_paths: set[Path]
+    #: The summary counter this promotion increments once its write has landed.
+    counter: str
+    #: Folds this promotion's edits into an open session.
+    apply: Callable[[BatchWriteSession], None]
 
 
 def _handle_keep_preprint(
@@ -786,11 +843,11 @@ def _handle_keep_preprint(
     browser_hook: bool = True,
     file_path_style: str = "absolute",
     next_candidate: NextPdfCandidate | None = None,
-) -> tuple[PromoteItem, _PendingFork | None]:
+) -> tuple[PromoteItem, _PendingWrite | None]:
     """The item this promotion produces, and the write it still owes the run.
 
     A dry run renders its diff here and owes nothing; a real run owes a
-    `_PendingFork`, because every write is deferred to phase 2.
+    `_PendingWrite`, because every write is deferred to a session.
     """
     preprint_ck = cast(str, preprint_record.get("citekey", ""))
 
@@ -828,7 +885,7 @@ def _handle_keep_preprint(
     changed_fields = changed_fields_between(preprint_record, published) or ["venue", "doi"]
 
     diff: str | None = None
-    pending: _PendingFork | None = None
+    pending: _PendingWrite | None = None
     if dry_run:
         # Same `force_new` as the real write, so the preview shows the insert
         # the run will actually perform rather than a spurious in-place update.
@@ -844,11 +901,15 @@ def _handle_keep_preprint(
             file_path_style=file_path_style,
         )["diff"]
     else:
-        pending = _PendingFork(
+        pending = _PendingWrite(
             preprint_ck=preprint_ck,
-            published=published,
-            published_ck=published_ck,
+            record=published,
             existing_pdf_paths=existing_pdf_paths,
+            counter="created",
+            apply=lambda session: _apply_published_fork(
+                session, published, preprint_ck, published_ck,
+                bib_path=bib_path, check_collision=True,
+            ),
         )
 
     return _promote_item(
@@ -957,6 +1018,45 @@ def _plan_note_update(
             "changed_fields": ["note"],
         }
     return None
+
+
+def _apply_in_place_promotion(
+    session: BatchWriteSession,
+    preprint_ck: str,
+    candidate: NormalizedRecord,
+    *,
+    pdf_source: NormalizedRecord,
+) -> None:
+    """Fold the in-place rewrite of *preprint_ck* into *session*.
+
+    The published metadata is merged onto the record as this session read it
+    under the lock, not onto the snapshot taken before discovery ran — which is
+    the property `update_bib_entry` used to provide by re-reading, and the
+    reason a concurrent edit is absorbed rather than overwritten.
+    """
+    for index, record in enumerate(session.records):
+        if record.get("citekey") != preprint_ck:
+            continue
+        entry = _promoted_entry(
+            session.entries[index], record, candidate, pdf_source=pdf_source
+        )
+        updated = bibtex_entry_to_record(entry)
+        session.apply_plan(
+            {
+                "action": "update",
+                "index": index,
+                "record": updated,
+                # Authoritative, like every other update plan: the entry is
+                # already merged onto the one on disk, so both sinks apply it
+                # verbatim rather than re-deriving it from the projection.
+                "entry": entry,
+                "changed_fields": changed_fields_between(record, updated),
+            }
+        )
+        return
+    raise _PreprintVanished(
+        "preprint entry disappeared before promotion update could be written"
+    )
 
 
 def _promoted_entry(
@@ -1069,8 +1169,14 @@ def _handle_update_in_place(
     browser_hook: bool = True,
     file_path_style: str = "absolute",
     next_candidate: NextPdfCandidate | None = None,
-    run_backup: _RunBackup | None = None,
-) -> PromoteItem:
+) -> tuple[PromoteItem, _PendingWrite | None]:
+    """The item this promotion produces, and the write it still owes the run.
+
+    Symmetrical with `_handle_keep_preprint`: the PDF download happens here,
+    outside the lock, and the entry rewrite is deferred to a write session.
+    It used to write here through `update_bib_entry`, taking the lock and
+    re-parsing all 22,232 entries once per promoted preprint.
+    """
     preprint_ck = cast(str, preprint_record.get("citekey", ""))
 
     updated = _merge_published_metadata(preprint_record, candidate)
@@ -1078,7 +1184,7 @@ def _handle_update_in_place(
 
     pdf_attached = False
     diff: str | None = None
-    backup: str | None = None
+    pending: _PendingWrite | None = None
     if dry_run:
         # Target the preprint *by citekey*, exactly as the real write does with
         # `update_bib_entry`. Relying on identity matching produced an INSERT
@@ -1106,60 +1212,29 @@ def _handle_update_in_place(
             next_candidate=next_candidate,
         )
 
-        def _updater(entry, current):
-            return _promoted_entry(entry, current, candidate, pdf_source=updated)
-
-        # `--replace` overwrites the preprint entry with a *different* paper's
-        # metadata and deliberately strips its identity (`eprint`, the arXiv
-        # DOI, the preprint URL). That is destruction of the same kind `delete`
-        # and `library merge` back up, and it had no undo at all.
-        #
-        # One backup for the whole run — see `_RunBackup`. This was
-        # `backup_path_for(bib_path, preprint_ck)`, i.e. a full copy of the
-        # library per promoted entry.
-        backup_target = (
-            run_backup.take() if run_backup is not None
-            else backup_path_for(bib_path, preprint_ck)
+        pending = _PendingWrite(
+            preprint_ck=preprint_ck,
+            record=updated,
+            existing_pdf_paths=existing_pdf_paths,
+            counter="updated",
+            apply=lambda session: _apply_in_place_promotion(
+                session, preprint_ck, candidate, pdf_source=updated
+            ),
         )
-        update_result = update_bib_entry(
-            bib_path,
-            preprint_ck,
-            _updater,
-            file_path_style=file_path_style,
-            backup_path=backup_target,
-        )
-        if update_result.get("found") is not True:
-            _remove_new_pdf(_local_pdf_path(updated), existing_pdf_paths)
-            return _promote_item(
-                preprint_ck, preprint_ck, "error",
-                note="preprint entry disappeared before promotion update could be written",
-            )
-        # Written only when the write actually changed something, so its
-        # existence is the honest test of whether there is anything to undo.
-        # With a run-level backup, every promoted entry reports the same path:
-        # it is the one file that undoes the run.
-        if run_backup is not None:
-            existing_backup = run_backup.path
-            backup = str(existing_backup) if existing_backup is not None else None
-        else:
-            backup = (
-                str(backup_target)
-                if backup_target is not None and backup_target.exists()
-                else None
-            )
 
     # Over the union of both key sets: iterating `updated` alone could only ever
     # report fields that survived, so a field the promotion *removed* — the
     # `eprint`, the preprint URL, the arXiv DOI — was applied but never named.
     changed_fields = changed_fields_between(preprint_record, updated)
 
+    # `backup_path` is filled in once the session that writes this promotion has
+    # taken the run's backup — see `_flush_pending`.
     return _promote_item(
         preprint_ck, preprint_ck, "update",
         changed_fields=changed_fields,
         pdf_attached=pdf_attached if not dry_run else None,
         diff=diff,
-        backup_path=backup,
-    )
+    ), pending
 
 
 # ---------------------------------------------------------------------------

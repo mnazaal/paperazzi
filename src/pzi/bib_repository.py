@@ -849,7 +849,11 @@ def _render_batch(
 
 @contextmanager
 def batch_write_session(
-    path: str, *, file_path_style: str = "absolute", write: bool = True,
+    path: str,
+    *,
+    file_path_style: str = "absolute",
+    write: bool = True,
+    backup_path: Path | None = None,
 ) -> Iterator[BatchWriteSession]:
     """Open a bib once for many edits, writing a single atomic time on exit.
 
@@ -861,6 +865,13 @@ def batch_write_session(
     This collapses N locked read-modify-write cycles (one per record) into one,
     and makes the whole batch transactional: if the caller raises, nothing is
     written.  It is the bulk path behind ``import``.
+
+    *backup_path*, when given, is copied from the on-disk file **inside this
+    lock** and only when the batch actually changes something — the same rule
+    and the same helper :func:`update_bib_entry` uses.  A batch that overwrites
+    entries rather than adding them needs an undo, and taking the copy here is
+    what keeps it under the lock: a caller doing it before opening the session
+    would snapshot a file another writer could still change.
     """
     with with_bib_lock(path):
         source, library, session = _open_batch_session(path)
@@ -874,7 +885,7 @@ def batch_write_session(
             library, session, path, source, file_path_style=file_path_style
         )
         if new_source != source:
-            _write_bib_text_atomic(path, new_source)
+            _write_bib_with_backup(path, new_source, backup_path)
 
 
 def preview_write_plan(

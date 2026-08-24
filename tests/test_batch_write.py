@@ -282,3 +282,86 @@ def test_batch_per_record_failure_cleans_only_that_records_pdf(tmp_path: Path) -
     committed_pdfs = list(papers_dir.glob("*.pdf"))
     assert len(committed_pdfs) == 1, "only the good record's PDF should remain"
     assert "good2024" in committed_pdfs[0].name
+
+
+# --- The backup hook (item 570) -------------------------------------------
+#
+# `update --promote` overwrites entries with a different paper's metadata and
+# strips their identity, which is destruction of the kind `delete` and
+# `library merge` back up. Hoisting those writes into a session would have lost
+# the undo, so the session takes the copy itself — under its own lock.
+
+def _one_entry_bib(bib_path):
+    bib_path.write_text(
+        "@article{smith2024graph,\n"
+        "  title = {Graph Parsers},\n"
+        "  doi = {10.1000/graph},\n"
+        "  year = {2024},\n"
+        "}\n"
+    )
+    return bib_path.read_text()
+
+
+def _retitle(session, title):
+    plan = plan_bib_write(
+        cast(
+            NormalizedRecord,
+            {"citekey": "smith2024graph", "doi": "10.1000/graph", "title": title},
+        ),
+        session.records,
+        index=session.index,
+        existing_entries=session.entries,
+    )
+    session.apply_plan(plan)
+
+
+def test_batch_write_session_backs_up_the_file_it_replaced(tmp_path):
+    bib_path = tmp_path / "ml.bib"
+    before = _one_entry_bib(bib_path)
+    backup = tmp_path / "ml.bib.promote.bak"
+
+    with batch_write_session(str(bib_path), backup_path=backup) as session:
+        _retitle(session, "Graph Parsers, Revisited")
+
+    # The backup is the content that was replaced, not the content written.
+    assert backup.read_text() == before
+    assert bib_path.read_text() != before
+    assert "Revisited" in bib_path.read_text()
+
+
+def test_batch_write_session_writes_no_backup_when_nothing_changed(tmp_path):
+    """A `.bak` of a file nothing replaced invites restoring over live content."""
+    bib_path = tmp_path / "ml.bib"
+    _one_entry_bib(bib_path)
+    backup = tmp_path / "ml.bib.promote.bak"
+
+    with batch_write_session(str(bib_path), backup_path=backup) as session:
+        _retitle(session, "Graph Parsers")  # the title it already has
+
+    assert not backup.exists()
+
+
+def test_batch_write_session_takes_no_backup_when_not_asked(tmp_path):
+    """The default is unchanged: `import` and friends leave no `.bak`."""
+    bib_path = tmp_path / "ml.bib"
+    _one_entry_bib(bib_path)
+
+    with batch_write_session(str(bib_path)) as session:
+        _retitle(session, "Graph Parsers, Revisited")
+
+    assert list(tmp_path.glob("*.bak*")) == []
+
+
+def test_batch_write_session_leaves_no_backup_when_the_batch_raises(tmp_path):
+    """Nothing was written, so there is nothing to undo."""
+    bib_path = tmp_path / "ml.bib"
+    before = _one_entry_bib(bib_path)
+    backup = tmp_path / "ml.bib.promote.bak"
+
+    with pytest.raises(RuntimeError):
+        with batch_write_session(str(bib_path), backup_path=backup) as session:
+            _retitle(session, "Graph Parsers, Revisited")
+            raise RuntimeError("caller changed its mind")
+
+    assert not backup.exists()
+    assert bib_path.read_text() == before
