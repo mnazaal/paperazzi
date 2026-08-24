@@ -21,6 +21,7 @@ from pathlib import Path
 from types import UnionType
 from typing import (
     Any,
+    Literal,
     NotRequired,
     Union,
     get_args,
@@ -298,6 +299,34 @@ def _required_keys(declared: type) -> set[str]:
     }
 
 
+def _report_returning_annotations() -> set[str]:
+    """Return-type names of every `api.py` function that returns via `_report`.
+
+    Read from the source rather than from runtime introspection: the question
+    is which functions *are written* to go through the derivation regime, and a
+    decorator or a re-export could hide that from `dir()`.
+    """
+    import ast
+    from pathlib import Path as _Path
+
+    import pzi.api
+
+    tree = ast.parse(_Path(pzi.api.__file__).read_text(encoding="utf-8"))
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef) or node.name == "_report":
+            continue
+        goes_through_report = any(
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Name)
+            and call.func.id == "_report"
+            for call in ast.walk(node)
+        )
+        if goes_through_report and node.returns is not None:
+            names.add(ast.unparse(node.returns))
+    return names
+
+
 def _type_complaints(value: object, hint: object, where: str) -> list[str]:
     """Complaints about *value* against one resolved annotation.
 
@@ -313,6 +342,16 @@ def _type_complaints(value: object, hint: object, where: str) -> list[str]:
         return _type_complaints(value, inner, where)
 
     origin = get_origin(hint)
+    if origin is Literal:
+        # Without this the function fell through every branch and returned no
+        # complaint, so a `Literal` field accepted anything at all. Dormant
+        # while no public type uses one, and silently unchecked from the moment
+        # one does — which is the failure mode worth closing early, because the
+        # test that should have caught it would still be green.
+        allowed = get_args(hint)
+        if value in allowed:
+            return []
+        return [f"{where}: expected one of {allowed!r}, got {value!r}"]
     if origin in (Union, UnionType):
         if any(not _type_complaints(value, arm, where) for arm in get_args(hint)):
             return []
@@ -400,7 +439,23 @@ def test_each_public_report_is_its_service_type_minus_the_envelope() -> None:
     """
     from pzi.api import _ENVELOPE_KEYS, _REPORT_TYPES, _REPORTS_KEEPING_ERRORS
 
-    assert len(_REPORT_TYPES) == 9, "one pair per envelope-returning result type"
+    # Derived from the source, not hand-counted. `len(_REPORT_TYPES) == 9` was
+    # the old guard, and a count does not conscript anything: a tenth
+    # envelope-returning function could be added with its type left out of the
+    # pairing, and the number would simply be updated to 10. Set equality names
+    # the offender in both directions — a type that skipped the derivation
+    # regime, and a pair left behind by a function that no longer exists.
+    #
+    # Ten functions, nine types: `add_tags` and `remove_tags` share
+    # `TagChangeReport`, which is why the count and the call sites never agreed.
+    declared = {public.__name__ for public, _service in _REPORT_TYPES}
+    returned = _report_returning_annotations()
+    assert declared == returned, (
+        "every function returning through `_report` must have its return type "
+        "paired in `_REPORT_TYPES`:\n"
+        f"  returned but unpaired: {sorted(returned - declared)}\n"
+        f"  paired but returned by nothing: {sorted(declared - returned)}"
+    )
     # Decision 40's exception, as an exact list: the three network sweeps where
     # ok-with-errors is a real outcome (a partial failure the CLI exits 4 on).
     # Exact, not a subset check — a fourth member is a decision, not a drift.
@@ -1201,3 +1256,198 @@ def test_check_accepts_the_bound_the_cli_has_had_since_item_550(
     pzi.check(limit=5, config_path=config)
 
     assert seen == [None, 5]
+
+
+def test_every_read_emits_its_warnings_through_pythons_own_channel(
+    tmp_path: Path,
+) -> None:
+    """Item 508's rule, pinned across all six reads at once.
+
+    The channel had three behaviours: emit-and-drop, emit-and-return, and
+    return-without-emitting. The last is the one that bit — `-W error` stopped a
+    script reading a missing bib through `list_tags` and let the identical
+    condition through `dedupe`. A per-function test would not have shown the
+    disagreement, so this asserts the whole surface in one place.
+    """
+    config = tmp_path / "config.toml"
+    missing = tmp_path / "not-created-yet.bib"
+    config.write_text(
+        f'[[bibs]]\nname = "ml"\npath = "{missing}"\ndefault = true\n', encoding="utf-8"
+    )
+
+    reads = {
+        "entries": lambda: pzi.entries(config_path=str(config)),
+        "search": lambda: pzi.search("anything", config_path=str(config)),
+        "list_tags": lambda: pzi.list_tags(config_path=str(config)),
+        "dedupe": lambda: pzi.dedupe(config_path=str(config)),
+        # Reaches the network only when there are records to check, and a
+        # missing bib has none — verified offline under `unshare -rn`.
+        "check": lambda: pzi.check(config_path=str(config)),
+    }
+    # `get` is absent on purpose: it raises on a missing entry rather than
+    # returning, so it has no "returned quietly" failure mode to pin.
+
+    silent = []
+    for name, call in reads.items():
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            call()
+        if not [w for w in caught if issubclass(w.category, UserWarning)]:
+            silent.append(name)
+
+    assert silent == [], f"reads that swallowed a missing-bib warning: {silent}"
+
+
+def test_a_report_shaped_read_both_emits_and_returns_its_warnings(
+    tmp_path: Path,
+) -> None:
+    """The half of the rule that says emitting does not replace returning."""
+    config = tmp_path / "config.toml"
+    missing = tmp_path / "not-created-yet.bib"
+    config.write_text(
+        f'[[bibs]]\nname = "ml"\npath = "{missing}"\ndefault = true\n', encoding="utf-8"
+    )
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        report = pzi.dedupe(config_path=str(config))
+
+    assert [w for w in caught if issubclass(w.category, UserWarning)]
+    assert report["warnings"], "a report-shaped return must carry them too"
+
+
+def test_type_complaints_checks_a_literal_instead_of_waving_it_through() -> None:
+    """Item 506, and the test matters more than the branch.
+
+    No public type uses `Literal` yet, so the gap was dormant: the checker fell
+    through every branch and returned no complaint, meaning the first `Literal`
+    field to appear would have been validated by a function that always agreed
+    with it. A conformance check that cannot fail is the same defect as a
+    `# pragma: no cover` claiming coverage it does not have.
+    """
+    status = Literal["ok", "error"]
+
+    assert _type_complaints("ok", status, "status") == []
+    assert _type_complaints("error", status, "status") == []
+
+    complaints = _type_complaints("draft", status, "status")
+    assert complaints, "a value outside the Literal must be reported"
+    assert "status" in complaints[0]
+    assert "draft" in complaints[0]
+
+    # Nested, because that is how one would really arrive — inside a report.
+    assert _type_complaints({"status": "draft"}, dict[str, status], "r") != []
+
+
+def test_the_sweep_item_types_are_checked_against_real_items(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Item 505: `UpdatePlanItem`/`CheckItem`/`PromoteItem` had no value to check.
+
+    The conformance table runs the three sweeps against an emptied library for
+    hermeticity, so `items == []` and these three shapes were pinned only as
+    declarations — a service renaming a key inside an item would not have failed
+    anything here.
+
+    The providers are stubbed rather than the services, so the item value is
+    built by the real sweep code. Stubbing `check_bib`/`promote_bib` instead
+    would check the types against this test's own fixtures, which is the same
+    vacuity in a new place. Verified to make no network call.
+    """
+    import pzi.check_service as check_service
+    import pzi.promote_planning as promote_planning
+    import pzi.update_service as update_service
+
+    published = {
+        "title": "Graph Parsers for Structured Prediction",
+        "authors": ["Jane Smith"],
+        "year": 2024,
+        "venue": "Proceedings of ACL",
+        "doi": "10.1000/acl.2024",
+    }
+
+    def _search(query: str, *, server_url: str):
+        return [{"item_type": "journalArticle", "record": dict(published),
+                 "attachments": []}]
+
+    def _by_title(title, *, contact_email=None, errors=None, **_kwargs):
+        return dict(published)
+
+    monkeypatch.setattr(update_service, "fetch_search_translations", _search)
+    monkeypatch.setattr(promote_planning, "fetch_search_translations", _search)
+    for provider in (
+        "fetch_crossref_record_by_title",
+        "fetch_openalex_record_by_title",
+        "fetch_dblp_record_by_title",
+        "fetch_openreview_record_by_title",
+    ):
+        monkeypatch.setattr(check_service, provider, _by_title)
+    monkeypatch.setattr(
+        check_service, "fetch_semantic_scholar_record_by_title",
+        lambda title, **_kwargs: dict(published),
+    )
+
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text(
+        "@article{smith2024graph,\n"
+        "  title = {Graph Parsers for Structured Prediction},\n"
+        "  author = {Smith, Jane},\n"
+        "  year = {2024},\n"
+        "  eprint = {2401.12345},\n"
+        "  archiveprefix = {arXiv},\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "promote_recheck_after_days = 0\n\n"
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\ndefault = true\n',
+        encoding="utf-8",
+    )
+    config = str(config_path)
+
+    # All three preview: the point is the item's shape, not the write.
+    sweeps: list[tuple[str, object, type]] = [
+        ("update", pzi.update(config_path=config), pzi.UpdatePlanItem),
+        ("check", pzi.check(config_path=config), pzi.CheckItem),
+        ("promote", pzi.promote(config_path=config), pzi.PromoteItem),
+    ]
+
+    failures: list[str] = []
+    for label, report, item_type in sweeps:
+        items = report["items"]  # type: ignore[index]
+        assert items, f"{label} produced no item, so its type is unchecked again"
+        for index, item in enumerate(items):
+            failures += [
+                f"{label}[{index}]: {c}" for c in _conforms(item, item_type)
+            ]
+    assert not failures, "sweep item types disagree with real items:\n" + "\n".join(
+        failures
+    )
+
+
+def test_the_pep_563_caveat_the_readme_documents_is_still_true() -> None:
+    """Item 509: a documented caveat nothing checks is a caveat that goes stale.
+
+    Under `from __future__ import annotations` every key lands in
+    `__required_keys__` and `__optional_keys__` is empty, so a runtime validator
+    trusting them demands keys pzi does not always send. Not a bug pzi can fix
+    without dropping PEP 563 across the package; it is written down in the
+    README instead, and pinned here so the README stops being right loudly
+    rather than quietly.
+    """
+    optional_by_declaration = {
+        "diff", "metadata_diagnostics", "pdf_error", "pdf_status",
+        "pdf_suggestion", "pdf_url",
+    }
+
+    # The trap: these all look required at runtime.
+    assert pzi.AddReport.__optional_keys__ == frozenset()
+    assert optional_by_declaration <= set(pzi.AddReport.__required_keys__)
+
+    # The workaround the README gives, and what pzi's own checks use.
+    resolved = get_type_hints(pzi.AddReport, include_extras=True)
+    actually_optional = {
+        key for key, hint in resolved.items() if get_origin(hint) is NotRequired
+    }
+    assert actually_optional == optional_by_declaration

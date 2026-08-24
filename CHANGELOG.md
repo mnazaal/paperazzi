@@ -17,6 +17,8 @@ next to the diff it explains.
 
 ### Fixed
 
+- `pzi.dedupe()` and `pzi.check()` now emit their warnings through `warnings.warn` like the other reads, so `-W error` stops a script on a missing bib whichever function it used. They still return `warnings` as well.
+
 - `update --promote --keep-preprint` no longer leaves a published entry in the library when the promotion is reported as failed. Its two writes — the new entry and the preprint's cross-reference note — are now planned together, so a failure between them writes neither. Previously the entry was committed while the run deleted the PDF its `file =` pointed at.
 
 ### Changed

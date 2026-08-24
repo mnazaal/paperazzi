@@ -393,6 +393,18 @@ def _emit_warnings(result: Mapping[str, Any]) -> None:
     category, module, lineno), so the second and third call in a process were
     dropped: three reads of a missing bib produced one warning, and it pointed
     at pzi's source rather than the line that asked.
+
+    **The rule, applied by every read:** warnings are always emitted here, and a
+    return that is report-shaped carries them as well. What is left asymmetric
+    is the *return*, not the emission, and it follows from the return type:
+    `search` hands back a bare `list` and `get` an `EntryRecord`, so there is
+    nowhere to put a `warnings` key, while `DedupeReport`/`CheckReport`/
+    `TagListReport` already have one.
+
+    Before this rule there were three behaviours. `dedupe` and `check` returned
+    warnings without emitting, so `-W error` stopped a script reading a missing
+    bib through `list_tags` and let the identical condition through `dedupe`
+    unnoticed.
     """
     for warning in result.get("warnings") or []:
         warnings.warn(str(warning), UserWarning, stacklevel=4)
@@ -767,6 +779,7 @@ def check(
     )
     typed = result.copy()
     _unwrap(typed, "status")
+    _emit_warnings(typed)
     return _report(typed, keep_errors=True)
 
 
@@ -779,6 +792,7 @@ def dedupe(
     """Report exact duplicate clusters and fuzzy near-duplicates. Reads only."""
     typed = find_duplicates(bib_path=_bib_path(config_path, library)).copy()
     _unwrap(typed, "status")
+    _emit_warnings(typed)
     return _report(typed)
 
 

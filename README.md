@@ -552,6 +552,18 @@ not just `dict`. `pzi.__all__` is the whole of the public surface — everything
 else is internal regardless of its docstring — and `pzi.__version__` is the
 installed version. `py.typed` ships.
 
+**Caveat for runtime validators.** These `TypedDict`s are defined under
+`from __future__ import annotations` (PEP 563), so their annotations are
+strings and Python records *every* key in `__required_keys__`, leaving
+`__optional_keys__` empty — even for keys declared `NotRequired`, such as
+`AddReport["diff"]`. A static type checker reads the declarations correctly, but
+a runtime validator that trusts `__required_keys__` (typeguard, pydantic's
+`TypeAdapter`) will demand keys pzi does not always send, and reject valid
+values. If you validate at runtime, resolve the hints first with
+`typing.get_type_hints(pzi.AddReport, include_extras=True)` and read
+`NotRequired` from there. pzi's own conformance tests do exactly this, which is
+why they are unaffected.
+
 `pzi.entries()` and `pzi.search()` return *summaries*: they say whether an entry
 has a PDF, not where it is. `pzi.get()` is the one that carries
 `local_pdf_path`.
