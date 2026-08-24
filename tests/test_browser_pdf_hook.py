@@ -511,3 +511,80 @@ def test_every_navigation_response_is_classified_by_fetchresult(
         )
 
     assert result == expected
+
+
+# === Paths that claimed browser-test coverage but had none (item 569) ======
+#
+# Five lines carried `# pragma: no cover — covered by integration/browser
+# tests`. Measured with the browser suite actually running and pragma
+# exclusions disabled, four of them never executed. None of the four needs a
+# browser to reach, so the claim is replaced with a test rather than a better
+# excuse.
+
+def test_resolve_pdf_candidate_urls_rejects_a_non_list() -> None:
+    """A pure function, and the JS it reads can return anything."""
+    assert hook.resolve_pdf_candidate_urls("https://journal.test/a", "not a list") == []
+    assert hook.resolve_pdf_candidate_urls("https://journal.test/a", None) == []
+
+
+def test_download_skips_a_candidate_that_is_not_an_http_url() -> None:
+    """Candidates come straight from page JS, unfiltered.
+
+    `session.evaluate` returns whatever the page yields — `javascript:` hrefs,
+    `mailto:`, fragments — so the non-http guard is on the ordinary path, not
+    an exotic one.
+    """
+    s = FakeBrowserSession(
+        fetch_results=[
+            (200, "text/html", b"<html></html>"),          # the landing URL
+            (200, "application/pdf", b"%PDF-1.4 linked"),  # the real candidate
+        ],
+        goto_results=[
+            type("F", (), {"headers": {"content-type": "text/html"}, "body": lambda: b"<html>"}),
+        ],
+        evaluate_results=[["javascript:void(0)", "https://journal.test/linked.pdf"]],
+    )
+
+    assert hook.download_pdf("https://example.com/paper.pdf", _session=s) == b"%PDF-1.4 linked"
+
+
+def test_download_moves_on_when_fetching_a_candidate_raises() -> None:
+    """One bad candidate must not end the search."""
+
+    class _SecondCandidateWorks(FakeBrowserSession):
+        def fetch_direct(self, url):
+            if url == "https://journal.test/broken.pdf":
+                raise RuntimeError("connection reset")
+            return super().fetch_direct(url)
+
+    s = _SecondCandidateWorks(
+        fetch_results=[
+            (200, "text/html", b"<html></html>"),
+            (200, "application/pdf", b"%PDF-1.4 second"),
+        ],
+        goto_results=[
+            type("F", (), {"headers": {"content-type": "text/html"}, "body": lambda: b"<html>"}),
+        ],
+        evaluate_results=[
+            ["https://journal.test/broken.pdf", "https://journal.test/good.pdf"]
+        ],
+    )
+
+    assert hook.download_pdf("https://example.com/paper.pdf", _session=s) == b"%PDF-1.4 second"
+
+
+def test_download_returns_none_when_the_page_scan_raises() -> None:
+    """A failure anywhere in the scan is "no PDF", not a crash out of the hook."""
+
+    class _EvaluateExplodes(FakeBrowserSession):
+        def evaluate(self, js):
+            raise RuntimeError("execution context was destroyed")
+
+    s = _EvaluateExplodes(
+        fetch_results=[(200, "text/html", b"<html></html>")],
+        goto_results=[
+            type("F", (), {"headers": {"content-type": "text/html"}, "body": lambda: b"<html>"}),
+        ],
+    )
+
+    assert hook.download_pdf("https://example.com/paper.pdf", _session=s) is None

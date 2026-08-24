@@ -339,7 +339,7 @@ def discover_pdf_url(
                 return resolved[0]
 
         return None
-    except Exception:  # pragma: no cover — covered by integration/browser tests
+    except Exception:
         return None
     finally:
         if close_on_exit:  # pragma: no cover — browser integration path
@@ -418,7 +418,7 @@ def download_pdf(
                 if not isinstance(candidate, str):
                     continue
                 if not candidate.startswith(("http://", "https://")):
-                    continue  # pragma: no cover — covered by integration/browser tests
+                    continue
                 tried += 1
                 # `fetch_direct`, not `navigate`: Chromium treats a navigation to
                 # `application/pdf` as a download, so `page.goto` raises
@@ -430,11 +430,11 @@ def download_pdf(
                     result = session.fetch_direct(candidate)
                     if result.is_pdf():
                         return result.body
-                except Exception:  # pragma: no cover — covered by integration/browser tests
+                except Exception:
                     continue
 
         return None
-    except Exception:  # pragma: no cover — covered by integration/browser tests
+    except Exception:
         return None
     finally:
         if close_on_exit:  # pragma: no cover — browser integration path
@@ -470,7 +470,7 @@ def _wait_for_verified_pdf(
 
 def resolve_pdf_candidate_urls(page_url: str, candidates: Any) -> list[str]:
     if not isinstance(candidates, list):
-        return []  # pragma: no cover — covered by integration/browser tests
+        return []
     resolved: list[str] = []
     for raw in candidates:
         if not isinstance(raw, str):
