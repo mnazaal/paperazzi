@@ -21,6 +21,20 @@ next to the diff it explains.
 
 - `update --promote --keep-preprint` no longer leaves a published entry in the library when the promotion is reported as failed. Its two writes — the new entry and the preprint's cross-reference note — are now planned together, so a failure between them writes neither. Previously the entry was committed while the run deleted the PDF its `file =` pointed at.
 
+- `pzi inbox` now prints the reason it left entries in the inbox. When the file was edited mid-drain it refuses to rewrite it and says so — previously that explanation went only into the `--json` envelope, so a plain run said nothing and exited `0` while the next drain silently re-added the same entries.
+
+- A PDF-discovery step that raises no longer aborts the whole `add` when `pdf_discovery_parallel = true`. Only the parallel HTTP stage was isolated; a failing step before or after it is now recorded as a diagnostic, matching sequential mode.
+
+- A capture server that is not running is now named as such during PDF discovery instead of reading as "this paper has no PDF".
+
+- The extension's Recent list shows captured titles again. It read a `title` field the server has never sent, so every stored title was empty.
+
+- A failed translation-server install no longer leaves its `ts.new.<pid>` staging directory behind. The per-pid name meant no later run ever cleaned it up.
+
+- `desktop_fallback_hosts = [123]` is now rejected by name. Non-string elements were dropped silently, which turned the feature off with no diagnostic.
+
+- `pzi entries <citekey> --json` no longer prints read warnings to stderr *and* carries them in the envelope; the envelope alone, as with `entries` and `entries --stats`.
+
 ### Changed
 
 - **Breaking:** `pzi import <missing-file>` and `pzi add --from-file <missing-file>` now exit `2` (usage), not `5`. Their `--json` envelopes already said `"reason": "usage"`, which maps to `2`; the code and the field now agree.
@@ -31,6 +45,8 @@ next to the diff it explains.
 - Unsupported HTTP methods (`PUT`, `HEAD`) and malformed request lines now return the JSON error shape rather than an HTML page, and the server no longer discloses its Python patch version.
 - `library check` no longer re-dials a provider that has failed three times running, streams `--jsonl` per entry instead of buffering to the end, reports progress for runs of 200+ entries, and accepts `--limit`.
 - `130` is documented as SIGINT *or* SIGTERM to `pzi server`, which is what it always returned under systemd.
+- **Breaking:** `POST /inbox/drain` answers `503`, not `400`, when the inbox file cannot be read. The service now classifies that failure as `unavailable`, which is the answer the status mapper was always meant to give it.
+- `pzi library check`'s `--json` error envelope carries `reason` on a config failure, like every other command's.
 - Minimum Python is now 3.11.4 (was 3.11), which removes a hand-rolled tar-extraction guard superseded by `filter="data"`.
 
 ### Fixed
