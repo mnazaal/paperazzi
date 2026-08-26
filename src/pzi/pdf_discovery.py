@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import re as _re
 from collections.abc import Callable, Mapping
-from pathlib import Path
 from typing import Any, Literal, TypeAlias, cast
 from urllib.parse import urlsplit, urlunsplit
 
@@ -340,7 +339,7 @@ def pdf_url_candidates_step(
     for candidate in candidates:
         if isinstance(candidate, str) and candidate.strip():
             normalized = candidate.strip()
-            if not safe_public_http_url(normalized) and not _existing_pdf_path(normalized):
+            if not safe_public_http_url(normalized):
                 continue
             updated = dict(record)
             updated["pdf_url"] = normalized
@@ -348,11 +347,6 @@ def pdf_url_candidates_step(
             return cast(NormalizedRecord, updated)
 
     return record
-
-
-def _existing_pdf_path(value: str) -> bool:
-    path = Path(value).expanduser()
-    return path.is_file() and path.suffix.lower() == ".pdf"
 
 
 def cookies_for_url(context: PdfDiscoveryContext, url: str) -> str | None:

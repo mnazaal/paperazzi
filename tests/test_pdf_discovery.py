@@ -1,4 +1,3 @@
-from pathlib import Path
 from typing import cast
 
 import pytest
@@ -228,16 +227,6 @@ def test_pdf_url_candidates_step_uses_first_valid() -> None:
     }
     result = pdf_url_candidates_step(record, context)
     assert result["pdf_url"] == "https://example.com/candidate.pdf"
-
-
-def test_pdf_url_candidates_step_accepts_existing_local_pdf_path(tmp_path: Path) -> None:
-    pdf_path = tmp_path / "paper.pdf"
-    pdf_path.write_bytes(b"%PDF-1.4\n%test\n")
-
-    result = pdf_url_candidates_step({}, {"pdf_url_candidates": [str(pdf_path)]})
-
-    assert result["pdf_url"] == str(pdf_path)
-    assert result["pdf_source"] == "pdf_url_candidates"
 
 
 def test_pdf_url_candidates_step_no_candidates() -> None:
