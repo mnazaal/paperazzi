@@ -804,7 +804,18 @@ def fetch_record_for_input(
                 fetch_text=metadata_fetch_text,
             )),
         ):
+            # `_call_metadata_fetcher`/`_fetch_s2_guarded` append bare error
+            # strings (`"HTTP 404"`, a bare `str(exc)`) — they call a fetcher
+            # generically and have no provider name to attach. This cascade
+            # does, so it prefixes here, the same before/after-diff shape
+            # `doi_pdf_step` uses for its own three providers: an unprefixed
+            # `provider_errors` (surfaced verbatim in `MetadataExhausted`)
+            # made every "no metadata" failure read identically regardless of
+            # which of the three providers actually broke.
+            before = len(provider_errors)
             candidate = call()
+            for i in range(before, len(provider_errors)):
+                provider_errors[i] = f"{provider}: {provider_errors[i]}"
             if _answers_the_lookup(candidate):
                 meta = candidate
                 winner = provider

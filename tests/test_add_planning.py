@@ -577,6 +577,41 @@ def test_fetch_record_for_input_returns_provider_errors() -> None:
     assert any("429" in e for e in provider_errors)
 
 
+def test_provider_errors_are_prefixed_with_the_provider_name() -> None:
+    """A bare 'HTTP 404' does not say which of three providers said it.
+
+    _call_metadata_fetcher/_fetch_s2_guarded append bare error strings — they
+    call a fetcher generically and have no provider name to attach. The
+    cascade knows which provider it just called, so it prefixes there, the
+    same shape doi_pdf_step uses for its own three providers.
+    """
+    from pzi.add_planning import MetadataExhausted
+
+    doi = "10.1/test"
+
+    def _failing(name: str):
+        def _fetch(doi: str, **_: object) -> None:
+            raise urllib.error.HTTPError(None, 404, name, {}, None)  # type: ignore[arg-type]
+
+        return _fetch
+
+    with pytest.raises(MetadataExhausted) as caught:
+        fetch_record_for_input(
+            raw_value=doi,
+            classified={"kind": "doi", "normalized": doi},
+            server_url="http://ts.test",
+            fetch_web=lambda *a, **k: [],
+            fetch_search=lambda *a, **k: [],
+            fetch_crossref=_failing("crossref"),
+            fetch_openalex=_failing("openalex"),
+            fetch_s2=lambda *a, **k: None,
+        )
+
+    errors = caught.value.provider_errors
+    assert any(e.startswith("crossref: ") for e in errors), errors
+    assert any(e.startswith("openalex: ") for e in errors), errors
+
+
 def test_fetch_record_for_input_routes_providers_through_the_shared_fetcher() -> None:
     """The add path called providers with their module-default fetcher.
 
