@@ -13,7 +13,7 @@ from pzi.bib_repository import (
 )
 from pzi.bibtex import NormalizedRecord, apply_record_to_entry
 from pzi.config import BibResolutionFailure, load_bib_target
-from pzi.errors import REASON_CONFIG, REASON_USAGE
+from pzi.errors import REASON_CONFIG, REASON_NOT_FOUND, REASON_USAGE
 
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
@@ -130,7 +130,7 @@ def list_tags(
                 "bib_name": bib["name"],
                 "citekey": citekey,
                 "tags": [],
-                "reason": "not_found",
+                "reason": REASON_NOT_FOUND,
                 "errors": [f"citekey not found: {citekey}"],
             }
         raw_tags = list(matching[0].get("tags") or [])
@@ -237,7 +237,7 @@ def _mutate_entry_tags(
             "changed": False,
             "dry_run": dry_run,
             "message": "citekey not found",
-            "reason": "not_found",
+            "reason": REASON_NOT_FOUND,
             "errors": [f"citekey not found: {citekey}"],
         }
 
@@ -333,7 +333,7 @@ def _mutate_entry_tags(
                 "changed": False,
                 "dry_run": dry_run,
                 "message": "citekey not found",
-                "reason": "not_found",
+                "reason": REASON_NOT_FOUND,
                 "errors": [f"citekey not found: {citekey}"],
             }
         # Report what was written under the lock, not what the pre-lock snapshot

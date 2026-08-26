@@ -130,7 +130,11 @@ def run_inbox_command(
             else:
                 for line in result["errors"]:
                     print(f"error: {line}", file=stderr)
-            return exit_codes.ENVIRONMENT
+            # `drain_inbox` now classifies its own failures (`reason`), so read
+            # the exit code from that instead of hardcoding one — the runner
+            # re-deciding it independently is exactly the vocabulary drift
+            # `pzi.errors` exists to prevent.
+            return exit_code_for_error(result)
 
         total = result["total"]
         if dry_run:
@@ -140,6 +144,16 @@ def run_inbox_command(
         # carries exactly one document, and the stream is progress, not result.
         for seq, item in enumerate(result["items"]):
             _stream_item(seq, total, item, stderr, dry_run=dry_run)
+
+        # Top-level `errors` on an otherwise-`ok` result (e.g. the inbox was
+        # rewritten mid-drain, so the drained lines were left in place rather
+        # than risking clobbering the edit) used to reach the user only under
+        # `--json`, where `emit_result` below carries the whole dict — the
+        # text path printed nothing and exited 0, so the same entries got
+        # silently re-added on the next drain with no explanation of why.
+        if not as_json:
+            for line in result.get("errors") or ():
+                print(f"error: {line}", file=stderr)
 
         if as_json:
             # The per-item reasons are inside `items[]`; lift the failures into

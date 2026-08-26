@@ -13,7 +13,7 @@ from pzi.bib_repository import (
     read_bib_file_with_notices,
 )
 from pzi.bibtex import NormalizedRecord
-from pzi.errors import REASON_USAGE
+from pzi.errors import REASON_NOT_FOUND, REASON_USAGE
 from pzi.similarity import (
     best_fuzzy_matches,
     build_identity_index,
@@ -79,7 +79,7 @@ class MergeResult(TypedDict):
     #: Where the pre-merge file was copied, mirroring `delete`.
     backup_path: NotRequired[str]
     # Structured failure kind, so the runner picks an exit code without matching
-    # on message text. Only "not_found" today; its absence means ENVIRONMENT.
+    # on message text. Only REASON_NOT_FOUND today; its absence means ENVIRONMENT.
     reason: NotRequired[str]
 
 
@@ -279,14 +279,14 @@ def merge_duplicates(
         return {
             "status": "error", "citekey_a": citekey_a, "citekey_b": citekey_b,
             "message": f"entry not found: {citekey_a}", "dry_run": dry_run,
-            "reason": "not_found",
+            "reason": REASON_NOT_FOUND,
             "errors": [f"entry not found: {citekey_a}"],
         }
     if idx_b is None:
         return {
             "status": "error", "citekey_a": citekey_a, "citekey_b": citekey_b,
             "message": f"entry not found: {citekey_b}", "dry_run": dry_run,
-            "reason": "not_found",
+            "reason": REASON_NOT_FOUND,
             "errors": [f"entry not found: {citekey_b}"],
         }
 
@@ -376,7 +376,7 @@ def merge_duplicates(
         return {
             "status": "error", "citekey_a": citekey_a, "citekey_b": citekey_b,
             "message": "entry disappeared between reads", "dry_run": dry_run,
-            "reason": "not_found",
+            "reason": REASON_NOT_FOUND,
             "errors": ["entry disappeared between reads"],
         }
 
