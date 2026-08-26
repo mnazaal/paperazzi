@@ -246,8 +246,20 @@ def run_check_command(
     if limit is not None and result["total"] >= limit:
         # Say it, because every count below is of the audited slice and reads
         # exactly like a count of the library.
+        #
+        # Phrased as "at most", not "entries after the first N were not
+        # audited": `check_bib` slices to `limit` *before* counting, so `total`
+        # can never exceed `limit` and this branch cannot tell a library of
+        # exactly N from one that was truncated. The old wording asserted the
+        # second, so a 2-entry library audited with `--limit 2` was told about
+        # unaudited entries that do not exist. Telling the two apart needs a
+        # library-wide count the service does not report, and adding one would
+        # widen `CheckReport` — a frozen public type — for a note. What the
+        # reader needs is the half that is true either way: these counts cover
+        # the slice, not necessarily the library.
         print(
-            f"note: --limit {limit} — entries after the first {limit} were not audited",
+            f"note: --limit {limit} — counts below cover at most the first "
+            f"{limit} entries, not necessarily the whole library",
             file=stderr,
         )
 

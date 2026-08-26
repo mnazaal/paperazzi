@@ -372,7 +372,26 @@ def test_limit_is_passed_through_and_reported(tmp_path: Path) -> None:
     assert code == 0, err
     assert "checked 2" in out
     assert "--limit 2" in err
-    assert "were not audited" in err
+    assert "at most the first 2" in err
+
+
+def test_the_limit_note_does_not_claim_entries_that_were_never_skipped(
+    tmp_path: Path,
+) -> None:
+    """A library of exactly `--limit` entries was told it had unaudited entries.
+
+    `check_bib` slices to `limit` before counting, so `result["total"]` can
+    never exceed `limit` and the note's branch cannot tell "library had exactly
+    N" from "library had more and was truncated". The old wording asserted the
+    second — "entries after the first N were not audited" — which for a 2-entry
+    library audited with `--limit 2` names unaudited entries that do not exist.
+    The note now says only the part that is true either way.
+    """
+    code, _out, err = _run(_args(limit=2), _streaming_fake(2), tmp_path)
+
+    assert code == 0, err
+    assert "were not audited" not in err
+    assert "at most the first 2" in err
 
 
 def test_limit_below_one_is_no_longer_rejected_by_the_runner(tmp_path: Path) -> None:
