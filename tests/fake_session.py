@@ -27,6 +27,7 @@ class FakeBrowserSession:
         self.page = self  # acts as its own page
 
     def navigate(self, url, *, wait_until="domcontentloaded", timeout=30000):
+        self._check_open()
         if self._gotos and self._goto_idx < len(self._gotos):
             resp = self._gotos[self._goto_idx]
             self._goto_idx += 1
@@ -34,14 +35,22 @@ class FakeBrowserSession:
         return None
 
     def current_url(self):
+        self._check_open()
         return self._url
 
     def evaluate(self, js):
+        self._check_open()
+        # Always consume one entry, whether it is a scalar result or a list
+        # result — the previous version only popped when the *first* queued
+        # item was itself a list, so a test queuing two different scalar
+        # results (`evaluate_results=[True, False]`) got the whole remaining
+        # queue back unconsumed on every call and silently saw `True` twice.
         if self._evaluate:
-            return self._evaluate.pop(0) if isinstance(self._evaluate[0], list) else self._evaluate
+            return self._evaluate.pop(0)
         return []
 
     def fetch_direct(self, url):
+        self._check_open()
         if self._fetches:
             from pzi.browser_session import FetchResult
             status, content_type, body = self._fetches.pop(0)
