@@ -354,9 +354,9 @@ pzi pdf attach <citekey> <url-or-path>
 pzi tag add|remove <citekey> <tag...> [--dry-run]
 pzi tag list [citekey] [--json]
 pzi search [--query <text>] [--author <name>] [--year <int>] [--tag <tag>]
-pzi library check [--strict] [--report PATH] [--jsonl PATH] [--force] [--json]   # validate references; --force overwrites an existing report
+pzi library check [--strict] [--report PATH] [--jsonl PATH] [--force] [--limit N] [--json]   # validate references; --force overwrites an existing report, --limit audits only the first N
 pzi update [--dry-run]                        # fill missing metadata
-pzi update --promote [--dry-run] [--keep-preprint] [--limit N] [--best-of N]  # replace preprints with published versions
+pzi update --promote [--dry-run] [--keep-preprint] [--mark-resolved] [--limit N] [--best-of N]  # replace preprints with published versions
 pzi entries [--offset N] [--limit N] [--sort citekey|title|year|author]
 pzi entries <citekey>                         # show the full record for one entry
 pzi entries --stats                           # library statistics
