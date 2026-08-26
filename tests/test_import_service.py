@@ -545,3 +545,32 @@ def test_a_dry_run_classifies_exactly_as_the_run_it_previews() -> None:
         # Same classification per entry, differing only in tense.
         assert [r["status"] for r in preview["results"]] == ["would_update", "would_import"]
         assert [r["status"] for r in applied["results"]] == ["updated", "imported"]
+
+
+def test_import_from_bibtex_batch_write_failure_is_unavailable(monkeypatch) -> None:
+    """G3: a batch write that raises after validation passed is an external
+    dependency failing, not a bad request — distinct from the resolution
+    failure above (REASON_CONFIG) and from a per-record validation error."""
+    import pzi.import_service as import_service_module
+
+    with tempfile.TemporaryDirectory() as td:
+        cp, bp, pd = _setup_config(td)
+        Path(bp).write_text("")
+        src = os.path.join(td, "source.bib")
+        Path(src).write_text(SIMPLE_BIB)
+
+        def _boom(**_kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(import_service_module, "add_records_to_bib_batch", _boom)
+
+        result = import_from_bibtex(
+            config_path=cp, home_dir=td, bib_selector=None,
+            source_path=src, dry_run=False, force_new=False,
+        )
+
+    assert result["status"] == "error"
+    assert result["message"] == "failed to write imported records"
+    from pzi.errors import REASON_UNAVAILABLE
+
+    assert result["reason"] == REASON_UNAVAILABLE
