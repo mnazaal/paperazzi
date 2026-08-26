@@ -285,6 +285,51 @@ def test_post_attach_pdf_bytes_updates_entry(tmp_path: Path) -> None:
     assert "pzi-pdf-url = {https://example.com/browser.pdf}" in text
 
 
+def test_post_attach_pdf_bytes_decodes_the_payload_only_once(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """C6: the sessionless attach path used to decode the same base64 PDF
+    twice — once for the size check, once inside `attach_pdf_bytes` — for one
+    request. It now decodes once and passes bytes down."""
+    import base64
+
+    real_b64decode = base64.b64decode
+    calls: list[int] = []
+
+    def _counting_b64decode(*args, **kwargs):
+        calls.append(1)
+        return real_b64decode(*args, **kwargs)
+
+    monkeypatch.setattr(base64, "b64decode", _counting_b64decode)
+
+    config_path, bib_path = _seed(tmp_path)
+    port, _thread, server = _serve_once(config_path, tmp_path)
+    try:
+        body = json.dumps(
+            {
+                "citekey": "smith2024graph",
+                "pdf_base64": base64.b64encode(b"%PDF-1.4 once").decode("ascii"),
+                "source_url": "https://example.com/once.pdf",
+            }
+        ).encode("utf-8")
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{port}/attach-pdf-bytes",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        response = urllib.request.urlopen(request, timeout=10)
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert payload["status"] == "ok"
+    # Before the fix this was 2: once for the size check, once inside
+    # `attach_pdf_bytes`. The request's own `pdf_base64` is built with
+    # `b64encode`, which this patch does not touch.
+    assert len(calls) == 1
+
+
 def test_options_request_returns_204_with_cors_headers(tmp_path: Path) -> None:
     config_path, _ = _seed(tmp_path)
     port, _thread, server = _serve_once(config_path, tmp_path)

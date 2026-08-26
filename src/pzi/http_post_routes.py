@@ -48,7 +48,7 @@ from pzi.http_status import (
 from pzi.pdf_acquisition_plan import build_pdf_acquisition_plan
 from pzi.pdf_attach_session import build_attach_session, validate_attach_request
 from pzi.pdf_attach_session_store import AttachSessionStore
-from pzi.pdf_service import attach_pdf_bytes, attach_pdf_raw_bytes
+from pzi.pdf_service import attach_pdf_raw_bytes
 from pzi.promote_service import promote_bib
 from pzi.protocols import accepts_keyword
 from pzi.tag_service import add_tags, remove_tags
@@ -794,6 +794,16 @@ def _handle_attach_pdf_post(
     if source_url is not None and not safe_public_http_url(source_url):
         return 400, {"error": "source_url must be a public http(s) URL"}
     request_id = body.get("request_id") if isinstance(body.get("request_id"), str) else None
+    # C6: decode once here and pass bytes down through both branches and into
+    # the write, instead of re-decoding the same payload for the session
+    # check, the sessionless size check, and again inside `attach_pdf_bytes`.
+    # A multi-MB base64 PDF decoded three times over one request was pure
+    # waste, not a safety property — nothing downstream depends on decoding
+    # happening more than once.
+    try:
+        pdf_bytes = base64.b64decode(pdf_base64, validate=True)
+    except (ValueError, binascii.Error):
+        return 400, {"error": "pdf_base64 invalid"}
     session = None
     if request_id is not None:
         if attach_session_store is None:
@@ -801,11 +811,6 @@ def _handle_attach_pdf_post(
         session = attach_session_store.claim(request_id)
         if session is None:
             return 403, {"error": "attach session not found"}
-        try:
-            pdf_bytes = base64.b64decode(pdf_base64, validate=True)
-        except (ValueError, binascii.Error):
-            attach_session_store.restore(session)
-            return 400, {"error": "pdf_base64 invalid"}
         attach_token_value = body.get("attach_token")
         token: str = attach_token_value if isinstance(attach_token_value, str) else ""
         validation_error = validate_attach_request(
@@ -827,21 +832,19 @@ def _handle_attach_pdf_post(
         # never opened a session still has to be able to attach — but arriving
         # without a session is not a reason to accept an unbounded PDF. The
         # session path checks exactly this via `session.max_bytes`; the same
-        # cap applies here.
-        try:
-            decoded_size = len(base64.b64decode(pdf_base64, validate=True))
-        except (ValueError, binascii.Error):
-            return 400, {"error": "pdf_base64 invalid"}
-        if decoded_size > MAX_BROWSER_PDF_BYTES:
+        # cap applies here. Size enforcement is unchanged: still the exact
+        # decoded byte count against the same limit, just measured on the
+        # bytes already in hand instead of a fresh decode.
+        if len(pdf_bytes) > MAX_BROWSER_PDF_BYTES:
             return 413, {
-                "error": f"pdf too large: {decoded_size} > {MAX_BROWSER_PDF_BYTES} bytes"
+                "error": f"pdf too large: {len(pdf_bytes)} > {MAX_BROWSER_PDF_BYTES} bytes"
             }
-    result = attach_pdf_bytes(
+    result = attach_pdf_raw_bytes(
         config_path=config_path,
         home_dir=home_dir,
         bib_selector=bib_selector_of(body),
         citekey=citekey,
-        pdf_base64=pdf_base64,
+        pdf_bytes=pdf_bytes,
         source_url=source_url,
     )
     status = status_for_service_result(result)
