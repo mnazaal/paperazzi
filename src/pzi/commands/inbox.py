@@ -130,7 +130,11 @@ def run_inbox_command(
             else:
                 for line in result["errors"]:
                     print(f"error: {line}", file=stderr)
-            return exit_codes.ENVIRONMENT
+            # `drain_inbox` now classifies its own failures (`reason`), so read
+            # the exit code from that instead of hardcoding one — the runner
+            # re-deciding it independently is exactly the vocabulary drift
+            # `pzi.errors` exists to prevent.
+            return exit_code_for_error(result)
 
         total = result["total"]
         if dry_run:

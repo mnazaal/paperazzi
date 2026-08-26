@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 
 from pzi.dedupe_service import find_duplicates, merge_duplicates
+from pzi.errors import REASON_NOT_FOUND
 
 
 def _write_bib(path: str, content: str) -> None:
@@ -122,6 +123,9 @@ def test_merge_duplicates_not_found() -> None:
         )
         assert result["status"] == "error"
         assert "not found" in result["message"]
+        # `pzi.errors.REASON_NOT_FOUND`, not a locally hardcoded "not_found" —
+        # so the vocabulary can only drift by changing the shared constant.
+        assert result["reason"] == REASON_NOT_FOUND
 
 
 def test_merge_duplicates_real() -> None:

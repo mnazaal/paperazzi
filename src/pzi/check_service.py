@@ -26,7 +26,7 @@ from pzi.bib_repository import read_bib_file_with_notices
 from pzi.bibtex import NormalizedRecord
 from pzi.capture_context import resolve_contact_email, resolve_optional_value
 from pzi.config import BibResolutionFailure, load_bib_target
-from pzi.errors import REASON_UNAVAILABLE
+from pzi.errors import REASON_CONFIG, REASON_UNAVAILABLE
 from pzi.fetch_helpers import ProviderBreaker, build_metadata_fetch_text
 from pzi.metadata_sources import (
     fetch_crossref_record_by_title,
@@ -445,7 +445,7 @@ def check_bib(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector
     )
     if isinstance(resolved, BibResolutionFailure):
-        return _error_result(strict, resolved.errors)
+        return _error_result(strict, resolved.errors, reason=REASON_CONFIG)
 
     config, bib = resolved
     s2_api_key = resolve_optional_value(
@@ -542,8 +542,10 @@ def check_bib(
     return result
 
 
-def _error_result(strict: bool, errors: list[str]) -> CheckResult:
-    return {
+def _error_result(
+    strict: bool, errors: list[str], *, reason: str | None = None
+) -> CheckResult:
+    result: CheckResult = {
         "status": "error",
         "bib_name": None,
         "strict": strict,
@@ -553,3 +555,6 @@ def _error_result(strict: bool, errors: list[str]) -> CheckResult:
         "errors": errors,
         "warnings": [],
     }
+    if reason is not None:
+        result["reason"] = reason
+    return result

@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from pzi.errors import REASON_UNAVAILABLE
 from pzi.inbox_service import (
     drain_inbox,
     parse_inbox_line,
@@ -309,6 +310,11 @@ def test_drain_inbox_read_error_returns_error(tmp_path: Path) -> None:
                          inbox_path=str(inbox), delay=0, add_fn=_ok_add())
     assert result["status"] == "error"
     assert any("cannot read inbox file" in e for e in result["errors"])
+    # A dependency the caller needs (a readable inbox file) is not there right
+    # now, not an unclassified error — so the HTTP `/inbox/drain` route answers
+    # 503 instead of falling back to a generic 400, and any future consumer
+    # branching on `reason` sees the same classification the CLI already used.
+    assert result["reason"] == REASON_UNAVAILABLE
 
 
 def test_drain_inbox_preserves_order_of_remaining_lines(tmp_path: Path) -> None:
