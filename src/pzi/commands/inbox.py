@@ -141,6 +141,16 @@ def run_inbox_command(
         for seq, item in enumerate(result["items"]):
             _stream_item(seq, total, item, stderr, dry_run=dry_run)
 
+        # Top-level `errors` on an otherwise-`ok` result (e.g. the inbox was
+        # rewritten mid-drain, so the drained lines were left in place rather
+        # than risking clobbering the edit) used to reach the user only under
+        # `--json`, where `emit_result` below carries the whole dict — the
+        # text path printed nothing and exited 0, so the same entries got
+        # silently re-added on the next drain with no explanation of why.
+        if not as_json:
+            for line in result.get("errors") or ():
+                print(f"error: {line}", file=stderr)
+
         if as_json:
             # The per-item reasons are inside `items[]`; lift the failures into
             # the documented `errors[]` channel too, as `add --from-file` does,

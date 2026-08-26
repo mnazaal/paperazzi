@@ -235,6 +235,37 @@ def test_inbox_drain_service_error_exits_environment(tmp_path: Path) -> None:
     assert "cannot read inbox file" in stderr.getvalue()
 
 
+def test_inbox_drain_ok_with_refusal_reaches_stderr_on_text_path(tmp_path: Path) -> None:
+    """A mid-drain rewrite refusal is `status: ok` (captures did succeed) but
+    still carries a top-level `errors[]` message explaining the file was left
+    untouched. That message used to be printed only inside the `status ==
+    "error"` branch, so on the plain-text path it never reached the user at
+    all — the next `inbox` run silently re-added the same entries. The exit
+    code is deliberately unchanged: the run genuinely succeeded.
+    """
+    def fake_drain(**kwargs: Any) -> dict[str, Any]:
+        result = _drain_ok(added=2)
+        result["errors"] = [
+            "/tmp/inbox.txt was modified while draining, so the entries "
+            "just added were left in it — remove them by hand or re-run "
+            "the drain"
+        ]
+        return result
+
+    stderr = StringIO()
+    code = run_inbox_command(
+        _args(_inbox_with_lines(tmp_path)),
+        home_dir=str(tmp_path),
+        config_path=str(tmp_path / "config.toml"),
+        stdout=StringIO(),
+        stderr=stderr,
+        drain_inbox_fn=fake_drain,
+    )
+    assert "was modified while draining" in stderr.getvalue()
+    # Exit-code semantics are frozen: the captures succeeded, so this stays 0.
+    assert code == exit_codes.OK
+
+
 def test_inbox_drain_renders_summary_to_stdout(tmp_path: Path) -> None:
     def fake_drain(**kwargs: Any) -> dict[str, Any]:
         return _drain_ok(added=2, exists=1, failed=0)
