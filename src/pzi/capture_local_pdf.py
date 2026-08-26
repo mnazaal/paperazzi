@@ -11,7 +11,7 @@ from pzi.add_planning import (
     AddResult,
     carry_item_type,
     fetch_record_for_input,
-    merge_record_sources,
+    merge_fetched_record_with_overrides,
     select_best_metadata_result,
 )
 from pzi.bib_repository import WritePlan, read_bib_file
@@ -289,8 +289,17 @@ def add_local_pdf(
             errors=list(metadata_errors),
             dry_run=dry_run,
             warnings=[],
+            bib=bib,
         )
-    merged = merge_record_sources(base_record, record_overrides)
+    # Splitting, not a plain merge: `merge_record_sources` does not know about
+    # `fallback_*` keys, so a caller-supplied `fallback_title` never filled
+    # anything and the capture was then refused below for identifying no
+    # paper — even though a title WAS supplied. `capture_core._merge_fallback_
+    # metadata` only ever emits `fallback_*` keys, and the URL/DOI branch
+    # (`add_service._merge_fetched_record_with_overrides`, the same function
+    # under this module's name) already splits them; this branch had its own
+    # unsplit copy.
+    merged = merge_fetched_record_with_overrides(base_record, record_overrides)
     # A provider error on this path used to be dropped on the floor unless
     # `--strict-metadata` was set, so a capture degraded by a Crossref 429 was
     # reported exactly like a clean one. Carried as warnings from here on, the
@@ -324,6 +333,7 @@ def add_local_pdf(
                 "nothing was written: supply at least a title with "
                 "--metadata-json FILE (or - for stdin) to add this PDF anyway",
             ],
+            bib=bib,
         )
     record_with_ck = ensure_citekey(
         merged,

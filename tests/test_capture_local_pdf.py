@@ -286,6 +286,104 @@ def test_add_local_pdf_honors_strict_metadata_and_writes_nothing(
     # Nothing written: no entry, and the PDF was not copied into papers_dir.
     assert bib_path.read_text() == ""
     assert list(papers_dir.iterdir()) == []
+    # A3 (F-nit): the sibling failure in `add_service.add_input_to_bib` names
+    # which bib the write was refused against; this one used to come back
+    # `None` because `error_result` was never told which `bib` it ran for.
+    assert result["bib_name"] == "main"
+    assert result["bib_path"] == str(bib_path)
+
+
+def test_add_local_pdf_error_result_names_the_bib_when_nothing_identifies_it(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The second `error_result` call on this path had the same omission."""
+    import pzi.capture_local_pdf as clp
+
+    source_pdf = tmp_path / "paper.pdf"
+    source_pdf.write_bytes(b"%PDF-1.4\n")
+    papers_dir = tmp_path / "papers"
+    papers_dir.mkdir()
+    bib_path = tmp_path / "library.bib"
+    bib_path.write_text("")
+
+    # No title, no DOI: extraction found nothing to identify the paper with.
+    monkeypatch.setattr(clp, "extract_pdf_metadata", lambda _p: {})
+
+    result = clp.add_local_pdf(
+        bib={"name": "main", "path": str(bib_path),
+             "papers_dir": str(papers_dir), "default": True},
+        raw_value=str(source_pdf),
+        record_overrides={},
+        dry_run=False,
+        server_url="http://127.0.0.1:1",
+        fetch_search=lambda _t, *, server_url: [],
+        ensure_citekey=lambda record, existing, **_kw: record,
+        add_record=lambda **_kw: (_ for _ in ()).throw(
+            AssertionError("must not be reached")
+        ),
+    )
+
+    assert result["status"] == "error"
+    assert "no metadata identifies" in result.get("message", "")
+    assert result["bib_name"] == "main"
+    assert result["bib_path"] == str(bib_path)
+
+
+def test_add_local_pdf_fallback_title_override_identifies_an_otherwise_blank_capture(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A3: `fallback_title` never filled anything on this branch.
+
+    The URL/DOI branch merges overrides through `merge_fetched_record_with_
+    overrides`, which splits `fallback_*` keys from plain ones and only fills
+    an *empty* field with the fallback value. This branch used a plain
+    `merge_record_sources`, which does not know the `fallback_` prefix means
+    anything special — so a caller-supplied `fallback_title` (what
+    `capture_core._merge_fallback_metadata` always emits) landed as a literal
+    `fallback_title` key nobody read, and `identifies_a_paper` then refused the
+    capture even though a title was supplied.
+    """
+    import pzi.capture_local_pdf as clp
+
+    source_pdf = tmp_path / "paper.pdf"
+    source_pdf.write_bytes(b"%PDF-1.4\n")
+    papers_dir = tmp_path / "papers"
+    papers_dir.mkdir()
+    bib_path = tmp_path / "library.bib"
+    bib_path.write_text("")
+
+    # Extraction found nothing on its own — the title is supplied only as a
+    # fallback override, exactly like a browser-extension capture with no
+    # extractable PDF text.
+    monkeypatch.setattr(clp, "extract_pdf_metadata", lambda _p: {})
+
+    seen_records: list[object] = []
+
+    def _add_record(*, record, **_kw):
+        seen_records.append(record)
+        return {
+            "status": "ok", "bib_name": "main", "bib_path": str(bib_path),
+            "action": "insert", "citekey": record.get("citekey"),
+            "pdf_path": None, "changed_fields": [], "dry_run": False,
+            "message": "insert entry", "warnings": [], "errors": [],
+        }
+
+    result = clp.add_local_pdf(
+        bib={"name": "main", "path": str(bib_path),
+             "papers_dir": str(papers_dir), "default": True},
+        raw_value=str(source_pdf),
+        record_overrides={"fallback_title": "Scraped From Elsewhere"},
+        dry_run=True,
+        server_url="http://127.0.0.1:1",
+        fetch_search=lambda _t, *, server_url: [],
+        ensure_citekey=lambda record, existing, **_kw: {
+            **record, "citekey": "elsewhere2024scraped",
+        },
+        add_record=_add_record,
+    )
+
+    assert result["status"] == "ok", result
+    assert seen_records and seen_records[0]["title"] == "Scraped From Elsewhere"
 
 
 # ---------------------------------------------------------------------------
