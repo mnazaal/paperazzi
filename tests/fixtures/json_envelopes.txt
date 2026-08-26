@@ -154,6 +154,7 @@ pzi pdf attach [error]
     items
     local_pdf_path
     message
+    reason
     source
     status
     warnings

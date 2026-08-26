@@ -47,6 +47,20 @@ def _fake_fetch_search(query: str, *, server_url: str) -> list[dict]:
     return [{"item_type": "journalArticle", "record": {}, "attachments": []}]
 
 
+def _only_provider_warnings(text: str) -> bool:
+    """Every stderr line is a provider-failure warning, and nothing else.
+
+    A title-less translation-server answer no longer stops the DOI cascade
+    (finding A4: it used to shadow Crossref permanently). The hermetic suite
+    blocks non-loopback sockets, so consulting the cascade now legitimately
+    produces one `provider error (...)` warning per provider. That is the
+    intended behaviour, not noise — but stderr must still carry nothing else,
+    which is what these tests originally used `== ""` to say.
+    """
+    lines = [line for line in text.splitlines() if line.strip()]
+    return all(line.startswith("warning: provider error (") for line in lines)
+
+
 def test_cli_dispatch_registry_covers_all_parser_commands() -> None:
     """Every parser command must be dispatchable, and vice versa.
 
@@ -449,7 +463,7 @@ default = true
 
     assert exit_code == 0
     assert stdout.getvalue() == "insert smith2024graph in ml\n"
-    assert stderr.getvalue() == ""
+    assert _only_provider_warnings(stderr.getvalue())
     assert "doi = {10.1234/foo}" in bib_path.read_text()
 
 
@@ -640,7 +654,7 @@ default = true
     )
 
     assert exit_code == 0
-    assert stderr.getvalue() == ""
+    assert _only_provider_warnings(stderr.getvalue())
     payload = __import__("json").loads(stdout.getvalue())
     assert payload["status"] == "ok"
     assert payload["bib_name"] == "ml"

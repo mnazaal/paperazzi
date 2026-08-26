@@ -738,6 +738,7 @@ def fetch_record_for_input(
         # contradicting the requested DOI, and warned "metadata confidence low"
         # about a capture that was correct.
         translation_results.extend(cast("list[dict]", usable))
+        translation_floor: Mapping[str, Any] | None = None
         if usable:
             selected = select_best_metadata_result(usable, fallback)
             # Gated on the same bar as the cascade below (`_answers_the_lookup`):
@@ -746,9 +747,22 @@ def fetch_record_for_input(
             # title-less record win here and never let Crossref/OpenAlex/S2 run
             # at all — the exact shadowing `_answers_the_lookup`'s docstring
             # describes, reintroduced one call site up. A record with no title
-            # is not worth stopping the cascade for; fall through to it.
-            if _answers_the_lookup(selected["record"]):
-                best = dict(merge_record_sources(fallback, selected["record"]))
+            # is not worth *stopping* the cascade for; fall through to it.
+            #
+            # Fall through, not discard. The cascade keeps its own first thin
+            # answer as a floor (see `meta = candidate` below) precisely so a
+            # DOI only one provider knows about still yields what little was
+            # said; dropping this one instead turned "the cascade can do
+            # better" into "the capture fails outright" whenever nothing after
+            # it answered either.
+            # See the web-endpoint site below: gated on the *merged* record,
+            # because that is what gets written and a caller-supplied
+            # `fallback_title` fills the field being tested.
+            _merged = dict(merge_record_sources(fallback, selected["record"]))
+            if not _answers_the_lookup(_merged):
+                translation_floor = selected
+            if _answers_the_lookup(_merged):
+                best = _merged
                 carry_item_type(best, selected)
                 # Named here as the cascade below names its own winner. Without it
                 # the translation-server path was identifiable only by this key's
@@ -825,6 +839,23 @@ def fetch_record_for_input(
                 # Crossref knows about still yields what little it said when no
                 # later provider does better.
                 meta = candidate
+        if meta is None and translation_floor is not None:
+            # Nothing in the cascade answered either, so the thin
+            # translation-server hit we declined to stop the cascade for is now
+            # the best there is. Same floor rule as the loop above, one source
+            # earlier: falling through to a better answer must not mean losing
+            # the only answer.
+            best = dict(merge_record_sources(fallback, translation_floor["record"]))
+            carry_item_type(best, translation_floor)
+            best["metadata_provider"] = "translation_server"
+            return (
+                _with_pdf_discovery(
+                    cast(NormalizedRecord, best),
+                    translation_attachments=translation_floor.get("attachments"),
+                ),
+                provider_errors,
+                translation_results,
+            )
         if meta is not None:
             best = dict(merge_record_sources(fallback, meta))
             record = _with_pdf_discovery(cast(NormalizedRecord, best))
@@ -857,8 +888,17 @@ def fetch_record_for_input(
                 # padding a dict. Reaching flaresolverr with the real page is
                 # better than writing a record `identifies_a_paper` would refuse
                 # anyway.
-                if _answers_the_lookup(selected["record"]):
-                    best = dict(merge_record_sources(fallback, selected["record"]))
+                # Gated on the *merged* record, not the raw one: `best` below
+                # is what would be written, and a caller-supplied
+                # `fallback_title` (`--metadata-json`, the extension's page
+                # title) fills the very field being tested. Gating the raw
+                # record sent captures whose title the caller had already
+                # supplied down the cascade to fetch a title they were not
+                # missing — and, with the network unreachable, to fail
+                # outright.
+                _merged = dict(merge_record_sources(fallback, selected["record"]))
+                if _answers_the_lookup(_merged):
+                    best = _merged
                     carry_item_type(best, selected)
                     # Attributed here too. The key was added to the DOI-search
                     # branch alone, so a capture the translation server answered
@@ -910,13 +950,16 @@ def fetch_record_for_input(
             errors=provider_errors,
         )
         translation_results.extend(results or [])
+        url_floor: Mapping[str, Any] | None = None
         if results:
             selected = select_best_metadata_result(results, fallback)
-            # Same title gate as both DOI-branch sites above. This kind has no
-            # Crossref/OpenAlex/S2 fallback of its own (there is no DOI to look
-            # them up by), so the alternative to accepting a title-less answer
-            # here is flaresolverr, then `MetadataExhausted` — either is
-            # honest, where writing a record `identifies_a_paper` refuses is not.
+            # Same title gate as both DOI-branch sites above: a title-less hit
+            # is `normalize_translation_item` padding a dict, and flaresolverr
+            # with the real page may do better. As there, the gate defers to a
+            # better source rather than discarding this one — `url_floor` below
+            # keeps it for the case where nothing better answers.
+            if not _answers_the_lookup(selected["record"]):
+                url_floor = selected
             if _answers_the_lookup(selected["record"]):
                 best = dict(selected["record"])
                 carry_item_type(best, selected)
@@ -948,6 +991,24 @@ def fetch_record_for_input(
                         provider_errors,
                         translation_results,
                     )
+
+        if url_floor is not None:
+            # Flaresolverr did not do better (or was not configured), so the
+            # thin translation hit we declined to stop at is the best there is.
+            # Raising instead would have thrown away a real answer and reported
+            # "no results" for a server that did reply — and for a caller who
+            # supplied the missing title themselves (`--metadata-json`, the
+            # extension's page title), it turned a working capture into a
+            # warning about metadata that was never missing.
+            best = dict(url_floor["record"])
+            carry_item_type(best, url_floor)
+            best = _with_pdf_discovery(
+                cast(NormalizedRecord, best),
+                translation_attachments=url_floor.get("attachments"),
+            )
+            merged = dict(merge_record_sources(fallback, best))
+            merged["metadata_provider"] = "translation_server"
+            return cast(NormalizedRecord, merged), provider_errors, translation_results
 
         raise MetadataExhausted(
             f"translation server returned no results for URL: {normalized}",

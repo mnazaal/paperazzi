@@ -1402,13 +1402,16 @@ def test_the_sweep_item_types_are_checked_against_real_items(
 
     monkeypatch.setattr(update_service, "fetch_search_translations", _search)
     monkeypatch.setattr(promote_planning, "fetch_search_translations", _search)
-    for provider in (
-        "fetch_crossref_record_by_title",
-        "fetch_openalex_record_by_title",
-        "fetch_dblp_record_by_title",
-        "fetch_openreview_record_by_title",
-    ):
-        monkeypatch.setattr(check_service, provider, _by_title)
+    # The four title-search providers now come from one shared table
+    # (`pzi.provider_cascade.TITLE_SEARCH_PROVIDERS`), consumed by both
+    # `check_service` and `promote_planning` so the two cannot drift apart.
+    # They are therefore no longer individual attributes of `check_service`;
+    # patching the table it reads at call time replaces all four at once.
+    monkeypatch.setattr(
+        check_service,
+        "TITLE_SEARCH_PROVIDERS",
+        tuple((name, _by_title) for name, _fn in check_service.TITLE_SEARCH_PROVIDERS),
+    )
     monkeypatch.setattr(
         check_service, "fetch_semantic_scholar_record_by_title",
         lambda title, **_kwargs: dict(published),

@@ -1148,7 +1148,12 @@ def test_post_attach_bytes_with_request_id_requires_valid_attach_token(monkeypat
             "errors": [],
         }
 
-    monkeypatch.setattr(http_post_routes, "attach_pdf_bytes", fake_attach_pdf_bytes)
+    # `attach_pdf_raw_bytes`, not `attach_pdf_bytes`: the route decodes the
+    # base64 payload once itself now (finding C6 — it used to be decoded twice
+    # here and a third time inside the service) and hands the bytes down. The
+    # old patch target is no longer imported by this module, so patching it
+    # left the real service wired up.
+    monkeypatch.setattr(http_post_routes, "attach_pdf_raw_bytes", fake_attach_pdf_bytes)
 
     bad_status, bad_body = http_post_routes.process_post_request(
         "/attach-pdf-bytes",
