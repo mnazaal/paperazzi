@@ -906,6 +906,49 @@ console.log(JSON.stringify({ ok: true, output: out }));
     assert "main" in result["output"]
 
 
+def test_format_capture_result_uses_bib_not_the_dead_bib_name_fallback(tmp_path: Path) -> None:
+    """`capture_payload` (src/pzi/http_payloads.py) sends `bib`, never
+    `bib_name` — the payload key `bib_name` preferred was always undefined, so
+    only the `bib` fallback ever actually rendered. Plant a stray `bib_name`
+    that disagrees with `bib`; the real key must win.
+    """
+    result = _run_popup_format_module(
+        r'''
+const mod = await import("./popup_format.js");
+const out = mod.formatCaptureResult({
+  status: "ok", citekey: "smith2024paper", bib: "main", bib_name: "WRONG-should-not-render",
+  dry_run: false,
+});
+console.log(JSON.stringify({ ok: true, output: out }));
+''',
+        tmp_path,
+    )
+    assert " in main" in result["output"]
+    assert "WRONG" not in result["output"]
+
+
+def test_format_capture_result_ignores_dead_metadata_warnings_key(tmp_path: Path) -> None:
+    """No payload builder ever emits `metadata_warnings` — real warnings ride
+    on `warnings`, which `displayWarnings` already renders. A stray
+    `metadata_warnings` on the result must not produce extra output (it used
+    to be read as a second, dead warnings channel).
+    """
+    result = _run_popup_format_module(
+        r'''
+const mod = await import("./popup_format.js");
+const out = mod.formatCaptureResult({
+  status: "ok", citekey: "smith2024paper", bib: "main", dry_run: false,
+  warnings: ["real warning"],
+  metadata_warnings: ["should never appear"],
+});
+console.log(JSON.stringify({ ok: true, output: out }));
+''',
+        tmp_path,
+    )
+    assert result["output"].count("real warning") == 1
+    assert "should never appear" not in result["output"]
+
+
 def test_format_capture_result_error(tmp_path: Path) -> None:
     result = _run_popup_format_module(
         r'''
@@ -2101,6 +2144,93 @@ console.log(JSON.stringify({
     assert "PZI-PLANTED-COOKIE" not in json.dumps(result["posts"])
 
 
+def test_bulk_capture_recent_title_comes_from_the_search_item_not_the_response(tmp_path: Path) -> None:
+    """`/capture` never sends a `title` field (see `capture_payload` in
+    `src/pzi/http_payloads.py`) — reading `data.title` always stored "". The
+    search-result item already carries the title the page listed it under,
+    from before the request went out, so that is the source now.
+
+    Driven rather than grepped: the fetch response is planted with a `title`
+    field an old build would have used, so if the read regresses to `data.title`
+    this test fails on the value, not on the field's mere absence.
+    """
+    result = _run_popup_js_test(
+        r'''
+const elements = new Map();
+const makeElement = (id) => ({
+  id,
+  value: "",
+  checked: false,
+  disabled: false,
+  textContent: "",
+  innerHTML: "",
+  className: "",
+  type: "",
+  style: { cssText: "" },
+  children: [],
+  handlers: {},
+  appendChild(child) { this.children.push(child); },
+  addEventListener(event, handler) { (this.handlers[event] ??= []).push(handler); },
+  querySelectorAll: () => [],
+});
+globalThis.document = {
+  getElementById: (id) => {
+    if (!elements.has(id)) elements.set(id, makeElement(id));
+    return elements.get(id);
+  },
+  createElement: () => makeElement("created"),
+};
+globalThis.window = { open: () => {} };
+const localBacking = {};
+globalThis.chrome = {
+  storage: {
+    local: {
+      get: async (keys) => {
+        const out = {};
+        for (const key of [].concat(keys)) if (key in localBacking) out[key] = localBacking[key];
+        return out;
+      },
+      set: async (values) => { Object.assign(localBacking, values); return {}; },
+      remove: async () => ({}),
+    },
+    session: { get: async () => ({}), set: async () => ({}), remove: async () => ({}) },
+  },
+  tabs: { query: async () => [{ id: 7, url: "https://scholar.google.com/scholar?q=bayesian" }] },
+  runtime: { sendMessage: () => {} },
+};
+globalThis.__searchResults = {
+  detected: true,
+  patternName: "Google Scholar",
+  items: [
+    { index: 0, url: "https://link.springer.com/article/10.1007/s00001", title: "Correct Title From Search Page" },
+  ],
+};
+// The server response deliberately carries a `title` an old build would have
+// preferred — this is the value the fix must NOT store.
+globalThis.fetch = async () => ({
+  ok: true,
+  json: async () => ({ status: "ok", citekey: "smith2024paper", bib: "main", title: "WRONG - server never really sends this" }),
+});
+
+await import("./popup.js");
+for (let i = 0; i < 20; i += 1) await new Promise((r) => setTimeout(r, 0));
+const clicks = elements.get("capture-all").handlers.click || [];
+if (clicks.length !== 1) throw new Error("expected one capture-all click handler, got " + clicks.length);
+await clicks[0]();
+for (let i = 0; i < 20; i += 1) await new Promise((r) => setTimeout(r, 0));
+
+console.log(JSON.stringify({ recent: localBacking["pzi:recent"] || null }));
+''',
+        tmp_path,
+    )
+
+    recent = result["recent"]
+    assert recent is not None, result
+    assert recent[0]["citekey"] == "smith2024paper", recent
+    assert recent[0]["title"] == "Correct Title From Search Page", recent
+    assert "WRONG" not in recent[0]["title"], recent
+
+
 def test_the_popup_stores_the_api_token_where_it_survives_a_restart(tmp_path: Path) -> None:
     """`storage.session` is cleared when the browser closes, and it *shadows*
     `storage.local` in the merge the background does — so the first capture of
@@ -2821,6 +2951,73 @@ console.log(JSON.stringify({
     # The browser clears the session area on close; the recent list must not be there.
     assert "pzi:recent" in result["inDurableStore"], result
     assert "pzi:recent" not in result["inSessionStore"], result
+
+
+def test_single_capture_recent_title_comes_from_capture_body_not_the_response(tmp_path: Path) -> None:
+    """`/capture` never sends a `title` field (see `capture_payload` in
+    `src/pzi/http_payloads.py`) — reading `result.title` always stored "".
+    `captureCurrentTab` (`background/capture.js`) attaches the page title it
+    already extracted as `result.capture_body.page_title` on every return
+    path, so that is the source now.
+    """
+    result = _run_popup_js_test(
+        r'''
+const elements = new Map();
+const makeElement = (id) => ({
+  id, value: "", checked: false, disabled: false, textContent: "", innerHTML: "",
+  className: "", type: "", style: { cssText: "", display: "" }, children: [], handlers: {},
+  appendChild(child) { this.children.push(child); },
+  addEventListener(event, handler) { (this.handlers[event] ??= []).push(handler); },
+  querySelectorAll: () => [],
+});
+globalThis.document = {
+  getElementById: (id) => {
+    if (!elements.has(id)) elements.set(id, makeElement(id));
+    return elements.get(id);
+  },
+  createElement: () => makeElement("created"),
+};
+globalThis.window = { open: () => {} };
+globalThis.fetch = async () => ({ ok: true, json: async () => ({}) });
+const localBacking = {};
+const sessionBacking = {};
+const area = (backing) => ({
+  get: async (keys) => {
+    const out = {};
+    for (const key of [].concat(keys)) if (key in backing) out[key] = backing[key];
+    return out;
+  },
+  set: async (values) => { Object.assign(backing, values); return {}; },
+  remove: async (keys) => { for (const k of [].concat(keys)) delete backing[k]; return {}; },
+});
+globalThis.chrome = {
+  storage: {
+    local: area(localBacking), session: area(sessionBacking),
+    onChanged: { addListener: () => {}, removeListener: () => {} },
+  },
+  tabs: { query: async () => [{ id: 7, url: "https://paper.test/article" }] },
+  runtime: { sendMessage: () => {} },
+  permissions: { contains: async () => true, request: async () => true, remove: async () => true },
+};
+await import("./popup.js");
+for (let i = 0; i < 20; i += 1) await new Promise((r) => setTimeout(r, 0));
+// The server response carries no `title` (the real contract), but does carry
+// `capture_body.page_title` the way `captureCurrentTab` always attaches it.
+globalThis.__captureResult = {
+  status: "ok", citekey: "smith2024paper", bib: "main",
+  capture_body: { page_title: "Real Extracted Title" },
+};
+await elements.get("go").handlers.click[0]();
+for (let i = 0; i < 20; i += 1) await new Promise((r) => setTimeout(r, 0));
+console.log(JSON.stringify({ recent: localBacking["pzi:recent"] || null }));
+''',
+        tmp_path,
+    )
+
+    recent = result["recent"]
+    assert recent is not None, result
+    assert recent[0]["citekey"] == "smith2024paper", recent
+    assert recent[0]["title"] == "Real Extracted Title", recent
 
 
 def test_configuration_is_not_shadowed_by_session_storage(tmp_path: Path) -> None:

@@ -392,6 +392,38 @@ def test_browser_pdf_step_no_cmd() -> None:
     assert result == record
 
 
+def test_browser_pdf_step_reports_dead_server_distinctly(monkeypatch) -> None:
+    """A dead capture server during discovery must not look like "no PDF found".
+
+    ``discover_via_server_api``'s twin ``download_via_server_api`` tells "server
+    said no PDF" apart from "nothing was listening" via its ``errors`` list;
+    this pins that ``browser_pdf_step`` surfaces the same distinction instead
+    of letting a bare ``None`` fall through silently.
+    """
+    import pzi.server_browser as server_browser
+
+    def fake_discover(api_url, page_url, *, doi=None, auth_token=None, timeout=120, errors=None):
+        if errors is not None:
+            errors.append(f"{api_url}: not reachable (Connection refused)")
+        return None
+
+    monkeypatch.setattr(server_browser, "discover_via_server_api", fake_discover)
+
+    record = {"title": "Paper", "canonical_url": "https://example.com/article"}
+    context: PdfDiscoveryContext = {
+        "api_url": "http://127.0.0.1:8765",
+        "browser_pdf_cmd": None,
+        "raw_value": "",
+    }
+
+    result = browser_pdf_step(record, context)
+
+    assert result.get("pdf_url") is None
+    assert discovery_diagnostics(context) == [
+        "server_browser: http://127.0.0.1:8765: not reachable (Connection refused)"
+    ]
+
+
 def test_unpaywall_step_no_doi() -> None:
     record = {"title": "Paper"}
     context: PdfDiscoveryContext = {"unpaywall_email": "test@example.com"}
@@ -535,6 +567,67 @@ def test_parallel_handles_http_step_exceptions() -> None:
         record, [failing_http, working_browser], context,
     )
     assert result["pdf_url"] == "https://example.com/browser.pdf"
+
+
+def test_parallel_isolates_phase_1_step_exceptions() -> None:
+    """A step ahead of the first HTTP step must not abort the whole add.
+
+    Phase 2 (above) and the sequential dispatcher both isolate a raising step
+    and record it as a diagnostic. Phase 1 (the sequential run-up before the
+    thread pool) had no try/except, so a raising pure step here crashed the
+    whole ``add`` instead.
+    """
+    record: dict[str, object] = {"title": "Paper"}
+    context: PdfDiscoveryContext = {}
+
+    @discovery_phase("pure")
+    def failing_pure(r, c):
+        raise RuntimeError("pure step exploded")
+
+    @discovery_phase("http")
+    def http_step(r, c):
+        return r  # no-op
+
+    @discovery_phase("browser")
+    def working_browser(r, c):
+        updated = dict(r)
+        updated["pdf_url"] = "https://example.com/browser.pdf"
+        return updated
+
+    result = apply_pdf_discovery_parallel(
+        record, [failing_pure, http_step, working_browser], context,
+    )
+
+    assert result["pdf_url"] == "https://example.com/browser.pdf"
+    assert discovery_diagnostics(context) == [
+        "failing_pure: RuntimeError('pure step exploded')"
+    ]
+
+
+def test_parallel_isolates_phase_3_step_exceptions() -> None:
+    """A step after the HTTP pool (the browser fallback, or a low-priority
+    pure step) must not abort the whole add either — same isolation as
+    phase 1 and phase 2.
+    """
+    record: dict[str, object] = {"title": "Paper"}
+    context: PdfDiscoveryContext = {}
+
+    @discovery_phase("http")
+    def http_step(r, c):
+        return r  # no-op
+
+    @discovery_phase("browser")
+    def failing_browser(r, c):
+        raise RuntimeError("browser step exploded")
+
+    result = apply_pdf_discovery_parallel(
+        record, [http_step, failing_browser], context,
+    )
+
+    assert result.get("pdf_url") is None
+    assert discovery_diagnostics(context) == [
+        "failing_browser: RuntimeError('browser step exploded')"
+    ]
 
 
 def test_unpaywall_step_skips_without_email() -> None:

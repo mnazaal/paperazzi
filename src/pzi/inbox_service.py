@@ -20,6 +20,7 @@ from pzi.bib_repository import (
     LOCK_TIMEOUT_SECONDS,
     acquire_lock_with_timeout,
 )
+from pzi.errors import REASON_UNAVAILABLE
 from pzi.fileio import fsync_parent_dir
 from pzi.tag_service import normalize_tags
 
@@ -50,6 +51,11 @@ class DrainResult(TypedDict):
     counts: dict[str, int]
     items: list[DrainItem]
     errors: list[str]
+    #: Structured failure reason (`pzi.errors.REASON_*`) — present only when
+    #: `status` is `"error"`, so `pzi.http_status.status_for_service_result`
+    #: and `pzi.errors.exit_code_for_error` can classify the failure without
+    #: matching on `errors[]` message text.
+    reason: NotRequired[str]
 
 
 # ---------------------------------------------------------------------------
@@ -210,6 +216,10 @@ def drain_inbox(
             "errors": [],
         }
     except OSError as exc:
+        # A dependency the caller needs (readable access to the inbox file) is
+        # not there right now — `REASON_UNAVAILABLE`, not an unclassified
+        # error, so the HTTP route answers 503 and the CLI exits the same code
+        # it always has instead of both falling back to a generic 400/error.
         return {
             "status": "error",
             "inbox_file": inbox_file,
@@ -218,6 +228,7 @@ def drain_inbox(
             "counts": {"added": 0, "exists": 0, "failed": 0},
             "items": [],
             "errors": [f"cannot read inbox file: {exc}"],
+            "reason": REASON_UNAVAILABLE,
         }
 
     raw_lines = raw_text.splitlines()

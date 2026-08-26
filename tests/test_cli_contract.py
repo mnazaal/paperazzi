@@ -1096,6 +1096,7 @@ def test_every_json_failure_exits_the_code_its_reason_names(
         (["search", "--query", "x", "--target", missing_bib], True),
         (["entries", "nosuchkey"], True),
         (["entries", "a1", "--stats"], True),
+        (["update", "--target", missing_bib], True),
         (["import", missing_file], True),
         (["add", "--from-file", missing_file, "--delay", "0"], True),
         (["add", "--from-file", str(empty_file), "--delay", "0"], True),
@@ -1111,6 +1112,52 @@ def test_every_json_failure_exits_the_code_its_reason_names(
         reason = envelope.get("reason")
         assert isinstance(reason, str), (argv, envelope)
         assert exit_code_for_error({"reason": reason}) == code, (argv, reason, code)
+
+
+def test_add_capture_failure_maps_the_reason_the_result_carries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_capture_and_render`'s failure branch, not covered by the spanning test above.
+
+    That test's own `add` case exercises the backend-not-ready refusal, a
+    different branch with a fixed `reason`. This one reaches the capture
+    service's own failure result (`add_service.py` can report `reason: usage`
+    for input it rejects past the CLI's own pre-check, e.g. after a page fetch)
+    — which used to exit a hardcoded `ENVIRONMENT` regardless of what the
+    envelope said.
+    """
+    import contextlib
+    import json
+
+    import pzi.commands.add
+    import pzi.ts_backend
+
+    config_path, _ = _library(tmp_path, ARTICLE)
+
+    @contextlib.contextmanager
+    def _backend(*_args, **_kwargs):
+        yield {"ready": True}
+
+    monkeypatch.setattr(pzi.ts_backend, "backend_session", _backend)
+
+    def _fake_capture_to_bib(*_args, **_kwargs):
+        return {
+            "status": "error",
+            "message": "invalid input",
+            "errors": ["bad"],
+            "warnings": [],
+            "reason": "usage",
+        }
+
+    monkeypatch.setattr(pzi.commands.add, "capture_to_bib", _fake_capture_to_bib)
+
+    code, out, _err = _run(
+        ["add", "10.1234/x", "--json", "--config", str(config_path)], tmp_path
+    )
+    envelope = json.loads(out)
+    assert envelope["status"] == "error"
+    assert envelope["reason"] == "usage"
+    assert exit_code_for_error({"reason": "usage"}) == code
 
 
 def test_library_list_aligns_its_columns_and_marks_the_default(
@@ -1244,6 +1291,38 @@ def test_a_dropped_duplicate_is_reported_by_every_command_that_reads_it(
         code, _out, err = _run([*argv, "--config", str(config_path)], tmp_path)
         assert code == exit_codes.FINDINGS, (argv, err)
         assert "duplicate citekey" in err, (argv, err)
+
+
+def test_entries_detail_json_does_not_also_print_warnings_to_stderr(
+    tmp_path: Path,
+) -> None:
+    """`entries KEY --json` carries warnings in the envelope, not stderr too.
+
+    `_run_detail` printed the read warnings before branching on `--json`, so
+    the JSON invocation emitted them to stderr *and* the envelope — its
+    siblings `_run_list` and `_run_stats` print them only in text mode. One
+    command, two rules for the same channel.
+    """
+    import json
+
+    bib_path = tmp_path / "dup.bib"
+    bib_path.write_text(
+        "@article{a1,\n  title = {A},\n}\n@article{a1,\n  title = {A again},\n}\n",
+        encoding="utf-8",
+    )
+    config_path = _config_naming(tmp_path, bib_path)
+
+    code, out, err = _run(
+        ["entries", "a1", "--json", "--config", str(config_path)], tmp_path
+    )
+    assert code == exit_codes.FINDINGS
+    assert err == "", err
+    envelope = json.loads(out)
+    assert any("duplicate citekey" in w for w in envelope.get("warnings") or [])
+
+    code, _out, err = _run(["entries", "a1", "--config", str(config_path)], tmp_path)
+    assert code == exit_codes.FINDINGS
+    assert "duplicate citekey" in err
 
 
 def test_the_partial_read_verdict_is_the_same_under_json(tmp_path: Path) -> None:

@@ -17,7 +17,7 @@ from pzi.bib_repository import (
     with_bib_lock,
 )
 from pzi.config import BibResolutionFailure, load_bib_target, load_config_file
-from pzi.errors import REASON_CONFIG
+from pzi.errors import REASON_CONFIG, REASON_NOT_FOUND
 from pzi.identifiers import is_preprint
 from pzi.pdf_planning import pdf_file_present
 
@@ -406,7 +406,7 @@ def entry_detail(
             "citekey": citekey,
             "bib_name": bib["name"],
             "message": f"entry not found: {citekey}",
-            "reason": "not_found",
+            "reason": REASON_NOT_FOUND,
             "errors": [f"no entry with citekey {citekey}"],
         }
 
@@ -499,7 +499,7 @@ def delete_entry(
             "citekey": citekey,
             "bib_path": bib_path,
             "message": f"entry not found: {citekey}",
-            "reason": "not_found",
+            "reason": REASON_NOT_FOUND,
             "errors": [f"no entry with citekey {citekey}"],
         }
 
@@ -533,7 +533,7 @@ def delete_entry(
             "citekey": citekey,
             "bib_path": bib_path,
             "message": f"entry not found: {citekey}",
-            "reason": "not_found",
+            "reason": REASON_NOT_FOUND,
             "errors": [f"no entry with citekey {citekey}"],
         }
 

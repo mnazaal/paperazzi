@@ -76,13 +76,6 @@ def _describe_action(action: argparse.Action) -> str | None:
     return "    " + " ".join(parts) + _format_default(action)
 
 
-def _subparsers(parser: argparse.ArgumentParser) -> dict[str, argparse.ArgumentParser]:
-    for action in parser._actions:
-        if isinstance(action, argparse._SubParsersAction):
-            return dict(action.choices)
-    return {}
-
-
 def describe_parser(parser: argparse.ArgumentParser, path: tuple[str, ...] = ()) -> list[str]:
     """The full command tree as sorted, diffable lines."""
     label = " ".join(("pzi", *path))

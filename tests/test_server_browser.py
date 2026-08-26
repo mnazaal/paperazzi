@@ -43,6 +43,35 @@ def test_discover_sends_auth_token_under_x_pzi_token_header(monkeypatch) -> None
     assert "X-pzi-auth" not in headers
 
 
+def test_discover_reports_unreachable_server_distinctly(dead_port: int) -> None:
+    """The twin ``download_via_server_api`` tells "no PDF" apart from "nothing
+    was listening" via its ``errors`` list; ``discover_via_server_api`` must
+    do the same instead of collapsing both into a bare ``None``.
+    """
+    errors: list[str] = []
+    result = server_browser.discover_via_server_api(
+        f"http://127.0.0.1:{dead_port}", "https://example.com/article",
+        timeout=2, errors=errors,
+    )
+    assert result is None
+    assert errors and "not reachable" in errors[0]
+
+
+def test_discover_reports_no_pdf_distinctly_from_unreachable(monkeypatch) -> None:
+    """The contrast: a server that answers but has no PDF is a different
+    diagnostic than one that never answered at all.
+    """
+    _capture_urlopen(monkeypatch, {"pdf_url": None})
+
+    errors: list[str] = []
+    result = server_browser.discover_via_server_api(
+        "http://127.0.0.1:8765", "https://example.com/article", errors=errors,
+    )
+    assert result is None
+    assert errors and "no PDF" in errors[0]
+    assert "not reachable" not in errors[0]
+
+
 def test_download_sends_auth_token_under_x_pzi_token_header(monkeypatch) -> None:
     pdf_b64 = base64.b64encode(b"%PDF-1.4\n").decode()
     captured = _capture_urlopen(monkeypatch, {"pdf_base64": pdf_b64})

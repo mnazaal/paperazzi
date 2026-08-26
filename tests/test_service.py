@@ -6,7 +6,6 @@ import pytest
 
 from pzi.add_service import (
     add_input_to_bib,
-    add_record_to_bib,
     add_record_with_bib,
     ensure_citekey_for_write,
     existing_citekeys,
@@ -20,27 +19,18 @@ from pzi.errors import REASON_USAGE, exit_code_for_error
 from pzi.exit_codes import USAGE as _USAGE
 
 
-def test_add_record_to_bib_inserts_new_entry(tmp_path: Path) -> None:
-    config_path = tmp_path / "config.toml"
+def test_add_record_with_bib_inserts_new_entry(tmp_path: Path) -> None:
     bib_path = tmp_path / "library.bib"
-    config_path.write_text(
-        f"""
-[[bibs]]
-name = "ml"
-path = "{bib_path}"
-default = true
-""".strip()
-    )
+    bib = {"name": "ml", "path": str(bib_path), "papers_dir": str(tmp_path / "papers"),
+           "default": True}
 
-    result = add_record_to_bib(
-        config_path=str(config_path),
-        home_dir=str(tmp_path),
+    result = add_record_with_bib(
+        bib=cast(dict, bib),
         record={
             "citekey": "smith2024graph",
             "title": "Graph Parsers",
             "doi": "10.1000/foo",
         },
-        bib_selector=None,
         dry_run=False,
     )
 
@@ -65,27 +55,18 @@ default = true
     )
 
 
-def test_add_record_to_bib_supports_dry_run(tmp_path: Path) -> None:
-    config_path = tmp_path / "config.toml"
+def test_add_record_with_bib_supports_dry_run(tmp_path: Path) -> None:
     bib_path = tmp_path / "library.bib"
-    config_path.write_text(
-        f"""
-[[bibs]]
-name = "ml"
-path = "{bib_path}"
-default = true
-""".strip()
-    )
+    bib = {"name": "ml", "path": str(bib_path), "papers_dir": str(tmp_path / "papers"),
+           "default": True}
 
-    result = add_record_to_bib(
-        config_path=str(config_path),
-        home_dir=str(tmp_path),
+    result = add_record_with_bib(
+        bib=cast(dict, bib),
         record={
             "citekey": "smith2024graph",
             "title": "Graph Parsers",
             "doi": "10.1000/foo",
         },
-        bib_selector=None,
         dry_run=True,
     )
 
@@ -107,17 +88,10 @@ default = true
     assert not bib_path.exists()
 
 
-def test_add_record_to_bib_updates_existing_entry(tmp_path: Path) -> None:
-    config_path = tmp_path / "config.toml"
+def test_add_record_with_bib_updates_existing_entry(tmp_path: Path) -> None:
     bib_path = tmp_path / "library.bib"
-    config_path.write_text(
-        f"""
-[[bibs]]
-name = "ml"
-path = "{bib_path}"
-default = true
-""".strip()
-    )
+    bib = {"name": "ml", "path": str(bib_path), "papers_dir": str(tmp_path / "papers"),
+           "default": True}
     bib_path.write_text(
         """
 @article{smith2024graph,
@@ -127,16 +101,14 @@ default = true
 """.strip()
     )
 
-    result = add_record_to_bib(
-        config_path=str(config_path),
-        home_dir=str(tmp_path),
+    result = add_record_with_bib(
+        bib=cast(dict, bib),
         record={
             "citekey": "smith2024graph",
             "title": "Graph Parsers for Structured Search",
             "doi": "10.1000/foo",
             "tags": ["graphs"],
         },
-        bib_selector=None,
         dry_run=False,
     )
 
@@ -157,19 +129,12 @@ default = true
     assert "title = {Graph Parsers for Structured Search}" in bib_path.read_text()
 
 
-def test_add_record_to_bib_updates_existing_entry_with_missing_local_pdf_path(
+def test_add_record_with_bib_updates_existing_entry_with_missing_local_pdf_path(
     tmp_path: Path,
 ) -> None:
-    config_path = tmp_path / "config.toml"
     bib_path = tmp_path / "library.bib"
-    config_path.write_text(
-        f"""
-[[bibs]]
-name = "ml"
-path = "{bib_path}"
-default = true
-""".strip()
-    )
+    bib = {"name": "ml", "path": str(bib_path), "papers_dir": str(tmp_path / "papers"),
+           "default": True}
     bib_path.write_text(
         """
 @article{smith2024graph,
@@ -179,15 +144,13 @@ default = true
 """.strip()
     )
 
-    result = add_record_to_bib(
-        config_path=str(config_path),
-        home_dir=str(tmp_path),
+    result = add_record_with_bib(
+        bib=cast(dict, bib),
         record={
             "citekey": "ignored-new-key",
             "doi": "10.1000/foo",
             "local_pdf_path": "papers/smith2024graph.pdf",
         },
-        bib_selector=None,
         dry_run=False,
     )
 
@@ -207,14 +170,15 @@ default = true
     assert "file = {papers/smith2024graph.pdf}" in bib_path.read_text()
 
 
-def test_add_record_to_bib_reports_config_errors(tmp_path: Path) -> None:
+def test_add_input_to_bib_reports_config_errors(tmp_path: Path) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text("bibs = []")
 
-    result = add_record_to_bib(
+    result = add_input_to_bib(
         config_path=str(config_path),
         home_dir=str(tmp_path),
-        record={"citekey": "smith2024graph"},
+        value="10.1000/foo",
+        record_overrides={},
         bib_selector=None,
         dry_run=False,
     )
@@ -237,7 +201,7 @@ def test_add_record_to_bib_reports_config_errors(tmp_path: Path) -> None:
     }
 
 
-def test_add_record_to_bib_reports_ambiguous_selection(tmp_path: Path) -> None:
+def test_add_input_to_bib_reports_ambiguous_selection(tmp_path: Path) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text(
         """
@@ -251,10 +215,11 @@ path = "/tmp/systems.bib"
 """.strip()
     )
 
-    result = add_record_to_bib(
+    result = add_input_to_bib(
         config_path=str(config_path),
         home_dir=str(tmp_path),
-        record={"citekey": "smith2024graph"},
+        value="10.1000/foo",
+        record_overrides={},
         bib_selector=None,
         dry_run=False,
     )
@@ -270,28 +235,22 @@ path = "/tmp/systems.bib"
         "dry_run": False,
         "message": "could not resolve target bib",
         "warnings": [],
-        "errors": ["no matching bib found or selection is ambiguous"],
+        # The sibling wording (`_resolve_capture_context`'s), not the old
+        # deleted single-record capture wrapper's phrasing — the two drifted
+        # before that dead function was removed.
+        "errors": ["no matching bib found"],
         "reason": "config",
     }
 
 
-def test_add_record_to_bib_requires_citekey(tmp_path: Path) -> None:
-    config_path = tmp_path / "config.toml"
+def test_add_record_with_bib_requires_citekey(tmp_path: Path) -> None:
     bib_path = tmp_path / "library.bib"
-    config_path.write_text(
-        f"""
-[[bibs]]
-name = "ml"
-path = "{bib_path}"
-default = true
-""".strip()
-    )
+    bib = {"name": "ml", "path": str(bib_path), "papers_dir": str(tmp_path / "papers"),
+           "default": True}
 
-    result = add_record_to_bib(
-        config_path=str(config_path),
-        home_dir=str(tmp_path),
+    result = add_record_with_bib(
+        bib=cast(dict, bib),
         record={"title": "Graph Parsers"},
-        bib_selector=None,
         dry_run=False,
     )
 
@@ -310,17 +269,10 @@ default = true
     }
 
 
-def test_add_record_to_bib_generates_collision_free_citekey(tmp_path: Path) -> None:
-    config_path = tmp_path / "config.toml"
+def test_add_record_with_bib_generates_collision_free_citekey(tmp_path: Path) -> None:
     bib_path = tmp_path / "library.bib"
-    config_path.write_text(
-        f"""
-[[bibs]]
-name = "ml"
-path = "{bib_path}"
-default = true
-""".strip()
-    )
+    bib = {"name": "ml", "path": str(bib_path), "papers_dir": str(tmp_path / "papers"),
+           "default": True}
     bib_path.write_text(
         """
 @article{smith2024graph,
@@ -329,15 +281,13 @@ default = true
 """.strip()
     )
 
-    result = add_record_to_bib(
-        config_path=str(config_path),
-        home_dir=str(tmp_path),
+    result = add_record_with_bib(
+        bib=cast(dict, bib),
         record={
             "title": "Graph Systems",
             "authors": ["Smith, Jane"],
             "year": 2024,
         },
-        bib_selector=None,
         dry_run=True,
     )
 
@@ -346,36 +296,26 @@ default = true
     assert result["changed_fields"] == ["authors", "citekey", "title", "year"]
 
 
-def test_add_record_to_bib_writes_relative_file_field_when_configured(
+def test_add_record_with_bib_writes_relative_file_field_when_configured(
     tmp_path: Path,
 ) -> None:
-    config_path = tmp_path / "config.toml"
     bib_path = tmp_path / "library.bib"
     pdf_path = tmp_path / "papers" / "smith2024.pdf"
     pdf_path.parent.mkdir()
     pdf_path.write_bytes(b"%PDF-1.4\n")
-    config_path.write_text(
-        f"""
-pdf_file_path_style = "relative"
+    bib = {"name": "ml", "path": str(bib_path), "papers_dir": str(pdf_path.parent),
+           "default": True}
 
-[[bibs]]
-name = "ml"
-path = "{bib_path}"
-default = true
-""".strip()
-    )
-
-    result = add_record_to_bib(
-        config_path=str(config_path),
-        home_dir=str(tmp_path),
+    result = add_record_with_bib(
+        bib=cast(dict, bib),
         record={
             "title": "Graph Parsers",
             "authors": ["Smith, Jane"],
             "year": 2024,
             "local_pdf_path": str(pdf_path),
         },
-        bib_selector=None,
         dry_run=False,
+        file_path_style="relative",
     )
 
     assert result["status"] == "ok"
@@ -2112,28 +2052,21 @@ def test_a_pdf_failure_does_not_lose_the_metadata(tmp_path, monkeypatch) -> None
     bib_path.write_text("", encoding="utf-8")
     papers = tmp_path / "papers"
     papers.mkdir()
-    config_path = tmp_path / "config.toml"
-    config_path.write_text(
-        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\n'
-        f'papers_dir = "{papers}"\ndefault = true\n',
-        encoding="utf-8",
-    )
+    bib = {"name": "ml", "path": str(bib_path), "papers_dir": str(papers), "default": True}
 
     def _explode(**_kwargs):
         raise OSError(28, "No space left on device")
 
     monkeypatch.setattr(add_service, "attach_pdf_if_available", _explode)
 
-    result = add_service.add_record_to_bib(
-        config_path=str(config_path),
-        home_dir=str(tmp_path),
+    result = add_service.add_record_with_bib(
+        bib=cast(dict, bib),
         record={
             "citekey": "smith2024graph",
             "title": "Graph Parsers",
             "year": 2024,
             "pdf_url": "https://example.com/paper.pdf",
         },
-        bib_selector=None,
         dry_run=False,
     )
 

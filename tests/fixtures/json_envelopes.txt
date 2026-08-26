@@ -78,6 +78,7 @@ pzi library check [error]
     counts
     errors
     items
+    reason
     status
     strict
     total

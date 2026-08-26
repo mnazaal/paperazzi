@@ -37,13 +37,33 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 def _handler_class(resolvable: Mapping[str, dict]) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
-            # is_ts_reachable() probes with a plain GET.
+            # is_ts_reachable() and the startup health-check both probe the
+            # root with a plain GET — never `/web` or `/search`, which only
+            # ever receive POST in the real client. Answering every GET path
+            # the same way would hide a client that started sending GET to a
+            # POST-only endpoint.
+            if self.path not in {"/", ""}:
+                self.send_response(404)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             self.send_response(200)
             self.send_header("Content-Length", "2")
             self.end_headers()
             self.wfile.write(b"ok")
 
         def do_POST(self) -> None:
+            # The real server answers `/web` and `/search`, and nothing else —
+            # dispatching on the needle alone (the previous version) meant a
+            # client bug that posted an identifier to the wrong path, or a
+            # typo'd endpoint string, still got a 200 with the matching item.
+            # That is exactly the shape this stub exists to catch, since the
+            # translation-server path has no other live coverage.
+            if self.path not in {"/web", "/search"}:
+                self.send_response(404)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             length = int(self.headers.get("Content-Length") or 0)
             body = self.rfile.read(length).decode("utf-8")
             for needle, item in resolvable.items():

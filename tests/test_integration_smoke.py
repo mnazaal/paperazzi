@@ -12,10 +12,11 @@ import os
 import tempfile
 from pathlib import Path
 
-from pzi.add_service import add_record_to_bib
+from pzi.add_service import add_record_with_bib
 from pzi.bib_repository import read_bib_file
 from pzi.bib_service import delete_entry
 from pzi.clean_service import validate_library
+from pzi.config import BibResolutionFailure, load_bib_target
 from pzi.export_service import export_bibtex, export_json
 
 
@@ -31,6 +32,29 @@ def _make_record(citekey, title, year, doi=None, authors=None):
     }
 
 
+def _add_via_config(*, config_path, home_dir, record, bib_selector, dry_run):
+    """Resolve the config's bib, then capture through the live write path.
+
+    Inlines what the now-deleted single-record capture wrapper used to do — resolve
+    then delegate to `add_record_with_bib` — so these smoke tests keep
+    exercising the same config-to-write pipeline production uses.
+    """
+    resolved = load_bib_target(
+        config_path=config_path, home_dir=home_dir, bib_selector=bib_selector,
+    )
+    assert not isinstance(resolved, BibResolutionFailure)
+    config, bib = resolved
+    return add_record_with_bib(
+        bib=bib,
+        record=record,
+        dry_run=dry_run,
+        browser_hook=config.get("browser_hook", True),
+        citekey_format=config.get("citekey_format"),
+        pdf_filename_format=config.get("pdf_filename_format"),
+        file_path_style=config.get("pdf_file_path_style", "absolute"),
+    )
+
+
 # ── Pipeline integration tests ──────────────────────────────────────────────
 
 
@@ -43,7 +67,7 @@ def test_add_record_and_read_back(write_app_config) -> None:
         )
         bib_path = os.path.join(td, "main.bib")
 
-        result = add_record_to_bib(
+        result = _add_via_config(
             config_path=config_path,
             home_dir=td,
             record=_make_record("smith2024great", "A Great Paper", 2024,
@@ -71,7 +95,7 @@ def test_add_and_validate(write_app_config) -> None:
         papers_dir = os.path.join(td, "papers")
         bib_path = os.path.join(td, "main.bib")
 
-        add_record_to_bib(
+        _add_via_config(
             config_path=config_path, home_dir=td,
             record=_make_record("test2024", "Test Title", 2024),
             bib_selector=None, dry_run=False,
@@ -92,7 +116,7 @@ def test_add_and_export_json(write_app_config) -> None:
         )
         bib_path = os.path.join(td, "main.bib")
 
-        add_record_to_bib(
+        _add_via_config(
             config_path=config_path, home_dir=td,
             record=_make_record("export2024", "Export Me", 2024,
                                 doi="10.5678/export.1", authors=["Doe, John", "Smith, Alice"]),
@@ -120,7 +144,7 @@ def test_add_and_export_bibtex(write_app_config) -> None:
         )
         bib_path = os.path.join(td, "main.bib")
 
-        add_record_to_bib(
+        _add_via_config(
             config_path=config_path, home_dir=td,
             record=_make_record("bibexport2024", "BibTeX Export", 2024),
             bib_selector=None, dry_run=False,
@@ -143,7 +167,7 @@ def test_add_dedupe_by_doi(write_app_config) -> None:
         bib_path = os.path.join(td, "main.bib")
 
         # First add
-        r1 = add_record_to_bib(
+        r1 = _add_via_config(
             config_path=config_path, home_dir=td,
             record=_make_record("first2024", "First Version", 2024,
                                 doi="10.1234/dup.001"),
@@ -152,7 +176,7 @@ def test_add_dedupe_by_doi(write_app_config) -> None:
         assert r1["citekey"] == "first2024"
 
         # Second add — same DOI, should merge
-        _r2 = add_record_to_bib(
+        _r2 = _add_via_config(
             config_path=config_path, home_dir=td,
             record=_make_record("second2024", "Second Version", 2024,
                                 doi="10.1234/dup.001"),
@@ -172,7 +196,7 @@ def test_add_delete_verify_gone(write_app_config) -> None:
         )
         bib_path = os.path.join(td, "main.bib")
 
-        add_record_to_bib(
+        _add_via_config(
             config_path=config_path, home_dir=td,
             record=_make_record("todelete2024", "Delete Me", 2024),
             bib_selector=None, dry_run=False,
@@ -201,7 +225,7 @@ def test_add_orphan_pdf_detected(write_app_config) -> None:
         os.makedirs(papers_dir, exist_ok=True)
 
         # Add a record (no PDF)
-        add_record_to_bib(
+        _add_via_config(
             config_path=config_path, home_dir=td,
             record=_make_record("nopdf2024", "No PDF", 2024),
             bib_selector=None, dry_run=False,

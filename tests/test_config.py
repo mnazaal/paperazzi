@@ -549,6 +549,28 @@ def test_absent_desktop_fallback_hosts_still_means_defaults() -> None:
     )
 
 
+def test_desktop_fallback_hosts_rejects_non_string_elements() -> None:
+    """`_normalize_host_list` silently drops any non-string element, so a list
+    that merely passed the old `isinstance(..., list)` check — e.g. `[123]` —
+    loaded with no diagnostic at all and the feature quietly turned off. Same
+    silent-vanish hazard already closed for `api_allowed_origins` and
+    `capture_source_dirs`.
+    """
+    config, errors = validate_app_config(
+        {
+            "desktop_fallback_hosts": [123],
+            "bibs": [{"name": "ml", "path": "~/ml.bib"}],
+        },
+        home_dir=HOME,
+    )
+
+    assert config is None
+    assert any(
+        "desktop_fallback_hosts must be a list of strings when provided" in error
+        for error in errors
+    ), errors
+
+
 def test_a_relative_bib_path_resolves_against_the_config_file(tmp_path, monkeypatch) -> None:
     """It resolved against the *current directory*, so `path = "ml.bib"` named a
     different file depending on where `pzi` happened to be run from — and a
@@ -734,7 +756,7 @@ _BAD_VALUES: list[tuple[str, object, str]] = [
     (
         "desktop_fallback_hosts",
         "example.com",
-        "desktop_fallback_hosts must be a list when provided",
+        "desktop_fallback_hosts must be a list of strings when provided",
     ),
     ("ezproxy_host", "https://proxy.example.edu", "ezproxy_host must be a bare hostname"),
     ("flaresolverr_url", "ftp://example.com", "flaresolverr_url must be an http or https URL"),

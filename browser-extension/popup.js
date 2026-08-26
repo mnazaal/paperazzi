@@ -321,7 +321,11 @@ async function doMultiCapture(all) {
       const data = await response.json().catch(() => null);
       results.push(data || { status: "error", message: "invalid JSON" });
       if (data && data.citekey) {
-        _storeRecent(data.citekey, data.title || "", data.bib || bib || "");
+        // `data` is the raw `/capture` response — no `title` key there either
+        // (same server contract as the single-capture path above). The
+        // search-result item already carries the title the page listed it
+        // under, from before this request went out.
+        _storeRecent(data.citekey, item.title || "", data.bib || bib || "");
       }
     } catch (err) {
       results.push({ status: "error", message: err?.message || String(err), item_url: item.url });
@@ -506,7 +510,12 @@ async function doSingleCapture() {
     summary.textContent = formatCaptureResult(result);
     raw.textContent = JSON.stringify(result, null, 2);
     if (result.citekey) {
-      _storeRecent(result.citekey, result.title || "", result.bib || "").then(() => _initRecent());
+      // The server never sends `title` — `capture_payload` has no such key
+      // (see src/pzi/http_payloads.py). The page title the popup already
+      // extracted rides along on `capture_body.page_title`, set by
+      // `captureCurrentTab` on every return path, success or error.
+      const title = result.capture_body?.page_title || "";
+      _storeRecent(result.citekey, title, result.bib || "").then(() => _initRecent());
     }
   } catch (err) {
     const result = stampPopupResult({ status: "error", errors: [err?.message || String(err)] });

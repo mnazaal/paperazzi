@@ -7,7 +7,12 @@ from typing import Any, TextIO
 
 from pzi import cli_json, exit_codes
 from pzi.cli_render import error_lines, render_pdf_success
-from pzi.commands.common import batch_exit_code, emit_usage_error, print_lines
+from pzi.commands.common import (
+    batch_exit_code,
+    emit_usage_error,
+    print_lines,
+    print_read_warnings,
+)
 from pzi.errors import exit_code_for_error
 from pzi.pdf_service import attach_pdf, retry_failed_pdfs, retry_pdf
 
@@ -39,14 +44,14 @@ def run_pdf_command(
         )
         if as_json:
             cli_json.emit_result(result, stdout, command="pdf attach", items=[])
-            _print_warnings(result, stderr)
+            print_read_warnings(result, stderr)
             return _pdf_exit_code(result)
         if result["status"] == "ok":
             print(render_pdf_success("attached", result), file=stdout)
-            _print_warnings(result, stderr)
+            print_read_warnings(result, stderr)
             return exit_codes.OK
         print_lines(error_lines(result["message"], result["errors"]), stderr)
-        _print_warnings(result, stderr)
+        print_read_warnings(result, stderr)
         return _pdf_exit_code(result)
 
     if getattr(args, "failed_only", False):
@@ -73,14 +78,14 @@ def run_pdf_command(
             cli_json.emit_result(
                 result, stdout, command="pdf retry", items=result.get("failures") or [],
             )
-            _print_warnings(result, stderr)
+            print_read_warnings(result, stderr)
             if result["status"] == "error":
-                return exit_codes.ENVIRONMENT
+                return _pdf_exit_code(result)
             return _failed_only_exit_code(result)
         if result["status"] == "error":
             print_lines(error_lines(result["message"], result["errors"]), stderr)
-            _print_warnings(result, stderr)
-            return exit_codes.ENVIRONMENT
+            print_read_warnings(result, stderr)
+            return _pdf_exit_code(result)
 
         lines = [
             f"bib: {result['bib_name']}",
@@ -93,7 +98,7 @@ def run_pdf_command(
             for failure in result["failures"]:
                 lines.append(f"  {failure['citekey']}: {failure['error']}")
         print_lines(lines, stdout)
-        _print_warnings(result, stderr)
+        print_read_warnings(result, stderr)
         # Mirror the JSON branch above: the exit code must not depend on the
         # output format, and this path has just printed the failure list.
         return _failed_only_exit_code(result)
@@ -115,30 +120,15 @@ def run_pdf_command(
     )
     if as_json:
         cli_json.emit_result(result, stdout, command="pdf retry", items=[])
-        _print_warnings(result, stderr)
+        print_read_warnings(result, stderr)
         return _pdf_exit_code(result)
     if result["status"] == "ok":
         print(render_pdf_success("fetched", result), file=stdout)
-        _print_warnings(result, stderr)
+        print_read_warnings(result, stderr)
         return exit_codes.OK
     print_lines(error_lines(result["message"], result["errors"]), stderr)
-    _print_warnings(result, stderr)
+    print_read_warnings(result, stderr)
     return _pdf_exit_code(result)
-
-
-def _print_warnings(result, stderr) -> None:
-    """Render the service's warnings, which this runner never read.
-
-    `pdf_service` was explicitly fixed to return acquisition warnings — its
-    comment says hardcoding `[]` "meant the same acquisition reported
-    differently depending on which command performed it" — and then the runner
-    kept dropping them, so the same fix produced the same asymmetry one layer
-    up. `commands/add.py` prints them. Reproduced with `_superseded_pdf_warning`:
-    re-attaching leaves the previous PDF on disk and said so only under `--json`.
-    The FlareSolverr terms-of-service notice is hidden the same way.
-    """
-    for warning in result.get("warnings") or []:
-        print(f"warning: {warning}", file=stderr)
 
 
 def _failed_only_exit_code(result) -> int:

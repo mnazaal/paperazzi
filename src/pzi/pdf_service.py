@@ -24,7 +24,7 @@ from pzi.config import (
     BibResolutionFailure,
     load_bib_target,
 )
-from pzi.errors import REASON_CONFIG, REASON_USAGE
+from pzi.errors import REASON_CONFIG, REASON_NOT_FOUND, REASON_USAGE
 from pzi.pdf import (
     fetch_and_store_pdf_trying_sources,
     fetch_and_store_pdf_with_fallbacks,
@@ -175,7 +175,7 @@ def retry_pdf(
             "citekey": citekey,
             "local_pdf_path": None,
             "message": "citekey not found",
-            "reason": "not_found",
+            "reason": REASON_NOT_FOUND,
             "warnings": [],
             "errors": [f"citekey not found: {citekey}"],
         }
@@ -247,7 +247,7 @@ def retry_pdf(
             "citekey": citekey,
             "local_pdf_path": None,
             "message": "citekey disappeared",
-            "reason": "not_found",
+            "reason": REASON_NOT_FOUND,
             "warnings": [],
             "errors": [f"citekey not found: {citekey}"],
         }
@@ -445,7 +445,7 @@ def attach_pdf(
             "local_pdf_path": None,
             "source": source,
             "message": "citekey not found",
-            "reason": "not_found",
+            "reason": REASON_NOT_FOUND,
             "warnings": [],
             "errors": [f"citekey not found: {citekey}"],
         }
@@ -502,7 +502,7 @@ def attach_pdf(
             "local_pdf_path": None,
             "source": source,
             "message": "citekey disappeared",
-            "reason": "not_found",
+            "reason": REASON_NOT_FOUND,
             "warnings": [],
             "errors": [f"citekey not found: {citekey}"],
         }
@@ -664,7 +664,7 @@ def _attach_pdf_data(
             "local_pdf_path": None,
             "source_url": source_url,
             "message": "citekey not found",
-            "reason": "not_found",
+            "reason": REASON_NOT_FOUND,
             "warnings": [],
             "errors": [f"citekey not found: {citekey}"],
         }
@@ -705,7 +705,7 @@ def _attach_pdf_data(
             "local_pdf_path": None,
             "source_url": source_url,
             "message": "citekey disappeared",
-            "reason": "not_found",
+            "reason": REASON_NOT_FOUND,
             "warnings": [],
             "errors": [f"citekey not found: {citekey}"],
         }

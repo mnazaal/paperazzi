@@ -394,9 +394,14 @@ def ensure_translation_server(
             return _build_translation_server(
                 ts_dir, build_dir, node_bin, stdout=stdout, stderr=stderr
             )
-        except BaseException:
+        finally:
+            # `_build_translation_server` reports a clone/npm/patch failure by
+            # returning `None`, not by raising, so cleanup keyed only on the
+            # exception path missed it — leaving `ts.new.<pid>` behind, and the
+            # pid in the name means no later run's `_needs_reinstall` check ever
+            # revisits it to clean it up. On the success path build_dir has
+            # already been renamed to ts_dir, so this is a no-op.
             shutil.rmtree(build_dir, ignore_errors=True)
-            raise
 
 
 @contextmanager
