@@ -38,24 +38,21 @@ def _fail_early(
     stdout at exit 5. `inbox` is the command most likely to run unattended from
     cron, which is exactly the caller that cannot read prose.
     """
-    if as_json:
-        cli_json.emit_result(
-            {
-                "status": "error",
-                "inbox_file": str(inbox_path),
-                "dry_run": dry_run,
-                "total": 0,
-                "counts": {"added": 0, "exists": 0, "failed": 0},
-                "items": [],
-                "errors": [message],
-                "reason": reason,
-            },
-            stdout,
-            command="inbox",
-        )
-    else:
-        print(message, file=stderr)
-    return exit_code_for_error({"reason": reason})
+    return cli_json.emit_failure(
+        message,
+        command="inbox",
+        reason=reason,
+        as_json=as_json,
+        stdout=stdout,
+        stderr=stderr,
+        extra={
+            "inbox_file": str(inbox_path),
+            "dry_run": dry_run,
+            "total": 0,
+            "counts": {"added": 0, "exists": 0, "failed": 0},
+            "items": [],
+        },
+    )
 
 
 def run_inbox_command(

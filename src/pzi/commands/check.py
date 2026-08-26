@@ -115,14 +115,9 @@ def run_check_command(
             stderr=stderr,
         )
     limit: int | None = getattr(args, "limit", None)
-    if limit is not None and limit < 1:
-        return emit_usage_error(
-            args,
-            "--limit must be at least 1",
-            command_path=("library", "check"),
-            stdout=stdout,
-            stderr=stderr,
-        )
+    # `< 1` is no longer checked here: `--limit` is `_positive_int` at the
+    # parser (`cli_parser.py`), so a value that reaches this point is already
+    # `>= 1` and this guard could never fire.
     # Both output paths are checked *before* the audit, not after it. `check`
     # is the long, network-bound command — a whole run against every entry — and
     # opening the destination at the end meant an unwritable path threw the
@@ -151,24 +146,26 @@ def run_check_command(
             # README documents as 5. Reaching for `emit_usage_error` because it
             # was the helper already in hand made this the one I/O failure in
             # the CLI reported as a usage mistake.
-            print_lines(
-                error_lines(f"cannot write {flag} {path}", [unwritable]), stderr
+            #
+            # Through the shared `emit_failure` rather than a hand-built
+            # envelope: this used to call `print_lines` unconditionally, ahead
+            # of the `--json` check below it, so `--json` got the human error
+            # on stderr *and* the envelope on stdout for the same failure —
+            # the one output stream `--json` promises to be the only one that
+            # matters. `emit_failure` prints to stderr only on the non-JSON
+            # branch, matching every other refusal in this file.
+            return cli_json.emit_failure(
+                f"cannot write {flag} {path}",
+                command="library check",
+                # `unavailable`: the destination cannot be used right now.
+                # Both mappers turn it into 5 / HTTP 503.
+                reason=REASON_UNAVAILABLE,
+                as_json=getattr(args, "json", False),
+                stdout=stdout,
+                stderr=stderr,
+                errors=[f"{flag} {unwritable}"],
+                stderr_lines=error_lines(f"cannot write {flag} {path}", [unwritable]),
             )
-            if getattr(args, "json", False):
-                cli_json.emit_result(
-                    {
-                        "status": "error",
-                        "bib_name": None,
-                        "errors": [f"{flag} {unwritable}"],
-                        # `unavailable`: the destination cannot be used right
-                        # now. Both mappers turn it into 5 / HTTP 503.
-                        "reason": REASON_UNAVAILABLE,
-                    },
-                    stdout,
-                    command="library check",
-                    items=[],
-                )
-            return exit_codes.ENVIRONMENT
 
     strict: bool = getattr(args, "strict", False)
     # `--jsonl` is written as the audit goes, not after it returns. On the

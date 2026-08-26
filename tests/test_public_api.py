@@ -1258,6 +1258,33 @@ def test_check_accepts_the_bound_the_cli_has_had_since_item_550(
     assert seen == [None, 5]
 
 
+@pytest.mark.parametrize("limit", [0, -1])
+def test_check_rejects_a_limit_below_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, limit: int
+) -> None:
+    """`limit=0` used to reach `check_bib`, which audits nothing and returns
+    `status: "ok"` — a clean bill of health for a run that checked zero
+    entries. A negative `limit` meant "unlimited" to `check_bib`, silently
+    auditing the whole library. The CLI's `--limit` rejects both at the
+    parser (`cli_parser._positive_int`); this front end has no parser of its
+    own, so it has to reject them itself.
+    """
+    config = _library(tmp_path)
+    seen: list[object] = []
+
+    def _fake_check_bib(**kwargs):
+        seen.append(kwargs.get("limit"))
+        return {"status": "ok", "bib_name": "ml", "items": [], "warnings": [], "errors": []}
+
+    monkeypatch.setattr(pzi_api, "check_bib", _fake_check_bib)
+
+    with pytest.raises(PziError) as excinfo:
+        pzi.check(limit=limit, config_path=config)
+
+    assert (excinfo.value.code, excinfo.value.reason) == (2, "usage")
+    assert not seen, "check_bib must not run once the limit is rejected"
+
+
 def test_every_read_emits_its_warnings_through_pythons_own_channel(
     tmp_path: Path,
 ) -> None:

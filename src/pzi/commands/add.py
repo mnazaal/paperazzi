@@ -152,18 +152,19 @@ def run_add_command(
                 # The commonest failure there is, and `--json` promised a
                 # parseable document on every outcome. This one printed prose to
                 # stderr and nothing at all to stdout.
-                if getattr(args, "json", False):
-                    # `unavailable`, spelled out: `emit_error` defaults to
-                    # `usage`, so this envelope told a consumer to retype while
-                    # the process exited 5 and told it to retry. `inbox` names
-                    # the reason on the same refusal; this call site did not.
-                    cli_json.emit_error(
-                        message, [message], stdout, command=command_label(args),
-                        reason=REASON_UNAVAILABLE,
-                    )
-                else:
-                    print(message, file=stderr)
-                return exit_codes.ENVIRONMENT
+                #
+                # `unavailable`, spelled out: `emit_error`'s default reason is
+                # `usage`, which would have told a consumer to retype while the
+                # process exited 5 and told it to retry. `inbox` names the
+                # reason on the same refusal; this call site did not, until now.
+                return cli_json.emit_failure(
+                    message,
+                    command=command_label(args),
+                    reason=REASON_UNAVAILABLE,
+                    as_json=getattr(args, "json", False),
+                    stdout=stdout,
+                    stderr=stderr,
+                )
             return _work()
 
     return _work()

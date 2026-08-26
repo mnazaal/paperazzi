@@ -769,7 +769,21 @@ def check(
     command at 0.6 s/entry best case, so a whole-library run is hours; without
     this the programmatic front end had no way to ask for a smaller one, while
     the CLI has had ``--limit`` since item 550.
+
+    Raises :class:`PziError` if *limit* is less than 1. The CLI's `--limit`
+    rejects `0` and negatives at the parser (`cli_parser._positive_int`); this
+    front end has no parser; without this check, `limit=0` reached
+    `check_bib`, which audited nothing and returned `status: "ok"` — a clean
+    bill of health for a run that checked zero entries — and a negative
+    `limit` meant "unlimited" to `check_bib`, silently auditing the whole
+    library from a flag that looked like it capped the run.
     """
+    if limit is not None and limit < 1:
+        raise PziError(
+            f"limit must be at least 1, got {limit}",
+            code=exit_codes.USAGE,
+            reason=REASON_USAGE,
+        )
     result = check_bib(
         config_path=_resolved_config_path(config_path),
         home_dir=_home(),

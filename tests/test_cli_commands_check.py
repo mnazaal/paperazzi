@@ -375,16 +375,26 @@ def test_limit_is_passed_through_and_reported(tmp_path: Path) -> None:
     assert "were not audited" in err
 
 
-def test_limit_below_one_is_a_usage_error(tmp_path: Path) -> None:
+def test_limit_below_one_is_no_longer_rejected_by_the_runner(tmp_path: Path) -> None:
+    """`--limit` validation moved to the parser (`cli_parser._positive_int`),
+    which every real CLI invocation goes through — `library check --limit 0`
+    now exits 2 with prose on stderr before this function is ever called
+    (see `test_cli.py::test_library_check_limit_below_one_is_a_parser_usage_error`).
+
+    This test calls `run_check_command` directly, bypassing the parser, which
+    is exactly how the runner-level `< 1` guard this used to pin got called at
+    all. That guard is deleted now that the parser is the only path a real
+    invocation takes; this test documents the runner trusts its caller rather
+    than re-checking, not that `limit=0` is some new valid input.
+    """
     called = []
 
     code, out, err = _run(
         _args(limit=0), lambda **_k: called.append(True) or _many(1), tmp_path
     )
 
-    assert code == exit_codes.USAGE, err
-    assert out == ""
-    assert called == []
+    assert called == [True]
+    assert code == exit_codes.OK, err
 
 
 def test_progress_is_printed_for_a_long_run_only(tmp_path: Path) -> None:

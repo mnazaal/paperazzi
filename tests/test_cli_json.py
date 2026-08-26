@@ -10,7 +10,8 @@ from __future__ import annotations
 import json
 from io import StringIO
 
-from pzi.cli_json import build_envelope, emit_result
+from pzi.cli_json import build_envelope, emit_failure, emit_result, merge_target_results
+from pzi.errors import REASON_UNAVAILABLE
 
 
 def test_envelope_normalizes_whichever_key_holds_the_list() -> None:
@@ -56,3 +57,65 @@ def test_emit_result_writes_one_json_document() -> None:
     assert payload["status"] == "error"
     assert payload["errors"] == ["boom"]
     assert payload["items"] == []
+
+
+def test_emit_failure_json_writes_one_document_with_reason() -> None:
+    stdout = StringIO()
+    stderr = StringIO()
+    exit_code = emit_failure(
+        "cannot write --report /no/such/dir/report.json",
+        command="library check",
+        reason=REASON_UNAVAILABLE,
+        as_json=True,
+        stdout=stdout,
+        stderr=stderr,
+        errors=["--report cannot be written: No such file or directory"],
+    )
+    # `--json` promises exactly one document on stdout; stderr must stay
+    # silent on this branch — the bug `check.py`'s report-path refusal used
+    # to have was printing here *and* emitting the envelope.
+    assert stderr.getvalue() == ""
+    payload = json.loads(stdout.getvalue())
+    assert payload["status"] == "error"
+    assert payload["reason"] == REASON_UNAVAILABLE
+    assert payload["errors"] == [
+        "--report cannot be written: No such file or directory"
+    ]
+    assert exit_code == 5
+
+
+def test_emit_failure_text_prints_to_stderr_not_stdout() -> None:
+    stdout = StringIO()
+    stderr = StringIO()
+    exit_code = emit_failure(
+        "Node.js is not available",
+        command="doctor --reinstall-server",
+        reason=REASON_UNAVAILABLE,
+        as_json=False,
+        stdout=stdout,
+        stderr=stderr,
+        errors=["Node.js is not available"],
+        stderr_lines=["Node.js is not available"],
+    )
+    # This is the branch `doctor --reinstall-server`'s failure path used to
+    # skip for two of its three call sites, printing nothing at all.
+    assert stdout.getvalue() == ""
+    assert "Node.js is not available" in stderr.getvalue()
+    assert exit_code == 5
+
+
+def test_merge_target_results_mixed_shapes_do_not_raise() -> None:
+    # Every real service returns one shape per key today, so this is a
+    # regression guard rather than a reachable case: `.setdefault(key,
+    # []).extend(...)` on a key an earlier target already reported as a
+    # scalar raised `AttributeError`, which no `cli.py` handler catches.
+    merged = merge_target_results(
+        [
+            ("a", {"status": "ok", "summary": "first"}),
+            ("b", {"status": "ok", "summary": ["second"]}),
+        ],
+        command="update",
+    )
+    # First result wins the key's shape; the mismatched second is dropped
+    # rather than crashing the merge.
+    assert merged["summary"] == "first"
