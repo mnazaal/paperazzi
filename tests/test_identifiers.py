@@ -229,3 +229,22 @@ def test_every_doi_a_publisher_path_yields_is_one_normalize_doi_accepts() -> Non
         match = DOI_IN_PATH_PATTERN.search(path)
         assert match is not None, path
         assert normalize_doi(match.group(1)) is not None, path
+
+
+def test_preprint_doi_prefixes_has_one_source() -> None:
+    """Guards against C5b's duplicate reappearing.
+
+    `resolution_match._doi_mismatch` used to carry its own copy of the
+    preprint DOI prefix list, separate from `identifiers.PREPRINT_DOI_PREFIX`
+    (arXiv only). Adding a preprint server to one and not the other is this
+    project's dominant defect shape, so `resolution_match` must hold the exact
+    same tuple object `identifiers.PREPRINT_DOI_PREFIXES` defines — not an
+    equal-valued copy that can drift the next time either is edited.
+    """
+    import pzi.resolution_match as resolution_match
+    from pzi.identifiers import PREPRINT_DOI_PREFIX, PREPRINT_DOI_PREFIXES
+
+    assert resolution_match.PREPRINT_DOI_PREFIXES is PREPRINT_DOI_PREFIXES
+    # The arXiv entry in the general table must not drift from the dedicated
+    # arXiv constant `is_preprint_doi` uses.
+    assert PREPRINT_DOI_PREFIXES[0] == PREPRINT_DOI_PREFIX.rstrip("/")

@@ -347,6 +347,24 @@ def is_preprint_doi(doi: object) -> bool:
     return isinstance(doi, str) and doi.strip().lower().startswith(PREPRINT_DOI_PREFIX)
 
 
+#: DOI prefixes belonging to preprint servers, where a different DOI on the
+#: published record is expected rather than contradictory (see
+#: :func:`pzi.resolution_match._doi_mismatch`). Broader than
+#: ``PREPRINT_DOI_PREFIX`` above, which names arXiv's own prefix specifically
+#: for the identity check in :func:`has_preprint_identity`; this list is every
+#: known preprint DOI prefix, compared with ``str.startswith`` (no trailing
+#: slash). Kept as one table, so a newly added preprint server only needs
+#: adding here rather than in two places that can drift apart.
+PREPRINT_DOI_PREFIXES = (
+    PREPRINT_DOI_PREFIX.rstrip("/"),  # arXiv
+    "10.1101",   # bioRxiv / medRxiv
+    "10.21203",  # Research Square
+    "10.2139",   # SSRN
+    "10.31234",  # PsyArXiv
+    "10.31219",  # OSF Preprints
+)
+
+
 def has_preprint_identity(record: Mapping[str, object]) -> bool:
     """True when the record itself carries preprint identity.
 

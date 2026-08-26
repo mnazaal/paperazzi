@@ -15,8 +15,9 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import TypedDict
 
-from pzi.identifiers import detect_preprint_source
+from pzi.identifiers import PREPRINT_DOI_PREFIXES, detect_preprint_source
 from pzi.similarity import (
+    as_int_year,
     author_surnames,
     authors_swapped,
     canonical_doi,
@@ -99,18 +100,6 @@ def _fabricated_surnames(entry: Sequence[str], candidate: Sequence[str]) -> list
     return [s for s in author_surnames(entry) if s not in cand]
 
 
-#: DOI prefixes belonging to preprint servers, where a different DOI on the
-#: published record is expected rather than contradictory.
-_PREPRINT_DOI_PREFIXES = (
-    "10.48550",  # arXiv
-    "10.1101",   # bioRxiv / medRxiv
-    "10.21203",  # Research Square
-    "10.2139",   # SSRN
-    "10.31234",  # PsyArXiv
-    "10.31219",  # OSF Preprints
-)
-
-
 def _doi_mismatch(entry: Mapping[str, object], candidate: Mapping[str, object]) -> bool:
     """True only when both records carry a DOI and the two disagree.
 
@@ -129,7 +118,7 @@ def _doi_mismatch(entry: Mapping[str, object], candidate: Mapping[str, object]) 
         return False
     if detect_preprint_source(entry) is not None:
         return False
-    return not e.startswith(_PREPRINT_DOI_PREFIXES)
+    return not e.startswith(PREPRINT_DOI_PREFIXES)
 
 
 def _given_name_substitutions(
@@ -322,14 +311,7 @@ def _apply_strict_checks(
 
 
 def _year(record: Mapping[str, object]) -> int | None:
-    value = record.get("year")
-    if isinstance(value, bool):  # `bool` is an `int` subclass
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str) and value.strip().isdigit():
-        return int(value.strip())
-    return None
+    return as_int_year(record.get("year"))
 
 
 def _year_gap(entry: Mapping[str, object], candidate: Mapping[str, object]) -> int | None:
