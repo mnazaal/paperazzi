@@ -28,6 +28,7 @@ _DISCOVERY_CONTEXT_KEYS = {
     "fetch_web", "fetch_unpaywall", "fetch_crossref", "fetch_openalex", "fetch_s2",
     "fetch_flaresolverr", "translation_attachments", "api_url", "api_auth_token",
     "desktop_fallback_hosts", "pdf_discovery_parallel", "exclude_pdf_urls",
+    "metadata_fetch_text",
 }
 
 

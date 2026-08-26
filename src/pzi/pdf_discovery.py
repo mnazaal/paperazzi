@@ -494,6 +494,12 @@ def doi_pdf_step(
     fetch_doaj_pdf = context.get("fetch_doaj_pdf") or fetch_doaj_pdf_url
 
     contact_email = context.get("contact_email")
+    # The same composed fetcher (disk cache + per-host rate limiter) the
+    # metadata cascade used to resolve this DOI in the first place. Crossref is
+    # asked the identical `works/<doi>` URL here that the cascade may have just
+    # answered — without this, that answer was thrown away and fetched again
+    # with no cache and no rate spacing.
+    metadata_fetch_text = context.get("metadata_fetch_text")
 
     # These three answer "no PDF" and "I am broken" with the same `None`. They
     # accept an `errors` list precisely so the second can be told from the
@@ -512,6 +518,7 @@ def doi_pdf_step(
             doi,
             contact_email=contact_email if isinstance(contact_email, str) else None,
             errors=provider_errors,
+            fetch_text=metadata_fetch_text,
         )
         for detail in provider_errors[before:]:
             context.setdefault("discovery_diagnostics", []).append(f"{name}: {detail}")
@@ -530,18 +537,23 @@ def _call_pdf_resolver(
     *,
     contact_email: str | None = None,
     errors: list[str] | None = None,
+    fetch_text: Callable[..., str] | None = None,
 ) -> str | None:
     """Call a PDF resolver, passing only the keywords it actually accepts.
 
     `errors` is threaded the same way `contact_email` is, because an injected
     seam (a test double, an alternate provider) is a plain one-argument callable
-    that has neither parameter.
+    that has neither parameter. `fetch_text` the same way again: an injected
+    resolver may be a one-argument test double with no `fetch_text` parameter
+    at all.
     """
     kwargs: dict[str, object] = {}
     if contact_email and accepts_keyword(fn, "contact_email"):
         kwargs["contact_email"] = contact_email
     if errors is not None and accepts_keyword(fn, "errors"):
         kwargs["errors"] = errors
+    if fetch_text is not None and accepts_keyword(fn, "fetch_text"):
+        kwargs["fetch_text"] = fetch_text
     return fn(doi, **kwargs)
 
 

@@ -918,3 +918,68 @@ def test_a_provider_that_simply_has_no_pdf_reports_nothing() -> None:
 
     assert doi_pdf_step(record, context) == record
     assert discovery_diagnostics(context) == []
+
+
+# ── B6: doi_pdf_step must reuse the composed metadata fetcher ───────────
+#
+# `add_service.build_metadata_fetch_text` composes a disk-cache + per-host
+# rate limiter and hands it to the metadata cascade so a DOI resolved through
+# Crossref does not fetch the identical `works/<doi>` URL a second time when
+# `doi_pdf_step` goes looking for a PDF. The context carried no such key, so
+# every DOI resolver here always used the module-default fetcher regardless.
+
+
+def test_doi_pdf_step_passes_the_composed_fetcher_to_each_resolver() -> None:
+    record = {"title": "Paper", "doi": "10.1000/abc"}
+    seen: dict[str, object] = {}
+
+    def _tracking_crossref(doi, *, fetch_text=None, **kw):
+        seen["crossref"] = fetch_text
+        return None
+
+    def _tracking_europepmc(doi, *, fetch_text=None, **kw):
+        seen["europepmc"] = fetch_text
+        return None
+
+    def _tracking_doaj(doi, *, fetch_text=None, **kw):
+        seen["doaj"] = fetch_text
+        return None
+
+    sentinel = object()
+    context: PdfDiscoveryContext = cast(
+        PdfDiscoveryContext,
+        {
+            "fetch_crossref_pdf": _tracking_crossref,
+            "fetch_europepmc_pdf": _tracking_europepmc,
+            "fetch_doaj_pdf": _tracking_doaj,
+            "metadata_fetch_text": sentinel,
+        },
+    )
+
+    doi_pdf_step(record, context)
+
+    # All three: the fetcher composed for the metadata cascade is a general
+    # `fetch_text`-shaped callable, not specific to Crossref, and the other two
+    # providers benefit from the same cache/rate-limit spacing even though
+    # only Crossref can hit an outright cache duplicate.
+    assert seen == {"crossref": sentinel, "europepmc": sentinel, "doaj": sentinel}
+
+
+def test_doi_pdf_step_without_a_composed_fetcher_passes_none() -> None:
+    """An injected seam with no `fetch_text` parameter must still work."""
+    record = {"title": "Paper", "doi": "10.1000/abc"}
+
+    def _plain_resolver(doi, **kw):
+        assert "fetch_text" not in kw
+        return None
+
+    context: PdfDiscoveryContext = cast(
+        PdfDiscoveryContext,
+        {
+            "fetch_crossref_pdf": _plain_resolver,
+            "fetch_europepmc_pdf": _plain_resolver,
+            "fetch_doaj_pdf": _plain_resolver,
+        },
+    )
+
+    assert doi_pdf_step(record, context) == record

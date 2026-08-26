@@ -467,6 +467,7 @@ def build_discovery_context(
     desktop_fallback_hosts: set[str] | None = None,
     pdf_discovery_parallel: bool = False,
     exclude_pdf_urls: frozenset[str] | None = None,
+    metadata_fetch_text: Callable[..., str] | None = None,
 ) -> PdfDiscoveryContext:
     """Assemble the context dict consumed by the PDF-discovery steps.
 
@@ -478,6 +479,14 @@ def build_discovery_context(
 
     ``exclude_pdf_urls`` carries the URLs a download has already failed on, so a
     re-run yields the next source instead of the same dead one.
+
+    ``metadata_fetch_text`` is the same composed fetcher (disk cache + per-host
+    rate limiter) `add_service.build_metadata_fetch_text` hands to the metadata
+    cascade. Without it here, `doi_pdf_step` re-fetched
+    ``api.crossref.org/works/<doi>`` — the identical URL the cascade had just
+    resolved the DOI through — with the module-default fetcher: no cache hit,
+    no rate spacing, and the caching this builder exists for silently did not
+    apply to the PDF-discovery half of a capture.
     """
     return {
         "raw_value": raw_value,
@@ -501,6 +510,7 @@ def build_discovery_context(
         "desktop_fallback_hosts": desktop_fallback_hosts,
         "pdf_discovery_parallel": pdf_discovery_parallel,
         "exclude_pdf_urls": exclude_pdf_urls,
+        "metadata_fetch_text": metadata_fetch_text,
     }
 
 
@@ -672,6 +682,7 @@ def fetch_record_for_input(
             api_auth_token=api_auth_token,
             desktop_fallback_hosts=desktop_fallback_hosts,
             pdf_discovery_parallel=pdf_discovery_parallel,
+            metadata_fetch_text=metadata_fetch_text,
         )
 
     def _with_pdf_discovery(
