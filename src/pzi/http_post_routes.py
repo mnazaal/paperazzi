@@ -50,6 +50,7 @@ from pzi.pdf_attach_session import build_attach_session, validate_attach_request
 from pzi.pdf_attach_session_store import AttachSessionStore
 from pzi.pdf_service import attach_pdf_bytes, attach_pdf_raw_bytes
 from pzi.promote_service import promote_bib
+from pzi.protocols import accepts_keyword
 from pzi.tag_service import add_tags, remove_tags
 from pzi.update_service import update_bib
 from pzi.url_safety import safe_public_http_url
@@ -497,9 +498,19 @@ def _handle_browser_discover_post(
     # No `doi=`: the manager accepted one and dropped it on the floor, because
     # `browser_pdf_hook.discover_pdf_url` has no parameter to forward it to.
     # Sending it implied a hint was being used that never was.
-    pdf_url = discover(normalized_page_url)
+    #
+    # `errors=` only if the manager's method accepts it (G1): the shared
+    # `errors` list distinguishes "the browser stage broke" (a crashed session
+    # mid-discovery) from "this page genuinely has no PDF", the same way
+    # `discover_via_server_api`/`download_via_server_api` already do on the
+    # client side of this same request. A dead browser must not answer 200.
+    discover_errors: list[str] = []
+    kwargs = {"errors": discover_errors} if accepts_keyword(discover, "errors") else {}
+    pdf_url = discover(normalized_page_url, **kwargs)
     if pdf_url:
         return 200, {"pdf_url": pdf_url}
+    if discover_errors:
+        return 503, {"error": "; ".join(discover_errors)}
     return 200, {"pdf_url": None}
 
 
@@ -519,11 +530,17 @@ def _handle_browser_download_post(
     download = getattr(browser_manager, "download_pdf_bytes", None)
     if not callable(download):
         return 503, {"error": "browser session not available"}
-    pdf_bytes = cast("bytes | None", download(normalized_pdf_url))
+    # Sibling of the `errors=` handling in `_handle_browser_discover_post`
+    # above (G1): a session that dies mid-download must not read as "no PDF".
+    download_errors: list[str] = []
+    kwargs = {"errors": download_errors} if accepts_keyword(download, "errors") else {}
+    pdf_bytes = cast("bytes | None", download(normalized_pdf_url, **kwargs))
     if pdf_bytes:
         if len(pdf_bytes) > max(0, max_pdf_bytes):
             return 413, {"error": "PDF too large"}
         return 200, {"pdf_base64": base64.b64encode(pdf_bytes).decode()}
+    if download_errors:
+        return 503, {"error": "; ".join(download_errors)}
     return 200, {"pdf_base64": None}
 
 

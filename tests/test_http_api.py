@@ -57,11 +57,15 @@ def _serve_once(
     *,
     token: str | None = None,
     max_body_bytes: int = 5 * 1024 * 1024,
+    browser_manager: object | None = None,
 ) -> tuple[int, threading.Thread, HTTPServer]:
     port = _free_port()
     security = build_http_security_config(auth_token=token, max_body_bytes=max_body_bytes)
     handler = build_handler_class(
-        config_path=str(config_path), home_dir=str(home_dir), security=security
+        config_path=str(config_path),
+        home_dir=str(home_dir),
+        security=security,
+        browser_manager=browser_manager,
     )
     server = HTTPServer(("127.0.0.1", port), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -920,3 +924,117 @@ def test_a_binary_route_with_no_handler_is_not_served_as_an_export(
     assert raw.startswith(b"HTTP/1.0 404 "), raw[:120]
     assert b"@article" not in raw
     assert _json_body(raw)["error"] == "not found"
+
+
+# === G1: a crashed browser session must not answer /browser/discover or
+# /browser/download with 200 the same way "genuinely no PDF" does. ===
+
+
+class _FakeBrowserManager:
+    """Stands in for BrowserSessionManager; each method takes the same
+    `errors=` list `browser_pdf_hook.discover_pdf_url`/`download_pdf` do."""
+
+    def __init__(self, *, crashed: bool) -> None:
+        self._crashed = crashed
+
+    def discover_pdf_url(self, page_url: str, *, errors: list[str] | None = None) -> str | None:
+        if self._crashed and errors is not None:
+            errors.append("browser session: browser session is closed")
+        return None
+
+    def download_pdf_bytes(self, pdf_url: str, *, errors: list[str] | None = None) -> bytes | None:
+        if self._crashed and errors is not None:
+            errors.append("browser session: browser session is closed")
+        return None
+
+
+def _post_json(port: int, path: str, body: dict) -> urllib.request.Request:
+    return urllib.request.Request(
+        f"http://127.0.0.1:{port}{path}",
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+
+def test_browser_discover_no_pdf_is_200(tmp_path: Path) -> None:
+    """A browser stage that genuinely finds nothing is not an error."""
+    config_path, _ = _seed(tmp_path)
+    port, _thread, server = _serve_once(
+        config_path, tmp_path, browser_manager=_FakeBrowserManager(crashed=False)
+    )
+    try:
+        response = urllib.request.urlopen(
+            _post_json(port, "/browser/discover", {"page_url": "https://example.test/a"}),
+            timeout=10,
+        )
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert response.status == 200
+    assert payload == {"pdf_url": None}
+
+
+def test_browser_discover_crashed_session_is_503(tmp_path: Path) -> None:
+    """G1: a crashed session must not be indistinguishable from "no PDF"."""
+    config_path, _ = _seed(tmp_path)
+    port, _thread, server = _serve_once(
+        config_path, tmp_path, browser_manager=_FakeBrowserManager(crashed=True)
+    )
+    try:
+        try:
+            urllib.request.urlopen(
+                _post_json(port, "/browser/discover", {"page_url": "https://example.test/a"}),
+                timeout=10,
+            )
+            raise AssertionError("expected HTTPError")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 503
+            assert "browser session" in json.loads(exc.read())["error"]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_browser_download_no_pdf_is_200(tmp_path: Path) -> None:
+    config_path, _ = _seed(tmp_path)
+    port, _thread, server = _serve_once(
+        config_path, tmp_path, browser_manager=_FakeBrowserManager(crashed=False)
+    )
+    try:
+        response = urllib.request.urlopen(
+            _post_json(
+                port, "/browser/download", {"pdf_url": "https://example.test/a.pdf"}
+            ),
+            timeout=10,
+        )
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert response.status == 200
+    assert payload == {"pdf_base64": None}
+
+
+def test_browser_download_crashed_session_is_503(tmp_path: Path) -> None:
+    """Sibling of test_browser_discover_crashed_session_is_503 (G1)."""
+    config_path, _ = _seed(tmp_path)
+    port, _thread, server = _serve_once(
+        config_path, tmp_path, browser_manager=_FakeBrowserManager(crashed=True)
+    )
+    try:
+        try:
+            urllib.request.urlopen(
+                _post_json(
+                    port, "/browser/download", {"pdf_url": "https://example.test/a.pdf"}
+                ),
+                timeout=10,
+            )
+            raise AssertionError("expected HTTPError")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 503
+            assert "browser session" in json.loads(exc.read())["error"]
+    finally:
+        server.shutdown()
+        server.server_close()
