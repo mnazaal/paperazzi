@@ -550,7 +550,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="with --promote, tag promoted preprints and skip already-tagged ones on re-runs",
     )
     update_parser.add_argument(
-        "--limit", type=int, default=None, metavar="N",
+        # `_positive_int`, not bare `int`: this used to be checked at
+        # runner-level (`commands/update.py`), the one place `--limit` was
+        # validated differently from `entries --limit` (parser-level). A
+        # negative value slipped past both and meant "unlimited" to
+        # `promote_service` — silent, and reachable only through this flag.
+        "--limit", type=_positive_int, default=None, metavar="N",
         help=(
             "with --promote, check at most N preprints and report how many remain "
             "(a full sweep of a large library is hours: the providers are rate-limited)"
@@ -776,8 +781,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="overwrite an existing --report / --jsonl file",
     )
     check_parser.add_argument(
+        # `_positive_int`, matching `entries --limit` and `update --limit`:
+        # this was bare `int` with a runner-side `< 1` check
+        # (`commands/check.py`), and `check_service.check_bib` treats a
+        # negative limit as "no limit" — so `--limit -1 --json` silently
+        # audited the whole library while sitting between the ad-hoc guard
+        # here and 0, which was rejected. `--limit 0` also used to audit
+        # nothing and exit 0, a clean bill of health for zero work.
         "--limit",
-        type=int,
+        type=_positive_int,
         metavar="N",
         help="audit only the first N entries (a whole library takes hours)",
     )

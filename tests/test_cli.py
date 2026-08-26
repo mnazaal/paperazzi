@@ -906,6 +906,30 @@ def test_doctor_reinstall_server_handles_missing_config(tmp_path: Path) -> None:
     assert "failed to load config" in stderr.getvalue()
 
 
+def test_doctor_reinstall_server_prints_when_node_unavailable(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The non-JSON failure branch used to print nothing at this call site.
+
+    Only the `config is None` caller worked around the gap with its own
+    manual `print_lines`; `ensure_node` returning `None` reached `_finish`
+    directly, whose non-JSON branch printed only on success — so this failure
+    exited 5 with zero bytes on stderr.
+    """
+    import pzi.node_runtime
+
+    monkeypatch.setattr(pzi.node_runtime, "ensure_node", lambda *a, **k: None)
+    stderr = StringIO()
+
+    exit_code = run_cli(
+        ["doctor", "--reinstall-server", "--config", str(_batch_config(tmp_path))],
+        home_dir=str(tmp_path), stdout=StringIO(), stderr=stderr,
+    )
+
+    assert exit_code == exit_codes.ENVIRONMENT
+    assert "Node.js is not available" in stderr.getvalue()
+
+
 @pytest.mark.parametrize("sub", ["status", "update", "up", "down"])
 def test_cli_services_command_removed(tmp_path: Path, sub: str) -> None:
     """`pzi services …` is gone — health is `doctor`, reinstall is `doctor --reinstall-server`."""
@@ -1429,6 +1453,54 @@ def test_entries_limit_negative_is_a_usage_error(tmp_path: Path) -> None:
         ["entries", "--limit", "-5"], home_dir=str(tmp_path), stdout=StringIO(), stderr=stderr
     )
     assert exit_code == 2
+    assert "must be one or greater" in stderr.getvalue()
+
+
+@pytest.mark.parametrize("value", ["0", "-3"])
+def test_update_promote_limit_below_one_is_a_parser_usage_error(
+    tmp_path: Path, value: str
+) -> None:
+    """`--limit` is `_positive_int` at the parser, matching `entries --limit`.
+
+    This used to be a runner-side check (`commands/update.py`) that produced
+    the same exit code but, under `--json`, a full envelope — the parser
+    rejection documented as the one exception to "every `--json` command
+    always emits one document" writes nothing to stdout even with `--json`
+    passed, so this is a real CLI-surface change: `--limit 0 --json` no
+    longer emits an envelope.
+    """
+    stdout = StringIO()
+    stderr = StringIO()
+    exit_code = run_cli(
+        ["update", "--promote", "--limit", value, "--json",
+         "--config", str(_batch_config(tmp_path))],
+        home_dir=str(tmp_path), stdout=stdout, stderr=stderr,
+    )
+    assert exit_code == 2
+    assert stdout.getvalue() == ""
+    assert "must be one or greater" in stderr.getvalue()
+
+
+@pytest.mark.parametrize("value", ["0", "-3"])
+def test_library_check_limit_below_one_is_a_parser_usage_error(
+    tmp_path: Path, value: str
+) -> None:
+    """Same unification as `update --limit` above, for `library check --limit`.
+
+    Before this, `--limit 0` audited nothing and exited `0` — a clean bill of
+    health for a run that checked zero entries — and `--limit -1` meant
+    "unlimited" to `check_service.check_bib`, silently auditing the whole
+    library. The parser now rejects both before either service call.
+    """
+    stdout = StringIO()
+    stderr = StringIO()
+    exit_code = run_cli(
+        ["library", "check", "--limit", value, "--json",
+         "--config", str(_batch_config(tmp_path))],
+        home_dir=str(tmp_path), stdout=stdout, stderr=stderr,
+    )
+    assert exit_code == 2
+    assert stdout.getvalue() == ""
     assert "must be one or greater" in stderr.getvalue()
 
 

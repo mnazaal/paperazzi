@@ -90,11 +90,9 @@ def run_update_command(
             args, "--limit only applies with --promote",
             command_path=("update",), stdout=stdout, stderr=stderr,
         )
-    if limit is not None and limit < 1:
-        return emit_usage_error(
-            args, "--limit must be at least 1",
-            command_path=("update",), stdout=stdout, stderr=stderr,
-        )
+    # `< 1` is no longer checked here: `--limit` is `_positive_int` at the
+    # parser (`cli_parser.py`), so a value that reaches this point is already
+    # `>= 1` and this guard could never fire.
 
     # Defaulted rather than optional, so "was it passed" is a comparison against
     # the default, not a None check.

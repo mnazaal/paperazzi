@@ -115,14 +115,9 @@ def run_check_command(
             stderr=stderr,
         )
     limit: int | None = getattr(args, "limit", None)
-    if limit is not None and limit < 1:
-        return emit_usage_error(
-            args,
-            "--limit must be at least 1",
-            command_path=("library", "check"),
-            stdout=stdout,
-            stderr=stderr,
-        )
+    # `< 1` is no longer checked here: `--limit` is `_positive_int` at the
+    # parser (`cli_parser.py`), so a value that reaches this point is already
+    # `>= 1` and this guard could never fire.
     # Both output paths are checked *before* the audit, not after it. `check`
     # is the long, network-bound command — a whole run against every entry — and
     # opening the destination at the end meant an unwritable path threw the
