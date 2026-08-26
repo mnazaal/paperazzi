@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import re as _re
 from collections.abc import Callable, Mapping
-from pathlib import Path
 from typing import Any, Literal, TypeAlias, cast
 from urllib.parse import urlsplit, urlunsplit
 
@@ -252,10 +251,36 @@ def apply_pdf_discovery_parallel(
                     # error) must not abort the whole fan-out: treat it as "no
                     # result" so lower-priority sources still get their turn.
                     results[step] = None
+
+        # Merge canonical_url / source_url / abstract_url found by *any* HTTP
+        # step in this phase, not only the one whose pdf_url wins the race.
+        # Sequential mode chains every step's result into the next step's
+        # input regardless of whether that step found a pdf_url, so a losing
+        # step's enrichment still rides along to the final record; the
+        # parallel path picked the winner's dict wholesale and dropped
+        # everyone else's, silently losing fields sequential mode kept.
+        # Only web_attachment_step sets these today, but the merge is
+        # step-order generic (backfill only, never overwrite) so it needs no
+        # update if a future step does the same.
+        enrichment_keys = ("canonical_url", "source_url", "abstract_url")
+        for step in http_steps:
+            result = results.get(step)
+            if result is None:
+                continue
+            for key in enrichment_keys:
+                value = result.get(key)
+                if isinstance(value, str) and value.strip() and not record.get(key):
+                    record = cast(NormalizedRecord, {**record, key: value})
+
         for step in http_steps:
             result = results.get(step)
             if result is not None and result.get("pdf_url"):
-                return result
+                merged = {**result}
+                for key in enrichment_keys:
+                    carried = record.get(key)
+                    if not merged.get(key) and carried:
+                        merged[key] = carried
+                return cast(NormalizedRecord, merged)
 
     # Phase 3: everything after the parallel block, still in chain order — the
     # browser fallback, and any non-HTTP step ranked below the HTTP sources.
@@ -314,7 +339,7 @@ def pdf_url_candidates_step(
     for candidate in candidates:
         if isinstance(candidate, str) and candidate.strip():
             normalized = candidate.strip()
-            if not safe_public_http_url(normalized) and not _existing_pdf_path(normalized):
+            if not safe_public_http_url(normalized):
                 continue
             updated = dict(record)
             updated["pdf_url"] = normalized
@@ -322,11 +347,6 @@ def pdf_url_candidates_step(
             return cast(NormalizedRecord, updated)
 
     return record
-
-
-def _existing_pdf_path(value: str) -> bool:
-    path = Path(value).expanduser()
-    return path.is_file() and path.suffix.lower() == ".pdf"
 
 
 def cookies_for_url(context: PdfDiscoveryContext, url: str) -> str | None:
@@ -351,6 +371,7 @@ def cookies_for_url(context: PdfDiscoveryContext, url: str) -> str | None:
     return cookies
 
 
+@discovery_phase("http")
 def web_attachment_step(
     record: NormalizedRecord, context: PdfDiscoveryContext
 ) -> NormalizedRecord:
@@ -494,6 +515,12 @@ def doi_pdf_step(
     fetch_doaj_pdf = context.get("fetch_doaj_pdf") or fetch_doaj_pdf_url
 
     contact_email = context.get("contact_email")
+    # The same composed fetcher (disk cache + per-host rate limiter) the
+    # metadata cascade used to resolve this DOI in the first place. Crossref is
+    # asked the identical `works/<doi>` URL here that the cascade may have just
+    # answered — without this, that answer was thrown away and fetched again
+    # with no cache and no rate spacing.
+    metadata_fetch_text = context.get("metadata_fetch_text")
 
     # These three answer "no PDF" and "I am broken" with the same `None`. They
     # accept an `errors` list precisely so the second can be told from the
@@ -512,6 +539,7 @@ def doi_pdf_step(
             doi,
             contact_email=contact_email if isinstance(contact_email, str) else None,
             errors=provider_errors,
+            fetch_text=metadata_fetch_text,
         )
         for detail in provider_errors[before:]:
             context.setdefault("discovery_diagnostics", []).append(f"{name}: {detail}")
@@ -530,18 +558,23 @@ def _call_pdf_resolver(
     *,
     contact_email: str | None = None,
     errors: list[str] | None = None,
+    fetch_text: Callable[..., str] | None = None,
 ) -> str | None:
     """Call a PDF resolver, passing only the keywords it actually accepts.
 
     `errors` is threaded the same way `contact_email` is, because an injected
     seam (a test double, an alternate provider) is a plain one-argument callable
-    that has neither parameter.
+    that has neither parameter. `fetch_text` the same way again: an injected
+    resolver may be a one-argument test double with no `fetch_text` parameter
+    at all.
     """
     kwargs: dict[str, object] = {}
     if contact_email and accepts_keyword(fn, "contact_email"):
         kwargs["contact_email"] = contact_email
     if errors is not None and accepts_keyword(fn, "errors"):
         kwargs["errors"] = errors
+    if fetch_text is not None and accepts_keyword(fn, "fetch_text"):
+        kwargs["fetch_text"] = fetch_text
     return fn(doi, **kwargs)
 
 

@@ -467,6 +467,7 @@ def build_discovery_context(
     desktop_fallback_hosts: set[str] | None = None,
     pdf_discovery_parallel: bool = False,
     exclude_pdf_urls: frozenset[str] | None = None,
+    metadata_fetch_text: Callable[..., str] | None = None,
 ) -> PdfDiscoveryContext:
     """Assemble the context dict consumed by the PDF-discovery steps.
 
@@ -478,6 +479,14 @@ def build_discovery_context(
 
     ``exclude_pdf_urls`` carries the URLs a download has already failed on, so a
     re-run yields the next source instead of the same dead one.
+
+    ``metadata_fetch_text`` is the same composed fetcher (disk cache + per-host
+    rate limiter) `add_service.build_metadata_fetch_text` hands to the metadata
+    cascade. Without it here, `doi_pdf_step` re-fetched
+    ``api.crossref.org/works/<doi>`` — the identical URL the cascade had just
+    resolved the DOI through — with the module-default fetcher: no cache hit,
+    no rate spacing, and the caching this builder exists for silently did not
+    apply to the PDF-discovery half of a capture.
     """
     return {
         "raw_value": raw_value,
@@ -501,6 +510,7 @@ def build_discovery_context(
         "desktop_fallback_hosts": desktop_fallback_hosts,
         "pdf_discovery_parallel": pdf_discovery_parallel,
         "exclude_pdf_urls": exclude_pdf_urls,
+        "metadata_fetch_text": metadata_fetch_text,
     }
 
 
@@ -561,7 +571,12 @@ def next_pdf_candidate_for_config(config: AppConfig, bib: BibConfig) -> NextPdfC
                 api_url=context.api_url,
                 api_auth_token=context.api_auth_token,
                 desktop_fallback_hosts=context.desktop_fallback_hosts,
-                pdf_discovery_parallel=context.pdf_discovery_parallel,
+                # No `pdf_discovery_parallel` here: `_next` always calls the
+                # sequential `apply_pdf_discovery` below, which never reads
+                # that context key (only `fetch_record_for_input` branches on
+                # it, between `apply_pdf_discovery` and `_parallel`). Passing
+                # it through was dead — a single stored entry's retry has one
+                # record to resolve, not the fan-out parallelism exists for.
                 exclude_pdf_urls=tried,
             ),
         )
@@ -672,6 +687,7 @@ def fetch_record_for_input(
             api_auth_token=api_auth_token,
             desktop_fallback_hosts=desktop_fallback_hosts,
             pdf_discovery_parallel=pdf_discovery_parallel,
+            metadata_fetch_text=metadata_fetch_text,
         )
 
     def _with_pdf_discovery(
@@ -724,25 +740,33 @@ def fetch_record_for_input(
         translation_results.extend(cast("list[dict]", usable))
         if usable:
             selected = select_best_metadata_result(usable, fallback)
-            best = dict(merge_record_sources(fallback, selected["record"]))
-            carry_item_type(best, selected)
-            # Named here as the cascade below names its own winner. Without it
-            # the translation-server path was identifiable only by this key's
-            # *absence*, so "the translation server answered" and "the fallback
-            # answered" were the same observation — which is why every capture
-            # on record is a Crossref fallback and the primary path has never
-            # been shown to run. `add_service` lifts the key off the record
-            # before any write, so it reaches `--verbose` and the result's
-            # `metadata_diagnostics`, never the `.bib`.
-            best["metadata_provider"] = "translation_server"
-            return (
-                _with_pdf_discovery(
-                    cast(NormalizedRecord, best),
-                    translation_attachments=selected.get("attachments"),
-                ),
-                provider_errors,
-                translation_results,
-            )
+            # Gated on the same bar as the cascade below (`_answers_the_lookup`):
+            # `normalize_translation_item` builds a candidate whether or not the
+            # translation server said anything useful, so "usable" alone let a
+            # title-less record win here and never let Crossref/OpenAlex/S2 run
+            # at all — the exact shadowing `_answers_the_lookup`'s docstring
+            # describes, reintroduced one call site up. A record with no title
+            # is not worth stopping the cascade for; fall through to it.
+            if _answers_the_lookup(selected["record"]):
+                best = dict(merge_record_sources(fallback, selected["record"]))
+                carry_item_type(best, selected)
+                # Named here as the cascade below names its own winner. Without it
+                # the translation-server path was identifiable only by this key's
+                # *absence*, so "the translation server answered" and "the fallback
+                # answered" were the same observation — which is why every capture
+                # on record is a Crossref fallback and the primary path has never
+                # been shown to run. `add_service` lifts the key off the record
+                # before any write, so it reaches `--verbose` and the result's
+                # `metadata_diagnostics`, never the `.bib`.
+                best["metadata_provider"] = "translation_server"
+                return (
+                    _with_pdf_discovery(
+                        cast(NormalizedRecord, best),
+                        translation_attachments=selected.get("attachments"),
+                    ),
+                    provider_errors,
+                    translation_results,
+                )
 
         # The cascade, in priority order, with the winner recorded. Nothing
         # anywhere used to say which provider answered, so `--verbose` on the
@@ -780,7 +804,18 @@ def fetch_record_for_input(
                 fetch_text=metadata_fetch_text,
             )),
         ):
+            # `_call_metadata_fetcher`/`_fetch_s2_guarded` append bare error
+            # strings (`"HTTP 404"`, a bare `str(exc)`) — they call a fetcher
+            # generically and have no provider name to attach. This cascade
+            # does, so it prefixes here, the same before/after-diff shape
+            # `doi_pdf_step` uses for its own three providers: an unprefixed
+            # `provider_errors` (surfaced verbatim in `MetadataExhausted`)
+            # made every "no metadata" failure read identically regardless of
+            # which of the three providers actually broke.
+            before = len(provider_errors)
             candidate = call()
+            for i in range(before, len(provider_errors)):
+                provider_errors[i] = f"{provider}: {provider_errors[i]}"
             if _answers_the_lookup(candidate):
                 meta = candidate
                 winner = provider
@@ -817,23 +852,29 @@ def fetch_record_for_input(
                 # path picked whichever result the translator happened to emit
                 # first and typed every conference paper it found as `@article`.
                 selected = select_best_metadata_result(usable_web, fallback)
-                best = dict(merge_record_sources(fallback, selected["record"]))
-                carry_item_type(best, selected)
-                # Attributed here too. The key was added to the DOI-search
-                # branch alone, so a capture the translation server answered
-                # *through the web endpoint* — which is every plain URL — looked
-                # exactly like a capture nothing answered, and the live smoke
-                # job could not tell them apart. Three return sites reach the
-                # translation server; this is the second.
-                best["metadata_provider"] = "translation_server"
-                return (
-                    _with_pdf_discovery(
-                        cast(NormalizedRecord, best),
-                        translation_attachments=selected.get("attachments"),
-                    ),
-                    provider_errors,
-                    translation_results,
-                )
+                # Same title gate as the DOI-search branch above: a title-less
+                # web-endpoint hit is not an answer, it is `normalize_translation_item`
+                # padding a dict. Reaching flaresolverr with the real page is
+                # better than writing a record `identifies_a_paper` would refuse
+                # anyway.
+                if _answers_the_lookup(selected["record"]):
+                    best = dict(merge_record_sources(fallback, selected["record"]))
+                    carry_item_type(best, selected)
+                    # Attributed here too. The key was added to the DOI-search
+                    # branch alone, so a capture the translation server answered
+                    # *through the web endpoint* — which is every plain URL — looked
+                    # exactly like a capture nothing answered, and the live smoke
+                    # job could not tell them apart. Three return sites reach the
+                    # translation server; this is the second.
+                    best["metadata_provider"] = "translation_server"
+                    return (
+                        _with_pdf_discovery(
+                            cast(NormalizedRecord, best),
+                            translation_attachments=selected.get("attachments"),
+                        ),
+                        provider_errors,
+                        translation_results,
+                    )
 
             if flaresolverr_url is not None:  # pragma: no branch
                 html = _fetch_flaresolverr_guarded(
@@ -871,18 +912,25 @@ def fetch_record_for_input(
         translation_results.extend(results or [])
         if results:
             selected = select_best_metadata_result(results, fallback)
-            best = dict(selected["record"])
-            carry_item_type(best, selected)
-            best = _with_pdf_discovery(
-                cast(NormalizedRecord, best), translation_attachments=selected.get("attachments")
-            )
-            # The third and last translation-server return site. Set on the
-            # merged record rather than on `best`, because `merge_record_sources`
-            # decides which side wins per key and this is not a bibliographic
-            # field to be merged — it is a note about who answered.
-            merged = dict(merge_record_sources(fallback, best))
-            merged["metadata_provider"] = "translation_server"
-            return cast(NormalizedRecord, merged), provider_errors, translation_results
+            # Same title gate as both DOI-branch sites above. This kind has no
+            # Crossref/OpenAlex/S2 fallback of its own (there is no DOI to look
+            # them up by), so the alternative to accepting a title-less answer
+            # here is flaresolverr, then `MetadataExhausted` — either is
+            # honest, where writing a record `identifies_a_paper` refuses is not.
+            if _answers_the_lookup(selected["record"]):
+                best = dict(selected["record"])
+                carry_item_type(best, selected)
+                best = _with_pdf_discovery(
+                    cast(NormalizedRecord, best),
+                    translation_attachments=selected.get("attachments"),
+                )
+                # The third and last translation-server return site. Set on the
+                # merged record rather than on `best`, because `merge_record_sources`
+                # decides which side wins per key and this is not a bibliographic
+                # field to be merged — it is a note about who answered.
+                merged = dict(merge_record_sources(fallback, best))
+                merged["metadata_provider"] = "translation_server"
+                return cast(NormalizedRecord, merged), provider_errors, translation_results
 
         if flaresolverr_url is not None:
             html = _fetch_flaresolverr_guarded(

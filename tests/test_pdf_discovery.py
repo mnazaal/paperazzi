@@ -1,4 +1,3 @@
-from pathlib import Path
 from typing import cast
 
 import pytest
@@ -14,6 +13,7 @@ from pzi.pdf_discovery import (
     discovery_phase,
     doi_pdf_step,
     pdf_url_candidates_step,
+    phase_of,
     translation_attachment_step,
     unpaywall_step,
     web_attachment_step,
@@ -229,16 +229,6 @@ def test_pdf_url_candidates_step_uses_first_valid() -> None:
     assert result["pdf_url"] == "https://example.com/candidate.pdf"
 
 
-def test_pdf_url_candidates_step_accepts_existing_local_pdf_path(tmp_path: Path) -> None:
-    pdf_path = tmp_path / "paper.pdf"
-    pdf_path.write_bytes(b"%PDF-1.4\n%test\n")
-
-    result = pdf_url_candidates_step({}, {"pdf_url_candidates": [str(pdf_path)]})
-
-    assert result["pdf_url"] == str(pdf_path)
-    assert result["pdf_source"] == "pdf_url_candidates"
-
-
 def test_pdf_url_candidates_step_no_candidates() -> None:
     record = {"title": "Paper"}
     context: PdfDiscoveryContext = {"pdf_url_candidates": []}
@@ -383,6 +373,17 @@ def test_web_attachment_step_fetch_failure() -> None:
     }
     result = web_attachment_step(record, context)
     assert result == record
+
+
+def test_web_attachment_step_declares_its_phase() -> None:
+    # The module docstring insists phase is always explicit, never inferred
+    # from a step's name — this step made a network call while relying on the
+    # undeclared-defaults-to-"http" fallback instead of declaring it.
+    # `phase_of` alone can't tell "declared http" from "undeclared, defaulted
+    # to http" (they return the same value), so check the raw attribute
+    # `discovery_phase` sets, not the value `phase_of` falls back to.
+    assert getattr(web_attachment_step, "discovery_phase", None) == "http"
+    assert phase_of(web_attachment_step) == "http"
 
 
 def test_browser_pdf_step_no_cmd() -> None:
@@ -546,6 +547,34 @@ def test_parallel_winner_is_by_step_priority_not_completion() -> None:
         record, [slow_high_priority, fast_low_priority], context, max_workers=2,
     )
     assert result["pdf_url"] == "https://high.example.com/pdf"
+
+
+def test_parallel_winner_carries_a_losing_steps_enrichment() -> None:
+    """A step that loses the pdf_url race can still discover canonical_url /
+    source_url / abstract_url — sequential mode chains every step's result
+    into the next, so that enrichment always rides along; parallel mode must
+    match rather than throwing the losing step's whole dict away.
+    """
+    record: dict[str, object] = {"title": "Paper"}
+    context: PdfDiscoveryContext = {}
+
+    @discovery_phase("http")
+    def high_priority_no_pdf(r, c):  # earlier in the list, finds no pdf_url
+        updated = dict(r)
+        updated["canonical_url"] = "https://publisher.example.com/paper"
+        return updated
+
+    @discovery_phase("http")
+    def low_priority_pdf(r, c):  # later in the list, wins on pdf_url
+        updated = dict(r)
+        updated["pdf_url"] = "https://low.example.com/pdf"
+        return updated
+
+    result = apply_pdf_discovery_parallel(
+        record, [high_priority_no_pdf, low_priority_pdf], context, max_workers=2,
+    )
+    assert result["pdf_url"] == "https://low.example.com/pdf"
+    assert result["canonical_url"] == "https://publisher.example.com/paper"
 
 
 def test_parallel_handles_http_step_exceptions() -> None:
@@ -918,3 +947,68 @@ def test_a_provider_that_simply_has_no_pdf_reports_nothing() -> None:
 
     assert doi_pdf_step(record, context) == record
     assert discovery_diagnostics(context) == []
+
+
+# ── B6: doi_pdf_step must reuse the composed metadata fetcher ───────────
+#
+# `add_service.build_metadata_fetch_text` composes a disk-cache + per-host
+# rate limiter and hands it to the metadata cascade so a DOI resolved through
+# Crossref does not fetch the identical `works/<doi>` URL a second time when
+# `doi_pdf_step` goes looking for a PDF. The context carried no such key, so
+# every DOI resolver here always used the module-default fetcher regardless.
+
+
+def test_doi_pdf_step_passes_the_composed_fetcher_to_each_resolver() -> None:
+    record = {"title": "Paper", "doi": "10.1000/abc"}
+    seen: dict[str, object] = {}
+
+    def _tracking_crossref(doi, *, fetch_text=None, **kw):
+        seen["crossref"] = fetch_text
+        return None
+
+    def _tracking_europepmc(doi, *, fetch_text=None, **kw):
+        seen["europepmc"] = fetch_text
+        return None
+
+    def _tracking_doaj(doi, *, fetch_text=None, **kw):
+        seen["doaj"] = fetch_text
+        return None
+
+    sentinel = object()
+    context: PdfDiscoveryContext = cast(
+        PdfDiscoveryContext,
+        {
+            "fetch_crossref_pdf": _tracking_crossref,
+            "fetch_europepmc_pdf": _tracking_europepmc,
+            "fetch_doaj_pdf": _tracking_doaj,
+            "metadata_fetch_text": sentinel,
+        },
+    )
+
+    doi_pdf_step(record, context)
+
+    # All three: the fetcher composed for the metadata cascade is a general
+    # `fetch_text`-shaped callable, not specific to Crossref, and the other two
+    # providers benefit from the same cache/rate-limit spacing even though
+    # only Crossref can hit an outright cache duplicate.
+    assert seen == {"crossref": sentinel, "europepmc": sentinel, "doaj": sentinel}
+
+
+def test_doi_pdf_step_without_a_composed_fetcher_passes_none() -> None:
+    """An injected seam with no `fetch_text` parameter must still work."""
+    record = {"title": "Paper", "doi": "10.1000/abc"}
+
+    def _plain_resolver(doi, **kw):
+        assert "fetch_text" not in kw
+        return None
+
+    context: PdfDiscoveryContext = cast(
+        PdfDiscoveryContext,
+        {
+            "fetch_crossref_pdf": _plain_resolver,
+            "fetch_europepmc_pdf": _plain_resolver,
+            "fetch_doaj_pdf": _plain_resolver,
+        },
+    )
+
+    assert doi_pdf_step(record, context) == record
