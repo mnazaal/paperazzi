@@ -1,6 +1,7 @@
 from pzi.add_service import add_record_with_bib
 from pzi.check_service import check_bib
 from pzi.config import BibResolutionFailure, load_bib_target
+from pzi.errors import REASON_CONFIG
 
 
 def _write_config(tmp_path, bib_path, **kwargs):
@@ -671,3 +672,23 @@ def test_each_verdict_is_handed_over_as_it_is_reached(tmp_path):
     assert [c for c, _i, _t in streamed] == [i["citekey"] for i in result["items"]]
     assert [i for _c, i, _t in streamed] == [0, 1, 2, 3]
     assert {t for _c, _i, t in streamed} == {4}
+
+
+def test_a_config_resolution_failure_says_why_in_the_reason_field(tmp_path):
+    """`check` classifies a bad config as `config`, like every sibling service.
+
+    `_error_result` used to omit `reason` entirely on this path while
+    `search`/`tag`/`update`/`promote`/`import` all set `REASON_CONFIG` on the
+    same failure. The exit code came out right by accident — an unclassified
+    failure falls back to ENVIRONMENT, which is what `config` maps to — so
+    nothing failed until a consumer branched on `reason` and met the one
+    envelope that lacked it.
+    """
+    result = check_bib(
+        config_path=str(tmp_path / "nonexistent.toml"),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+    )
+
+    assert result["status"] == "error"
+    assert result["reason"] == REASON_CONFIG
