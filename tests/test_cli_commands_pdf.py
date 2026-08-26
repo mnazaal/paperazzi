@@ -4,6 +4,7 @@ from pathlib import Path
 
 from pzi import exit_codes
 from pzi.commands.pdf import run_pdf_command
+from pzi.errors import REASON_USAGE
 
 
 def test_run_pdf_command_attach_uses_injected_service(tmp_path: Path) -> None:
@@ -157,6 +158,35 @@ def test_run_pdf_command_failed_only_all_failed_is_environment(tmp_path: Path) -
             retry_failed_pdfs_fn=fake_retry_failed_pdfs,
         )
         assert exit_code == exit_codes.ENVIRONMENT, f"json={as_json}"
+
+
+def test_run_pdf_command_failed_only_error_maps_the_reason_the_result_carries(
+    tmp_path: Path,
+) -> None:
+    """A whole-batch failure exits by its own `reason`, not a hardcoded ENVIRONMENT.
+
+    Both `--failed-only` output branches open-coded `exit_codes.ENVIRONMENT` on
+    `status == "error"`, unlike the sibling single-`retry`/`attach` branches a
+    few lines below, which already route through `_pdf_exit_code`. `REASON_USAGE`
+    is used here to make the fork visible, since the one reason `pdf_service`
+    reaches on this path today (`REASON_CONFIG`) happens to also map to
+    `ENVIRONMENT`.
+    """
+
+    def fake_retry_failed_pdfs(**_kwargs):
+        return {"status": "error", "message": "bad selector", "errors": [], "reason": REASON_USAGE}
+
+    for as_json in (False, True):
+        exit_code = run_pdf_command(
+            Namespace(pdf_command="retry", citekey=None, failed_only=True, json=as_json),
+            home_dir=str(tmp_path),
+            config_path=str(tmp_path / "config.toml"),
+            stdout=StringIO(),
+            stderr=StringIO(),
+            bib_selector="ml",
+            retry_failed_pdfs_fn=fake_retry_failed_pdfs,
+        )
+        assert exit_code == exit_codes.USAGE, f"json={as_json}"
 
 
 def test_pdf_retry_unknown_citekey_is_not_found(tmp_path: Path) -> None:

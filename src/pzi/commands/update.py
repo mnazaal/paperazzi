@@ -20,6 +20,7 @@ from pzi.commands.common import (
     print_result_item_diffs,
     target_list,
 )
+from pzi.errors import exit_code_for_error
 from pzi.promote_service import promote_bib
 from pzi.update_service import update_bib
 
@@ -113,6 +114,11 @@ def run_update_command(
     ok = True
     items_succeeded = 0
     items_failed = 0
+    #: The first failed target's exit code, from the shared `reason` mapper —
+    #: see `search.py`'s `failure_code`, which this mirrors. A hardcoded
+    #: ENVIRONMENT here forked the exit code from the `reason` the same failure
+    #: puts in the JSON envelope.
+    failure_code: int | None = None
     collected: list[tuple[str, Mapping[str, Any]]] = []
     for target in target_list(args.target):
         if promote:
@@ -141,6 +147,8 @@ def run_update_command(
 
         if result["status"] != "ok":
             ok = False
+            if failure_code is None:
+                failure_code = exit_code_for_error(result)
         # A record the run could not update is a partly-failed batch. Failures
         # used to survive only as free text in each item's `note`, which nothing
         # read, so a run where every record failed still exited 0.
@@ -192,6 +200,6 @@ def run_update_command(
             items=merged["items"],
         )
     if not ok:
-        return exit_codes.ENVIRONMENT
+        return failure_code if failure_code is not None else exit_codes.ENVIRONMENT
     # The shared batch contract — see `batch_exit_code`.
     return batch_exit_code(succeeded=items_succeeded, failed=items_failed)
