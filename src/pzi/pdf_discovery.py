@@ -210,6 +210,11 @@ def apply_pdf_discovery_parallel(
     # than sequentially. The incoming record is validated first for the same
     # reason as in ``apply_pdf_discovery``: after a failed download it still
     # carries the URL that failed.
+    #
+    # A step that raises here is isolated the same way as phase 2 below and as
+    # ``apply_pdf_discovery``'s loop: recorded as a diagnostic, not fatal. This
+    # phase used to have no try/except, so a raising pure step aborted the
+    # whole ``add`` instead of falling through to the remaining sources.
     http_steps = [step for step in steps if phase_of(step) == "http"]
     first_http = next(
         (index for index, step in enumerate(steps) if phase_of(step) == "http"),
@@ -219,7 +224,10 @@ def apply_pdf_discovery_parallel(
     for step in steps[:first_http]:
         if record.get("pdf_url"):
             return record
-        record = _validated_discovery(step(record, context), context)
+        try:
+            record = _validated_discovery(step(record, context), context)
+        except Exception as exc:
+            record_discovery_failure(context, step, exc)
 
     if record.get("pdf_url"):
         return record
@@ -251,11 +259,17 @@ def apply_pdf_discovery_parallel(
 
     # Phase 3: everything after the parallel block, still in chain order — the
     # browser fallback, and any non-HTTP step ranked below the HTTP sources.
+    # Isolated the same way as phases 1 and 2: a raising step here (most often
+    # the browser fallback, which shells out to a subprocess or an HTTP
+    # server) must not abort the whole ``add`` either.
     for step in steps[first_http:]:
         if record.get("pdf_url"):
             return record
         if phase_of(step) != "http":
-            record = _validated_discovery(step(record, context), context)
+            try:
+                record = _validated_discovery(step(record, context), context)
+            except Exception as exc:
+                record_discovery_failure(context, step, exc)
 
     return record
 
@@ -425,10 +439,20 @@ def browser_pdf_step(
         # Prefer server-side persistent browser when available.
         if api_url is not None:
             from pzi.server_browser import discover_via_server_api
+
+            # Distinguish "server answered, no PDF" from "nothing was
+            # listening" the same way the download stage does (pdf.py) — a
+            # dead capture server must not read as "no PDF found".
+            server_errors: list[str] = []
             pdf_url = discover_via_server_api(
                 api_url, url, doi=doi,
                 auth_token=context.get("api_auth_token"),
+                errors=server_errors,
             )
+            for detail in server_errors:
+                context.setdefault("discovery_diagnostics", []).append(
+                    f"server_browser: {detail}"
+                )
 
         # Fall back to subprocess browser hook.
         if pdf_url is None and browser_pdf_cmd is not None:
