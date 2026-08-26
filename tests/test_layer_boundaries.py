@@ -75,6 +75,11 @@ CORE: frozenset[str] = frozenset(
         "capture_context",
         "html_metadata",
         "metadata_sources",
+        # The shared title-search provider cascade. CORE, not SERVICE: it is a
+        # table of `(name, fetcher)` pairs over `metadata_sources` with no logic
+        # and no service imports, which is what lets both `check_service` and
+        # `promote_planning` import it without a cycle.
+        "provider_cascade",
         # Promotion's negative-lookup ledger. CORE like `config` and
         # `metadata_cache`: it reads and writes one JSON file and imports
         # nothing but stdlib and `fileio`.
