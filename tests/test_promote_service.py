@@ -697,6 +697,57 @@ def test_promote_empty_query_skips_search(tmp_path):
     assert result["status"] == "ok"
 
 
+def test_promote_no_query_record_is_counted_and_reported(tmp_path):
+    """A preprint with nothing to build a query from is a real outcome, not a
+    non-event that vanishes from the accounting.
+
+    `promote_bib` increments `summary["checked"]` before discovery runs; a
+    `no_query` result (no title, authors, or year to search with) then
+    `continue`d with no item emitted and no skip counter incremented, so
+    `checked` outran the sum of the outcome counters and this preprint never
+    reached `on_item`'s `planned` denominator. This pins the closed invariant:
+    every checked preprint gets exactly one item, and `checked` equals the sum
+    of the outcome counters.
+    """
+    bib_path = tmp_path / "ml.bib"
+    config_path = _write_config(tmp_path, bib_path)
+    # `arxiv_id` gives it preprint identity (so it is not filtered out before
+    # `checked` as `not_preprint`); an empty title and no authors/year is what
+    # leaves `_build_query` with nothing to search.
+    _add_via_config(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        record={"citekey": "noquery", "arxiv_id": "2401.99999", "title": ""},
+        bib_selector=None,
+        dry_run=False,
+    )
+
+    result = promote_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        dry_run=False,
+        fetch_search=lambda q, *, server_url: [],
+    )
+
+    summary = result["summary"]
+    assert summary["checked"] == 1
+    assert summary["skipped_no_query"] == 1
+    outcome_total = (
+        summary["created"]
+        + summary["updated"]
+        + summary["skipped_no_candidate"]
+        + summary["skipped_no_query"]
+        + summary["skipped_low_confidence"]
+        + summary["skipped_existing"]
+        + summary["skipped_failed"]
+    )
+    assert outcome_total == summary["checked"]
+    assert len(result["items"]) == 1
+    assert result["items"][0]["preprint_citekey"] == "noquery"
+    assert result["items"][0]["action"] == "skip"
+
+
 def test_promote_different_author_year_scoring(tmp_path):
     bib_path = tmp_path / "ml.bib"
     # Above the extra-author/off-by-one-year penalty, below the default bar of
