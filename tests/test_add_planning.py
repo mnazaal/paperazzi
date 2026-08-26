@@ -799,6 +799,110 @@ def test_a_thin_answer_is_still_used_when_nothing_better_arrives() -> None:
 
 
 # ---------------------------------------------------------------------------
+# A4: a title-less translation-server answer must not shadow the cascade
+# ---------------------------------------------------------------------------
+
+
+def test_titleless_doi_search_hit_falls_through_to_the_crossref_cascade() -> None:
+    """The first of three translation-server return sites.
+
+    `normalize_translation_item` builds a record whether or not the
+    translation server said anything useful, so "any usable candidate"
+    let a title-less hit win outright and Crossref never ran — the exact
+    shadowing `_answers_the_lookup` exists to prevent, reintroduced one call
+    site up from the cascade that checks it.
+    """
+    from pzi.add_planning import fetch_record_for_input
+
+    def _search(_query, *, server_url):
+        return [
+            {"item_type": "journalArticle",
+             "record": {"title": None, "doi": "10.1145/3372297"},
+             "attachments": []},
+        ]
+
+    record, _errors, _results = fetch_record_for_input(
+        raw_value="10.1145/3372297",
+        classified={"kind": "doi", "raw": "10.1145/3372297",
+                    "normalized": "10.1145/3372297"},
+        server_url="http://127.0.0.1:1969",
+        fetch_web=lambda *_a, **_k: [],
+        fetch_search=_search,
+        fetch_crossref=lambda *_a, **_k: {
+            "title": "The Paper That Was Asked For", "doi": "10.1145/3372297",
+            "authors": ["A, B"], "year": 2020,
+        },
+    )
+
+    assert record["title"] == "The Paper That Was Asked For"
+    assert record["metadata_provider"] == "crossref"
+
+
+def test_titleless_web_endpoint_hit_falls_through_within_the_doi_branch() -> None:
+    """The second return site: the DOI branch's own `/web` rung, reached when
+    the raw input was a URL and the cascade already failed. A title-less hit
+    here must not win either — it must let FlareSolverr's real page answer.
+    """
+    from pzi.add_planning import fetch_record_for_input
+
+    html = (
+        '<html><head>'
+        '<meta name="citation_title" content="Behind Cloudflare">'
+        '<meta name="citation_author" content="Smith, Ada">'
+        '<meta name="citation_publication_date" content="2024">'
+        '</head></html>'
+    )
+
+    def _web(_url, *, server_url, **_k):
+        return [{"item_type": "journalArticle", "record": {"title": None}, "attachments": []}]
+
+    record, _errors, _results = fetch_record_for_input(
+        raw_value="https://example.com/paper",
+        classified={"kind": "doi", "normalized": "10.1000/x"},
+        server_url="http://127.0.0.1:59999",
+        fetch_web=_web,
+        fetch_search=lambda *a, **k: [],
+        fetch_crossref=lambda *a, **k: None,
+        fetch_openalex=lambda *a, **k: None,
+        fetch_s2=lambda *a, **k: None,
+        flaresolverr_url="http://127.0.0.1:8191",
+        fetch_flaresolverr=lambda _url: html,
+    )
+
+    assert record["title"] == "Behind Cloudflare"
+    assert record.get("metadata_provider") != "translation_server"
+
+
+def test_titleless_url_branch_hit_falls_through_to_flaresolverr() -> None:
+    """The third return site: the plain URL / PDF-URL branch's own rung."""
+    from pzi.add_planning import fetch_record_for_input
+
+    html = (
+        '<html><head>'
+        '<meta name="citation_title" content="Behind Cloudflare">'
+        '<meta name="citation_author" content="Smith, Ada">'
+        '<meta name="citation_publication_date" content="2024">'
+        '</head></html>'
+    )
+
+    def _web(_url, *, server_url, **_k):
+        return [{"item_type": "journalArticle", "record": {"title": None}, "attachments": []}]
+
+    record, _errors, _results = fetch_record_for_input(
+        raw_value="https://example.com/paper",
+        classified={"kind": "url", "normalized": "https://example.com/paper"},
+        server_url="http://127.0.0.1:59999",
+        fetch_web=_web,
+        fetch_search=lambda *a, **k: [],
+        flaresolverr_url="http://127.0.0.1:8191",
+        fetch_flaresolverr=lambda _url: html,
+    )
+
+    assert record["title"] == "Behind Cloudflare"
+    assert record.get("metadata_provider") != "translation_server"
+
+
+# ---------------------------------------------------------------------------
 # An injected FlareSolverr fetcher that raises
 # ---------------------------------------------------------------------------
 
