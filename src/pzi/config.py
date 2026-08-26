@@ -560,8 +560,16 @@ def validate_app_config(
     raw_desktop_fallback_hosts = raw.get(
         "desktop_fallback_hosts", DEFAULT_DESKTOP_FALLBACK_HOSTS
     )
-    if raw_desktop_fallback_hosts is not None and not isinstance(raw_desktop_fallback_hosts, list):
-        errors.append("desktop_fallback_hosts must be a list when provided")
+    if raw_desktop_fallback_hosts is not None and (
+        not isinstance(raw_desktop_fallback_hosts, list)
+        or not all(isinstance(h, str) for h in raw_desktop_fallback_hosts)
+    ):
+        # `_normalize_host_list` silently drops any non-string element instead
+        # of raising, so a list-but-wrong-element-type value (e.g. `[123]`)
+        # loaded with no diagnostic at all and the feature quietly turned off —
+        # the same silent-vanish hazard already closed for `api_allowed_origins`
+        # and `capture_source_dirs` above.
+        errors.append("desktop_fallback_hosts must be a list of strings when provided")
 
     raw_pzi_data_home = raw.get("pzi_data_home")
     if raw_pzi_data_home is not None and (

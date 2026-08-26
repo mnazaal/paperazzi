@@ -152,6 +152,26 @@ def test_force_reinstall_proceeds_on_a_directory_pzi_did_install(
     assert build.called
 
 
+def test_a_failed_build_leaves_no_staging_directory_behind(tmp_path: Path) -> None:
+    """A failed clone/npm bootstrap must not leak `ts.new.<pid>` forever.
+
+    `_build_translation_server` reports a clone/npm failure by returning
+    ``None`` rather than raising, so a cleanup handler keyed on an exception
+    never runs — and because the staging dir's name embeds the pid, no later
+    run's `_needs_reinstall` check ever revisits it. Left alone, every failed
+    bootstrap accumulates one directory in the data home forever.
+    """
+    out, err = io.StringIO(), io.StringIO()
+
+    with patch("pzi.ts_backend._build_translation_server", return_value=None):
+        result = ts_backend.ensure_translation_server(
+            tmp_path, "node", stdout=out, stderr=err
+        )
+
+    assert result is None
+    assert list(tmp_path.glob("ts.new.*")) == []
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # _apply_cookie_patch
 # ═══════════════════════════════════════════════════════════════════════════════
