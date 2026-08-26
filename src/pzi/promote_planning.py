@@ -19,19 +19,14 @@ from urllib.error import HTTPError
 from pzi.bibtex import NormalizedRecord
 from pzi.fetch_helpers import ProviderBreaker
 from pzi.identifiers import has_preprint_identity, is_preprint_doi
-from pzi.metadata_sources import (
-    fetch_crossref_record_by_title,
-    fetch_dblp_record_by_title,
-    fetch_openalex_record_by_title,
-    fetch_openreview_record_by_title,
-    fetch_semantic_scholar_record_by_title_with_error,
-)
+from pzi.metadata_sources import fetch_semantic_scholar_record_by_title_with_error
 from pzi.protocols import (
     MetadataRecordFetcher,
     S2RecordWithErrorFetcher,
     SearchTranslationFetcher,
     accepts_keyword,
 )
+from pzi.provider_cascade import TITLE_SEARCH_PROVIDERS
 from pzi.resolution_match import score_match
 from pzi.translation_server import fetch_search_translations
 
@@ -158,11 +153,18 @@ def find_published_candidate_with_diagnostics(
     # polite-pool providers as the CS-conference / ML-venue authorities that
     # confirm proceedings versions the DOI-based sources leave unresolved.
     provider_candidates: list[NormalizedRecord] = []
-    title_providers: tuple[tuple[str, MetadataRecordFetcher | None, Any], ...] = (
-        ("crossref", fetch_crossref, fetch_crossref_record_by_title),
-        ("openalex", fetch_openalex, fetch_openalex_record_by_title),
-        ("dblp", fetch_dblp, fetch_dblp_record_by_title),
-        ("openreview", fetch_openreview, fetch_openreview_record_by_title),
+    # Overrides keyed by name so the shared cascade (`pzi.provider_cascade`)
+    # decides order and membership; this function only decides which override,
+    # if any, replaces a given provider's live fetcher.
+    overrides_by_name: dict[str, MetadataRecordFetcher | None] = {
+        "crossref": fetch_crossref,
+        "openalex": fetch_openalex,
+        "dblp": fetch_dblp,
+        "openreview": fetch_openreview,
+    }
+    title_providers: tuple[tuple[str, MetadataRecordFetcher | None, Any], ...] = tuple(
+        (name, overrides_by_name.get(name), base_fn)
+        for name, base_fn in TITLE_SEARCH_PROVIDERS
     )
     #: Acceptable candidates held so far. `best_of` is a bound on this, not on
     #: the number of providers asked: a provider that answers with a poor match

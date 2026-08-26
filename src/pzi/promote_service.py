@@ -434,6 +434,17 @@ def promote_bib(
         metadata_diagnostics = candidate_result.get("metadata_diagnostics", [])
         if candidate is None:
             if candidate_result.get("reason") == "no_query":
+                # `checked` was already incremented above; without an item and a
+                # counter here that increment had nothing to show for itself —
+                # `checked` outran the sum of the outcome counters, and this was
+                # the one preprint `on_item`'s `planned` denominator never
+                # reached. A record with no title, authors, or year to build a
+                # query from is a real (if rare) outcome, not a non-event.
+                summary["skipped_no_query"] += 1
+                item = _skip_item(
+                    preprint_ck, "no query could be built (record has no title, authors, or year)"
+                )
+                record_item(item)
                 continue
             summary["provider_errors"] += len(provider_errors)
             summary["skipped_no_candidate"] += 1
@@ -687,6 +698,7 @@ def _empty_summary() -> dict[str, Any]:
         "created": 0,
         "updated": 0,
         "skipped_no_candidate": 0,
+        "skipped_no_query": 0,
         "skipped_low_confidence": 0,
         "skipped_existing": 0,
         "skipped_already_resolved": 0,

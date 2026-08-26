@@ -28,13 +28,8 @@ from pzi.capture_context import resolve_contact_email, resolve_optional_value
 from pzi.config import BibResolutionFailure, load_bib_target
 from pzi.errors import REASON_CONFIG, REASON_UNAVAILABLE
 from pzi.fetch_helpers import ProviderBreaker, build_metadata_fetch_text
-from pzi.metadata_sources import (
-    fetch_crossref_record_by_title,
-    fetch_dblp_record_by_title,
-    fetch_openalex_record_by_title,
-    fetch_openreview_record_by_title,
-    fetch_semantic_scholar_record_by_title,
-)
+from pzi.metadata_sources import fetch_semantic_scholar_record_by_title
+from pzi.provider_cascade import TITLE_SEARCH_PROVIDERS
 from pzi.resolution_match import MatchScore, score_match, title_similarity_score
 
 Verdict = Literal["verified", "could_not_verify", "problematic"]
@@ -142,18 +137,11 @@ def _providers(
         )
     )
     return [
-        bind("crossref", fetch_crossref_record_by_title),
-        bind("openalex", fetch_openalex_record_by_title),
-        bind("dblp", fetch_dblp_record_by_title),
-        bind("openreview", fetch_openreview_record_by_title),
+        *(bind(name, fn) for name, fn in TITLE_SEARCH_PROVIDERS),
         ("s2", s2_fn),
     ]
 
 
-#: Consecutive transport failures after which a provider is dropped for the rest
-#: of the run. Small on purpose: the failure this exists for (a refused
-#: connection, a DNS miss, an API that is down) does not clear between two
-#: entries, and the cost of finding out is one full request timeout per entry.
 def _impossible_year(record: Mapping[str, object], *, now_year: int) -> bool:
     year = record.get("year")
     return isinstance(year, int) and (year > now_year + 1 or year < 1500)

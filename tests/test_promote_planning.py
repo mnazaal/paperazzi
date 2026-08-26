@@ -135,6 +135,35 @@ def test_without_a_gate_nothing_can_be_counted_so_everyone_is_asked():
     assert asked == list(_PROVIDER_ORDER)
 
 
+def test_provider_order_matches_check_services_cascade():
+    """`check_service` and `promote_planning` must dial the same providers, in
+    the same order.
+
+    They used to each hand-copy the crossref -> openalex -> dblp -> openreview
+    -> s2 cascade; a provider added, reordered, or dropped in one silently
+    disagreed with the other, in commands that take hours to run and give no
+    other sign a provider list has drifted. Both now build their four-provider
+    title-search portion from the one shared table,
+    `pzi.provider_cascade.TITLE_SEARCH_PROVIDERS` (Semantic Scholar stays local
+    to each caller — it alone returns `(record, error)` and needs its own
+    breaker wiring). This asserts the *effective*, at-runtime order each module
+    actually dials still agrees, so a future hand edit to either cascade that
+    reintroduces a hardcoded, diverging list fails here instead of drifting
+    silently.
+    """
+    from pzi.check_service import _providers as check_providers
+
+    check_order = tuple(
+        name
+        for name, _fetch in check_providers(
+            fetch_text=None, s2_api_key=None, contact_email=None, overrides={}
+        )
+    )
+    _, promote_order = _run(best_of=1, gate=None)
+
+    assert check_order == tuple(promote_order) == _PROVIDER_ORDER
+
+
 class _StubGate:
     """Accepts exactly the candidates named, whatever they score.
 
