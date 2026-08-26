@@ -287,7 +287,19 @@ def merge_target_results(
                     else entry
                     for entry in value
                 ]
-                extras.setdefault(key, []).extend(prefixed)
+                existing = extras.get(key)
+                if isinstance(existing, list):
+                    existing.extend(prefixed)
+                elif key not in extras:
+                    extras[key] = prefixed
+                # else: an earlier target already reported this key as a
+                # scalar. `.setdefault(key, []).extend(...)` here would raise
+                # `AttributeError` on a non-list — unreachable today, since
+                # every service returns one shape per key, but a real one
+                # would net no `cli.py` handler (it catches OSError/ValueError
+                # /KeyError/RuntimeError, not AttributeError). The scalar-wins
+                # rule matches the branch below: the first result to report a
+                # key decides its shape.
             else:
                 extras.setdefault(key, value)
 

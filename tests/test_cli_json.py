@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from io import StringIO
 
-from pzi.cli_json import build_envelope, emit_failure, emit_result
+from pzi.cli_json import build_envelope, emit_failure, emit_result, merge_target_results
 from pzi.errors import REASON_UNAVAILABLE
 
 
@@ -102,3 +102,20 @@ def test_emit_failure_text_prints_to_stderr_not_stdout() -> None:
     assert stdout.getvalue() == ""
     assert "Node.js is not available" in stderr.getvalue()
     assert exit_code == 5
+
+
+def test_merge_target_results_mixed_shapes_do_not_raise() -> None:
+    # Every real service returns one shape per key today, so this is a
+    # regression guard rather than a reachable case: `.setdefault(key,
+    # []).extend(...)` on a key an earlier target already reported as a
+    # scalar raised `AttributeError`, which no `cli.py` handler catches.
+    merged = merge_target_results(
+        [
+            ("a", {"status": "ok", "summary": "first"}),
+            ("b", {"status": "ok", "summary": ["second"]}),
+        ],
+        command="update",
+    )
+    # First result wins the key's shape; the mismatched second is dropped
+    # rather than crashing the merge.
+    assert merged["summary"] == "first"
