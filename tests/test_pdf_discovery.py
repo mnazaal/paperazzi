@@ -14,6 +14,7 @@ from pzi.pdf_discovery import (
     discovery_phase,
     doi_pdf_step,
     pdf_url_candidates_step,
+    phase_of,
     translation_attachment_step,
     unpaywall_step,
     web_attachment_step,
@@ -383,6 +384,17 @@ def test_web_attachment_step_fetch_failure() -> None:
     }
     result = web_attachment_step(record, context)
     assert result == record
+
+
+def test_web_attachment_step_declares_its_phase() -> None:
+    # The module docstring insists phase is always explicit, never inferred
+    # from a step's name — this step made a network call while relying on the
+    # undeclared-defaults-to-"http" fallback instead of declaring it.
+    # `phase_of` alone can't tell "declared http" from "undeclared, defaulted
+    # to http" (they return the same value), so check the raw attribute
+    # `discovery_phase` sets, not the value `phase_of` falls back to.
+    assert getattr(web_attachment_step, "discovery_phase", None) == "http"
+    assert phase_of(web_attachment_step) == "http"
 
 
 def test_browser_pdf_step_no_cmd() -> None:

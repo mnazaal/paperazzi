@@ -351,6 +351,7 @@ def cookies_for_url(context: PdfDiscoveryContext, url: str) -> str | None:
     return cookies
 
 
+@discovery_phase("http")
 def web_attachment_step(
     record: NormalizedRecord, context: PdfDiscoveryContext
 ) -> NormalizedRecord:
