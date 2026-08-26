@@ -65,7 +65,9 @@ class BrowserSessionManager:
             self._session = self._launch()
             return self._session
 
-    def discover_pdf_url(self, page_url: str) -> str | None:
+    def discover_pdf_url(
+        self, page_url: str, *, errors: list[str] | None = None
+    ) -> str | None:
         """Discover PDF URL from a page using the persistent browser session.
 
         There is deliberately no `doi` parameter. One used to be accepted and
@@ -73,6 +75,14 @@ class BrowserSessionManager:
         forward it to — so the extension's DOI hint went nowhere while the
         signature implied it was used. Refusing it is honest; wiring it through
         discovery would be a feature.
+
+        *errors* collects why the browser stage produced nothing, so a session
+        that crashed is answerable with 503 instead of a 200 saying the page
+        has no PDF. `_handle_browser_discover_post` passes it only when this
+        method accepts it, so without this parameter the whole G1 fix silently
+        no-opped on the persistent-session path and fired only for the
+        subprocess one — the fix landing at one call site while its sibling
+        kept the bug, which is this project's most common defect by far.
         """
         from pzi.browser_pdf_hook import discover_pdf_url as _discover
 
@@ -85,10 +95,17 @@ class BrowserSessionManager:
                 browser=self._browser,
                 _session=session,
                 headless=self._headless,
+                errors=errors,
             )
 
-    def download_pdf_bytes(self, pdf_url: str) -> bytes | None:
-        """Download PDF bytes using the persistent browser session."""
+    def download_pdf_bytes(
+        self, pdf_url: str, *, errors: list[str] | None = None
+    ) -> bytes | None:
+        """Download PDF bytes using the persistent browser session.
+
+        *errors* is the sibling of `discover_pdf_url`'s: a session that dies
+        mid-download must answer 503, not a 200 reporting no PDF.
+        """
         from pzi.browser_pdf_hook import download_pdf as _download
 
         with self._lock:
@@ -98,6 +115,7 @@ class BrowserSessionManager:
                 browser=self._browser,
                 _session=session,
                 headless=self._headless,
+                errors=errors,
             )
 
     def close(self) -> None:

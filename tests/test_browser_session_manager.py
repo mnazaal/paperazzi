@@ -101,8 +101,54 @@ def test_each_delegate_passes_the_persistent_session_and_its_browser_settings(
 
     assert getattr(manager, method)(argument) == "sentinel"
     assert calls == [
-        (argument, {"browser": "firefox", "_session": session, "headless": False})
+        (
+            argument,
+            {
+                "browser": "firefox",
+                "_session": session,
+                "headless": False,
+                # Forwarded even when the caller passed none, so the hook's own
+                # signature stays one shape. See the `errors` test below.
+                "errors": None,
+            },
+        )
     ]
+
+
+@pytest.mark.parametrize(
+    ("method", "hook_name", "argument"),
+    [
+        ("discover_pdf_url", "discover_pdf_url", "https://journal.test/article"),
+        ("download_pdf_bytes", "download_pdf", "https://journal.test/paper.pdf"),
+    ],
+)
+def test_each_delegate_forwards_the_errors_list_to_the_hook(
+    monkeypatch, method: str, hook_name: str, argument: str
+) -> None:
+    """A crashed session must reach the caller, not read as "no PDF" (G1).
+
+    `_handle_browser_discover_post` passes `errors=` only when the manager's
+    method accepts it (`accepts_keyword`). That guard degrades silently, so
+    when these two methods lacked the parameter the whole fix no-opped on the
+    persistent-session path while working on the subprocess one — and no test
+    said so. This pins the forwarding itself: the list the caller owns is the
+    list the hook appends to.
+    """
+    import pzi.browser_pdf_hook
+
+    session = FakeBrowserSession()
+    _install_fake_launcher(monkeypatch, [session])
+    manager = BrowserSessionManager(browser="firefox", profile_path="/p", headless=False)
+
+    def record(url, **kwargs):
+        kwargs["errors"].append("browser session crashed")
+        return None
+
+    monkeypatch.setattr(pzi.browser_pdf_hook, hook_name, record)
+
+    errors: list[str] = []
+    assert getattr(manager, method)(argument, errors=errors) is None
+    assert errors == ["browser session crashed"]
 
 
 @pytest.mark.parametrize(
