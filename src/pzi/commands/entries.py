@@ -148,7 +148,6 @@ def _run_detail(args, home_dir, config_path, stdout, stderr, bib_selector) -> in
             print_lines(error_lines(result["message"], result["errors"]), stderr)
         return exit_code_for_error(result)
     record = result["record"]
-    print_read_warnings(result, stderr)
     if getattr(args, "json", False):
         # One record still arrives as a one-item envelope, so `.items[]` is the
         # same jq path as the listing. The service's own `record` key is dropped
@@ -160,6 +159,10 @@ def _run_detail(args, home_dir, config_path, stdout, stderr, bib_selector) -> in
             items=[record],
         )
         return exit_codes.FINDINGS if has_read_warnings(result) else exit_codes.OK
+    # Text mode only, to match `_run_list`/`_run_stats`: `--json` above already
+    # carries these in the envelope, so printing them here too put the same
+    # warning on stderr *and* in the document for `--json` alone.
+    print_read_warnings(result, stderr)
     print(f"citekey: {record.get('citekey', '')}", file=stdout)
     print(f"title: {record.get('title') or ''}", file=stdout)
     year = record.get("year")

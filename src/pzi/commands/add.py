@@ -34,7 +34,7 @@ from pzi.commands.common import (
     print_metadata_diagnostics,
 )
 from pzi.config import load_config_file
-from pzi.errors import REASON_UNAVAILABLE
+from pzi.errors import REASON_UNAVAILABLE, exit_code_for_error
 from pzi.tag_service import parse_tag_csv
 
 # Single-item-only flags (defined on the `add` parser) that have no meaning
@@ -231,7 +231,10 @@ def _capture_and_render(
         # explained it to nobody.
         for warning in result.get("warnings") or []:
             print(f"warning: {warning}", file=stderr)
-        return exit_codes.ENVIRONMENT
+        # The shared `reason` mapper, not a hardcoded ENVIRONMENT: a capture
+        # `add_service` rejects as `REASON_USAGE` used to exit 5, "could not
+        # run", while the envelope it just emitted said `"reason": "usage"`.
+        return exit_code_for_error(result)
 
     if getattr(args, "json", False):
         cli_json.emit_result(result, stdout, command="add")

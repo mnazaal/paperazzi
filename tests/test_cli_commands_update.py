@@ -4,6 +4,7 @@ from pathlib import Path
 
 from pzi import exit_codes
 from pzi.commands.update import run_update_command
+from pzi.errors import REASON_NOT_FOUND
 
 
 def test_run_update_command_calls_service_for_each_target(tmp_path: Path) -> None:
@@ -158,6 +159,35 @@ def test_run_update_command_returns_failure_when_any_target_fails(tmp_path: Path
     assert exit_code == exit_codes.ENVIRONMENT
     assert stdout.getvalue() == "no updates\n"
     assert stderr.getvalue() == "update failed (bad)\n- missing bib\n"
+
+
+def test_run_update_command_maps_the_reason_the_result_carries(tmp_path: Path) -> None:
+    """A batch-level failure exits by its own `reason`, not a hardcoded ENVIRONMENT.
+
+    Mirrors `search`'s runner: a hardcoded `exit_codes.ENVIRONMENT` here means
+    the JSON envelope's `reason` and the process exit code can disagree the
+    moment a service starts reporting a reason other than config/unavailable —
+    `NOT_FOUND` used here to make the fork visible, since every reason
+    `update_service` reaches today happens to also map to `ENVIRONMENT`.
+    """
+
+    def fake_update_bib(**kwargs):
+        return {"status": "error", "errors": ["no such entry"], "reason": REASON_NOT_FOUND}
+
+    stdout = StringIO()
+    stderr = StringIO()
+    args = Namespace(target=None, dry_run=False, verbose=False)
+
+    exit_code = run_update_command(
+        args,
+        home_dir=str(tmp_path),
+        config_path=str(tmp_path / "config.toml"),
+        stdout=stdout,
+        stderr=stderr,
+        update_bib_fn=fake_update_bib,
+    )
+
+    assert exit_code == exit_codes.NOT_FOUND
 
 
 def test_update_exits_partial_when_a_record_failed(tmp_path: Path) -> None:
