@@ -406,13 +406,24 @@ def has_truncation_sentinel(authors: Sequence[str]) -> bool:
     return any(is_truncation_sentinel(a) for a in authors)
 
 
-def _as_int_year(value: object) -> int | None:
+def as_int_year(value: object) -> int | None:
     """Defensively coerce a year-ish value to int; callers should already have
-    normalized ints, but this guards against a stray string reaching the
-    ``abs(record_year - existing_year)`` comparison below."""
+    normalized ints, but this guards against a stray string reaching an
+    ``abs(record_year - existing_year)`` comparison.
+
+    ``bool`` is an ``int`` subclass but never a year — ``True``/``False``
+    return ``None`` rather than silently scoring as 1/0. A leading ``-`` is
+    rejected too: ``str.isdigit()`` already excludes it, and no source in this
+    codebase produces a negative year, so a string that has one is malformed
+    input rather than a value worth coercing.
+
+    Shared by :mod:`pzi.resolution_match`, which used to carry its own,
+    subtly different copy (``"-5"`` coerced there, rejected here) — see
+    the module's ``_year`` wrapper.
+    """
     if isinstance(value, int) and not isinstance(value, bool):
         return value
-    if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+    if isinstance(value, str) and value.strip().isdigit():
         return int(value.strip())
     return None
 
@@ -430,7 +441,7 @@ def compute_similarity_hint(
         return None
 
     record_authors = normalize_authors(record.get("authors"))
-    record_year = _as_int_year(record.get("year"))
+    record_year = as_int_year(record.get("year"))
 
     best_key: str | None = None
     best_score: float = 0.0
@@ -443,7 +454,7 @@ def compute_similarity_hint(
         if similarity < title_threshold:
             continue
 
-        existing_year = _as_int_year(existing.get("year"))
+        existing_year = as_int_year(existing.get("year"))
         if (
             record_year is not None
             and existing_year is not None
@@ -482,7 +493,7 @@ def _prepare(records: Sequence[SimilarityCandidate]) -> list[_Prepared]:
             ),
             tokens=frozenset(title_tokens(record.get("title"))),
             authors=normalize_authors(record.get("authors")),
-            year=_as_int_year(record.get("year")),
+            year=as_int_year(record.get("year")),
         )
         for record in records
     ]

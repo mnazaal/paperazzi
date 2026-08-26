@@ -393,3 +393,68 @@ def test_a_doi_match_does_not_need_the_title_to_agree() -> None:
     incoming = {"title": "The Final Published Title", "doi": "10.1000/xyz"}
 
     assert find_exact_match(incoming, existing) == 0
+
+
+# ---------------------------------------------------------------------------
+# as_int_year: pinned edge-case table, and the sole-source guard for
+# resolution_match._year (C5a — two year-coercers used to disagree on
+# negative-sign strings: "-5" coerced to -5 in similarity._as_int_year but
+# was rejected in resolution_match._year). `as_int_year` is now the one
+# implementation; both cases below must never silently drift apart again.
+# ---------------------------------------------------------------------------
+
+
+def test_as_int_year_edge_case_table() -> None:
+    """Pins the coercion table decided in C5a of the 2026-08-26 audit.
+
+    | input        | result | why                                          |
+    |--------------|--------|-----------------------------------------------|
+    | 123          | 123    | plain int passes through                       |
+    | "2024"       | 2024   | numeric string parses                           |
+    | "2024a"      | None   | not purely digits                               |
+    | True         | None   | bool is an int subclass but never a year        |
+    | False        | None   | same                                             |
+    | -5           | -5     | a real negative int is passed through unchanged |
+    | "-5"         | None   | `str.isdigit()` excludes the sign; no source in |
+    |              |        | this codebase emits a negative year string, so  |
+    |              |        | treated as malformed input, not a value to coerce|
+    | ""           | None   | empty                                            |
+    | None         | None   | absent                                           |
+    | "abc"        | None   | non-numeric                                      |
+    """
+    from pzi.similarity import as_int_year
+
+    assert as_int_year(123) == 123
+    assert as_int_year("2024") == 2024
+    assert as_int_year("2024a") is None
+    assert as_int_year(True) is None
+    assert as_int_year(False) is None
+    assert as_int_year(-5) == -5
+    assert as_int_year("-5") is None
+    assert as_int_year("") is None
+    assert as_int_year(None) is None
+    assert as_int_year("abc") is None
+
+
+def test_resolution_match_year_delegates_to_the_one_coercer() -> None:
+    """Guards against C5a's duplicate reappearing.
+
+    `resolution_match._year` used to carry its own hand-rolled coercion that
+    quietly disagreed with `similarity._as_int_year` on negative-sign strings.
+    This checks both that the source no longer hand-rolls the check (the
+    literal duplicate) and that behaviour tracks `as_int_year` for every case
+    in the table above (so a future edit to one cannot diverge from the other
+    without this failing).
+    """
+    import inspect
+
+    import pzi.resolution_match as resolution_match
+    from pzi.similarity import as_int_year
+
+    source = inspect.getsource(resolution_match._year)
+    assert "as_int_year" in source, "resolution_match._year should delegate, not reimplement"
+    assert "isdigit" not in source, "a hand-rolled digit check means the duplicate is back"
+
+    for value in (123, "2024", "2024a", True, False, -5, "-5", "", None, "abc", "  2024  "):
+        record = {"year": value}
+        assert resolution_match._year(record) == as_int_year(value), value
