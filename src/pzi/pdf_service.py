@@ -24,7 +24,7 @@ from pzi.config import (
     BibResolutionFailure,
     load_bib_target,
 )
-from pzi.errors import REASON_CONFIG, REASON_NOT_FOUND, REASON_USAGE
+from pzi.errors import REASON_CONFIG, REASON_NOT_FOUND, REASON_UNAVAILABLE, REASON_USAGE
 from pzi.pdf import (
     fetch_and_store_pdf_trying_sources,
     fetch_and_store_pdf_with_fallbacks,
@@ -188,6 +188,10 @@ def retry_pdf(
             "citekey": citekey,
             "local_pdf_path": None,
             "message": "no PDF URL on entry",
+            # Same shape as "citekey not found" a few lines up in this
+            # function: the thing retry_pdf needs (a URL to retry) is absent
+            # from the record, not merely unreachable.
+            "reason": REASON_NOT_FOUND,
             "warnings": [],
             "errors": ["no PDF URL found on entry"],
         }
@@ -220,6 +224,11 @@ def retry_pdf(
             "citekey": citekey,
             "local_pdf_path": None,
             "message": "failed to fetch PDF",
+            # A URL was found; the fetch itself (network, source, or
+            # FlareSolverr) failed. That is an external dependency being
+            # unavailable, not a bad request or missing resource — the same
+            # class of failure as `discover_via_server_api`'s "not reachable".
+            "reason": REASON_UNAVAILABLE,
             "warnings": [],
             "errors": _pdf_failure_errors(warning, "failed to fetch PDF"),
         }
@@ -474,6 +483,22 @@ def attach_pdf(
             "local_pdf_path": None,
             "source": source,
             "message": "failed to attach PDF",
+            # `_store_pdf_source` branches on the same prefix check: a URL
+            # source failed because fetching it broke (an external
+            # dependency, `REASON_UNAVAILABLE`, matching the "failed to fetch
+            # PDF" case above); a local-path source failed because
+            # `copy_pdf_to_papers_dir` could not find/read it, so
+            # `REASON_NOT_FOUND` fits the common case. Imprecise on one rarer
+            # sub-case: a local file that exists but isn't a valid PDF is
+            # also reported as `REASON_NOT_FOUND` here, though it's really a
+            # bad input (closer to `REASON_USAGE`) — `acquisition_note`'s text
+            # is the only place that distinction currently survives, and
+            # splitting on it would mean matching message text, which is the
+            # anti-pattern this classification exists to remove. Left as an
+            # honest imprecision rather than a wrong guess.
+            "reason": REASON_UNAVAILABLE
+            if source.startswith(("http://", "https://"))
+            else REASON_NOT_FOUND,
             "warnings": [],
             "errors": _pdf_failure_errors(acquisition_note, "failed to attach PDF"),
         }

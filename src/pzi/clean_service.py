@@ -15,7 +15,7 @@ from pzi.bib_repository import (
 )
 from pzi.bib_serialize import failed_block_details, validate_bibtex_roundtrip
 from pzi.bibtex import BibtexEntry
-from pzi.errors import PziError
+from pzi.errors import REASON_USAGE, PziError
 from pzi.fileio import read_text_utf8
 from pzi.pdf_planning import pdf_file_present
 
@@ -36,6 +36,10 @@ class CleanResult(TypedDict):
     partial_parse: bool
     errors: list[str]
     issues: list[dict[str, Any]]
+    #: Structured failure discriminator (see `pzi.errors`). Only set on the
+    #: parse-failure path — the file's content is malformed, not a bad flag or
+    #: an unreachable dependency.
+    reason: NotRequired[str]
     #: Read notices that are not about an individual block — currently only
     #: "the configured bib does not exist". Printed by `print_read_warnings`.
     warnings: NotRequired[list[str]]
@@ -105,6 +109,10 @@ def validate_library(
             "missing_pdfs": [],
             "orphan_pdfs": [],
             "partial_parse": True,
+            # A malformed block in the file's own content, not a bad flag or
+            # an unavailable dependency — the fix is to correct the file, not
+            # retry. Same class as `attach_pdf_bytes`'s "invalid PDF payload".
+            "reason": REASON_USAGE,
             # The documented `--json` failure channel must not be empty.
             "errors": parse_failures,
             "issues": [

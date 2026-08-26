@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 
 from pzi.clean_service import clean_library, validate_library
+from pzi.errors import REASON_USAGE
 
 
 def _write_bib(path: str, content: str) -> None:
@@ -270,6 +271,9 @@ def test_validate_library_reports_a_wholly_corrupt_bib_as_an_error() -> None:
 
         assert result["status"] == "error"
         assert [i["type"] for i in result["issues"]] == ["parse_error"]
+        # G3: malformed file content — the fix is to correct the file, not
+        # retry or reconfigure.
+        assert result["reason"] == REASON_USAGE
 
 
 def test_clean_fix_does_not_quarantine_pdfs_of_unparseable_entries() -> None:

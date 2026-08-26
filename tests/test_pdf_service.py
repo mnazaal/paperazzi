@@ -10,6 +10,7 @@ import pytest
 
 from pzi import pdf_service
 from pzi.config import BibResolutionFailure
+from pzi.errors import REASON_NOT_FOUND, REASON_UNAVAILABLE
 
 # ---------------------------------------------------------------------------
 # retry_pdf: successful bib resolution + citekey found + PDF URL present
@@ -91,6 +92,9 @@ def test_retry_pdf_no_pdf_url(monkeypatch) -> None:
     assert result["status"] == "error"
     assert result["message"] == "no PDF URL on entry"
     assert result["bib_name"] == "ml"
+    # G3: the resource retry_pdf needs is absent from the record, same class
+    # as "citekey not found" above.
+    assert result["reason"] == REASON_NOT_FOUND
 
 
 def test_retry_pdf_fetch_failed(monkeypatch) -> None:
@@ -122,6 +126,9 @@ def test_retry_pdf_fetch_failed(monkeypatch) -> None:
         "network error",
         "hint: open the actual PDF tab in your browser and click pzi again",
     ]
+    # G3: a URL was found; fetching it failed — an external dependency, not a
+    # bad request.
+    assert result["reason"] == REASON_UNAVAILABLE
 
 
 def test_retry_pdf_update_not_found(monkeypatch) -> None:
@@ -301,6 +308,36 @@ def test_attach_pdf_store_failed(monkeypatch) -> None:
         "source missing",
         "hint: open the actual PDF tab in your browser and click pzi again",
     ]
+    # G3: a local-path source that could not be stored — treated as "not
+    # found" (the common case is the file being missing/unreadable).
+    assert result["reason"] == REASON_NOT_FOUND
+
+
+def test_attach_pdf_store_failed_url_source_is_unavailable(monkeypatch) -> None:
+    """Sibling of test_attach_pdf_store_failed (G3): a URL source that fails to
+    store is an external-dependency failure, not "not found"."""
+    monkeypatch.setattr(
+        pdf_service, "load_bib_target",
+        lambda **kw: (_app_config(), {"name": "ml", "path": "/b", "papers_dir": "/p"}),
+    )
+    monkeypatch.setattr(
+        pdf_service, "read_bib_file",
+        lambda path: {
+            "entries": [{"citekey": "smith2024", "fields": {}}],
+            "records": [],
+        },
+    )
+    monkeypatch.setattr(
+        pdf_service, "_store_pdf_source",
+        lambda **kw: (None, "network error"),
+    )
+    result = pdf_service.attach_pdf(
+        config_path="/f", home_dir="/h", bib_selector=None,
+        citekey="smith2024", source="http://x.com/p.pdf",
+    )
+    assert result["status"] == "error"
+    assert result["message"] == "failed to attach PDF"
+    assert result["reason"] == REASON_UNAVAILABLE
 
 
 def test_attach_pdf_update_disappeared(monkeypatch) -> None:

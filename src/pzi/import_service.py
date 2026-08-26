@@ -9,7 +9,7 @@ from pzi.add_service import add_records_to_bib_batch
 from pzi.bib_serialize import parse_bibtex_for_import
 from pzi.bibtex import bibtex_entry_to_record
 from pzi.config import BibResolutionFailure, load_bib_target
-from pzi.errors import REASON_CONFIG, REASON_USAGE
+from pzi.errors import REASON_CONFIG, REASON_UNAVAILABLE, REASON_USAGE
 from pzi.fileio import read_text_utf8
 
 
@@ -200,6 +200,11 @@ def import_from_bibtex(
             "bib_name": bib["name"],
             "dry_run": dry_run,
             "message": "failed to write imported records",
+            # Every record already passed resolution/validation above; the
+            # write itself (a filesystem operation) broke. That's an external
+            # dependency failing after a good request, not a bad one — retrying
+            # once the underlying issue clears is reasonable, unlike usage/config.
+            "reason": REASON_UNAVAILABLE,
             "errors": [str(exc)],
             "total_source": len(source_entries) + len(dropped_blocks),
             "imported": 0,

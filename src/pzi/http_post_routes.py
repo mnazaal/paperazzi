@@ -48,8 +48,9 @@ from pzi.http_status import (
 from pzi.pdf_acquisition_plan import build_pdf_acquisition_plan
 from pzi.pdf_attach_session import build_attach_session, validate_attach_request
 from pzi.pdf_attach_session_store import AttachSessionStore
-from pzi.pdf_service import attach_pdf_bytes, attach_pdf_raw_bytes
+from pzi.pdf_service import attach_pdf_raw_bytes
 from pzi.promote_service import promote_bib
+from pzi.protocols import accepts_keyword
 from pzi.tag_service import add_tags, remove_tags
 from pzi.update_service import update_bib
 from pzi.url_safety import safe_public_http_url
@@ -497,9 +498,19 @@ def _handle_browser_discover_post(
     # No `doi=`: the manager accepted one and dropped it on the floor, because
     # `browser_pdf_hook.discover_pdf_url` has no parameter to forward it to.
     # Sending it implied a hint was being used that never was.
-    pdf_url = discover(normalized_page_url)
+    #
+    # `errors=` only if the manager's method accepts it (G1): the shared
+    # `errors` list distinguishes "the browser stage broke" (a crashed session
+    # mid-discovery) from "this page genuinely has no PDF", the same way
+    # `discover_via_server_api`/`download_via_server_api` already do on the
+    # client side of this same request. A dead browser must not answer 200.
+    discover_errors: list[str] = []
+    kwargs = {"errors": discover_errors} if accepts_keyword(discover, "errors") else {}
+    pdf_url = discover(normalized_page_url, **kwargs)
     if pdf_url:
         return 200, {"pdf_url": pdf_url}
+    if discover_errors:
+        return 503, {"error": "; ".join(discover_errors)}
     return 200, {"pdf_url": None}
 
 
@@ -519,11 +530,17 @@ def _handle_browser_download_post(
     download = getattr(browser_manager, "download_pdf_bytes", None)
     if not callable(download):
         return 503, {"error": "browser session not available"}
-    pdf_bytes = cast("bytes | None", download(normalized_pdf_url))
+    # Sibling of the `errors=` handling in `_handle_browser_discover_post`
+    # above (G1): a session that dies mid-download must not read as "no PDF".
+    download_errors: list[str] = []
+    kwargs = {"errors": download_errors} if accepts_keyword(download, "errors") else {}
+    pdf_bytes = cast("bytes | None", download(normalized_pdf_url, **kwargs))
     if pdf_bytes:
         if len(pdf_bytes) > max(0, max_pdf_bytes):
             return 413, {"error": "PDF too large"}
         return 200, {"pdf_base64": base64.b64encode(pdf_bytes).decode()}
+    if download_errors:
+        return 503, {"error": "; ".join(download_errors)}
     return 200, {"pdf_base64": None}
 
 
@@ -777,6 +794,16 @@ def _handle_attach_pdf_post(
     if source_url is not None and not safe_public_http_url(source_url):
         return 400, {"error": "source_url must be a public http(s) URL"}
     request_id = body.get("request_id") if isinstance(body.get("request_id"), str) else None
+    # C6: decode once here and pass bytes down through both branches and into
+    # the write, instead of re-decoding the same payload for the session
+    # check, the sessionless size check, and again inside `attach_pdf_bytes`.
+    # A multi-MB base64 PDF decoded three times over one request was pure
+    # waste, not a safety property — nothing downstream depends on decoding
+    # happening more than once.
+    try:
+        pdf_bytes = base64.b64decode(pdf_base64, validate=True)
+    except (ValueError, binascii.Error):
+        return 400, {"error": "pdf_base64 invalid"}
     session = None
     if request_id is not None:
         if attach_session_store is None:
@@ -784,11 +811,6 @@ def _handle_attach_pdf_post(
         session = attach_session_store.claim(request_id)
         if session is None:
             return 403, {"error": "attach session not found"}
-        try:
-            pdf_bytes = base64.b64decode(pdf_base64, validate=True)
-        except (ValueError, binascii.Error):
-            attach_session_store.restore(session)
-            return 400, {"error": "pdf_base64 invalid"}
         attach_token_value = body.get("attach_token")
         token: str = attach_token_value if isinstance(attach_token_value, str) else ""
         validation_error = validate_attach_request(
@@ -810,21 +832,19 @@ def _handle_attach_pdf_post(
         # never opened a session still has to be able to attach — but arriving
         # without a session is not a reason to accept an unbounded PDF. The
         # session path checks exactly this via `session.max_bytes`; the same
-        # cap applies here.
-        try:
-            decoded_size = len(base64.b64decode(pdf_base64, validate=True))
-        except (ValueError, binascii.Error):
-            return 400, {"error": "pdf_base64 invalid"}
-        if decoded_size > MAX_BROWSER_PDF_BYTES:
+        # cap applies here. Size enforcement is unchanged: still the exact
+        # decoded byte count against the same limit, just measured on the
+        # bytes already in hand instead of a fresh decode.
+        if len(pdf_bytes) > MAX_BROWSER_PDF_BYTES:
             return 413, {
-                "error": f"pdf too large: {decoded_size} > {MAX_BROWSER_PDF_BYTES} bytes"
+                "error": f"pdf too large: {len(pdf_bytes)} > {MAX_BROWSER_PDF_BYTES} bytes"
             }
-    result = attach_pdf_bytes(
+    result = attach_pdf_raw_bytes(
         config_path=config_path,
         home_dir=home_dir,
         bib_selector=bib_selector_of(body),
         citekey=citekey,
-        pdf_base64=pdf_base64,
+        pdf_bytes=pdf_bytes,
         source_url=source_url,
     )
     status = status_for_service_result(result)

@@ -93,9 +93,9 @@ def test_main_discovers_pdf_url(monkeypatch, capsys) -> None:
     monkeypatch.setattr(
         hook,
         "discover_pdf_url",
-        lambda page_url, *, browser, profile_path, headless=True: f"{page_url}/paper.pdf"
-        if browser == "firefox" and profile_path == "prof"
-        else None,
+        lambda page_url, *, browser, profile_path, headless=True, errors=None: (
+            f"{page_url}/paper.pdf" if browser == "firefox" and profile_path == "prof" else None
+        ),
     )
 
     assert hook.main() == 0
@@ -160,6 +160,34 @@ def test_discover_no_candidates() -> None:
     s = FakeBrowserSession(evaluate_results=[[]])
     result = hook.discover_pdf_url("https://example.com", _session=s)
     assert result is None
+
+
+def test_discover_no_candidates_leaves_errors_empty() -> None:
+    """A page that genuinely has no PDF must not look like a broken session."""
+    s = FakeBrowserSession(evaluate_results=[[]])
+    errs: list[str] = []
+    result = hook.discover_pdf_url("https://example.com", _session=s, errors=errs)
+    assert result is None
+    assert errs == []
+
+
+def test_discover_reports_crashed_session_in_errors() -> None:
+    """A `RuntimeError` from a closed/crashed session (G1) must be surfaced,
+    not silently read as "no PDF found" — the same class of bug tier 1 fixed
+    for a dead capture server (A6)."""
+    s = FakeBrowserSession()
+    s.close()  # _check_open() now raises RuntimeError on every method call
+    errs: list[str] = []
+    result = hook.discover_pdf_url("https://example.com", _session=s, errors=errs)
+    assert result is None
+    assert errs and "browser session is closed" in errs[0]
+
+
+def test_discover_without_errors_param_still_swallows_crash() -> None:
+    """Callers that don't ask for diagnostics keep the old silent-`None` shape."""
+    s = FakeBrowserSession()
+    s.close()
+    assert hook.discover_pdf_url("https://example.com", _session=s) is None
 
 
 def test_discover_candidates_found() -> None:
@@ -256,6 +284,18 @@ def test_download_outer_exception() -> None:
     s.fetch_direct = lambda url: FetchResult(status=-1, content_type=None, body=b"")
     result = hook.download_pdf("https://example.com/paper.pdf", _session=s)
     assert result is None
+
+
+def test_download_reports_crashed_session_in_errors() -> None:
+    """Sibling of test_discover_reports_crashed_session_in_errors (G1): a
+    session that dies mid-download is surfaced via `errors`, not folded into
+    the ordinary "no PDF" outcome."""
+    s = FakeBrowserSession(fetch_result=(-1, None, b""))
+    s.close()
+    errs: list[str] = []
+    result = hook.download_pdf("https://example.com/paper.pdf", _session=s, errors=errs)
+    assert result is None
+    assert errs and "browser session is closed" in errs[0]
 
 # === FakeBrowserSession raises after close(), like the real session (D1) ===
 #
