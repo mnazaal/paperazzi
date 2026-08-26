@@ -71,7 +71,11 @@ def _run_list(args, home_dir, config_path, stdout, stderr, bib_selector) -> int:
     if getattr(args, "json", False):
         cli_json.emit_result(result, stdout, command="entries")
         if result["status"] != "ok":
-            return exit_codes.ENVIRONMENT
+            # `list_entries`'s only error path sets `reason=REASON_CONFIG`, the
+            # same one `update.py`/`pdf.py`/`add.py` already route through
+            # `exit_code_for_error` rather than a hardcoded ENVIRONMENT — this
+            # runner was the sibling tier 1 missed.
+            return exit_code_for_error(result)
         # The same verdict the text branch below reaches. `--json` is a
         # rendering choice, and computing the code twice is how the two answers
         # drift apart.
@@ -128,7 +132,7 @@ def _run_list(args, home_dir, config_path, stdout, stderr, bib_selector) -> int:
         )
         return exit_codes.FINDINGS if has_read_warnings(result) else exit_codes.OK
     print_lines(error_lines("failed to list entries", result["errors"]), stderr)
-    return exit_codes.ENVIRONMENT
+    return exit_code_for_error(result)
 
 
 def _run_detail(args, home_dir, config_path, stdout, stderr, bib_selector) -> int:
@@ -194,6 +198,12 @@ def _run_stats(args, home_dir, config_path, stdout, stderr, bib_selector) -> int
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector,
     )
 
+    # `bib_stats` builds its result as a literal with `"status": "ok"` and has
+    # no other return — it cannot fail once it is called, so unlike
+    # `_run_list` above there is no error path to route through
+    # `exit_code_for_error`. The two guards this used to have (mirroring
+    # `_run_list`'s shape) tested a status this function can never produce;
+    # deleted rather than left as a check for an impossible case.
     result = bib_stats(bib_path=target["path"], papers_dir=target["papers_dir"])
     if getattr(args, "json", False):
         # `bib_stats` takes a path rather than a selector, so it cannot name the
@@ -205,15 +215,10 @@ def _run_stats(args, home_dir, config_path, stdout, stderr, bib_selector) -> int
             result, stdout, command="entries --stats", items=[],
             bib_name=target["name"],
         )
-        if result["status"] != "ok":
-            return exit_codes.ENVIRONMENT
         return exit_codes.FINDINGS if has_read_warnings(result) else exit_codes.OK
-    if result["status"] == "ok":
-        print_lines(render_bib_stats(result), stdout)
-        print_read_warnings(result, stderr)
-        return exit_codes.FINDINGS if has_read_warnings(result) else exit_codes.OK
-    print_lines(error_lines("stats failed", result["errors"]), stderr)
-    return exit_codes.ENVIRONMENT
+    print_lines(render_bib_stats(result), stdout)
+    print_read_warnings(result, stderr)
+    return exit_codes.FINDINGS if has_read_warnings(result) else exit_codes.OK
 
 
 def _author_name(author: object) -> str:
