@@ -7,8 +7,9 @@ import pytest
 import pzi.promote_service as promote_service
 import pzi.update_service as update_service
 from pzi import promote_ledger
-from pzi.add_service import add_record_to_bib
+from pzi.add_service import add_record_with_bib
 from pzi.bib_repository import ConcurrentEditError, StalePlanError
+from pzi.config import BibResolutionFailure, load_bib_target
 from pzi.errors import REASON_UNAVAILABLE
 from pzi.http_status import status_for_service_result
 from pzi.pdf import PdfSourceOutcome
@@ -19,6 +20,29 @@ from pzi.promote_planning import (
 )
 from pzi.promote_service import promote_bib
 from pzi.update_service import update_bib
+
+
+def _add_via_config(*, config_path, home_dir, record, bib_selector=None, dry_run=False):
+    """Seed the bib through the live write path (`add_record_with_bib`).
+
+    Inlines what the now-deleted single-record capture wrapper used to do — resolve
+    the config's bib, then delegate — so these `promote_bib`/`update_bib`
+    fixtures keep seeding their library exactly as production would capture it.
+    """
+    resolved = load_bib_target(
+        config_path=config_path, home_dir=home_dir, bib_selector=bib_selector,
+    )
+    assert not isinstance(resolved, BibResolutionFailure)
+    config, bib = resolved
+    return add_record_with_bib(
+        bib=bib,
+        record=record,
+        dry_run=dry_run,
+        browser_hook=config.get("browser_hook", True),
+        citekey_format=config.get("citekey_format"),
+        pdf_filename_format=config.get("pdf_filename_format"),
+        file_path_style=config.get("pdf_file_path_style", "absolute"),
+    )
 
 #: The real candidate set for `jing-understanding-2022`, taken from a
 #: `--verbose` run against the user's library on 2026-08-14. The arXiv record
@@ -237,7 +261,7 @@ def _seed_bib_with_preprint(tmp_path, bib_path, config_path, **kwargs):
         "authors": ["Smith, Jane"],
         **kwargs,
     }
-    add_record_to_bib(
+    _add_via_config(
         config_path=str(config_path),
         home_dir=str(tmp_path),
         record=record,
@@ -408,7 +432,7 @@ def test_promote_skips_when_published_already_exists(tmp_path):
     bib_path = tmp_path / "ml.bib"
     config_path = _write_config(tmp_path, bib_path)
     _seed_bib_with_preprint(tmp_path, bib_path, config_path)
-    add_record_to_bib(
+    _add_via_config(
         config_path=str(config_path),
         home_dir=str(tmp_path),
         record={
@@ -470,7 +494,7 @@ def test_promote_skips_low_confidence(tmp_path):
 def test_promote_skips_non_preprints(tmp_path):
     bib_path = tmp_path / "ml.bib"
     config_path = _write_config(tmp_path, bib_path)
-    add_record_to_bib(
+    _add_via_config(
         config_path=str(config_path),
         home_dir=str(tmp_path),
         record={
@@ -647,7 +671,7 @@ def test_promote_uses_s2_api_key(tmp_path):
 def test_promote_empty_query_skips_search(tmp_path):
     bib_path = tmp_path / "ml.bib"
     config_path = _write_config(tmp_path, bib_path)
-    add_record_to_bib(
+    _add_via_config(
         config_path=str(config_path),
         home_dir=str(tmp_path),
         record={"citekey": "empty", "title": ""},
@@ -760,7 +784,7 @@ def test_promote_find_duplicate_by_title(tmp_path):
     config_path = _write_config(tmp_path, bib_path)
     _seed_bib_with_preprint(tmp_path, bib_path, config_path)
     # Add duplicate with same title but different citekey
-    add_record_to_bib(
+    _add_via_config(
         config_path=str(config_path),
         home_dir=str(tmp_path),
         record={
@@ -974,7 +998,7 @@ def test_promote_unexpected_error_isolated_per_record(tmp_path, monkeypatch):
         ("alpha2024", "2401.00001", "Alpha Net"),
         ("beta2024", "2401.00002", "Beta Net"),
     ]:
-        add_record_to_bib(
+        _add_via_config(
             config_path=str(config_path),
             home_dir=str(tmp_path),
             record={
@@ -1603,7 +1627,7 @@ def test_promote_does_not_fork_an_entry_that_merely_lacks_a_venue(tmp_path):
     """
     bib_path = tmp_path / "ml.bib"
     config_path = _write_config(tmp_path, bib_path)
-    add_record_to_bib(
+    _add_via_config(
         config_path=str(config_path),
         home_dir=str(tmp_path),
         record={
@@ -1664,7 +1688,7 @@ def test_promoting_several_preprints_leaves_one_backup(tmp_path):
     bib_path = tmp_path / "ml.bib"
     config_path = _write_config(tmp_path, bib_path)
     for index in range(3):
-        add_record_to_bib(
+        _add_via_config(
             config_path=str(config_path),
             home_dir=str(tmp_path),
             record={
@@ -1713,7 +1737,7 @@ def test_promoting_several_preprints_leaves_one_backup(tmp_path):
 
 def _seed_two_preprints(tmp_path, config_path) -> None:
     for index in (1, 2):
-        add_record_to_bib(
+        _add_via_config(
             config_path=str(config_path),
             home_dir=str(tmp_path),
             record={
@@ -2489,7 +2513,7 @@ def test_a_corrupt_ledger_does_not_fail_the_run(tmp_path):
 
 def _seed_many_preprints(tmp_path, bib_path, config_path, count):
     for i in range(count):
-        add_record_to_bib(
+        _add_via_config(
             config_path=str(config_path),
             home_dir=str(tmp_path),
             record={

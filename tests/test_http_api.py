@@ -9,7 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from pzi.add_service import add_record_to_bib
+from pzi.add_service import add_record_with_bib
+from pzi.config import BibResolutionFailure, load_bib_target
 from pzi.http_api import (
     CONNECTION_READ_TIMEOUT_SECONDS,
     build_handler_class,
@@ -79,15 +80,20 @@ path = "{bib_path}"
 default = true
 """.strip()
     )
-    add_record_to_bib(
-        config_path=str(config_path),
-        home_dir=str(tmp_path),
+    # Seeds through the live write path (`add_record_with_bib`), inlining what
+    # the now-deleted single-record capture wrapper used to.
+    resolved = load_bib_target(
+        config_path=str(config_path), home_dir=str(tmp_path), bib_selector=None,
+    )
+    assert not isinstance(resolved, BibResolutionFailure)
+    _config, bib = resolved
+    add_record_with_bib(
+        bib=bib,
         record={
             "citekey": "smith2024graph",
             "title": "Graph Parsers",
             "doi": "10.1/foo",
         },
-        bib_selector=None,
         dry_run=False,
     )
     return config_path, bib_path

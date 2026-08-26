@@ -1,5 +1,6 @@
-from pzi.add_service import add_record_to_bib
+from pzi.add_service import add_record_with_bib
 from pzi.check_service import check_bib
+from pzi.config import BibResolutionFailure, load_bib_target
 
 
 def _write_config(tmp_path, bib_path, **kwargs):
@@ -18,13 +19,14 @@ default = true
 
 
 def _seed(tmp_path, config_path, **record):
-    add_record_to_bib(
-        config_path=str(config_path),
-        home_dir=str(tmp_path),
-        record=record,
-        bib_selector=None,
-        dry_run=False,
+    # Seeds through the live write path (`add_record_with_bib`), inlining what
+    # the now-deleted single-record capture wrapper used to.
+    resolved = load_bib_target(
+        config_path=str(config_path), home_dir=str(tmp_path), bib_selector=None,
     )
+    assert not isinstance(resolved, BibResolutionFailure)
+    _config, bib = resolved
+    add_record_with_bib(bib=bib, record=record, dry_run=False)
 
 
 def _setup(tmp_path, **record):
