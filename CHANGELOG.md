@@ -35,6 +35,22 @@ next to the diff it explains.
 
 - `pzi entries <citekey> --json` no longer prints read warnings to stderr *and* carries them in the envelope; the envelope alone, as with `entries` and `entries --stats`.
 
+- A crashed or closed browser session during PDF discovery or download is now reported instead of being read as "this page has no PDF". `POST /browser/discover` and `POST /browser/download` answer `503` where they used to answer `200` with a null result — on both the subprocess and the persistent-session paths.
+
+- `update --promote` no longer lets a translation-server hit with no title shadow a full Crossref record. All three translation-server paths now require a title before winning, matching the gate the metadata cascade already applied.
+
+- `pzi add <file.pdf>` now honours caller-supplied `fallback_title`/`fallback_authors`. The local-PDF branch merged overrides without splitting the `fallback_*` keys, so a supplied title filled nothing and the capture was then refused for having no title.
+
+- PDF discovery no longer re-fetches a Crossref record the metadata cascade just fetched: the cached, rate-limited fetcher is threaded through to the DOI PDF lookup.
+
+- Parallel PDF discovery keeps the `canonical_url`/`source_url`/`abstract_url` backfill from steps that found no PDF, matching sequential mode.
+
+- Provider errors in the DOI cascade name the provider that failed (`crossref: HTTP 404`) instead of a bare `HTTP 404`.
+
+- `pdf retry` on an entry with no PDF URL exits `3` (not found), not `5`. `library clean` and `import` failures likewise say why in `reason`.
+
+- `library check --limit N` no longer claims entries went unaudited when the library holds exactly N. It now says the counts cover at most the first N.
+
 ### Changed
 
 - **Breaking:** `pzi import <missing-file>` and `pzi add --from-file <missing-file>` now exit `2` (usage), not `5`. Their `--json` envelopes already said `"reason": "usage"`, which maps to `2`; the code and the field now agree.
@@ -47,6 +63,7 @@ next to the diff it explains.
 - `130` is documented as SIGINT *or* SIGTERM to `pzi server`, which is what it always returned under systemd.
 - **Breaking:** `POST /inbox/drain` answers `503`, not `400`, when the inbox file cannot be read. The service now classifies that failure as `unavailable`, which is the answer the status mapper was always meant to give it.
 - `pzi library check`'s `--json` error envelope carries `reason` on a config failure, like every other command's.
+- **Breaking:** `--limit` is validated at the parser for `entries`, `update --promote` and `library check`, so `--limit 0` and negative values now exit `2` instead of being accepted (a negative silently meant "unlimited", and `library check --limit 0` reported a clean bill of health for auditing nothing). Under `--json` these emit prose on stderr and nothing on stdout, matching the documented parser-rejection exception. `pzi.check(limit=...)` raises `PziError` on the same values.
 - Minimum Python is now 3.11.4 (was 3.11), which removes a hand-rolled tar-extraction guard superseded by `filter="data"`.
 
 ### Fixed
