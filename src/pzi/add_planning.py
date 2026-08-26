@@ -571,7 +571,12 @@ def next_pdf_candidate_for_config(config: AppConfig, bib: BibConfig) -> NextPdfC
                 api_url=context.api_url,
                 api_auth_token=context.api_auth_token,
                 desktop_fallback_hosts=context.desktop_fallback_hosts,
-                pdf_discovery_parallel=context.pdf_discovery_parallel,
+                # No `pdf_discovery_parallel` here: `_next` always calls the
+                # sequential `apply_pdf_discovery` below, which never reads
+                # that context key (only `fetch_record_for_input` branches on
+                # it, between `apply_pdf_discovery` and `_parallel`). Passing
+                # it through was dead — a single stored entry's retry has one
+                # record to resolve, not the fan-out parallelism exists for.
                 exclude_pdf_urls=tried,
             ),
         )
