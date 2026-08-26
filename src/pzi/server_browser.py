@@ -21,8 +21,18 @@ def discover_via_server_api(
     doi: str | None = None,
     auth_token: str | None = None,
     timeout: int = 120,
+    errors: list[str] | None = None,
 ) -> str | None:
-    """Discover PDF URL via the server's /browser/discover endpoint."""
+    """Discover PDF URL via the server's /browser/discover endpoint.
+
+    *errors* collects why this stage produced nothing, the same way its twin
+    ``download_via_server_api`` does. Without it every outcome was `None`, and
+    `browser_pdf_step` let that fall through silently — so a dead capture
+    server during discovery was indistinguishable from "this paper has no
+    PDF", the commonest cause being that nothing was listening on that port
+    at all (the same `api_url` is synthesized from the listen host/port
+    whether or not `pzi server` is up).
+    """
     body = json.dumps({
         "page_url": page_url,
         **({"doi": doi} if doi else {}),
@@ -39,8 +49,17 @@ def discover_via_server_api(
             pdf_url = data.get("pdf_url")
             if isinstance(pdf_url, str) and pdf_url.strip():
                 return pdf_url.strip()
+        if errors is not None:
+            errors.append(f"{api_url}: response carried no PDF")
         return None
-    except (OSError, HTTPError, URLError, json.JSONDecodeError, ValueError):
+    except (HTTPError, json.JSONDecodeError, ValueError, TypeError) as exc:
+        if errors is not None:
+            errors.append(f"{api_url}: bad response ({exc})")
+        return None
+    except (URLError, OSError) as exc:
+        if errors is not None:
+            reason = getattr(exc, "reason", None) or exc
+            errors.append(f"{api_url}: not reachable ({reason})")
         return None
 
 
