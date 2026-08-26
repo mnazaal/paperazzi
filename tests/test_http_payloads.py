@@ -80,6 +80,33 @@ def test_capture_payload_defaults_pdf_status() -> None:
     assert result["bib"] == "ml"
 
 
+def test_capture_payload_has_no_title_key() -> None:
+    # `AddResult` (src/pzi/add_planning.py) carries no `title` field on any
+    # code path that builds it (error_result, build_add_record_result), so
+    # there is nothing genuine for capture_payload to source a "title" value
+    # from. Pin that contract explicitly: even if a caller's result dict
+    # happens to carry a stray "title" key, capture_payload must not surface
+    # it, so nobody re-adds a fabricated read here. The extension gets a
+    # title from `capture_body.page_title` on its own side instead (see
+    # browser-extension/popup.js).
+    result = capture_payload(
+        {
+            "status": "ok",
+            "bib_name": "ml",
+            "citekey": "smith2024paper",
+            "action": "insert",
+            "pdf_path": None,
+            "dry_run": False,
+            "message": "insert entry",
+            "warnings": [],
+            "errors": [],
+            "title": "should never surface",
+        }
+    )
+
+    assert "title" not in result
+
+
 def test_capture_payload_hides_diagnostics_by_default_and_includes_when_verbose() -> None:
     result = {
         "status": "ok",

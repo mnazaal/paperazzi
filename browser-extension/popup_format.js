@@ -9,7 +9,9 @@ export function formatCaptureResult(result) {
   const lines = [];
   const action = actionLabel(result.action || "captured");
   const citekey = result.citekey || "entry";
-  const bibName = result.bib_name || result.bib;
+  // `capture_payload` (src/pzi/http_payloads.py) sends `bib`, never
+  // `bib_name` — that was a dead fallback-only read.
+  const bibName = result.bib;
   const bib = bibName ? ` in ${bibName}` : "";
   const isUnchanged = result.action === "update"
     && Array.isArray(result.changed_fields)
@@ -26,20 +28,12 @@ export function formatCaptureResult(result) {
   for (const warning of displayWarnings(result)) {
     if (warning) lines.push(`⚠️ ${warning}`);
   }
-  for (const warning of metadataWarnings(result)) {
-    lines.push(`⚠️ ${warning}`);
-  }
   const diagnostics = metadataDiagnostics(result);
   if (diagnostics.length > 0) {
     lines.push("metadata diagnostics:");
     for (const line of diagnostics) lines.push(`  ${line}`);
   }
   return lines.join("\n");
-}
-
-function metadataWarnings(result) {
-  if (!Array.isArray(result.metadata_warnings)) return [];
-  return result.metadata_warnings.filter((warning) => typeof warning === "string" && warning);
 }
 
 function metadataDiagnostics(result) {
