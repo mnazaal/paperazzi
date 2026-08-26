@@ -1,7 +1,31 @@
 import pytest
 
-from pzi.add_service import add_record_to_bib
+from pzi.add_service import add_record_with_bib
+from pzi.config import BibResolutionFailure, load_bib_target
 from pzi.search_service import search_bib
+
+
+def _add_via_config(*, config_path, home_dir, record, bib_selector, dry_run):
+    """Seed the bib through the live write path (`add_record_with_bib`).
+
+    Inlines what the now-deleted single-record capture wrapper used to do — resolve
+    the config's bib, then delegate — so this fixture keeps seeding the
+    library exactly as production would capture it.
+    """
+    resolved = load_bib_target(
+        config_path=config_path, home_dir=home_dir, bib_selector=bib_selector,
+    )
+    assert not isinstance(resolved, BibResolutionFailure)
+    config, bib = resolved
+    return add_record_with_bib(
+        bib=bib,
+        record=record,
+        dry_run=dry_run,
+        browser_hook=config.get("browser_hook", True),
+        citekey_format=config.get("citekey_format"),
+        pdf_filename_format=config.get("pdf_filename_format"),
+        file_path_style=config.get("pdf_file_path_style", "absolute"),
+    )
 
 
 @pytest.fixture
@@ -45,7 +69,7 @@ default = true
         },
     ]
     for record in records:
-        add_record_to_bib(
+        _add_via_config(
             config_path=str(config_path),
             home_dir=str(tmp_path),
             record=record,

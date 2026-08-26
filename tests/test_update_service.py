@@ -2,7 +2,8 @@
 
 from pathlib import Path
 
-from pzi.add_service import add_record_to_bib
+from pzi.add_service import add_record_with_bib
+from pzi.config import BibResolutionFailure, load_bib_target
 from pzi.update_service import (
     _changed_fields,
     _changed_fields_for_candidate,
@@ -24,6 +25,29 @@ default = true
 """.strip()
     )
     return config_path
+
+
+def _add_via_config(*, config_path, home_dir, record, bib_selector, dry_run):
+    """Seed `bib_path` through the live write path (`add_record_with_bib`).
+
+    Inlines what the now-deleted single-record capture wrapper used to do — resolve
+    the config's bib, then delegate — so these `update_bib` tests keep seeding
+    their fixture library exactly as production would capture it.
+    """
+    resolved = load_bib_target(
+        config_path=config_path, home_dir=home_dir, bib_selector=bib_selector,
+    )
+    assert not isinstance(resolved, BibResolutionFailure)
+    config, bib = resolved
+    return add_record_with_bib(
+        bib=bib,
+        record=record,
+        dry_run=dry_run,
+        browser_hook=config.get("browser_hook", True),
+        citekey_format=config.get("citekey_format"),
+        pdf_filename_format=config.get("pdf_filename_format"),
+        file_path_style=config.get("pdf_file_path_style", "absolute"),
+    )
 
 
 # ── _needs_update ────────────────────────────────────────────────
@@ -155,7 +179,7 @@ def test_update_bib_lookup_failure_recorded(tmp_path: Path) -> None:
     """When fetch_search raises, the note records the error."""
     bib_path = tmp_path / "ml.bib"
     config_path = _write_config(tmp_path, bib_path)
-    add_record_to_bib(
+    _add_via_config(
         config_path=str(config_path),
         home_dir=str(tmp_path),
         record={
@@ -191,7 +215,7 @@ def test_update_bib_value_error_lookup_recorded(tmp_path: Path) -> None:
     """ValueError from search is also caught."""
     bib_path = tmp_path / "ml.bib"
     config_path = _write_config(tmp_path, bib_path)
-    add_record_to_bib(
+    _add_via_config(
         config_path=str(config_path),
         home_dir=str(tmp_path),
         record={
@@ -219,7 +243,7 @@ def test_update_bib_no_results_skipped(tmp_path: Path) -> None:
     """When search returns empty, the record is skipped."""
     bib_path = tmp_path / "ml.bib"
     config_path = _write_config(tmp_path, bib_path)
-    add_record_to_bib(
+    _add_via_config(
         config_path=str(config_path),
         home_dir=str(tmp_path),
         record={
@@ -245,7 +269,7 @@ def test_update_bib_no_changed_fields_skipped(tmp_path: Path) -> None:
     """When candidate has no new fields, record is skipped."""
     bib_path = tmp_path / "ml.bib"
     config_path = _write_config(tmp_path, bib_path)
-    add_record_to_bib(
+    _add_via_config(
         config_path=str(config_path),
         home_dir=str(tmp_path),
         record={
@@ -296,7 +320,7 @@ def test_update_dry_run_previews_an_edit_not_an_insert(tmp_path: Path) -> None:
     """
     bib_path = tmp_path / "ml.bib"
     config_path = _write_config(tmp_path, bib_path)
-    add_record_to_bib(
+    _add_via_config(
         config_path=str(config_path),
         home_dir=str(tmp_path),
         record={
@@ -348,7 +372,7 @@ def test_update_bib_applies_changes_when_not_dry_run(tmp_path: Path) -> None:
     """Dry-run=False actually writes to the bib file."""
     bib_path = tmp_path / "ml.bib"
     config_path = _write_config(tmp_path, bib_path)
-    add_record_to_bib(
+    _add_via_config(
         config_path=str(config_path),
         home_dir=str(tmp_path),
         record={
@@ -397,7 +421,7 @@ def test_update_bib_conservative_enrich_respects_existing_values(
     """Existing non-empty fields are not overwritten."""
     bib_path = tmp_path / "ml.bib"
     config_path = _write_config(tmp_path, bib_path)
-    add_record_to_bib(
+    _add_via_config(
         config_path=str(config_path),
         home_dir=str(tmp_path),
         record={
@@ -497,7 +521,7 @@ def test_update_bib_published_record_not_enriched(tmp_path: Path) -> None:
     """A fully-published record (venue + doi + year) is skipped by _needs_update."""
     bib_path = tmp_path / "ml.bib"
     config_path = _write_config(tmp_path, bib_path)
-    add_record_to_bib(
+    _add_via_config(
         config_path=str(config_path),
         home_dir=str(tmp_path),
         record={
@@ -533,7 +557,7 @@ def test_update_bib_entry_disappeared_during_update(tmp_path: Path) -> None:
     """If update_bib_entry can't find the entry, note is set."""
     bib_path = tmp_path / "ml.bib"
     config_path = _write_config(tmp_path, bib_path)
-    add_record_to_bib(
+    _add_via_config(
         config_path=str(config_path),
         home_dir=str(tmp_path),
         record={
@@ -582,7 +606,7 @@ def test_update_bib_record_without_query_skipped(tmp_path: Path) -> None:
     """Records without doi, arxiv_id, or title produce no query → skipped."""
     bib_path = tmp_path / "ml.bib"
     config_path = _write_config(tmp_path, bib_path)
-    add_record_to_bib(
+    _add_via_config(
         config_path=str(config_path),
         home_dir=str(tmp_path),
         record={
@@ -608,7 +632,7 @@ def test_update_bib_change_field_list_dry_run_vs_applied(tmp_path: Path) -> None
     """Dry-run reports changed_fields but applied=False."""
     bib_path = tmp_path / "ml.bib"
     config_path = _write_config(tmp_path, bib_path)
-    add_record_to_bib(
+    _add_via_config(
         config_path=str(config_path),
         home_dir=str(tmp_path),
         record={
@@ -683,7 +707,7 @@ def test_update_bib_uses_best_translation_result_not_first(tmp_path: Path) -> No
     """Update picks best metadata candidate by pure score, not result order."""
     bib_path = tmp_path / "ml.bib"
     config_path = _write_config(tmp_path, bib_path)
-    add_record_to_bib(
+    _add_via_config(
         config_path=str(config_path),
         home_dir=str(tmp_path),
         record={
@@ -745,7 +769,7 @@ def test_update_does_not_adopt_an_unrelated_paper(tmp_path: Path) -> None:
     """
     bib_path = tmp_path / "ml.bib"
     config_path = _write_config(tmp_path, bib_path)
-    add_record_to_bib(
+    _add_via_config(
         config_path=str(config_path),
         home_dir=str(tmp_path),
         record={
@@ -804,7 +828,7 @@ def test_update_still_applies_a_candidate_that_is_the_same_paper(
     """
     bib_path = tmp_path / "ml.bib"
     config_path = _write_config(tmp_path, bib_path)
-    add_record_to_bib(
+    _add_via_config(
         config_path=str(config_path),
         home_dir=str(tmp_path),
         record={
@@ -846,7 +870,7 @@ def test_update_still_applies_a_candidate_that_is_the_same_paper(
 def test_update_bib_reports_low_confidence_metadata_warning(tmp_path: Path) -> None:
     bib_path = tmp_path / "ml.bib"
     config_path = _write_config(tmp_path, bib_path)
-    add_record_to_bib(
+    _add_via_config(
         config_path=str(config_path),
         home_dir=str(tmp_path),
         record={
@@ -896,7 +920,7 @@ path = "{bib_path}"
 default = true
 """.strip()
     )
-    add_record_to_bib(
+    _add_via_config(
         config_path=str(config_path),
         home_dir=str(tmp_path),
         record={
@@ -942,7 +966,7 @@ def test_update_bib_unexpected_error_isolated_per_record(tmp_path: Path) -> None
     bib_path = tmp_path / "ml.bib"
     config_path = _write_config(tmp_path, bib_path)
     for citekey, arxiv in [("alpha2024", "2401.00001"), ("beta2024", "2401.00002")]:
-        add_record_to_bib(
+        _add_via_config(
             config_path=str(config_path),
             home_dir=str(tmp_path),
             record={"citekey": citekey, "title": citekey, "arxiv_id": arxiv},

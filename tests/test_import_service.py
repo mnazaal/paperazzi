@@ -9,7 +9,7 @@ from pathlib import Path
 from pzi.bib_repository import update_bib_entry
 from pzi.import_service import import_from_bibtex
 
-# We need a minimal valid config.toml for add_record_to_bib to resolve bibs.
+# A minimal valid config.toml so `import_from_bibtex` can resolve the bib.
 MINIMAL_CONFIG_TOML = """
 # pzi configuration
 api_listen_host = "127.0.0.1"

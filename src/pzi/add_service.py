@@ -1,8 +1,11 @@
 """Add/capture workflow orchestration.
 
 Public API:
-    add_input_to_bib  — main entry point for CLI / HTTP capture
-    add_record_to_bib — capture a pre-built record
+    add_input_to_bib      — main entry point for CLI / HTTP capture
+    add_records_to_bib_batch — batch entry point, used by import_service
+
+Both delegate the single-record write to `add_record_with_bib`, the internal
+capture engine every entry point in this module ultimately calls.
 
 Metadata fetching is delegated to add_planning.py.
 
@@ -555,50 +558,6 @@ def add_input_to_bib(
             )
         )
     return _finalize(_add(merged_record))
-
-
-def add_record_to_bib(
-    *,
-    config_path: str,
-    home_dir: str,
-    record: dict[str, object],
-    bib_selector: str | None,
-    dry_run: bool,
-    force_new: bool = False,
-) -> AddRecordResult:
-    resolved = load_bib_target(
-        config_path=config_path,
-        home_dir=home_dir,
-        bib_selector=bib_selector,
-    )
-    if isinstance(resolved, BibResolutionFailure):
-        ambiguous = resolved.reason == "target_unresolved"
-        return _error_result(
-            message="could not resolve target bib" if ambiguous else "failed to load config",
-            errors=(
-                ["no matching bib found or selection is ambiguous"]
-                if ambiguous
-                else resolved.errors
-            ),
-            dry_run=dry_run,
-            warnings=[],
-            # Both halves are the configuration failing to name what was asked
-            # for, which is what `config` means. Still exit 5 — now by decision
-            # rather than by default.
-            reason=REASON_CONFIG,
-        )
-    config, bib = resolved
-
-    return add_record_with_bib(
-        bib=bib,
-        record=record,
-        dry_run=dry_run,
-        browser_hook=config.get("browser_hook", True),
-        citekey_format=config.get("citekey_format"),
-        pdf_filename_format=config.get("pdf_filename_format"),
-        force_new=force_new,
-        file_path_style=config.get("pdf_file_path_style", "absolute"),
-    )
 
 
 # ---------------------------------------------------------------------------

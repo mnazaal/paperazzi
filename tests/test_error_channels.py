@@ -83,7 +83,8 @@ def test_promote_summary_survives_the_json_envelope() -> None:
 def test_an_update_where_every_item_failed_is_not_ok(tmp_path: Path) -> None:
     """`POST /update` returns this verbatim, so it answered 200
     `{"status":"ok","errors":[]}` for a run in which nothing worked."""
-    from pzi.add_service import add_record_to_bib
+    from pzi.add_service import add_record_with_bib
+    from pzi.config import BibResolutionFailure, load_bib_target
     from pzi.update_service import update_bib
 
     bib_path = tmp_path / "ml.bib"
@@ -92,11 +93,16 @@ def test_an_update_where_every_item_failed_is_not_ok(tmp_path: Path) -> None:
         f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\ndefault = true\n',
         encoding="utf-8",
     )
-    add_record_to_bib(
-        config_path=str(config_path),
-        home_dir=str(tmp_path),
+    # Seed the entry through the live write path (`add_record_with_bib`),
+    # inlining what the now-deleted single-record capture wrapper used to.
+    _resolved = load_bib_target(
+        config_path=str(config_path), home_dir=str(tmp_path), bib_selector=None,
+    )
+    assert not isinstance(_resolved, BibResolutionFailure)
+    _config, _bib = _resolved
+    add_record_with_bib(
+        bib=_bib,
         record={"citekey": "a2024", "title": "A", "arxiv_id": "2401.00001"},
-        bib_selector=None,
         dry_run=False,
     )
 
