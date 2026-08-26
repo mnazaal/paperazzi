@@ -203,7 +203,10 @@ directories and are closed by default.
 5. For same-origin candidates: extension fetches with `credentials: "include"`.
 6. For cross-origin candidates: extension requests optional host permission via
    browser prompt. User must approve.
-7. Extension fetches PDF bytes, validates they start with `%PDF-`.
+7. Extension fetches PDF bytes and screens them: it accepts bytes starting with
+   `%PDF-`, *or* a `Content-Type` naming a PDF. (The page-context fetch path
+   screens on `Content-Type` alone.) This screen only avoids a pointless
+   upload — it is not the security boundary; step 9 is.
 8. Extension uploads bytes to `/attach-pdf-raw` with attach-token.
 9. Pzi server validates token, citekey, size, source URL, then saves PDF.
 10. Extension removes temporary host permission.
@@ -242,7 +245,10 @@ for the allowlist it does not get.
   session-first — which is backwards: a token in session storage un-pairs the
   extension every time the browser closes.)
 - Auth token sent as the `X-Pzi-Token` header, never in a URL.
-- PDF bytes are validated (`%PDF-` magic) before upload.
+- PDF bytes are validated (`%PDF-` magic) by the **server**, which refuses any
+  upload without it. The extension's own pre-upload screen is weaker — magic
+  bytes *or* a PDF `Content-Type` — so it saves a wasted round trip rather than
+  standing in for the server check.
 - Attach sessions have TTL (10 min), max byte limit, and allowlisted source URLs.
 - Extension version marker in every capture body for debugging.
 
