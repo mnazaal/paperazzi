@@ -273,12 +273,20 @@ def main() -> int:  # pragma: no cover — CLI entry point
         return 0
 
     # Default: discover PDF URL
+    discover_errors: list[str] = []
     pdf_url = discover_pdf_url(
         url,
         browser=args.browser,
         profile_path=args.profile,
         headless=not args.headful,
+        errors=discover_errors,
     )
+    if pdf_url is None and discover_errors:
+        # The stage broke rather than genuinely finding nothing — worth a line
+        # on stderr since the caller (browser_pdf.discover_pdf_url_with_browser)
+        # only sees the JSON `{}` on stdout, same as a clean "no PDF" result.
+        for detail in discover_errors:
+            print(f"browser PDF hook: {detail}", file=sys.stderr)
     print(encode_hook_response(pdf_url=pdf_url))
     return 0
 
@@ -294,12 +302,23 @@ def discover_pdf_url(
     _session: BrowserSession | None = None,
     headless: bool = True,
     url_allowed: Callable[[str], bool] | None = None,
+    errors: list[str] | None = None,
 ) -> str | None:
     """Discover PDF URL from a page using browser.
 
     All I/O edges are injectable via _session for testing, including the
     URL predicate — see :class:`BrowserSession.url_allowed` for why that is a
     parameter and not a config key.
+
+    *errors* collects why this stage produced nothing, the same shape as
+    ``server_browser.discover_via_server_api``. Without it, ``RuntimeError``
+    from ``BrowserSession._check_open`` — raised when the underlying browser
+    died mid-operation (crash, OOM, the session manager tearing it down under
+    us) — fell into the blanket ``except Exception`` below and came back
+    identical to "this page has no PDF". That is the same silent-failure shape
+    tier 1 fixed for a dead capture server in ``discover_via_server_api`` (A6):
+    a caller that cares (``_handle_browser_discover_post``) can now tell
+    "broken" apart from "nothing found".
     """
     close_on_exit = _session is None
     if _session is not None:  # pragma: no branch
@@ -339,6 +358,10 @@ def discover_pdf_url(
                 return resolved[0]
 
         return None
+    except RuntimeError as exc:
+        if errors is not None:
+            errors.append(f"browser session: {exc}")
+        return None
     except Exception:
         return None
     finally:
@@ -357,6 +380,7 @@ def download_pdf(
     challenge_timeout: int = 0,
     candidate_deadline_seconds: float = CANDIDATE_DEADLINE_SECONDS,
     url_allowed: Callable[[str], bool] | None = None,
+    errors: list[str] | None = None,
 ) -> bytes | None:
     """Download PDF bytes using browser, with optional profile reuse.
 
@@ -367,6 +391,14 @@ def download_pdf(
     without a bound the page decides how long the server's single browser lock
     is held — one hostile document could stall every other capture indefinitely,
     30 seconds at a time.
+
+    *errors* is the same sibling-symmetric addition as on ``discover_pdf_url``
+    above: a crashed session (``RuntimeError`` from ``_check_open``) outside
+    the per-candidate loop is recorded rather than silently read as "no PDF".
+    The per-candidate loop's own ``except Exception: continue`` is untouched —
+    it exists specifically because Chromium turns a PDF navigation into a
+    download exception (see the comment at that site), which is a normal
+    outcome, not a broken session.
     """
     close_on_exit = _session is None
     if _session is not None:  # pragma: no branch
@@ -433,6 +465,10 @@ def download_pdf(
                 except Exception:
                     continue
 
+        return None
+    except RuntimeError as exc:
+        if errors is not None:
+            errors.append(f"browser session: {exc}")
         return None
     except Exception:
         return None
