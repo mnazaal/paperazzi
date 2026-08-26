@@ -252,10 +252,36 @@ def apply_pdf_discovery_parallel(
                     # error) must not abort the whole fan-out: treat it as "no
                     # result" so lower-priority sources still get their turn.
                     results[step] = None
+
+        # Merge canonical_url / source_url / abstract_url found by *any* HTTP
+        # step in this phase, not only the one whose pdf_url wins the race.
+        # Sequential mode chains every step's result into the next step's
+        # input regardless of whether that step found a pdf_url, so a losing
+        # step's enrichment still rides along to the final record; the
+        # parallel path picked the winner's dict wholesale and dropped
+        # everyone else's, silently losing fields sequential mode kept.
+        # Only web_attachment_step sets these today, but the merge is
+        # step-order generic (backfill only, never overwrite) so it needs no
+        # update if a future step does the same.
+        enrichment_keys = ("canonical_url", "source_url", "abstract_url")
+        for step in http_steps:
+            result = results.get(step)
+            if result is None:
+                continue
+            for key in enrichment_keys:
+                value = result.get(key)
+                if isinstance(value, str) and value.strip() and not record.get(key):
+                    record = cast(NormalizedRecord, {**record, key: value})
+
         for step in http_steps:
             result = results.get(step)
             if result is not None and result.get("pdf_url"):
-                return result
+                merged = {**result}
+                for key in enrichment_keys:
+                    carried = record.get(key)
+                    if not merged.get(key) and carried:
+                        merged[key] = carried
+                return cast(NormalizedRecord, merged)
 
     # Phase 3: everything after the parallel block, still in chain order — the
     # browser fallback, and any non-HTTP step ranked below the HTTP sources.

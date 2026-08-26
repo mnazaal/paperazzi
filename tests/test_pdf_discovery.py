@@ -560,6 +560,34 @@ def test_parallel_winner_is_by_step_priority_not_completion() -> None:
     assert result["pdf_url"] == "https://high.example.com/pdf"
 
 
+def test_parallel_winner_carries_a_losing_steps_enrichment() -> None:
+    """A step that loses the pdf_url race can still discover canonical_url /
+    source_url / abstract_url — sequential mode chains every step's result
+    into the next, so that enrichment always rides along; parallel mode must
+    match rather than throwing the losing step's whole dict away.
+    """
+    record: dict[str, object] = {"title": "Paper"}
+    context: PdfDiscoveryContext = {}
+
+    @discovery_phase("http")
+    def high_priority_no_pdf(r, c):  # earlier in the list, finds no pdf_url
+        updated = dict(r)
+        updated["canonical_url"] = "https://publisher.example.com/paper"
+        return updated
+
+    @discovery_phase("http")
+    def low_priority_pdf(r, c):  # later in the list, wins on pdf_url
+        updated = dict(r)
+        updated["pdf_url"] = "https://low.example.com/pdf"
+        return updated
+
+    result = apply_pdf_discovery_parallel(
+        record, [high_priority_no_pdf, low_priority_pdf], context, max_workers=2,
+    )
+    assert result["pdf_url"] == "https://low.example.com/pdf"
+    assert result["canonical_url"] == "https://publisher.example.com/paper"
+
+
 def test_parallel_handles_http_step_exceptions() -> None:
     """An HTTP step that raises does not crash the pipeline."""
     record: dict[str, object] = {"title": "Paper"}
