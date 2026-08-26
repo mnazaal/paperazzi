@@ -21,7 +21,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any, TextIO
 
-from pzi.errors import REASON_USAGE
+from pzi.errors import REASON_USAGE, exit_code_for_error
 
 # Service result keys that hold "the list of things this command produced".
 # They are normalized to `items` so consumers do not need a per-command jq path.
@@ -180,6 +180,53 @@ def emit_error(
         stdout,
         command=command,
     )
+
+
+def emit_failure(
+    message: str,
+    *,
+    command: str,
+    reason: str,
+    as_json: bool,
+    stdout: TextIO,
+    stderr: TextIO,
+    errors: Sequence[str] | None = None,
+    extra: Mapping[str, Any] | None = None,
+    stderr_lines: Sequence[str] | None = None,
+) -> int:
+    """Report a refusal that happens outside the normal service-result path.
+
+    `commands/common.emit_usage_error` covers argparse-shaped refusals, always
+    ``REASON_USAGE`` and exit `2`. This is its sibling for the other refusals a
+    runner reaches before or beside a service call — an unreadable inbox file,
+    a translation server that never started, a report path that cannot be
+    written — each of which needs its own `reason` and the exit code that goes
+    with it, from :func:`pzi.errors.exit_code_for_error`.
+
+    Four call sites (`inbox._fail_early`, `add.py`'s backend-not-ready
+    refusal, `doctor._finish`, `check.py`'s unwritable-report path) rebuilt
+    this ``--json`` / prose-on-stderr branch by hand and had already
+    micro-diverged: `doctor`'s non-JSON failure printed nothing at two of its
+    three call sites (a manual `print_lines` at the third papered over the
+    same gap instead of closing it), and `check`'s printed the human error
+    to stderr even under `--json`, so a `--json` consumer got the document it
+    asked for *plus* unrelated prose on stderr. Both are normalized here
+    rather than kept: every non-JSON failure now prints, and only the JSON
+    branch touches stdout.
+    """
+    if as_json:
+        payload: dict[str, Any] = {
+            "status": "error",
+            "errors": list(errors) if errors is not None else [message],
+            "reason": reason,
+        }
+        if extra:
+            payload.update(extra)
+        emit_result(payload, stdout, command=command)
+    else:
+        for line in (stderr_lines if stderr_lines is not None else [message]):
+            print(line, file=stderr)
+    return exit_code_for_error({"reason": reason})
 
 
 def merge_target_results(

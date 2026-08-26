@@ -9,6 +9,7 @@ from pzi.cli_render import error_lines, render_doctor_result
 from pzi.commands.common import emit_usage_error, print_lines
 from pzi.config import load_config_file
 from pzi.doctor_service import doctor_check
+from pzi.errors import REASON_CONFIG, REASON_UNAVAILABLE
 
 
 def run_doctor_command(args, *, home_dir, config_path, stdout, stderr) -> int:
@@ -84,31 +85,47 @@ def _reinstall_server(*, config_path, home_dir, stdout, stderr, args=None) -> in
     as_json = bool(getattr(args, "json", False))
     progress = stderr if as_json else stdout
 
-    def _finish(code: int, message: str, errors: list[str]) -> int:
-        if as_json:
-            cli_json.emit_result(
-                {
-                    "status": "ok" if code == exit_codes.OK else "error",
-                    "message": message,
-                    "errors": errors,
-                },
-                stdout,
-                command="doctor --reinstall-server",
-                items=[],
-            )
-        elif code == exit_codes.OK:
-            print(message, file=stdout)
-        return code
+    def _finish(
+        code: int, message: str, errors: list[str], *, reason: str = REASON_UNAVAILABLE
+    ) -> int:
+        if code == exit_codes.OK:
+            if as_json:
+                cli_json.emit_result(
+                    {"status": "ok", "message": message, "errors": errors},
+                    stdout,
+                    command="doctor --reinstall-server",
+                    items=[],
+                )
+            else:
+                print(message, file=stdout)
+            return code
+        # Collapsed onto the shared failure emitter rather than kept as its
+        # own hand-rolled envelope: this used to print nothing at all on the
+        # non-JSON path for two of its three failure call sites (only the
+        # `config is None` one worked around the gap with its own manual
+        # `print_lines`, which is deleted below now that `_finish` covers it).
+        # `--reinstall-server` with no config and no `--json` used to fail
+        # silent at exit 5.
+        return cli_json.emit_failure(
+            message,
+            command="doctor --reinstall-server",
+            reason=reason,
+            as_json=as_json,
+            stdout=stdout,
+            stderr=stderr,
+            errors=errors,
+            extra={"message": message},
+            stderr_lines=error_lines(message, errors),
+        )
     from pzi.node_runtime import ensure_node
     from pzi.ts_backend import ensure_translation_server, is_ts_reachable
 
     cfg = load_config_file(config_path, home_dir=home_dir)
     config = cfg["config"]
     if config is None:
-        if not as_json:
-            print_lines(error_lines("failed to load config", cfg["errors"]), stderr)
         return _finish(
-            exit_codes.ENVIRONMENT, "failed to load config", list(cfg["errors"])
+            exit_codes.ENVIRONMENT, "failed to load config", list(cfg["errors"]),
+            reason=REASON_CONFIG,
         )
 
     # Subscript, not `.get` + guard: `AppConfig` is a total TypedDict and
