@@ -257,6 +257,46 @@ def test_download_outer_exception() -> None:
     result = hook.download_pdf("https://example.com/paper.pdf", _session=s)
     assert result is None
 
+# === FakeBrowserSession raises after close(), like the real session (D1) ===
+#
+# Before this fix `_check_open()` existed on the fake with the docstring
+# "Raise like the real session does once the browser is gone" but no method
+# called it — so hook code that reused a session after closing it (a plausible
+# bug shape: a retry path, or a helper that closes on one branch and is called
+# again on another) passed every fake-based test here and would only fail
+# live, against the real `BrowserSession` (src/pzi/browser_session.py), whose
+# `navigate`/`evaluate`/`fetch_direct`/`current_url` all call `_check_open()`
+# and raise `RuntimeError` once closed.
+
+
+def test_fake_session_navigate_raises_once_closed() -> None:
+    s = FakeBrowserSession()
+    s.close()
+    with pytest.raises(RuntimeError):
+        s.navigate("https://example.com")
+
+
+def test_fake_session_evaluate_raises_once_closed() -> None:
+    s = FakeBrowserSession()
+    s.close()
+    with pytest.raises(RuntimeError):
+        s.evaluate("document.title")
+
+
+def test_fake_session_fetch_direct_raises_once_closed() -> None:
+    s = FakeBrowserSession()
+    s.close()
+    with pytest.raises(RuntimeError):
+        s.fetch_direct("https://example.com/paper.pdf")
+
+
+def test_fake_session_current_url_raises_once_closed() -> None:
+    s = FakeBrowserSession()
+    s.close()
+    with pytest.raises(RuntimeError):
+        s.current_url()
+
+
 class FakeLocatorFirst:
     def __init__(self, should_click: bool) -> None:
         self.should_click = should_click

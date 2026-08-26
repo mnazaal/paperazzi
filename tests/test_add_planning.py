@@ -491,13 +491,29 @@ def test_minimum_metadata_diagnostics_with_non_numeric_year() -> None:
 
 
 def test_format_citekey_with_existing_keys() -> None:
-    result = format_citekey("auth.lower + shorttitle(3,3) + year", {
+    """Pins the actual collision behaviour, not just "some string came back".
+
+    The base key this template produces is `smithDeepGraphNetworks2024`
+    (checked by the plain no-collision case below). Passing an `existing_keys`
+    set that does not contain it — the previous version passed
+    `{"smithdeep2024"}`, which never collides with the real base — would let
+    `resolve_citekey_collision` be deleted entirely and this test would still
+    pass. Collision suffixing itself is already pinned in
+    `tests/test_format_templates.py:157` and `tests/test_citekeys.py:108-115`;
+    this only has to not contradict them.
+    """
+    record = {
         "authors": ["Smith, Jane"],
         "title": "Deep Graph Networks",
         "year": 2024,
-    }, {"smithdeep2024"})
-    assert result is not None
-    assert "smith" in result.lower()
+    }
+    base = "smithDeepGraphNetworks2024"
+
+    assert format_citekey("auth.lower + shorttitle(3,3) + year", record, set()) == base
+    assert (
+        format_citekey("auth.lower + shorttitle(3,3) + year", record, {base})
+        == f"{base}-2"
+    )
 
 
 def test_format_pdf_filename_basic() -> None:

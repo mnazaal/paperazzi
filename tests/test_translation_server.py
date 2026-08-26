@@ -4,6 +4,7 @@ from pzi.translation_server import (
     fetch_web_translations,
     normalize_translation_item,
 )
+from tests.stub_translation_server import stub_translation_server, translation_item
 
 
 def test_normalize_translation_item_maps_core_fields() -> None:
@@ -228,6 +229,58 @@ def test_a_multiple_choice_response_is_explained_not_reported_as_a_server_error(
     assert len(errors) == 1
     assert "several possible items" in errors[0]
     assert "HTTP 300" not in errors[0]
+
+
+# --- Stub server dispatches on the request path (D2) -------------------------
+
+
+def test_stub_translation_server_rejects_a_matching_body_on_the_wrong_path() -> None:
+    """Pins the stub's own contract, since nothing else exercises it directly.
+
+    Before this fix `do_POST` matched a needle in the body regardless of
+    `self.path`, so a client bug that posted an identifier to the wrong
+    endpoint — or a typo'd path string — still got back a 200 with the
+    matching item. A request to a path that is neither `/web` nor `/search`
+    must 404 even when the body would otherwise match.
+    """
+    import urllib.error
+    import urllib.request
+
+    item = translation_item(title="A Stub Paper")
+    with stub_translation_server({"10.1/x": item}) as server_url:
+        for path in ("/web", "/search"):
+            req = urllib.request.Request(
+                f"{server_url}{path}", data=b"10.1/x", method="POST"
+            )
+            with urllib.request.urlopen(req) as resp:
+                assert resp.status == 200
+
+        req = urllib.request.Request(
+            f"{server_url}/wrong-endpoint", data=b"10.1/x", method="POST"
+        )
+        try:
+            urllib.request.urlopen(req)
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 404
+        else:
+            raise AssertionError("expected HTTPError 404 for an unknown POST path")
+
+
+def test_stub_translation_server_get_only_answers_the_health_probe_root() -> None:
+    """`is_ts_reachable` GETs the root; `/web` and `/search` never see GET."""
+    import urllib.error
+    import urllib.request
+
+    with stub_translation_server({}) as server_url:
+        with urllib.request.urlopen(server_url) as resp:
+            assert resp.status == 200
+
+        try:
+            urllib.request.urlopen(f"{server_url}/web")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 404
+        else:
+            raise AssertionError("expected HTTPError 404 for GET /web")
 
 
 def test_other_statuses_keep_their_terse_form() -> None:
