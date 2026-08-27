@@ -51,6 +51,8 @@ next to the diff it explains.
 
 - `library check --limit N` no longer claims entries went unaudited when the library holds exactly N. It now says the counts cover at most the first N.
 
+- An anti-bot challenge page is no longer captured as a paper. A Cloudflare-protected site answers the translation server with an interstitial, which it reports as a normal HTTP 200 item titled e.g. `Verifying your browser | OpenReview`; every gate passed it because it has a title, so the capture reported success and wrote `@article{unknownxxxxverifying}`. Such items are now dropped and the capture fails honestly — configure `flaresolverr_url` or use the browser extension for sites behind a challenge.
+
 ### Changed
 
 - **Breaking:** `pzi import <missing-file>` and `pzi add --from-file <missing-file>` now exit `2` (usage), not `5`. Their `--json` envelopes already said `"reason": "usage"`, which maps to `2`; the code and the field now agree.
