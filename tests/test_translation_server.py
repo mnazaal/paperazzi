@@ -296,3 +296,78 @@ def test_other_statuses_keep_their_terse_form() -> None:
     errors: list[str] = []
     safe_api_call(_server_error, errors=errors)
     assert errors == ["HTTP 500"]
+
+
+def test_a_bot_challenge_page_is_not_a_translation_result() -> None:
+    """An anti-bot interstitial must never be captured as a paper.
+
+    Verbatim from the live server on 2026-08-27, for
+    `https://openreview.net/forum?id=zUbBaWAM1Q`: HTTP 200, one item, a real
+    title string. Every gate downstream passed it — `identifies_a_paper` sees a
+    title, and so does `_answers_the_lookup` — so a dry run reported
+    `status: ok` and would have written
+    `@article{unknownxxxxverifying, title = {Verifying your browser | OpenReview}}`.
+    17 of 152 links in one real batch were OpenReview, so this is not a corner.
+
+    Dropped here, at the boundary where every consumer gets its results, rather
+    than at the three translation-server return sites in `add_planning`: a
+    predicate applied at three sites is the shape this project keeps
+    regressing. Dropping it also stops it becoming a *floor* — the thin-record
+    fallback would otherwise write exactly this record when nothing better
+    answered.
+    """
+    def fake_post_json(endpoint: str, payload: object) -> object:
+        return [
+            {
+                "key": "IZNQC6G9",
+                "version": 0,
+                "itemType": "webpage",
+                "url": "https://openreview.net/challenge?redirect=%2Fforum%3Fid%3DzUbBaWAM1Q",
+                "title": "Verifying your browser | OpenReview",
+                "accessDate": "2026-08-27T10:48:29Z",
+            }
+        ]
+
+    results = fetch_web_translations(
+        "https://openreview.net/forum?id=zUbBaWAM1Q",
+        server_url="http://127.0.0.1:1969",
+        post_json=fake_post_json,
+    )
+
+    assert results == []
+
+
+def test_a_real_paper_alongside_a_challenge_page_still_survives() -> None:
+    """The filter drops challenge items, not the whole response."""
+    def fake_post_json(endpoint: str, payload: object) -> object:
+        return [
+            {"itemType": "webpage", "title": "Just a moment...", "url": "https://x.test/cdn-cgi/challenge-platform/y"},
+            {"itemType": "journalArticle", "title": "Graph Parsers", "url": "https://example.com/paper"},
+        ]
+
+    results = fetch_web_translations(
+        "https://example.com/paper",
+        server_url="http://127.0.0.1:1969",
+        post_json=fake_post_json,
+    )
+
+    assert [r["record"]["title"] for r in results] == ["Graph Parsers"]
+
+
+def test_a_paper_whose_title_merely_mentions_attention_is_kept() -> None:
+    """The markers must be interstitial phrases, not common title words.
+
+    `Attention Is All You Need` is in this very library; a substring match on
+    "attention" would have refused it.
+    """
+    def fake_post_json(endpoint: str, payload: object) -> object:
+        return [{"itemType": "conferencePaper", "title": "Attention Is All You Need",
+                 "url": "https://arxiv.org/abs/1706.03762"}]
+
+    results = fetch_web_translations(
+        "https://arxiv.org/abs/1706.03762",
+        server_url="http://127.0.0.1:1969",
+        post_json=fake_post_json,
+    )
+
+    assert [r["record"]["title"] for r in results] == ["Attention Is All You Need"]

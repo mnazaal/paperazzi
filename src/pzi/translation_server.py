@@ -30,6 +30,60 @@ JsonPost = Callable[[str, object], object]
 TextPost = Callable[[str, str], object]
 
 
+#: Titles an anti-bot interstitial serves in place of the page. Matched as
+#: whole phrases, not words: `Attention Is All You Need` is in this library,
+#: so a substring test for "attention" would refuse a real paper. Lowercased
+#: before comparison.
+_CHALLENGE_TITLE_MARKERS = (
+    "just a moment",
+    "verifying your browser",
+    "verifying you are human",
+    "checking your browser before accessing",
+    "attention required! | cloudflare",
+    "enable javascript and cookies to continue",
+    "one moment, please",
+)
+
+#: URL shapes that only a challenge endpoint has. The translation server
+#: reports the URL it *landed on*, so a redirect into one of these is the
+#: strongest signal available — stronger than the title, which a site may
+#: localise.
+_CHALLENGE_URL_MARKERS = (
+    "/cdn-cgi/challenge-platform",
+    "__cf_chl",
+    "/challenge?redirect=",
+)
+
+
+def is_bot_challenge_item(item: Mapping[str, object]) -> bool:
+    """Whether a translation-server item is an anti-bot interstitial, not a paper.
+
+    The translation server fetches pages without a real browser, so a site
+    behind Cloudflare answers it with a challenge page — and the server
+    dutifully returns HTTP 200 and a well-formed item describing *that page*:
+
+        {"itemType": "webpage",
+         "url": "https://openreview.net/challenge?redirect=%2Fforum%3Fid%3D...",
+         "title": "Verifying your browser | OpenReview"}
+
+    Every downstream gate passed it, because each one asks whether a title
+    exists and this has one. A capture therefore reported success and would
+    have written `@article{unknownxxxxverifying}` into the library. Observed
+    live on 2026-08-27: 17 of 152 links in one real batch were OpenReview.
+
+    A challenge is not a thin answer to be kept as a floor — it is the wrong
+    page. Callers drop it entirely so it cannot be selected *or* fallen back
+    to, and the capture then fails honestly, which is what flaresolverr
+    (`flaresolverr_url`) exists to get past.
+    """
+    title = _mapping_string(item, "title") or ""
+    lowered = title.strip().lower()
+    if any(marker in lowered for marker in _CHALLENGE_TITLE_MARKERS):
+        return True
+    url = (_mapping_string(item, "url") or "").lower()
+    return any(marker in url for marker in _CHALLENGE_URL_MARKERS)
+
+
 def normalize_translation_item(
     item: Mapping[str, object], *, source_url: str | None = None
 ) -> TranslationResult:
@@ -128,7 +182,11 @@ def fetch_web_translations(
         payload=payload,
         post_json=post_json or _post,
     )
-    return [normalize_translation_item(item, source_url=url) for item in response]
+    return [
+        normalize_translation_item(item, source_url=url)
+        for item in response
+        if not is_bot_challenge_item(item)
+    ]
 
 
 def fetch_search_translations(
@@ -146,7 +204,11 @@ def fetch_search_translations(
         payload=query,
         post_json=fn,
     )
-    return [normalize_translation_item(item) for item in response]
+    return [
+        normalize_translation_item(item)
+        for item in response
+        if not is_bot_challenge_item(item)
+    ]
 
 
 def _call_translation_server(
