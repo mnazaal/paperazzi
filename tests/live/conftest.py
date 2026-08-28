@@ -35,9 +35,16 @@ _LIVE_RUN: dict[str, object] = {
 #: Tests whose passing proves a real translation-server capture happened. Named
 #: rather than inferred from the module, so moving a test does not silently
 #: empty the set that the session gate counts.
+#:
+#: One name, not two. `test_live_add_arxiv_url_metadata` deliberately does not
+#: assert *which* provider answered — an arXiv URL is classified `doi`, so a
+#: capture Crossref or OpenAlex resolved is a pass there — and counting it here
+#: let the gate report "real translation-server capture: yes" for a run in which
+#: the server answered nothing. That is precisely the state this gate exists to
+#: make visible, so the one test that pins `provider == "translation_server"` is
+#: the only one whose pass proves it.
 _CAPTURE_TESTS = frozenset({
     "test_live_add_oa_doi_metadata",
-    "test_live_add_arxiv_url_metadata",
 })
 
 

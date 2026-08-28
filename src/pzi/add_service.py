@@ -488,11 +488,15 @@ def add_input_to_bib(
         # Diagnostics are computed here, where the results are consumed, rather
         # than inside a wrapper around the injected fetcher seam.
         if translation_results:
-            metadata_warnings = metadata_result_confidence_warnings(
+            # Extended for the same reason as the diagnostics below, though
+            # nothing writes to this list before here *today*: it is the same
+            # accumulator-assigned-over shape, and the first `append` added
+            # above this line would vanish exactly as the attribution did.
+            metadata_warnings.extend(metadata_result_confidence_warnings(
                 cast(list[Mapping[str, Any]], translation_results),
                 fallback_for_diagnostics,
                 min_score=metadata_confidence_min_score,
-            )
+            ))
             if len(translation_results) > 1:
                 # Extended, not assigned. Rebinding discarded everything already
                 # recorded above — the `metadata from X` attribution and the PDF
