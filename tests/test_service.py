@@ -2254,3 +2254,67 @@ def test_a_doi_the_translation_server_answered_says_so(tmp_path: Path, dead_port
         None,
     )
     assert provider == "translation_server", diagnostics
+
+
+def test_candidate_diagnostics_do_not_erase_the_provider_attribution(
+    tmp_path: Path, dead_port
+) -> None:
+    """Two candidates must not cost the capture its `metadata from X` line.
+
+    The candidate-scoring diagnostics were *assigned* over the list rather than
+    appended to it, so every line recorded earlier — the provider attribution
+    and the PDF-discovery failures — was dropped whenever the translation server
+    returned more than one result. The three attribution tests above each pass a
+    single candidate, so all of them passed while `--verbose` (and the live smoke
+    job) saw no provider at all on the ambiguous pages: an arXiv URL is one, and
+    that is how the live job reported a real translation-server capture as one
+    nothing had answered.
+    """
+    config_path = tmp_path / "amb.toml"
+    bib_path = tmp_path / "amb.bib"
+    bib_path.write_text("")
+    config_path.write_text(
+        f'translation_server_url = "http://127.0.0.1:{dead_port}"\n\n'
+        f'[[bibs]]\nname = "m"\npath = "{bib_path}"\ndefault = true\n'
+    )
+
+    result = add_input_to_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        value="10.1145/1327452.1327492",
+        record_overrides={},
+        bib_selector=None,
+        dry_run=True,
+        # The second has no DOI, so it is not dropped for contradicting the
+        # looked-up one: genuinely ambiguous, which is what triggers the
+        # candidate diagnostics.
+        fetch_search=lambda query, **_kw: [
+            {
+                "item_type": "journalArticle",
+                "record": {
+                    "title": "MapReduce: Simplified Data Processing",
+                    "authors": ["Dean, Jeffrey", "Ghemawat, Sanjay"],
+                    "year": 2008, "doi": "10.1145/1327452.1327492",
+                },
+                "attachments": [],
+            },
+            {
+                "item_type": "journalArticle",
+                "record": {"title": "MapReduce (extended abstract)", "year": 2007},
+                "attachments": [],
+            },
+        ],
+        fetch_web=lambda url, **_kw: [],
+    )
+
+    assert result["status"] == "ok", result.get("message")
+    diagnostics = result.get("metadata_diagnostics") or []
+    provider = next(
+        (line.removeprefix("metadata from ").strip() for line in diagnostics
+         if isinstance(line, str) and line.startswith("metadata from ")),
+        None,
+    )
+    assert provider == "translation_server", diagnostics
+    # …and the candidate scoring is still reported alongside it, not instead
+    # of it.
+    assert any(line.startswith("selected result ") for line in diagnostics), diagnostics

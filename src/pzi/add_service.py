@@ -494,9 +494,18 @@ def add_input_to_bib(
                 min_score=metadata_confidence_min_score,
             )
             if len(translation_results) > 1:
-                metadata_diagnostics = metadata_result_diagnostics(
-                    cast(list[Mapping[str, Any]], translation_results),
-                    fallback_for_diagnostics,
+                # Extended, not assigned. Rebinding discarded everything already
+                # recorded above — the `metadata from X` attribution and the PDF
+                # discovery failures — whenever the server returned more than one
+                # candidate. So a capture the translation server answered named
+                # no provider at all for exactly the ambiguous pages where the
+                # answer matters most (an arXiv URL is one), and looked
+                # indistinguishable from a capture nothing answered.
+                metadata_diagnostics.extend(
+                    metadata_result_diagnostics(
+                        cast(list[Mapping[str, Any]], translation_results),
+                        fallback_for_diagnostics,
+                    )
                 )
         if effective_strict:
             # The cascade *succeeded* — a record came back. Failing here because

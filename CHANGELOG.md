@@ -53,6 +53,8 @@ next to the diff it explains.
 
 - An anti-bot challenge page is no longer captured as a paper. A Cloudflare-protected site answers the translation server with an interstitial, which it reports as a normal HTTP 200 item titled e.g. `Verifying your browser | OpenReview`; every gate passed it because it has a title, so the capture reported success and wrote `@article{unknownxxxxverifying}`. Such items are now dropped and the capture fails honestly — configure `flaresolverr_url` or use the browser extension for sites behind a challenge.
 
+- `--json`/`--verbose` no longer lose the `metadata from <provider>` line when the translation server returns more than one candidate. The candidate-scoring diagnostics were assigned over the list instead of appended to it, dropping the provider attribution and any `pdf discovery failed:` lines — so an ambiguous page (an arXiv URL is one) looked like a capture no provider had answered.
+
 ### Changed
 
 - **Breaking:** `pzi import <missing-file>` and `pzi add --from-file <missing-file>` now exit `2` (usage), not `5`. Their `--json` envelopes already said `"reason": "usage"`, which maps to `2`; the code and the field now agree.
