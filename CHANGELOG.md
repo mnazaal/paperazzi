@@ -15,7 +15,13 @@ next to the diff it explains.
 
 ## [Unreleased]
 
+### Added
+
+- `pdf_filename_format` accepts a second `replaceFrom2`/`replaceTo2` substitution pair, applied after the first, and reads capture groups in Zotero's `$1` syntax as well as Python's `\1`. Together with the `firstCreator` fix below, a library previously renamed by Zotero can now be matched file-for-file; `config.template.toml` gives the template.
+
 ### Fixed
+
+- `{{ firstCreator }}` renders Zotero's Creator column — `Smith`, `Smith and Doe`, `Smith et al.` — where it previously returned the first surname alone, silently dropping every co-author from the default `pdf_filename_format` this project documents. Better BibTeX's `auth` keeps its one-surname meaning in both citekey formulas and `{{ }}` templates, so citekeys are unaffected; PDFs captured under a `firstCreator` template will be named differently from now on.
 
 - `pzi.dedupe()` and `pzi.check()` now emit their warnings through `warnings.warn` like the other reads, so `-W error` stops a script on a missing bib whichever function it used. They still return `warnings` as well.
 

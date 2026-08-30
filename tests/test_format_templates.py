@@ -29,7 +29,8 @@ _RECORD = {
     [
         ("{{ year }}", "2024"),
         ("{{ title }}", "The Graph Neural Networks of Tomorrow"),
-        ("{{ firstCreator }}", "Smith"),
+        ("{{ firstCreator }}", "Smith and Doe"),  # Zotero's Creator column
+        ("{{ auth }}", "Smith"),  # Better BibTeX's, one surname
         ("{{ authors }}", "Smith and Doe"),
         ("{{ citationKey }}", "smith2024graph"),
         ("{{ publicationTitle }}", "NeurIPS"),
@@ -46,8 +47,8 @@ def test_render_zotero_template_variables(template, expected) -> None:
     "template,expected",
     [
         ("{{ year prefix='[' suffix=']' }}", "[2024]"),
-        ("{{ firstCreator case='upper' }}", "SMITH"),
-        ("{{ firstCreator case='lower' }}", "smith"),
+        ("{{ firstCreator case='upper' }}", "SMITH AND DOE"),
+        ("{{ firstCreator case='lower' }}", "smith and doe"),
         ("{{ title case='hyphen' truncate='9' }}", "the-graph"),
         ("{{ title case='snake' truncate='9' }}", "the_graph"),
         ("{{ title start='4' truncate='5' }}", "Graph"),
@@ -77,11 +78,91 @@ def test_render_zotero_template_skips_single_initial_author() -> None:
     assert render_zotero_template("{{ firstCreator }}", record) == "Watanabe"
 
 
+# --- firstCreator, and the `auth` it is not ---------------------------------
+
+_ONE = {"authors": ["Ghahramani, Zoubin"], "year": 1998, "title": "Factorial Learning"}
+_TWO = {"authors": ["Chow, C", "Tsitsiklis, J"], "year": 1989, "title": "Dynamic Programming"}
+_MANY = {
+    "authors": ["Blondel, Vincent D", "Bournez, Olivier", "Koiran, Pascal"],
+    "year": 2001,
+    "title": "Saturated Linear Dynamical Systems",
+}
+
+#: The library-parity template: Zotero's documented default, with the `and`
+#: reduced to a hyphen and `et al.`'s period dropped.
+_LEGACY_ZOTERO = (
+    r'{{ firstCreator suffix="-" replaceFrom="\s+and\s+" replaceTo="-" '
+    r'replaceFrom2="\.$" replaceTo2="" }}'
+    r'{{ year suffix="-" }}{{ title truncate="100" }}'
+)
+
+
+@pytest.mark.parametrize(
+    "record,expected",
+    [
+        (_ONE, "Ghahramani"),
+        (_TWO, "Chow and Tsitsiklis"),
+        (_MANY, "Blondel et al."),
+    ],
+)
+def test_first_creator_summarizes_the_creator_list(record, expected) -> None:
+    # Zotero's `firstCreator` is the Creator column, not the first surname:
+    # one name alone, two joined by `and`, three or more as `et al.`. Returning
+    # names[0] for all three dropped every co-author from the default template.
+    assert render_zotero_template("{{ firstCreator }}", record) == expected
+
+
+@pytest.mark.parametrize(
+    "record,expected",
+    [
+        (_ONE, "Ghahramani-1998-Factorial Learning.pdf"),
+        (_TWO, "Chow-Tsitsiklis-1989-Dynamic Programming.pdf"),
+        (_MANY, "Blondel et al-2001-Saturated Linear Dynamical Systems.pdf"),
+    ],
+)
+def test_legacy_zotero_filenames_are_reproducible(record, expected) -> None:
+    # The shape of a library renamed by Zotero itself. Reproducing all three
+    # creator counts is the point of the feature; a two-author fixture alone
+    # cannot tell `firstCreator` apart from `auth`, which is how the gap sat
+    # here unnoticed.
+    assert format_pdf_filename(_LEGACY_ZOTERO, record) == expected
+
+
+def test_auth_keeps_one_meaning_across_both_dialects() -> None:
+    # `auth` is Better BibTeX's, and a citekey component must stay one word.
+    # It renders through `_render_bbt_part` in a formula and `_template_value`
+    # in a `{{ }}` template — two call sites that once shared `firstCreator`'s
+    # helper, so teaching that helper about co-authors rewrote every citekey.
+    formula = 'auth.lower + "-" + shorttitle(1, 0).lower + "-" + year'
+    assert format_citekey(formula, _MANY, set()) == "blondel-saturated-2001"
+    assert render_zotero_template("{{ auth }}", _MANY) == "Blondel"
+
+
+def test_second_replacement_pair_applies_after_the_first() -> None:
+    template = (
+        r'{{ title replaceFrom="Graph" replaceTo="Mesh" '
+        r'replaceFrom2="Mesh" replaceTo2="Lattice" }}'
+    )
+    assert render_zotero_template(template, _RECORD) == "The Lattice Neural Networks of Tomorrow"
+
+
+def test_replacement_accepts_zotero_capture_group_syntax() -> None:
+    # Zotero documents `$1`; `re.sub` reads it literally, so a template copied
+    # from Zotero's own documentation put a dollar sign in the filename.
+    assert (
+        render_zotero_template(r'{{ year replaceFrom="(20)(24)" replaceTo="$2$1" }}', _RECORD)
+        == "2420"
+    )
+    assert (
+        render_zotero_template(r'{{ year replaceFrom="^" replaceTo="$$" }}', _RECORD) == "$2024"
+    )
+
+
 # --- format_pdf_filename ----------------------------------------------------
 
 
 def test_format_pdf_filename_uses_template() -> None:
-    assert format_pdf_filename("{{ firstCreator }}{{ year }}", _RECORD) == "Smith2024.pdf"
+    assert format_pdf_filename("{{ firstCreator }}{{ year }}", _RECORD) == "Smith and Doe2024.pdf"
 
 
 def test_format_pdf_filename_falls_back_to_citekey() -> None:
@@ -146,7 +227,10 @@ def test_format_citekey_better_bibtex(template, expected) -> None:
 
 
 def test_format_citekey_zotero_template() -> None:
-    assert format_citekey("{{ firstCreator case='lower' }}{{ year }}", _RECORD, set()) == "smith2024"
+    assert (
+        format_citekey("{{ firstCreator case='lower' }}{{ year }}", _RECORD, set())
+        == "smithanddoe2024"
+    )
 
 
 def test_format_citekey_no_template_generates_base() -> None:

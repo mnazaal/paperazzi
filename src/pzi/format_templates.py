@@ -23,6 +23,9 @@ _SEPARATOR_RUN = re.compile(r"[-_:.]{2,}")
 _NON_CITEKEY_KEEPING_SEPARATORS = re.compile(r"[^A-Za-z0-9\-_:.]+")
 _FILENAME_FORBIDDEN = re.compile(r"[\\/\x00-\x1f:]+")
 _WHITESPACE = re.compile(r"\s+")
+#: Zotero's capture-group syntax in a `replaceTo` value: `$1`, or `$$` for a
+#: literal dollar.
+_CAPTURE_GROUP_REF = re.compile(r"\$(\$|\d+)")
 #: Better BibTeX's default `skipWords`, which `title`/`shorttitle` always apply.
 #: pzi shipped a 10-word list, so a title beginning "Towards …" or "From …"
 #: built its key on the skipped word — a plausible-looking key that simply did
@@ -45,9 +48,12 @@ def render_zotero_template(template: str, record: Mapping[str, Any]) -> str:
     """Render the useful Zotero 7 file-renaming template subset.
 
     Supports `{{ field ... }}` and `{{ :field ... }}` variables with `prefix`,
-    `suffix`, `start`, `truncate`, `replaceFrom`, `replaceTo`, `regexOpts`, and
-    `case` options. Unsupported variables render empty so copied Zotero
-    templates degrade safely.
+    `suffix`, `start`, `truncate`, `replaceFrom`, `replaceTo`, `replaceFrom2`,
+    `replaceTo2`, `regexOpts`, and `case` options. Unsupported variables render
+    empty so copied Zotero templates degrade safely.
+
+    `replaceFrom2`/`replaceTo2` are a pzi addition; every template Zotero
+    itself accepts renders the same here.
     """
 
     def replace(match: re.Match[str]) -> str:
@@ -162,6 +168,19 @@ def describe_template_error(template: str | None) -> str | None:
     return None
 
 
+def _replacement_text(text: str) -> str:
+    """Translate Zotero's `$1` capture-group references into `re.sub`'s `\\1`.
+
+    Zotero documents `$1`; `re.sub` reads it as a literal dollar sign, so a
+    template copied from Zotero's own docs inserted `$1` into the filename. `$$`
+    is an escaped dollar. Existing `\\1` references keep working — the
+    substitution runs through a function, so the result is never rescanned.
+    """
+    return _CAPTURE_GROUP_REF.sub(
+        lambda m: "$" if m.group(1) == "$" else "\\" + m.group(1), text
+    )
+
+
 def _apply_options(value: str, options: Mapping[str, str]) -> str:
     if not value:
         return ""
@@ -173,13 +192,19 @@ def _apply_options(value: str, options: Mapping[str, str]) -> str:
         except re.error:
             return ""
 
-    if "replaceFrom" in options:
-        flags = re.IGNORECASE if "i" in options.get("regexOpts", "") else 0
-        count = 0 if "g" in options.get("regexOpts", "") else 1
+    flags = re.IGNORECASE if "i" in options.get("regexOpts", "") else 0
+    count = 0 if "g" in options.get("regexOpts", "") else 1
+    # Two pairs, applied in order. Zotero allows one, which cannot express a
+    # rename needing two different replacements on the same value: reducing
+    # `Smith and Doe` to `Smith-Doe` while also dropping the `.` from
+    # `Smith et al.` needs both. `regexOpts` governs both pairs.
+    for from_key, to_key in (("replaceFrom", "replaceTo"), ("replaceFrom2", "replaceTo2")):
+        if from_key not in options:
+            continue
         try:
             value = re.sub(
-                options["replaceFrom"],
-                options.get("replaceTo", ""),
+                options[from_key],
+                _replacement_text(options.get(to_key, "")),
                 value,
                 count=count,
                 flags=flags,
@@ -217,7 +242,12 @@ def _apply_options(value: str, options: Mapping[str, str]) -> str:
 
 def _template_value(variable: str, record: Mapping[str, Any]) -> str:
     key = variable[0].lower() + variable[1:]
-    if key in {"firstCreator", "firstcreator", "auth"}:
+    if key in {"firstCreator", "firstcreator"}:
+        return _zotero_first_creator(record)
+    if key == "auth":
+        # Better BibTeX's `auth`, kept to its own meaning here. Aliasing it to
+        # `firstCreator` made one word mean two things depending on which
+        # config key the template appeared under.
         return _first_creator(record)
     if key in {"authors", "creators"}:
         return " and ".join(_author_family_names(record))
@@ -379,8 +409,34 @@ def _shorttitle(record: Mapping[str, Any], token: str) -> str:
 
 
 def _first_creator(record: Mapping[str, Any]) -> str:
+    """One family name, for Better BibTeX's ``auth``.
+
+    A citekey component must stay a single word, so this stops at the first
+    name. Zotero's ``firstCreator`` summarizes the whole creator list instead —
+    see :func:`_zotero_first_creator`, which is why the two are separate
+    functions rather than one shared helper.
+    """
     names = _author_family_names(record)
     return names[0] if names else ""
+
+
+def _zotero_first_creator(record: Mapping[str, Any]) -> str:
+    """Zotero's ``firstCreator``: the item list's Creator column.
+
+    Zotero documents this as "the parent item's creator (1-2 authors or
+    editors)", and renames files with it: one name alone, two joined by ``and``,
+    three or more collapsed to ``et al.``. pzi returned the bare first surname
+    for all three, so the documented default template — the one in
+    ``config.template.toml`` — silently dropped every co-author.
+    """
+    names = _author_family_names(record)
+    if not names:
+        return ""
+    if len(names) == 1:
+        return names[0]
+    if len(names) == 2:
+        return f"{names[0]} and {names[1]}"
+    return f"{names[0]} et al."
 
 
 def _author_family_names(record: Mapping[str, Any]) -> list[str]:

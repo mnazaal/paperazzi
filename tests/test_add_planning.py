@@ -283,7 +283,7 @@ def test_render_zotero_default_file_template() -> None:
         '{{ title truncate="20" }}'
     )
 
-    assert render_zotero_template(template, RECORD) == "Smith - 2024 - A Study of Graph Par"
+    assert render_zotero_template(template, RECORD) == "Smith and Doe - 2024 - A Study of Graph Par"
 
 
 def test_render_zotero_colon_variables_and_regex_replacement() -> None:
@@ -295,7 +295,7 @@ def test_render_zotero_colon_variables_and_regex_replacement() -> None:
 
     assert (
         render_zotero_template(template, RECORD)
-        == "Smith-2024-A-Study-of-Graph-Parsers:-Methods-and-Results."
+        == "Smith-Doe-2024-A-Study-of-Graph-Parsers:-Methods-and-Results."
     )
 
 
@@ -306,7 +306,7 @@ def test_format_pdf_filename_sanitizes_path_separators_and_adds_extension() -> N
     )
     record = {**RECORD, "title": "Bad / Path: Paper"}
 
-    assert format_pdf_filename(template, record) == "Smith-2024-Bad Path Paper.pdf"
+    assert format_pdf_filename(template, record) == "Smith and Doe-2024-Bad Path Paper.pdf"
 
 
 def test_format_citekey_supports_zotero_template_and_collision_suffix() -> None:
@@ -314,7 +314,7 @@ def test_format_citekey_supports_zotero_template_and_collision_suffix() -> None:
 
     # Case survives a template now — the final sanitizer used to lowercase
     # everything, which is also why `.upper` could never do anything.
-    assert format_citekey(template, RECORD, {"Smith2024AStu"}) == "Smith2024AStu-2"
+    assert format_citekey(template, RECORD, {"SmithandDoe2024AStu"}) == "SmithandDoe2024AStu-2"
 
 
 def test_format_citekey_supports_common_better_bibtex_formula() -> None:

@@ -29,6 +29,21 @@ api_listen_port = 8765
 # where Better BibTeX appends a, b.
 # citekey_format = "auth.lower + shorttitle(3,3) + year"
 # pdf_filename_format = "{{ firstCreator suffix=\" - \" }}{{ year suffix=\" - \" }}{{ title truncate=\"100\" }}"
+# pdf_filename_format takes Zotero 7 file-renaming templates; the line above is
+#   Zotero's own default. firstCreator is the Creator column -- one name alone,
+#   two joined by "and", three or more as "et al." -- while auth stays Better
+#   BibTeX's single surname, so the two differ on purpose. Options: prefix,
+#   suffix, start, truncate, case, match, replaceFrom/replaceTo, and regexOpts
+#   ("i" to ignore case, "g" to replace every match). Capture groups may be
+#   written Zotero's way ($1) or Python's (\1).
+# pzi addition: a second replaceFrom2/replaceTo2 pair, applied after the first.
+#   It exists for the case Zotero's single pair cannot express -- reducing
+#   "Smith and Doe" to "Smith-Doe" while also dropping the period from
+#   "Smith et al.". A library already renamed by Zotero with hyphen separators
+#   is matched file-for-file by (note the single quotes: TOML would eat the
+#   backslashes in a "..." string)
+#   pdf_filename_format = '{{ firstCreator suffix="-" replaceFrom="\s+and\s+" replaceTo="-" replaceFrom2="\.$" replaceTo2="" }}{{ year suffix="-" }}{{ title truncate="100" }}'
+#   yielding Chow-Tsitsiklis-1989-Title.pdf and Blondel et al-2001-Title.pdf.
 # PDF file fields default to absolute paths. Set "relative" to write paths relative to the .bib file.
 # pdf_file_path_style = "absolute"  # "absolute" or "relative"
 # Optional external page processor: reads {url, html, metadata} JSON from stdin; writes metadata JSON.
