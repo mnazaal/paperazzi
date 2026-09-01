@@ -412,3 +412,34 @@ def test_a_renderable_macro_still_decodes_to_its_symbol() -> None:
     )
     assert "mathcal" not in name
     assert name.startswith("On the Regret of H")
+
+
+def test_nested_braces_in_a_macro_argument_keep_their_content() -> None:
+    """The content guard missed `\\texttt{{{MiniMol}}}`.
+
+    Better BibTeX protects case with its own braces, so a macro argument
+    routinely arrives already braced — `\\texttt{{{MiniMol}}}`, not
+    `\\texttt{MiniMol}`. The first guard matched only brace-free arguments, so
+    it did not see the content, did not fire, and the decoder dropped the whole
+    group: the model's name vanished from its own filename exactly as before.
+    Found while repairing the seven double-escaped titles this fix exists for.
+    """
+    name = format_pdf_filename(
+        _TITLE_ONLY,
+        {
+            "citekey": "klaser2024",
+            "title": r"$\texttt{{{MiniMol}}}$: A Parameter-Efficient Foundation Model",
+        },
+    )
+    assert "MiniMol" in name, name
+    assert "texttt" not in name
+
+
+def test_nested_braces_do_not_break_a_renderable_macro() -> None:
+    """`\\mathrm{{{SU}}}({{N}})` renders; the fallback must not fire on it."""
+    name = format_pdf_filename(
+        _TITLE_ONLY,
+        {"citekey": "boyda2021", "title": r"Sampling Using $\mathrm{{{SU}}}({{N}})$ Flows"},
+    )
+    assert "SU(N)" in name, name
+    assert "mathrm" not in name

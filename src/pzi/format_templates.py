@@ -486,12 +486,34 @@ def _sanitize_citekey(value: str) -> str:
 #: filed as "50". Escaping a bare `%` first costs nothing on the common path.
 _BARE_PERCENT = re.compile(r"(?<!\\)%")
 
-#: `\cmd{content}` — an unhandled macro wrapping text. Unwrapped to its content
-#: as a last resort, so the content survives even when the decoder cannot render
-#: the macro.
-_MACRO_WRAPPING_TEXT = re.compile(r"\\[A-Za-z]+\s*\{([^{}]*)\}")
+#: The start of `\cmd{` — a macro taking a braced argument. The argument itself
+#: is found by scanning for its matching close brace rather than by regex,
+#: because Better BibTeX protects case with braces of its own, so an argument
+#: routinely arrives already braced (`\texttt{{{MiniMol}}}`). A `[^{}]*` pattern
+#: matched only the brace-free form and silently ignored the nested one.
+_MACRO_ARGUMENT_START = re.compile(r"\\[A-Za-z]+\s*\{")
 
 _LATEX_TEXT = LatexNodes2Text(math_mode="text")
+
+
+def _macro_arguments(value: str) -> list[tuple[int, int, int]]:
+    """Spans of every ``\\cmd{...}`` in *value*, brace nesting respected.
+
+    Each item is ``(macro_start, argument_start, argument_end)`` with the
+    argument bounds exclusive of the outer braces.
+    """
+    spans: list[tuple[int, int, int]] = []
+    for match in _MACRO_ARGUMENT_START.finditer(value):
+        depth, index = 1, match.end()
+        while index < len(value) and depth:
+            if value[index] == "{":
+                depth += 1
+            elif value[index] == "}":
+                depth -= 1
+            index += 1
+        if not depth:  # a balanced argument; an unbalanced one is not a macro call
+            spans.append((match.start(), match.end(), index - 1))
+    return spans
 
 
 def _unwrapped(value: str) -> str:
@@ -499,7 +521,12 @@ def _unwrapped(value: str) -> str:
     previous = None
     while previous != value:
         previous = value
-        value = _MACRO_WRAPPING_TEXT.sub(r"\1", value)
+        spans = _macro_arguments(value)
+        if not spans:
+            break
+        # Rightmost first, so earlier spans' offsets stay valid.
+        for macro_start, arg_start, arg_end in reversed(spans):
+            value = value[:macro_start] + value[arg_start:arg_end] + value[arg_end + 1:]
     return value
 
 
@@ -514,7 +541,9 @@ def _lost_braced_content(source: str, decoded: str) -> bool:
     became ``ℋ``, which still *is* the H once folded to ASCII.
     """
     folded = _ascii(decoded)
-    for content in _MACRO_WRAPPING_TEXT.findall(source):
+    for _macro_start, arg_start, arg_end in _macro_arguments(source):
+        # Inner braces are Better BibTeX's case protection, not content.
+        content = source[arg_start:arg_end].replace("{", "").replace("}", "")
         stripped = _ascii(content).strip()
         if stripped and stripped not in folded:
             return True
