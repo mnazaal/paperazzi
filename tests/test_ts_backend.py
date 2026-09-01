@@ -1062,3 +1062,34 @@ def test_a_failing_subprocess_is_reported_not_raised(
     # Untouched: the swap never ran, so the working install is still in place.
     assert (ts_dir / "previous.txt").exists()
     assert ts_backend._read_sentinel(ts_dir) is None
+
+
+# ── audit B1: SIGTERM must unwind an owned child (2026-09-01) ────────────────
+
+
+def test_backend_session_converts_sigterm_so_finally_runs() -> None:
+    """`terminate_ts` lives in a `finally:`, and default SIGTERM skips finally.
+
+    The conversion existed only in `pzi server`'s runner, so `timeout 60 pzi
+    add …` (or a systemd/tmux kill) left the auto-started node child — its own
+    session leader via `start_new_session=True`, so it never sees the signal —
+    listening on :1969 indefinitely, with no PID file to reclaim it. Installed
+    here at the seam, every entrant is covered; a caller on a non-main thread
+    degrades to the old behaviour (`signal.signal` refuses, the shim yields).
+    """
+    import signal as _signal
+
+    from pzi.ts_backend import backend_session
+
+    before = _signal.getsignal(_signal.SIGTERM)
+    with backend_session(
+        {"translation_server_url": "http://127.0.0.1:1"},  # port 1: never up
+        "/nonexistent-home",
+        stdout=io.StringIO(),
+        stderr=io.StringIO(),
+    ):
+        inside = _signal.getsignal(_signal.SIGTERM)
+        assert inside is not before, "SIGTERM handler unchanged inside the session"
+        with pytest.raises(KeyboardInterrupt):
+            inside(_signal.SIGTERM, None)  # type: ignore[operator]
+    assert _signal.getsignal(_signal.SIGTERM) is before

@@ -24,6 +24,7 @@ from pzi.capture_context import CaptureContext, build_capture_context
 from pzi.config import AppConfig, BibConfig
 from pzi.flaresolverr import fetch_html_via_flaresolverr
 from pzi.html_metadata import extract_metadata_from_html
+from pzi.identifiers import normalize_doi
 from pzi.metadata_sources import (
     fetch_crossref_record,
     fetch_openalex_record,
@@ -926,12 +927,15 @@ def fetch_record_for_input(
                 if html:
                     meta = extract_metadata_from_html(html)
                     if meta is not None:
-                        best = dict(merge_record_sources(meta, fallback))
-                        return (
-                            _with_pdf_discovery(cast(NormalizedRecord, best)),
-                            provider_errors,
-                            translation_results,
+                        best = _flaresolverr_record(
+                            meta, fallback, errors=provider_errors
                         )
+                        if best is not None:
+                            return (
+                                _with_pdf_discovery(cast(NormalizedRecord, best)),
+                                provider_errors,
+                                translation_results,
+                            )
 
         suffix = (
             " (page may be Cloudflare-protected — configure flaresolverr_url to bypass)"
@@ -985,12 +989,15 @@ def fetch_record_for_input(
             if html:
                 meta = extract_metadata_from_html(html)
                 if meta is not None:
-                    best = dict(merge_record_sources(meta, fallback))
-                    return (
-                        _with_pdf_discovery(cast(NormalizedRecord, best)),
-                        provider_errors,
-                        translation_results,
+                    best = _flaresolverr_record(
+                        meta, fallback, errors=provider_errors
                     )
+                    if best is not None:
+                        return (
+                            _with_pdf_discovery(cast(NormalizedRecord, best)),
+                            provider_errors,
+                            translation_results,
+                        )
 
         if url_floor is not None:
             # Flaresolverr did not do better (or was not configured), so the
@@ -1362,6 +1369,43 @@ def _arxiv_id_from_doi(doi: str) -> str | None:
     if lower.startswith(prefix):
         return doi[len(prefix):]
     return None
+
+
+def _flaresolverr_record(
+    meta: Mapping[str, Any],
+    fallback: Mapping[str, Any],
+    *,
+    errors: list[str],
+) -> dict[str, Any] | None:
+    """The FlareSolverr rung's answer, or None when the page must be refused.
+
+    One helper for both branches (DOI and plain-URL), because the guards below
+    were previously absent from both while their siblings had them — and a fix
+    landing in one branch and not the other is this codebase's dominant defect.
+
+    The DOI guard is `drop_contradicting_candidates`' job done for HTML: the
+    fallback carries the *requested* DOI and wins the merge, so without the
+    check a wrong page — an issue TOC, a related-article redirect, a half-solved
+    challenge page — had its title and authors written under the user's DOI,
+    "indistinguishable afterwards from a correct capture". A page declaring a
+    different DOI is a wrong page, not extra metadata.
+
+    Attribution mirrors the three translation-server return sites: set on the
+    merged dict, because `metadata_provider` is a note about who answered, not
+    a bibliographic field to be merged.
+    """
+    requested = normalize_doi(str(fallback.get("doi") or "")) if fallback.get("doi") else None
+    page_doi = normalize_doi(str(meta.get("doi") or "")) if meta.get("doi") else None
+    if requested and page_doi and requested != page_doi:
+        errors.append(
+            f"flaresolverr: page declares DOI {page_doi}, which contradicts the "
+            f"requested DOI {requested} — refusing the page (wrong page, not "
+            "extra metadata)"
+        )
+        return None
+    best = dict(merge_record_sources(meta, fallback))
+    best["metadata_provider"] = "flaresolverr"
+    return best
 
 
 def merge_record_sources(

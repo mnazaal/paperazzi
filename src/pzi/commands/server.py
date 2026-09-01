@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-import signal
-from collections.abc import Iterator
-from contextlib import contextmanager
-
 from pzi import exit_codes
 from pzi.capture_context import resolve_api_auth_token
 from pzi.cli_server import build_server_plan
@@ -75,14 +71,16 @@ def run_server_command(args, *, home_dir, config_path, stdout, stderr) -> int:
             log_requests_to=stderr if getattr(args, "log_requests", False) else None,
         )
 
+    # Late import, as before the shim moved to its seam: `pzi server --help`
+    # should not pay for the backend module. Both uses below sit after it.
+    from pzi.ts_backend import backend_session, sigterm_unwinds
+
     if config is None:
-        with _sigterm_as_keyboard_interrupt():
+        with sigterm_unwinds():
             _serve()
         return exit_codes.OK
 
-    from pzi.ts_backend import backend_session
-
-    with _sigterm_as_keyboard_interrupt(), backend_session(
+    with sigterm_unwinds(), backend_session(
         config, home_dir,
         interactive=True, stdout=stdout, stderr=stderr,
     ) as backend:
@@ -125,17 +123,4 @@ def _maybe_start_watchdog(backend, *, stdout, stderr):
     return watchdog
 
 
-@contextmanager
-def _sigterm_as_keyboard_interrupt() -> Iterator[None]:
-    def _raise(_signum: int, _frame: object) -> None:
-        raise KeyboardInterrupt
 
-    try:
-        previous = signal.signal(signal.SIGTERM, _raise)
-    except (ValueError, OSError, AttributeError):
-        yield
-        return
-    try:
-        yield
-    finally:
-        signal.signal(signal.SIGTERM, previous)

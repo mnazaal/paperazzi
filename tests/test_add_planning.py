@@ -1042,3 +1042,94 @@ def test_flaresolverr_html_is_read_into_a_record_at_both_seams(
 
     assert record["title"] == "Behind Cloudflare"
     assert record["authors"] == ["Smith, Ada"]
+
+
+# ── audit B3: the FlareSolverr rung must not stamp the requested DOI ─────────
+
+
+_FLARESOLVERR_KW = dict(
+    server_url="http://127.0.0.1:59999",
+    fetch_search=lambda *a, **k: [],
+    fetch_crossref=lambda *a, **k: None,
+    fetch_openalex=lambda *a, **k: None,
+    fetch_s2=lambda *a, **k: None,
+    flaresolverr_url="http://127.0.0.1:8191",
+)
+
+
+def test_a_contradicting_page_doi_refuses_the_flaresolverr_page() -> None:
+    """`drop_contradicting_candidates` exists because writing paper B's record
+    under requested DOI A is "indistinguishable afterwards from a correct
+    capture" — but it filtered translation-server results only. The
+    FlareSolverr rung merged the page and let the requested DOI win, so a
+    TOC/redirect/related-article page captured via FlareSolverr wrote another
+    paper's title and authors under the user's DOI, silently.
+    """
+    from pzi.add_planning import MetadataExhausted, fetch_record_for_input
+
+    html = (
+        '<html><head>'
+        '<meta name="citation_title" content="A Different Paper Entirely">'
+        '<meta name="citation_doi" content="10.9999/other-paper">'
+        '</head></html>'
+    )
+
+    def _web(_url, *, server_url, **_k):
+        return []
+
+    import pytest as _pytest
+
+    with _pytest.raises(MetadataExhausted) as exc_info:
+        fetch_record_for_input(
+            # An http(s) raw value: the DOI branch only reaches FlareSolverr
+            # when the pasted input was a URL (`raw_as_url`).
+            raw_value="https://example.com/doi/full/10.1000/x",
+            classified={"kind": "doi", "normalized": "10.1000/x"},
+            fetch_web=_web,
+            fetch_flaresolverr=lambda _url: html,
+            **_FLARESOLVERR_KW,
+        )
+
+    joined = " ".join(exc_info.value.provider_errors)
+    assert "10.9999/other-paper" in joined
+    assert "10.1000/x" in joined
+
+
+def test_a_flaresolverr_capture_names_its_provider() -> None:
+    """The two HTML-extraction sites set no `metadata_provider`, making a
+    FlareSolverr capture indistinguishable in `--json` from the manual-override
+    fallback — which blinds the which-path-ran measurement the live capture
+    gate exists for. Spans both branches, since the attribution key was
+    previously added to the DOI-search branch alone and drifted.
+    """
+    from pzi.add_planning import fetch_record_for_input
+
+    html = (
+        '<html><head>'
+        '<meta name="citation_title" content="Behind Cloudflare">'
+        '<meta name="citation_doi" content="10.1000/x">'
+        '</head></html>'
+    )
+
+    def _web_empty(_url, *, server_url, **_k):
+        return []
+
+    record, _errors, _results = fetch_record_for_input(
+        raw_value="https://example.com/doi/full/10.1000/x",
+        classified={"kind": "doi", "normalized": "10.1000/x"},
+        fetch_web=_web_empty,
+        fetch_flaresolverr=lambda _url: html,
+        **_FLARESOLVERR_KW,
+    )
+    assert record["metadata_provider"] == "flaresolverr"
+
+    record2, _e2, _r2 = fetch_record_for_input(
+        raw_value="https://example.com/paper",
+        classified={"kind": "url", "normalized": "https://example.com/paper"},
+        fetch_web=_web_empty,
+        fetch_flaresolverr=lambda _url: html,
+        server_url="http://127.0.0.1:59999",
+        fetch_search=lambda *a, **k: [],
+        flaresolverr_url="http://127.0.0.1:8191",
+    )
+    assert record2["metadata_provider"] == "flaresolverr"

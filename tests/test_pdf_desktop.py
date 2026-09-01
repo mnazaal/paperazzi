@@ -277,3 +277,45 @@ def test_desktop_fallback_times_out_with_no_download(
     assert path is None
     assert reason is None
     assert "Timed out waiting for a downloaded PDF" in capsys.readouterr().err
+
+
+def test_a_firefox_placeholder_does_not_poison_the_watch(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Audit B2: Firefox creates the final-named file empty and streams into
+    `.part`, renaming on completion. The empty placeholder failed the magic-byte
+    check and landed in `seen` — permanently, so the finished PDF, appearing
+    seconds later at exactly that path, was never re-examined and the watch
+    timed out on a download the user completed. Firefox is the default browser.
+    """
+    import pzi.pdf
+    from pzi.pdf import fetch_pdf_via_desktop_browser_download
+
+    downloads = tmp_path / "downloads"
+    downloads.mkdir()
+    monkeypatch.setattr(pzi.pdf.webbrowser, "open", lambda _url: True)
+
+    clock = {"now": 0.0}
+    ticks: list[float] = []
+
+    def fake_sleep(seconds: float) -> None:
+        clock["now"] += seconds
+        ticks.append(seconds)
+        target = downloads / "smith2024.pdf"
+        if len(ticks) == 1:
+            target.write_bytes(b"")  # the placeholder
+        elif len(ticks) == 3:
+            target.write_bytes(b"%PDF-finished")  # the rename lands
+
+    path, _warning = fetch_pdf_via_desktop_browser_download(
+        url="https://www.biorxiv.org/content/smith2024.full.pdf",
+        papers_dir=str(tmp_path / "papers"),
+        citekey="smith2024",
+        timeout=8,
+        settings=_desktop_settings(downloads),
+        sleep=fake_sleep,
+        monotonic=lambda: clock["now"],
+    )
+
+    assert path == str(tmp_path / "papers" / "smith2024.pdf")
+    assert Path(path).read_bytes() == b"%PDF-finished"

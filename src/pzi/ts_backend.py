@@ -816,6 +816,35 @@ class BackendHandle(TypedDict):
 
 
 @contextmanager
+def sigterm_unwinds() -> Iterator[None]:
+    """Convert SIGTERM to KeyboardInterrupt so ``finally:`` blocks run.
+
+    An owned translation-server child is torn down in a ``finally:`` — and
+    default SIGTERM ends CPython without unwinding, while the child
+    (``start_new_session=True``, its own session leader) never sees the signal
+    itself. `timeout 60 pzi add …` therefore left an unauthenticated
+    URL-fetching node process on the port indefinitely, with no PID file to
+    reclaim it. Installed by `backend_session` at the seam so every entrant is
+    covered; `pzi server` also wraps its serve loop directly.
+
+    Off the main thread `signal.signal` refuses; degrading to the old
+    behaviour there is deliberate.
+    """
+    def _raise(_signum: int, _frame: object) -> None:
+        raise KeyboardInterrupt
+
+    try:
+        previous = signal.signal(signal.SIGTERM, _raise)
+    except (ValueError, OSError, AttributeError):
+        yield
+        return
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+@contextmanager
 def backend_session(
     config: dict[str, object],
     home_dir: str,
@@ -836,70 +865,71 @@ def backend_session(
     helpers; the server is located purely from ``config``
     (``translation_server_url`` and ``pzi_data_home``).
     """
-    ts_url = _ts_url_from_config(config)
+    with sigterm_unwinds():
+        ts_url = _ts_url_from_config(config)
 
-    # No URL configured: nothing to manage or probe.
-    if ts_url is None:
-        yield {"url": ts_url, "ready": True, "owned": False, "proc": None}
-        return
+        # No URL configured: nothing to manage or probe.
+        if ts_url is None:
+            yield {"url": ts_url, "ready": True, "owned": False, "proc": None}
+            return
 
-    # Auto-start disabled. The flag means "I manage the server myself, do not
-    # touch it", so this deliberately does not probe — but it stops claiming to
-    # know the server is up. `ready: True` here means "proceed", not "reachable"
-    # (the whole test suite runs under this flag), and `commands/add.py` read it
-    # as the latter: it skipped its accurate "translation server is not running"
-    # diagnostic, so a refused connection surfaced as "translation server
-    # returned no results" — a paper that does not exist rather than a server
-    # that is not there. `auto_start_skipped` is what lets the caller say so.
-    if env_flag(os.environ.get("PZI_SKIP_AUTO_START")):
-        yield {
-            "url": ts_url,
-            "ready": True,
-            "owned": False,
-            "proc": None,
-            "auto_start_skipped": True,
-        }
-        return
+        # Auto-start disabled. The flag means "I manage the server myself, do not
+        # touch it", so this deliberately does not probe — but it stops claiming to
+        # know the server is up. `ready: True` here means "proceed", not "reachable"
+        # (the whole test suite runs under this flag), and `commands/add.py` read it
+        # as the latter: it skipped its accurate "translation server is not running"
+        # diagnostic, so a refused connection surfaced as "translation server
+        # returned no results" — a paper that does not exist rather than a server
+        # that is not there. `auto_start_skipped` is what lets the caller say so.
+        if env_flag(os.environ.get("PZI_SKIP_AUTO_START")):
+            yield {
+                "url": ts_url,
+                "ready": True,
+                "owned": False,
+                "proc": None,
+                "auto_start_skipped": True,
+            }
+            return
 
-    if is_ts_reachable(ts_url):
-        yield {"url": ts_url, "ready": True, "owned": False, "proc": None}
-        return
+        if is_ts_reachable(ts_url):
+            yield {"url": ts_url, "ready": True, "owned": False, "proc": None}
+            return
 
-    raw_home = config.get("pzi_data_home", home_dir)
-    data_home = Path(str(raw_home)).expanduser()
+        raw_home = config.get("pzi_data_home", home_dir)
+        data_home = Path(str(raw_home)).expanduser()
 
-    node_path = config.get("node_path")
-    node = ensure_node(
-        data_home,
-        interactive=interactive,
-        node_path=node_path if isinstance(node_path, str) else None,
-        stdout=stdout,
-        stderr=stderr,
-    )
-    if node is None:
-        yield {"url": ts_url, "ready": False, "owned": False, "proc": None}
-        return
-
-    ts_dir = ensure_translation_server(data_home, node, stdout=stdout, stderr=stderr)
-    if ts_dir is None:
-        yield {"url": ts_url, "ready": False, "owned": False, "proc": None}
-        return
-
-    port = _port_from_ts_url(ts_url)
-    print(f"starting translation-server on port {port} …", file=stdout)
-    stdout.flush()
-    stderr_log = data_home / TS_STDERR_LOG_NAME
-    proc = start_ts(node, ts_dir, port=port, stderr_log=stderr_log)
-    try:
-        ready = wait_for_ts(
-            ts_url, stdout=stdout, stderr=stderr, proc=proc, stderr_log=stderr_log
+        node_path = config.get("node_path")
+        node = ensure_node(
+            data_home,
+            interactive=interactive,
+            node_path=node_path if isinstance(node_path, str) else None,
+            stdout=stdout,
+            stderr=stderr,
         )
-        yield {
-            "url": ts_url, "ready": ready, "owned": True, "proc": proc,
-            "node_bin": node, "ts_dir": ts_dir, "port": port, "stderr_log": stderr_log,
-        }
-    finally:
-        terminate_ts(proc)
+        if node is None:
+            yield {"url": ts_url, "ready": False, "owned": False, "proc": None}
+            return
+
+        ts_dir = ensure_translation_server(data_home, node, stdout=stdout, stderr=stderr)
+        if ts_dir is None:
+            yield {"url": ts_url, "ready": False, "owned": False, "proc": None}
+            return
+
+        port = _port_from_ts_url(ts_url)
+        print(f"starting translation-server on port {port} …", file=stdout)
+        stdout.flush()
+        stderr_log = data_home / TS_STDERR_LOG_NAME
+        proc = start_ts(node, ts_dir, port=port, stderr_log=stderr_log)
+        try:
+            ready = wait_for_ts(
+                ts_url, stdout=stdout, stderr=stderr, proc=proc, stderr_log=stderr_log
+            )
+            yield {
+                "url": ts_url, "ready": ready, "owned": True, "proc": proc,
+                "node_bin": node, "ts_dir": ts_dir, "port": port, "stderr_log": stderr_log,
+            }
+        finally:
+            terminate_ts(proc)
 
 
 # ---------------------------------------------------------------------------

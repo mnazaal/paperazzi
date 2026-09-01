@@ -27,6 +27,12 @@ next to the diff it explains.
 
 ### Fixed
 
+- Killing `pzi add`/`pzi inbox` with SIGTERM (a `timeout`, systemd, tmux) no longer leaves the auto-started translation-server running: the signal now unwinds the session's `finally:` on every command, not only `pzi server`. The node child is its own session leader, so nothing else would ever have stopped it.
+
+- A Firefox download no longer times out the desktop-browser watch: Firefox creates the final-named file empty and streams into `.part`, and the empty placeholder permanently disqualified its own path, so the finished PDF appearing there seconds later was never re-examined.
+
+- A FlareSolverr-fetched page that declares a different DOI than the one requested is refused instead of captured: previously the requested DOI silently overwrote the page's own, writing another paper's title and authors under your DOI whenever the fetched page was a TOC, redirect target, or half-solved challenge page. FlareSolverr captures also now report `metadata_provider: "flaresolverr"` like every other source.
+
 - A deliberate `file =` path change is written, not silently discarded: the "still points at the same attachment" check compared path *suffixes*, so `pzi pdf attach` to a new directory whose path ended with the old relative spelling (`…/papers/<name>.pdf` — the normal shape of a papers-dir relocation) reported the new path and exited 0 while the bib kept the old one. The check now resolves both spellings against the bib directory and compares locations; relative spellings are still preserved verbatim on unrelated edits, and `pdf_file_path_style = "relative"` still relativizes a touched absolute path.
 
 - `{{ firstCreator }}` renders Zotero's Creator column — `Smith`, `Smith and Doe`, `Smith et al.` — where it previously returned the first surname alone, silently dropping every co-author from the default `pdf_filename_format` this project documents. Better BibTeX's `auth` keeps its one-surname meaning in both citekey formulas and `{{ }}` templates, so citekeys are unaffected; PDFs captured under a `firstCreator` template will be named differently from now on.

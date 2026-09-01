@@ -175,7 +175,15 @@ def fetch_pdf_via_desktop_browser_download(
             except OSError:
                 continue
             if not is_pdf_bytes(data):
-                seen.add(candidate)
+                # NOT added to `seen`: Firefox creates the final-named file
+                # *empty* and streams into `.part`, renaming on completion —
+                # so this exact path holds the finished PDF a few seconds
+                # later. Poisoning it here made the watch time out on a
+                # download the user completed. Re-reading a matching-name
+                # non-PDF once per tick until the deadline is the cost, and it
+                # is bounded by the watch itself. (The unrelated-filename
+                # branch above still poisons: a name that does not match will
+                # not start matching.)
                 continue
             local_path = write_pdf_bytes(
                 data=data,

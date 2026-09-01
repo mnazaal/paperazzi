@@ -1572,6 +1572,35 @@ def test_build_add_record_result_shapes_dry_run_message() -> None:
     assert result["citekey"] == "smith2024paper"
 
 
+def test_a_renamed_citekey_reaches_the_user_as_a_warning() -> None:
+    """Audit B5: the last link of the rename chain was guarded by no test.
+
+    `ensure_citekey_for_write` sets the `_citekey_renamed_from` marker (tested),
+    `plan_with_applied_record` preserves it across the write (tested), and
+    `build_add_record_result` lifts it into the user-visible warning — which was
+    unexecuted by all 659 tests that touch this module, so deleting the lift
+    left the suite green while `--citekey mykey` silently wrote `mykey-2` with
+    `warnings: []`. This asserts the surfaced string, not the marker.
+    """
+    plan = plan_bib_write(
+        {"citekey": "mykey-2", "title": "Paper", "_citekey_renamed_from": "mykey"},
+        [],
+    )
+
+    result = build_add_record_result(
+        bib={"name": "ml", "path": "/tmp/ml.bib"},
+        plan=plan,
+        warnings=[],
+        dry_run=False,
+    )
+
+    assert result["status"] == "ok"
+    assert any(
+        "requested citekey 'mykey' was already taken" in w and "'mykey-2'" in w
+        for w in result["warnings"]
+    ), result["warnings"]
+
+
 # ---------------------------------------------------------------------------
 # Single-write-path PDF cleanup on retry-then-fail
 # ---------------------------------------------------------------------------

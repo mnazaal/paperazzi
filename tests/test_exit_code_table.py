@@ -196,10 +196,12 @@ def test_sigterm_to_the_server_is_the_documented_interrupted_code() -> None:
     import signal
 
     from pzi.cli_parser import build_parser
-    from pzi.commands.server import _sigterm_as_keyboard_interrupt
+    # The shim moved to its seam (`backend_session` installs it for every
+    # command, item 585); `pzi server` imports and uses the same one.
+    from pzi.ts_backend import sigterm_unwinds
 
     raised = False
-    with _sigterm_as_keyboard_interrupt():
+    with sigterm_unwinds():
         try:
             os.kill(os.getpid(), signal.SIGTERM)
         except KeyboardInterrupt:
