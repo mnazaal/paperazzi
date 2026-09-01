@@ -181,7 +181,7 @@ _COMMAND_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
     ("Maintain", (
         ("update", "Fill missing metadata; --promote replaces preprints"),
         ("library", "Inspect and repair a library: list, check, clean, dedupe, merge, reindex"),
-        ("delete", "Delete an entry by citekey"),
+        ("delete", "Delete one or more entries by citekey"),
         ("import", "Import entries from a .bib file"),
         ("export", "Export to BibTeX, CSV, JSON, or RIS"),
     )),
@@ -222,8 +222,9 @@ def _top_level_epilog() -> str:
             (3, "entry not found"),
             (4, "batch partly failed: some items succeeded and some did not"),
             (" ", "   (add --from-file, import, inbox, update, update --promote,"),
-            (" ", "   pdf retry --failed-only;"),
-            (" ", "   a batch in which *nothing* succeeded is 5)"),
+            (" ", "   pdf retry --failed-only, delete with several citekeys;"),
+            (" ", "   a batch in which *nothing* succeeded is 5, except"),
+            (" ", "   delete, where no citekey matching is 3)"),
             (5, "could not run (bad config, unknown --target, locked bib,"),
             (" ", "   permission denied, service unreachable)"),
             (130, "stopped by a signal (SIGINT, or SIGTERM to `pzi server`)"),
@@ -648,12 +649,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # ── delete / entries ─────────────────────────────────────────────────
-    delete_parser = subparsers.add_parser("delete", help="Delete a BibTeX entry by citekey")
-    delete_parser.add_argument("citekey", help="citekey of the entry to delete")
+    delete_parser = subparsers.add_parser(
+        "delete", help="Delete one or more BibTeX entries by citekey",
+    )
+    delete_parser.add_argument(
+        "citekey", nargs="+", help="citekey(s) of the entries to delete",
+    )
     add_config(delete_parser)
     add_single_target(delete_parser)
     delete_parser.add_argument("--dry-run", action="store_true", help="preview without deleting")
     delete_parser.add_argument("--force", action="store_true", help="skip confirmation prompt")
+    delete_parser.add_argument(
+        "--keep-pdf",
+        action="store_true",
+        help="leave the entry's PDF in place (default: move it to papers/.orphans/)",
+    )
     delete_parser.add_argument(
         "--json", action="store_true", help="emit the result as a JSON envelope",
     )
@@ -821,6 +831,11 @@ def build_parser() -> argparse.ArgumentParser:
     add_config(merge_parser)
     add_single_target(merge_parser)
     merge_parser.add_argument("--dry-run", action="store_true", help="preview without merging")
+    merge_parser.add_argument(
+        "--keep-pdf",
+        action="store_true",
+        help="leave the dropped entry's PDF in place (default: move it to papers/.orphans/)",
+    )
     merge_parser.add_argument(
         "--json", action="store_true", help="emit the result as a JSON envelope",
     )

@@ -15,6 +15,7 @@ those stay in :mod:`pzi.bib_repository`, which re-exports the names here.
 
 from __future__ import annotations
 
+import os
 import re
 from collections import Counter
 from collections.abc import Collection, Mapping, Sequence
@@ -783,6 +784,8 @@ def merge_preserving_unchanged_source(
     original: BibtexEntryV2,
     rebuilt: BibtexEntryV2,
     strings: Mapping[str, str],
+    *,
+    bib_dir: str,
 ) -> BibtexEntryV2:
     """Take *rebuilt*, but keep *original*'s source text where nothing changed.
 
@@ -833,7 +836,7 @@ def merge_preserving_unchanged_source(
             source_field.value, enclosing, strings
         ) or (
             field.key.lower() == "file"
-            and _file_field_still_points_at(source_field.value, field.value)
+            and _file_field_still_points_at(source_field.value, field.value, bib_dir)
         )
         if not unchanged:
             known.append((position, Field(key=source_field.key, value=field.value)))
@@ -858,7 +861,9 @@ def merge_preserving_unchanged_source(
     return merged
 
 
-def _file_field_still_points_at(source_value: str, rebuilt_value: str) -> bool:
+def _file_field_still_points_at(
+    source_value: str, rebuilt_value: str, bib_dir: str
+) -> bool:
     """Rebuilt ``file`` values that still mean *source_value*'s attachment.
 
     A Zotero/JabRef composite (``description:path:mimetype``, several joined by
@@ -870,45 +875,40 @@ def _file_field_still_points_at(source_value: str, rebuilt_value: str) -> bool:
     pzi does not re-compose one: that would mean owning three producers'
     escaping rules to gain nothing, since a bare path is the one form all of
     them read. Instead the field counts as unchanged while it still points at
-    the same attachment, and the source text is kept verbatim.
+    the same attachment, and the source text is kept verbatim. The same rule
+    keeps a *relative* spelling relative when an unrelated edit touches the
+    entry (reproduced with `tag add`: one tagged entry went machine-specific
+    while every untouched entry stayed portable).
 
-    The rebuilt value is derived *from* this source by `resolve_file_field`, so
-    it is either the primary path itself (absolute) or the bib directory joined
-    to it (relative) — which is why no bib path is needed here. A `..` segment
-    could defeat the suffix test; that fails safe, rewriting to a bare path,
-    which is today's behaviour.
+    "Still points at" is decided by resolving both spellings against the bib
+    directory — the same base `resolve_file_field` uses — and comparing the
+    locations. The earlier form compared *suffixes*, and old/new paths sharing
+    a ``/papers/<name>.pdf`` tail is the expected shape of a papers-dir
+    relocation, not evidence of identity: a deliberate `pdf attach` to a new
+    directory was eaten as "unchanged" while the command reported the new path
+    (audit B4, reproduced live).
     """
     primary = primary_pdf_path(source_value)
     if primary is None:
         return False
-    if primary == source_value.strip():
-        # A bare path. It still counts as unchanged when it is *relative* and
-        # the rebuilt absolute path names the same file, because `file` is read
-        # into the record model as an absolute `local_pdf_path` and written back
-        # absolute — so any command that touched an entry rewrote a portable
-        # `papers/x.pdf` into a machine-specific `/home/you/bibs/papers/x.pdf`.
-        # Reproduced with `tag add`: one tagged entry became absolute while
-        # every untouched entry stayed relative, i.e. a git-tracked library
-        # drifted to machine-specific one entry at a time, silently.
-        #
-        # This preserves what the entry already had rather than imposing a
-        # style, the same principle as sniffing the file's layout: it is not
-        # `pdf_file_path_style`'s job to decide what an *existing* field looks
-        # like. That setting still decides what a newly attached PDF is written
-        # as.
-        if not primary.startswith(("/", "~")) and rebuilt_value.endswith(
-            "/" + str(Path(primary))
-        ):
-            return True
-        return False  # already a bare absolute path; the normal comparison applies
-    if rebuilt_value == primary:
-        return True
-    if not primary.startswith(("/", "~")):
-        # Relative primary: `resolve_file_field` joined the bib directory to it.
-        return rebuilt_value.endswith("/" + str(Path(primary)))
-    # Absolute primary under `pdf_file_path_style = "relative"`:
-    # `_normalize_file_field` shortened the rebuilt value against the bib dir.
-    return bool(rebuilt_value) and primary.endswith("/" + str(Path(rebuilt_value)))
+    if primary == source_value.strip() and primary.startswith(("/", "~")):
+        # A bare absolute path is the one spelling with nothing to preserve:
+        # letting the rebuilt value through is what allows
+        # `pdf_file_path_style = "relative"` to relativize it on touch. The
+        # identical-spelling case never reaches here (`_unchanged_forms`
+        # catches value equality first).
+        return False
+    return _located_against(primary, bib_dir) == _located_against(
+        rebuilt_value, bib_dir
+    )
+
+
+def _located_against(path_text: str, bib_dir: str) -> str:
+    """Where *path_text* points, resolved the way `resolve_file_field` reads it."""
+    expanded = os.path.expanduser(path_text)
+    if not os.path.isabs(expanded):
+        expanded = os.path.join(bib_dir, expanded)
+    return os.path.normpath(expanded)
 
 
 def _unchanged_forms(

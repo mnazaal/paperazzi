@@ -50,6 +50,7 @@ from pzi.bib_service import list_bibs as _list_bibs_service
 from pzi.capture_core import capture_to_bib
 from pzi.capture_models import CaptureInput, CaptureOptions
 from pzi.check_service import CheckItem, CheckResult, check_bib
+from pzi.clean_service import plan_pdf_disposal
 from pzi.config import (
     AppConfig,
     BibConfig,
@@ -211,6 +212,9 @@ class DeleteEntryReport(TypedDict):
     dry_run: NotRequired[bool]
     title: NotRequired[str]
     pdf_path: NotRequired[str | None]
+    #: What became of ``pdf_path``. Absent under ``keep_pdf`` or when the
+    #: entry had no PDF. See `pzi.clean_service.QuarantineResult`.
+    pdf_action: NotRequired[dict[str, Any]]
     backup_path: NotRequired[str]
 
 
@@ -225,6 +229,9 @@ class MergeReport(TypedDict):
     dry_run: bool
     message: str
     merged_title: NotRequired[str]
+    #: What became of ``orphaned_pdf``. Absent under ``keep_pdf`` or when the
+    #: merge kept the only PDF. See `pzi.clean_service.QuarantineResult`.
+    pdf_action: NotRequired[dict[str, Any]]
     dropped_citekey: NotRequired[str]
     changed_fields: NotRequired[list[str]]
     merged_record: NotRequired[dict[str, Any]]
@@ -852,6 +859,7 @@ def delete(
     citekey: str,
     *,
     dry_run: bool = True,
+    keep_pdf: bool = False,
     config_path: str | None = None,
     library: str | None = None,
 ) -> DeleteEntryReport:
@@ -859,8 +867,10 @@ def delete(
 
     Pass ``dry_run=False`` to actually delete. A timestamped copy of the
     pre-delete library is made first, and its path is in the returned
-    ``backup_path``. The entry's PDF is left on disk — the result reports it as
-    ``pdf_path`` so a caller can remove it deliberately.
+    ``backup_path``. The entry's PDF is moved to ``papers_dir/.orphans/`` and
+    the move reported as ``pdf_action``; pass ``keep_pdf=True`` to leave it
+    where it is. It is never unlinked, so ``backup_path`` and the quarantined
+    file together undo the call.
 
     Previewing is the odd one out among the writers here, and deliberately so.
     The general rule is that a function naming exactly what it touches acts —
@@ -870,12 +880,19 @@ def delete(
     ``POST /delete`` previews. A Python API that deleted on the first call was
     the only surface where a typo'd citekey in a REPL took the entry out.
     """
+    config, target = _bib_target(config_path, library)
     typed = delete_entry(
-        bib_path=_bib_path(config_path, library),
+        bib_path=target["path"],
         citekey=citekey,
         dry_run=dry_run,
     ).copy()
     _unwrap(typed, "status")
+    pdf_action = plan_pdf_disposal(
+        result=typed, config=config, target=target,
+        keep_pdf=keep_pdf, dry_run=dry_run,
+    )
+    if pdf_action is not None:
+        typed["pdf_action"] = pdf_action
     return _report(typed)
 
 
@@ -939,6 +956,7 @@ def merge(
     citekey_b: str,
     *,
     dry_run: bool = True,
+    keep_pdf: bool = False,
     config_path: str | None = None,
     library: str | None = None,
 ) -> MergeReport:
@@ -966,6 +984,11 @@ def merge(
         file_path_style=config.get("pdf_file_path_style", "absolute"),
     ).copy()
     _unwrap(typed, "status")
+    pdf_action = plan_pdf_disposal(
+        result=typed, config=config, target=bib, keep_pdf=keep_pdf, dry_run=dry_run,
+    )
+    if pdf_action is not None:
+        typed["pdf_action"] = pdf_action
     return _report(typed)
 
 

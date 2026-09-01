@@ -25,11 +25,16 @@ of libraries, so that is a misconfiguration, not a missing entry."""
 PARTIAL = 4
 """A batch ran, some items succeeded and some failed.
 
-Returned by `add --from-file`, `import`, `inbox`, `update`, `update --promote`
-and `pdf retry --failed-only`.
+Returned by `add --from-file`, `import`, `inbox`, `update`, `update --promote`,
+`pdf retry --failed-only`, and `delete` given several citekeys.
 A batch in which *nothing* succeeded is `ENVIRONMENT`, not this: see
 `commands.common.batch_exit_code`, which is where every batch command gets the
-answer."""
+answer.
+
+`delete` is the exception, and deliberately: a batch none of whose citekeys
+exist stays `NOT_FOUND`, because branching on a citekey that is not in the
+library is exactly what 3 is for, and the count of keys asked about does not
+change what happened."""
 
 ENVIRONMENT = 5
 """The command could not run: unreadable or invalid config, a bib locked by

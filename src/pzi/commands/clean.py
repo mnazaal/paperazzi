@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-import os
-
 from pzi import cli_json, exit_codes
-from pzi.clean_service import clean_library, validate_library
+from pzi.clean_service import (
+    clean_library,
+    siblings_sharing_papers_dir,
+    validate_library,
+)
 from pzi.cli_render import error_lines, render_clean_result
 from pzi.commands.common import (
     emit_usage_error,
@@ -14,22 +16,6 @@ from pzi.commands.common import (
     print_read_warnings,
     resolve_target,
 )
-
-
-def _siblings_sharing_papers_dir(config, target) -> list[str]:
-    """The other configured libraries storing PDFs in *target*'s papers directory.
-
-    The default layout gives every bib the same `papers_dir`, so without this a
-    check of one library reported the others' PDFs as orphans — and `--fix`
-    quarantined them, breaking `file =` fields in a library the user never named.
-    """
-    shared = os.path.realpath(target["papers_dir"])
-    return [
-        bib["path"]
-        for bib in config.get("bibs", [])
-        if bib["path"] != target["path"]
-        and os.path.realpath(bib["papers_dir"]) == shared
-    ]
 
 
 def run_clean_command(args, *, home_dir, config_path, stdout, stderr, bib_selector) -> int:
@@ -48,7 +34,7 @@ def run_clean_command(args, *, home_dir, config_path, stdout, stderr, bib_select
             stderr=stderr,
         )
 
-    siblings = _siblings_sharing_papers_dir(_config, target)
+    siblings = siblings_sharing_papers_dir(_config, target)
     if args.fix:
         result = clean_library(
             bib_path=target["path"], papers_dir=target["papers_dir"],

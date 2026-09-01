@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from pzi import cli_json, exit_codes
-from pzi.cli_render import error_lines, render_dedupe_result
+from pzi.clean_service import plan_pdf_disposal
+from pzi.cli_render import describe_pdf_disposal, error_lines, render_dedupe_result
 from pzi.commands.common import (
     has_read_warnings,
     print_lines,
@@ -67,11 +68,31 @@ def run_merge_command(args, *, home_dir, config_path, stdout, stderr, bib_select
         dry_run=getattr(args, "dry_run", False),
         file_path_style=config.get("pdf_file_path_style", "absolute"),
     )
+    # Same disposal step as `delete`: the bib write is the commit point and the
+    # dropped entry's PDF moves after it. Shared so the hazard checked in one
+    # command cannot go unchecked in the other.
+    if result["status"] == "ok":
+        pdf_action = plan_pdf_disposal(
+            result=result,
+            config=config,
+            target=target,
+            keep_pdf=getattr(args, "keep_pdf", False),
+            dry_run=getattr(args, "dry_run", False),
+        )
+        if pdf_action is not None:
+            result["pdf_action"] = pdf_action
+
     if getattr(args, "json", False):
         cli_json.emit_result(
             result, stdout, command="library merge", items=[], bib_name=target["name"]
         )
-        return exit_codes.OK if result["status"] == "ok" else exit_code_for_error(result)
+        # Through the same verdict helper as the text branch below: returning
+        # plain OK here made `--json` exit 0 on a failed quarantine while the
+        # identical text invocation exited 1 — under the very comment saying the
+        # two branches cannot drift apart.
+        if result["status"] != "ok":
+            return exit_code_for_error(result)
+        return _merge_verdict(result)
     if result["status"] != "ok":
         print_lines(error_lines(result["message"], []), stderr)
         # Both branches go through the same mapper so they cannot drift apart
@@ -101,16 +122,33 @@ def run_merge_command(args, *, home_dir, config_path, stdout, stderr, bib_select
             f"{result['citekey_a']}: {', '.join(overwritten)}",
             file=stdout,
         )
-    orphaned = result.get("orphaned_pdf")
-    if orphaned:
-        # The dropped entry's PDF, which the merge does not keep. It stays on
-        # disk with nothing pointing at it until a later `library clean --fix`
-        # quarantines it, and the dry run is where the user decides.
-        print(
-            f"  PDF orphaned (kept by neither entry): {orphaned}",
-            file=stdout,
-        )
+    # The dropped entry's PDF, which the merge does not keep. It used to be
+    # named here and left on disk for a later `library clean --fix`; the clause
+    # now reports what this command did with it.
+    if result.get("orphaned_pdf"):
+        clause = describe_pdf_disposal(result)
+        print(f"  PDF orphaned (kept by neither entry), {clause}", file=stdout)
     backup = result.get("backup_path")
     if backup:
         print(f"  backup: {backup}", file=stdout)
+    action = result.get("pdf_action")
+    if isinstance(action, dict) and action.get("status") == "failed":
+        print(
+            f"could not quarantine {action['source']}: "
+            f"{action.get('error', 'unknown error')}",
+            file=stderr,
+        )
+    return _merge_verdict(result)
+
+
+def _merge_verdict(result) -> int:
+    """OK, or FINDINGS when the merge succeeded but its PDF move did not.
+
+    The entry went; the file did not. That is a report, not a failure to run —
+    the merge the user asked for did happen. Shared by the JSON and text
+    branches so the two exits cannot disagree about one result.
+    """
+    action = result.get("pdf_action")
+    if isinstance(action, dict) and action.get("status") == "failed":
+        return exit_codes.FINDINGS
     return exit_codes.OK

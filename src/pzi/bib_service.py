@@ -112,7 +112,9 @@ class DeleteEntryResult(TypedDict):
     """One deletion — what `pzi.delete()` returns.
 
     `backup_path` is the pre-delete copy of the library, taken under the same
-    lock as the write. `pdf_path` is the entry's PDF, which is left on disk.
+    lock as the write. `pdf_path` is the entry's PDF; this service does not
+    touch it, and the caller decides its fate via `clean_service`'s
+    `plan_pdf_disposal`, recording the outcome in `pdf_action`.
     """
 
     status: str
@@ -126,6 +128,9 @@ class DeleteEntryResult(TypedDict):
     dry_run: NotRequired[bool]
     title: NotRequired[str]
     pdf_path: NotRequired[str | None]
+    #: What the calling command did with `pdf_path`. Set by the front ends,
+    #: not here. See `pzi.clean_service.QuarantineResult`.
+    pdf_action: NotRequired[dict[str, Any]]
     backup_path: NotRequired[str]
 
 

@@ -34,7 +34,7 @@ and `/export/raw`), and eleven `POST`s. Two deserve naming explicitly:
 - `POST /browser/download` is a "fetch this URL through a headless browser
   carrying my real profile" primitive. It is SSRF-guarded (`url_safety`), but a
   caller with the token can drive an authenticated browser session.
-- `POST /delete` and `POST /update` mutate the library.
+- `POST /delete` and `POST /update` mutate the library. `/delete` also moves the entry's PDF to `papers/.orphans/` (same disposal and `keep_pdf` opt-out as the CLI; the file is never unlinked).
 
 Everything on this surface is gated by the same token; there is no per-route
 authorization. Treat the token as equivalent to shell access to your library.

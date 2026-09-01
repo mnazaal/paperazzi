@@ -276,7 +276,7 @@ the command that made it.
 | `<bib>.reindex.bak` | `pzi library reindex --rename-citekeys` | Removed again if the run changed nothing. |
 | `<bib>.promote.bak` | `pzi update --promote` | One per **run**, taken by the first write, not one per entry. |
 | `<data-home>/config-backups/config.toml.<UTC-timestamp>` | `pzi init --force` | Mode 0600, timestamped, so repeated `--force` runs keep a history instead of clobbering the first backup. |
-| `papers/.orphans/` | `pzi library clean --fix` | PDFs no entry references are **moved here, not deleted**. `mv` one back to restore it. |
+| `papers/.orphans/` | `pzi delete`, `pzi library merge`, `POST /delete`, `pzi library clean --fix` | PDFs no entry references are **moved here, not deleted**. `mv` one back to restore it. `delete` and `merge` file away only the PDF of the entry they removed, and only when nothing else still references it; `clean --fix` sweeps the whole `papers_dir`. Pass `--keep-pdf` to leave the file where it is. |
 
 **An ordinary `add` or `update` leaves no backup** — only the commands that
 destroy or replace a whole block do. Nothing ever cleans `.bak` files up, so
@@ -360,11 +360,11 @@ pzi update --promote [--dry-run] [--keep-preprint] [--mark-resolved] [--limit N]
 pzi entries [--offset N] [--limit N] [--sort citekey|title|year|author]
 pzi entries <citekey>                         # show the full record for one entry
 pzi entries --stats                           # library statistics
-pzi delete <citekey> [--dry-run] [--force]
+pzi delete <citekey>... [--dry-run] [--force] [--keep-pdf]   # PDFs go to papers/.orphans/
 pzi library list                              # the configured libraries and which is default
 pzi library clean [--dry-run] [--fix]         # check integrity; --fix relocates orphan PDFs
 pzi library dedupe
-pzi library merge <citekey_a> <citekey_b> [--dry-run]
+pzi library merge <citekey_a> <citekey_b> [--dry-run] [--keep-pdf]
 pzi library reindex [--rename-citekeys [--dry-run] [--force]]  # audit citekeys; rename only on explicit opt-in
 pzi export [--format bibtex|csv|json|ris] [-o <output>] [--force]
 pzi import <source.bib> [--dry-run] [--force-new]
@@ -418,6 +418,7 @@ For external `.bib` files managed by Zotero, Paperpile, LaTeX projects, or hand 
 - Malformed BibTeX (unbalanced braces, unterminated strings, a `%` comment inside an entry) is rejected and must be fixed manually
 - **A write reproduces your file's own layout, and makes two file-wide changes.** Entry types are lowercased (`@Article` → `@article`) everywhere, including in entries the write never looked at. And indentation and trailing-comma style are normalized to whichever the file uses *most* — so a consistently formatted file is untouched outside the edited entry, while one that mixes tabs and spaces is unified on the majority style. Everything else survives: blank lines, citekey capitalization, field names' capitalization, field order within an entry, line endings, a byte-order mark, and the file's permissions. On a consistently formatted 22,232-entry Better BibTeX export, adding one tag is a **one-line diff**
 - Comments, `@string` macros, and `@preamble` blocks are preserved across insert, update, tag, delete, merge, and reindex (which keeps entry order); `library clean --fix` never rewrites the `.bib` (it only relocates orphan PDFs)
+- **Removing an entry files its PDF away rather than deleting it.** `delete` and `library merge` move the removed entry's PDF to `papers/.orphans/`, so the `.bak` and the quarantined file together undo the operation. The file is left alone when another entry still references it (two entries can share one path when `pdf_filename_format` renders the same name for both) or when it sits outside `papers_dir`. `--keep-pdf` opts out
 - BibTeX `@string` macros are kept as-is but not expanded or validated
 
 ### External services and rate limits

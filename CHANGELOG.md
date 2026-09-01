@@ -15,11 +15,19 @@ next to the diff it explains.
 
 ## [Unreleased]
 
+### Changed
+
+- **`pzi delete`, `pzi library merge`, and `POST /delete` now move the removed entry's PDF to `papers/.orphans/` instead of leaving it on disk.** Reclaiming the file previously meant a second command — `library clean --fix`, a whole-`papers_dir` sweep run to finish a one-entry action, which also moved unrelated orphans left over from any earlier incident. The PDF is never unlinked, so the `.bak` and the quarantined file still undo the operation together. It is left in place when another entry still references it, when it sits outside `papers_dir`, or when any library sharing `papers_dir` could not be fully read (an unreadable reference set proves nothing); `--keep-pdf` — `keep_pdf` in a request body — opts out. `pzi.delete()` and `pzi.merge()` take a matching `keep_pdf=` and report the outcome as `pdf_action`, which carries `dry_run: true` on previews; their previous contract, "the entry's PDF is left on disk", no longer holds. A move that fails (e.g. an unwritable `papers_dir`) is a reported finding, exit 1, on every surface.
+
 ### Added
+
+- `pzi delete` accepts several citekeys in one call (`pzi delete a b c`); a repeated citekey counts once. Each entry gets its own `.bak` and its own PDF disposal; a call where only some citekeys exist exits `4`, and one where none of them do stays `3`. **`pzi delete --json` now reports per-entry detail under `items`**: the envelope carries `citekeys`, `deleted` and `message`, and the `citekey`, `title`, `pdf_path`, `pdf_action`, `backup_path`, `dry_run` and `errors` keys that used to sit at the top level are in `items[0]` for a single-citekey call. A call that removed nothing still emits the failure envelope with its `reason`, unchanged.
 
 - `pdf_filename_format` accepts a second `replaceFrom2`/`replaceTo2` substitution pair, applied after the first, and reads capture groups in Zotero's `$1` syntax as well as Python's `\1`. Together with the `firstCreator` fix below, a library previously renamed by Zotero can now be matched file-for-file; `config.template.toml` gives the template.
 
 ### Fixed
+
+- A deliberate `file =` path change is written, not silently discarded: the "still points at the same attachment" check compared path *suffixes*, so `pzi pdf attach` to a new directory whose path ended with the old relative spelling (`…/papers/<name>.pdf` — the normal shape of a papers-dir relocation) reported the new path and exited 0 while the bib kept the old one. The check now resolves both spellings against the bib directory and compares locations; relative spellings are still preserved verbatim on unrelated edits, and `pdf_file_path_style = "relative"` still relativizes a touched absolute path.
 
 - `{{ firstCreator }}` renders Zotero's Creator column — `Smith`, `Smith and Doe`, `Smith et al.` — where it previously returned the first surname alone, silently dropping every co-author from the default `pdf_filename_format` this project documents. Better BibTeX's `auth` keeps its one-surname meaning in both citekey formulas and `{{ }}` templates, so citekeys are unaffected; PDFs captured under a `firstCreator` template will be named differently from now on.
 

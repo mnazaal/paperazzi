@@ -16,6 +16,7 @@ from typing import Any
 
 import pytest
 
+from pzi import pdf_service
 from pzi.add_service import add_record_with_bib
 from pzi.bib_repository import merge_bib_entries, read_bib_file
 from pzi.bib_service import delete_entry
@@ -709,3 +710,69 @@ def test_the_bib_directory_is_resolved_once_per_write_not_once_per_entry(
 
     assert calls["hoisted"] == 1, calls
     assert calls["per_entry"] == 0, calls
+
+
+def test_a_deliberate_file_path_change_is_written_not_suffix_matched() -> None:
+    """Audit B4: the suffix heuristic ate a real change and lied about it.
+
+    `_file_field_still_points_at` decided "unchanged" whenever the new absolute
+    path merely *ended with* the old relative one — but old and new paths
+    sharing a `/papers/<name>.pdf` tail is the expected shape of a papers-dir
+    relocation, not evidence of identity. `pdf attach` printed "the entry now
+    points at <new>" and exited 0 while the bib still held the old path,
+    resolving to the old file. Reproduced live before this test existed.
+
+    The heuristic now compares where the two paths actually point (both
+    resolved against the bib directory), which keeps every intended
+    preservation case — same location spelled relative vs absolute — and only
+    those.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        bibs_dir = Path(td) / "bibs"
+        (bibs_dir / "papers").mkdir(parents=True)
+        new_papers = Path(td) / "data" / "papers"
+        new_papers.mkdir(parents=True)
+        old_pdf = bibs_dir / "papers" / "smith2020.pdf"
+        old_pdf.write_bytes(b"%PDF-1.4 old\n")
+        new_pdf = new_papers / "smith2020.pdf"
+        new_pdf.write_bytes(b"%PDF-1.4 new\n")
+        bib = bibs_dir / "t.bib"
+        bib.write_text(
+            "@article{smith2020,\n  title = {A},\n  file = {papers/smith2020.pdf}\n}\n"
+        )
+        cp = Path(td) / "config.toml"
+        cp.write_text(
+            f'[[bibs]]\nname = "t"\npath = "{bib}"\n'
+            f'papers_dir = "{new_papers}"\ndefault = true\n'
+        )
+
+        result = pdf_service.attach_pdf(
+            config_path=str(cp), home_dir=td, bib_selector=None,
+            citekey="smith2020", source=str(new_pdf),
+        )
+
+        assert result["status"] == "ok"
+        text = bib.read_text()
+        assert "papers/smith2020.pdf}" in text  # some spelling of the new path…
+        recorded = read_bib_file(str(bib))["records"][0]["local_pdf_path"]
+        assert Path(recorded).resolve() == new_pdf.resolve(), (
+            f"bib still points at the old file: {text}"
+        )
+
+
+def test_tag_add_still_preserves_a_relative_file_spelling() -> None:
+    """The preservation case the heuristic exists for must survive its fix:
+    an unrelated edit resolves the relative spelling to the same location and
+    keeps the source text verbatim."""
+    with tempfile.TemporaryDirectory() as td:
+        cp, bib, papers = _config(td)
+        Path(os.path.join(papers, "c2022.pdf")).write_bytes(b"%PDF-1.4\n")
+        Path(bib).write_text(
+            "@article{c2022,\n  title = {C},\n  file = {papers/c2022.pdf}\n}\n"
+        )
+        result = add_tags(
+            config_path=cp, home_dir=td, bib_selector=None,
+            citekey="c2022", tags=["ml"],
+        )
+        assert result["status"] == "ok" and result["changed"]
+        assert "file = {papers/c2022.pdf}" in Path(bib).read_text()

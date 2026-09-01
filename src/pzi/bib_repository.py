@@ -514,7 +514,10 @@ def _update_library_blocks(
                 new_blocks.append(block)
             else:
                 new_blocks.append(
-                    merge_preserving_unchanged_source(block, rebuild(entry), strings)
+                    merge_preserving_unchanged_source(
+                        block, rebuild(entry), strings,
+                        bib_dir=str(Path(bib_path).parent),
+                    )
                 )
             position += 1
         else:
@@ -1426,6 +1429,7 @@ def merge_bib_entries(
                 merged_entry, path, file_path_style=file_path_style
             ),
             strings,
+            bib_dir=str(Path(path).parent),
         )
 
         new_blocks: list = []

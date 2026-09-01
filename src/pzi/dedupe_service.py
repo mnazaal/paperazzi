@@ -68,9 +68,12 @@ class MergeResult(TypedDict):
     #: which is why the dry run used to be unable to preview the loss.
     carried_fields: NotRequired[list[str]]
     dropped_fields: NotRequired[list[str]]
-    #: The dropped entry's PDF when the merge does not keep it — left on disk
-    #: with nothing referring to it, for a later `library clean --fix` to quarantine.
+    #: The dropped entry's PDF when the merge does not keep it. This service
+    #: only names it; the calling command quarantines it and records that in
+    #: `pdf_action`.
     orphaned_pdf: NotRequired[str]
+    #: See `pzi.clean_service.QuarantineResult`.
+    pdf_action: NotRequired[dict[str, Any]]
     #: Fields the survivor *loses*: present in both entries with different
     #: values, and resolved in the dropped entry's favour (title, venue and
     #: abstract prefer the longer string). Reported as "kept from the survivor"

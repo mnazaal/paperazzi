@@ -304,11 +304,50 @@ def reindex_error_lines(result: Mapping[str, Any]) -> list[str]:
 
 
 def render_delete_success(result: Mapping[str, Any]) -> str:
-    """Render delete result as a single status line."""
+    """Render delete result as a single status line.
+
+    The PDF clause used to read `(PDF at /path/x.pdf)` whatever happened, which
+    was the only thing the command said about a file it had just orphaned — and
+    it reads as a report of what was removed, not a warning about what was left.
+    It now names the outcome, because the four are materially different: moved
+    to quarantine, deliberately kept, kept because moving it would break another
+    entry, or never on disk at all.
+    """
     prefix = "DRY RUN: " if result["dry_run"] else ""
-    msg = result["message"]
-    pdf = f" (PDF at {result['pdf_path']})" if result.get("pdf_path") else ""
-    return f"{prefix}{msg}{pdf}"
+    clause = describe_pdf_disposal(result)
+    return f"{prefix}{result['message']}" + (f" (PDF {clause})" if clause else "")
+
+
+def describe_pdf_disposal(result: Mapping[str, Any]) -> str:
+    """What became of the removed entry's PDF, as a clause without the noun.
+
+    Callers supply the noun and the punctuation, because the two of them frame it
+    differently — `delete` as a parenthetical after its own message, `merge` as an
+    indented line under a heading that already says "PDF". Returning a fully
+    formed `(PDF …)` had merge printing `PDF orphaned …: (PDF quarantined to …)`.
+
+    The preview/applied tense is read off the action's own ``dry_run`` marker,
+    which `quarantine_pdf` sets on previews — the same fact the Python facade's
+    callers branch on, so the two surfaces cannot disagree about what happened.
+    """
+    action = result.get("pdf_action")
+    pdf_path = result.get("pdf_path") or result.get("orphaned_pdf")
+    if not isinstance(action, Mapping):
+        # `--keep-pdf`, or a caller that did not run the disposal step.
+        return f"left at {pdf_path}" if pdf_path else ""
+    status = action.get("status")
+    if status == "moved":
+        verb = "would be quarantined to" if action.get("dry_run") else "quarantined to"
+        return f"{verb} {action['destination']}"
+    if status == "kept":
+        return f"left at {action['source']} — {action['reason']}"
+    if status == "failed":
+        return f"still at {action['source']}"
+    if status == "missing":
+        # Without this the merge line ended `…, ` — a trailing comma and nothing
+        # after it — whenever the orphaned `file =` named a file never downloaded.
+        return f"not found on disk at {action['source']}"
+    return ""
 
 
 def render_doctor_result(result: Mapping[str, Any]) -> list[str]:

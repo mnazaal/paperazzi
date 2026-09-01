@@ -8,18 +8,14 @@ pzi add [error]
     status
 
 pzi delete [ok]
-    backup_path
     bib_name
-    bib_path
-    citekey
+    citekeys
     command
-    dry_run
+    deleted
     errors
     items
     message
-    pdf_path
     status
-    title
 
 pzi doctor [ok]
     bib_name

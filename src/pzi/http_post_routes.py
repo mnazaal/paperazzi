@@ -23,6 +23,7 @@ from pzi.bib_service import delete_entry
 from pzi.bibtex import normalize_authors
 from pzi.capture_core import capture_to_bib
 from pzi.capture_models import AuthHints, CaptureInput, CaptureOptions, PageArtifact, PdfCandidate
+from pzi.clean_service import plan_pdf_disposal
 from pzi.config import (
     DEFAULT_API_LISTEN_HOST,
     DEFAULT_API_LISTEN_PORT,
@@ -569,14 +570,28 @@ def _handle_delete_post(
     if isinstance(resolved, JsonError):
         return resolved
 
-    _config, bib = resolved
-    result = delete_entry(
+    config, bib = resolved
+    result = dict(delete_entry(
         bib_path=bib["path"],
         citekey=citekey.strip(),
         dry_run=dry_run,
-    )
+    ))
+    if result.get("status") == "ok":
+        # The same disposal as the CLI and the Python facade: this route called
+        # `delete_entry` directly and stranded the PDF, making HTTP the one
+        # surface where the documented contract did not hold. The flag default
+        # matches `--keep-pdf`'s: absent means quarantine.
+        pdf_action = plan_pdf_disposal(
+            result=result,
+            config=config,
+            target=bib,
+            keep_pdf=body_flag(body, "keep_pdf", default=False),
+            dry_run=dry_run,
+        )
+        if pdf_action is not None:
+            result["pdf_action"] = pdf_action
     status = status_for_service_result(result)
-    return status, dict(result)
+    return status, result
 
 
 def _confined_local_capture_path(
