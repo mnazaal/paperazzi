@@ -484,3 +484,165 @@ def test_a_dry_run_still_previews_a_healthy_library() -> None:
 
         assert result["status"] == "ok"
         assert [c["new_citekey"] for c in result["changed"]] == ["smith2020paper"]
+
+
+# ── audit C1/C2: backup ordering, and shared-PDF preview parity (2026-09-02) ─
+
+
+def test_the_backup_exists_before_any_pdf_is_renamed(tmp_path, monkeypatch) -> None:
+    """C1: PDFs were renamed *before* the `.bak` was taken.
+
+    A failed `mkdir`/`copy2` — disk full, permissions — therefore propagated
+    with every PDF already renamed, the bib untouched, no backup, and no
+    message saying where the files went. The undo block guarded only the bib
+    rewrite. Ordering is the fix: nothing on disk moves until the undo artifact
+    exists.
+    """
+    from pzi import reindex_service
+
+    seen: dict[str, bool] = {"backup_before_rename": False}
+    real_rename = reindex_service._rename_planned_pdfs
+
+    def _spy(*args, **kwargs):
+        seen["backup_before_rename"] = any(
+            p.name.endswith(".reindex.bak") for p in tmp_path.rglob("*.bak")
+        )
+        return real_rename(*args, **kwargs)
+
+    monkeypatch.setattr(reindex_service, "_rename_planned_pdfs", _spy)
+
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    (papers / "old2020.pdf").write_bytes(b"%PDF-1.4\n")
+    bib = tmp_path / "t.bib"
+    bib.write_text(
+        "@article{old2020,\n  title = {A Paper},\n  author = {Smith, Jane},\n"
+        f"  year = {{2020}},\n  file = {{{papers / 'old2020.pdf'}}},\n}}\n"
+    )
+
+    reindex_service.reindex_library(
+        bib_path=str(bib), papers_dir=str(papers),
+        citekey_format='auth.lower + "-" + year', dry_run=False,
+    )
+
+    assert seen["backup_before_rename"], "PDFs were renamed before the backup existed"
+
+
+def test_the_preview_of_two_entries_sharing_one_pdf_matches_the_run(tmp_path) -> None:
+    """C2: the preview promised two clean renames where the run does one.
+
+    With both entries pointing at the same file, the real run renames it once
+    and repoints the second entry, reporting an error for it. The preview
+    marked both `renamed_pdf: True` with no errors, because its
+    already-planned check looked only at colliding *destinations*, never at a
+    shared *source*.
+    """
+    from pzi import reindex_service
+
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    shared = papers / "shared.pdf"
+    shared.write_bytes(b"%PDF-1.4\n")
+    bib = tmp_path / "t.bib"
+    bib.write_text(
+        f"@article{{aa2020,\n  author = {{Alpha, A}},\n  year = {{2020}},\n"
+        f"  file = {{{shared}}},\n}}\n\n"
+        f"@article{{bb2021,\n  author = {{Beta, B}},\n  year = {{2021}},\n"
+        f"  file = {{{shared}}},\n}}\n"
+    )
+    common = dict(
+        bib_path=str(bib), papers_dir=str(papers),
+        citekey_format='auth.lower + "-" + year',
+    )
+
+    preview = reindex_service.reindex_library(**common, dry_run=True)
+    previewed = sum(1 for c in preview["changed"] if c.get("renamed_pdf"))
+
+    assert previewed == 1, (
+        "preview claims two renames of one file; the run performs one "
+        f"(changed: {preview['changed']})"
+    )
+    assert any("shares its PDF" in e for e in preview["errors"]), preview["errors"]
+
+
+# ── --rename-files: resync filenames to pdf_filename_format ─────────────────
+
+
+def _library_with_names(tmp_path, entries):
+    papers = tmp_path / "papers"
+    papers.mkdir(exist_ok=True)
+    text = ""
+    for citekey, title, filename in entries:
+        (papers / filename).write_bytes(b"%PDF-1.4\n")
+        text += (
+            f"@article{{{citekey},\n  title = {{{title}}},\n"
+            f"  file = {{{papers / filename}}},\n}}\n\n"
+        )
+    bib = tmp_path / "t.bib"
+    bib.write_text(text)
+    return str(bib), str(papers)
+
+
+def test_rename_files_is_scoped_to_residue_by_default(tmp_path) -> None:
+    """The reason this is not simply "rename every mismatch".
+
+    On the real 23k library, 10,695 attached files differ from what the
+    template produces — Better BibTeX named them from Zotero's sentence-case
+    title while pzi renders the exported one. Renaming those is a mass rewrite
+    nobody asked for. The default targets only names carrying LaTeX command
+    residue, which current pzi could never emit.
+    """
+    from pzi import reindex_service
+
+    bib, papers = _library_with_names(tmp_path, [
+        ("mangled2024", "A Real Title", "A textbraceleft Mangled Name.pdf"),
+        ("cosmetic2024", "The Complexity of Things", "the complexity of things.pdf"),
+    ])
+
+    result = reindex_service.rename_files_to_policy(
+        bib_path=bib, papers_dir=papers,
+        pdf_filename_format="{{ title }}", dry_run=True,
+    )
+
+    planned = {c["citekey"] for c in result["changed"]}
+    assert planned == {"mangled2024"}, result["changed"]
+    assert result["skipped_cosmetic"] == 1
+
+
+def test_rename_files_all_includes_cosmetic_mismatches(tmp_path) -> None:
+    """`--all` is the deliberate opt-in for a template change."""
+    from pzi import reindex_service
+
+    bib, papers = _library_with_names(tmp_path, [
+        ("mangled2024", "A Real Title", "A textbraceleft Mangled Name.pdf"),
+        ("cosmetic2024", "The Complexity of Things", "the complexity of things.pdf"),
+    ])
+
+    result = reindex_service.rename_files_to_policy(
+        bib_path=bib, papers_dir=papers,
+        pdf_filename_format="{{ title }}", dry_run=True, include_all=True,
+    )
+
+    assert {c["citekey"] for c in result["changed"]} == {"mangled2024", "cosmetic2024"}
+
+
+def test_rename_files_applies_and_repoints_the_entry(tmp_path) -> None:
+    from pzi import reindex_service
+    from pzi.bib_repository import read_bib_file
+
+    bib, papers = _library_with_names(tmp_path, [
+        ("mangled2024", "A Real Title", "A textbraceleft Mangled Name.pdf"),
+    ])
+
+    result = reindex_service.rename_files_to_policy(
+        bib_path=bib, papers_dir=papers,
+        pdf_filename_format="{{ title }}", dry_run=False,
+    )
+
+    assert result["status"] == "ok", result
+    assert (Path(papers) / "A Real Title.pdf").exists()
+    assert not (Path(papers) / "A textbraceleft Mangled Name.pdf").exists()
+    stored = read_bib_file(bib)["records"][0]["local_pdf_path"]
+    assert Path(stored).name == "A Real Title.pdf"
+    # Same undo artifact as the citekey path.
+    assert result["backup_path"]

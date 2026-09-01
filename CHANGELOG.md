@@ -21,6 +21,12 @@ next to the diff it explains.
 
 ### Added
 
+- `pzi library reindex --rename-files` renames attached PDFs to the name `pdf_filename_format` currently produces. Needed because a naming *policy* can change with no citekey changing — pzi's own LaTeX decoding changed twice in one day and each resync took a hand-written script. Read-only by default like the citekey pass, with the same `.bak`. **Scoped by default to names carrying LaTeX residue**, because on a real 23k-entry library 10,695 attached files differ from the template purely in case and punctuation (Better BibTeX named them from Zotero's title, pzi renders the exported one) — renaming those is a mass rewrite, not a repair. `--all` opts into the full set. Bare `reindex` is unchanged and still reports citekeys only.
+
+- `pzi library clean` distinguishes an orphan PDF that is a redundant copy of an attached file from one that is a paper never catalogued. `pdf attach` leaves the superseded file behind by design, so every re-attach mints a copy, and until now nothing told the two apart — sifting 262 orphans by hand to find the 28 safe to delete is what this replaces. `--fix` files them under `papers/.orphans/duplicates/`; nothing is ever deleted. Detection is by content, size-filtered first so a 23k-entry library hashes a handful of files rather than tens of gigabytes.
+
+- `pzi library clean` reports titles carrying escaped LaTeX commands (`\textbackslash`, `\textbraceleft`, …). A Zotero export can write the *escaped text* of markup, which renders as raw source in a bibliography and degrades the PDF filename; it went unnoticed for months because nothing looked. Report only — repairing them needs a human reading the diffs.
+
 - `pzi pdf retry` derives a PDF URL from the identifiers an entry already carries instead of refusing. An entry holding `eprint = {2211.03782}` was previously turned away with "no PDF URL on entry" although pzi owned the machinery to build the link. Only the *pure* discovery steps run by default — arithmetic on identifiers already present, so no network call and nothing to rate-limit — and `--discover` adds the HTTP sources (Unpaywall, DOI resolution, publisher pages). The derived URL is reported as a warning naming the step that supplied it, and stored on the entry so the next retry is immediate. `--failed-only` applies the same derivation rather than skipping those entries as URL-less.
 
 - `pzi delete` accepts several citekeys in one call (`pzi delete a b c`); a repeated citekey counts once. Each entry gets its own `.bak` and its own PDF disposal; a call where only some citekeys exist exits `4`, and one where none of them do stays `3`. **`pzi delete --json` now reports per-entry detail under `items`**: the envelope carries `citekeys`, `deleted` and `message`, and the `citekey`, `title`, `pdf_path`, `pdf_action`, `backup_path`, `dry_run` and `errors` keys that used to sit at the top level are in `items[0]` for a single-citekey call. A call that removed nothing still emits the failure envelope with its `reason`, unchanged.
@@ -28,6 +34,10 @@ next to the diff it explains.
 - `pdf_filename_format` accepts a second `replaceFrom2`/`replaceTo2` substitution pair, applied after the first, and reads capture groups in Zotero's `$1` syntax as well as Python's `\1`. Together with the `firstCreator` fix below, a library previously renamed by Zotero can now be matched file-for-file; `config.template.toml` gives the template.
 
 ### Fixed
+
+- `pzi library reindex --rename-citekeys` takes its `.bak` **before** renaming any PDF. A failing `mkdir`/`copy2` — disk full, permissions — previously propagated with every PDF already renamed, the bib untouched, no backup, and nothing saying where the files went; the undo block guarded only the bib rewrite. It now guards the renames too.
+
+- `pzi library reindex --rename-citekeys --dry-run` no longer promises two renames of one file. With two entries sharing a PDF the real run renames it once and repoints the second, reporting an error; the preview marked both as clean renames because its collision check looked only at destinations, never at a shared source.
 
 - A macro argument that is itself braced keeps its content in the filename. Better BibTeX protects case with braces, so an argument routinely arrives as `\texttt{{{MiniMol}}}` rather than `\texttt{MiniMol}`; the content check matched only the brace-free form, so it did not fire and the decoder dropped the group — the model's name vanished from its own file. Macro arguments are now found by brace matching rather than by a pattern that could not nest.
 

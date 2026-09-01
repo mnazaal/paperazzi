@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 from pzi import cli_json, exit_codes
 from pzi.cli_render import error_lines, reindex_error_lines, render_reindex_result
@@ -13,7 +14,7 @@ from pzi.commands.common import (
     print_read_warnings,
     resolve_target,
 )
-from pzi.reindex_service import reindex_library
+from pzi.reindex_service import reindex_library, rename_files_to_policy
 
 
 def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_selector) -> int:
@@ -23,6 +24,53 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
 
     as_json = getattr(args, "json", False)
     rename = getattr(args, "rename_citekeys", False)
+    rename_files = getattr(args, "rename_files", False)
+    if rename and rename_files:
+        return emit_usage_error(
+            args,
+            "--rename-citekeys and --rename-files are separate passes; run one, "
+            "then the other",
+            command_path=("library", "reindex"),
+            stdout=stdout,
+            stderr=stderr,
+        )
+    if rename_files:
+        # A distinct pass, deliberately: bare `reindex` keeps reporting citekeys
+        # only. Folding filename findings into the default output would have
+        # added ~10.7k lines on a real library, for names that differ from the
+        # template purely in case and are not defects.
+        result = rename_files_to_policy(
+            bib_path=target["path"],
+            papers_dir=target["papers_dir"],
+            pdf_filename_format=config.get("pdf_filename_format"),
+            dry_run=getattr(args, "dry_run", False),
+            include_all=getattr(args, "all", False),
+            file_path_style=config.get("pdf_file_path_style", "absolute"),
+        )
+        if as_json:
+            cli_json.emit_result(
+                result, stdout, command="library reindex",
+                items=result.get("changed") or [], bib_name=target["name"],
+            )
+        else:
+            verb = "would rename" if getattr(args, "dry_run", False) else "renamed"
+            print(f"{verb} {len(result['changed'])} PDF(s)", file=stdout)
+            for change in result["changed"]:
+                print(f"  {change['citekey']}: {Path(change['new_pdf']).name}",
+                      file=stdout)
+            if result.get("skipped_cosmetic") and not getattr(args, "all", False):
+                print(
+                    f"  ({result['skipped_cosmetic']} name(s) differ only "
+                    "cosmetically and were left alone; --all includes them)",
+                    file=stderr,
+                )
+            for error in result["errors"]:
+                print(f"  {error}", file=stderr)
+            backup = result.get("backup_path")
+            if backup:
+                print(f"backup saved to {backup}", file=stderr)
+        return exit_codes.FINDINGS if result["changed"] or result["errors"] else exit_codes.OK
+
     for flag, given in (
         ("--force", getattr(args, "force", False)),
         ("--dry-run", getattr(args, "dry_run", False)),

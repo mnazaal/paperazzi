@@ -117,11 +117,13 @@ pzi library merge
     <citekey_b> dest=citekey_b required
 
 pzi library reindex
+    --all dest=all nargs=0
     --config dest=config
     --dry-run dest=dry_run nargs=0
     --force dest=force nargs=0
     --json dest=json nargs=0
     --rename-citekeys dest=rename_citekeys nargs=0
+    --rename-files dest=rename_files nargs=0
     --target dest=target
 
 pzi pdf

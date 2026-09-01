@@ -865,6 +865,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="rewrite citekeys to match citekey_format (breaks \\cite{} using the old keys)",
     )
     reindex_parser.add_argument(
+        "--rename-files", action="store_true",
+        help=(
+            "rename attached PDFs to match pdf_filename_format; by default only "
+            "names carrying LaTeX residue, add --all for every mismatch"
+        ),
+    )
+    reindex_parser.add_argument(
+        "--all", action="store_true",
+        help="with --rename-files, include names that differ only cosmetically",
+    )
+    reindex_parser.add_argument(
         "--json", action="store_true", help="emit the result as a JSON envelope",
     )
     reindex_parser.add_argument(

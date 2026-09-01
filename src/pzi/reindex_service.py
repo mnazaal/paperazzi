@@ -19,7 +19,7 @@ from pzi.bib_repository import (
     with_bib_lock,
 )
 from pzi.bibtex import BibtexEntry, NormalizedRecord
-from pzi.format_templates import format_citekey
+from pzi.format_templates import format_citekey, format_pdf_filename
 from pzi.pdf_planning import plan_pdf_path
 
 
@@ -275,11 +275,23 @@ def reindex_library(
             # to overwrite an existing destination, so previewing a rename the
             # real run declines is a preview of a different command.
             planned_destinations: set[str] = set()
+            #: Sources an earlier change in this same preview already moves. The
+            #: real run renames a shared PDF once and repoints the later entry;
+            #: without this the preview promised a rename per entry, so two
+            #: entries sharing a file previewed two clean renames where the run
+            #: performs one rename, one repoint and an error.
+            planned_sources: set[str] = set()
             for change in changes:
                 old_pdf = change.get("old_pdf")
                 new_pdf = change.get("new_pdf")
                 will_rename = bool(old_pdf) and os.path.exists(str(old_pdf))
-                if will_rename and new_pdf:
+                if will_rename and str(old_pdf) in planned_sources:
+                    will_rename = False
+                    errors.append(
+                        f"would repoint {change['old_citekey']} rather than "
+                        f"rename: {old_pdf} shares its PDF with another entry"
+                    )
+                elif will_rename and new_pdf:
                     if os.path.exists(new_pdf) or new_pdf in planned_destinations:
                         will_rename = False
                         errors.append(
@@ -288,19 +300,27 @@ def reindex_library(
                         )
                     else:
                         planned_destinations.add(new_pdf)
+                        planned_sources.add(str(old_pdf))
                 change["renamed_pdf"] = will_rename
         elif changes:
-            renamed = _rename_planned_pdfs(changes, entries, errors)
             # Every citekey in the library is about to change, breaking any
             # `\cite{}` that used the old ones, and there is no undo. `delete`
             # and `library merge` — the other two commands that destroy something
             # the user cannot reconstruct — both leave a `.bak`, and both write
             # it under the lock immediately before the write so it is exactly
             # the content being replaced.
+            #
+            # Taken *before* a single PDF moves. The renames used to run first,
+            # so a failing `mkdir`/`copy2` — disk full, permissions — propagated
+            # with every PDF already renamed, the bib untouched, no backup, and
+            # nothing telling the user where the files had gone. The undo below
+            # guarded only the rewrite; now it guards the renames too.
             backup_path = backup_path_for(bib_path, "reindex")
             backup_path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
             shutil.copy2(bib_path, backup_path)
+            renamed: list[tuple[str, str]] = []
             try:
+                renamed = _rename_planned_pdfs(changes, entries, errors)
                 rewrite_entries_in_order_locked(
                     bib_path, entries, file_path_style=file_path_style
                 )
@@ -322,4 +342,136 @@ def reindex_library(
             "errors": errors,
             "warnings": warnings,
             "backup_path": str(backup_path) if backup_path is not None else None,
+        }
+
+
+#: Command names a current pzi could never put in a filename: it decodes LaTeX
+#: before sanitizing, so a name containing these is the residue of a title that
+#: was stripped rather than decoded. Scoping the default rename to these is what
+#: keeps it from touching the ~10.7k files whose names differ from the template
+#: only in case and punctuation, because Better BibTeX named them from Zotero's
+#: title rather than from the exported one.
+_FILENAME_RESIDUE = (
+    "textasciicircum", "textbraceleft", "textbraceright", "textbackslash",
+    "textasciitilde", "textquotedbl", "textunderscore", "{{", "}}",
+    "texttt", "mathcal", "mathrm", "mathbb", "mathscr", "mathsf", "mathfrak",
+    "textbf", "textit", "textrm",
+)
+
+
+def rename_files_to_policy(
+    *,
+    bib_path: str,
+    papers_dir: str,
+    pdf_filename_format: str | None = None,
+    dry_run: bool = True,
+    include_all: bool = False,
+    file_path_style: str = "absolute",
+) -> ReindexResult:
+    """Rename attached PDFs to the name ``pdf_filename_format`` now produces.
+
+    The companion to the citekey pass: same command, same lock, same `.bak`,
+    same read-only default. It exists because a naming *policy* can change
+    without any citekey changing — pzi's own LaTeX decoding changed twice in one
+    day, and each time the only way to resync was a hand-written script.
+
+    *include_all* is the difference between a repair and a mass rewrite. By
+    default only names carrying LaTeX residue are touched; everything else is
+    counted as `skipped_cosmetic` and left alone. On a real library the wider
+    set was 10,695 files whose names differ from the template purely in case,
+    which is not a defect and must never be swept up by a repair.
+    """
+    # `shared=dry_run` and the *raw* read, mirroring `reindex_library`:
+    # `read_bib_file` acquires the lock itself, so calling it here deadlocks
+    # against the lock this function already holds.
+    with with_bib_lock(bib_path, shared=dry_run):
+        raw, _dropped = read_bib_file_raw_with_failures(bib_path)
+        entries = raw["entries"]
+        records = raw["records"]
+
+        changed: list[dict[str, Any]] = []
+        errors: list[str] = []
+        skipped_cosmetic = 0
+        planned_destinations: set[str] = set()
+        planned_sources: set[str] = set()
+
+        for index, entry in enumerate(entries):
+            record = records[index] if index < len(records) else {}
+            current = record.get("local_pdf_path")
+            if not isinstance(current, str) or not current:
+                continue
+            citekey = entry.get("citekey", "")
+            wanted = format_pdf_filename(
+                pdf_filename_format, {**record, "citekey": citekey}
+            )
+            current_path = Path(current)
+            if current_path.name == wanted:
+                continue
+            if not any(marker in current_path.name for marker in _FILENAME_RESIDUE):
+                skipped_cosmetic += 1
+                if not include_all:
+                    continue
+
+            destination = str(Path(papers_dir) / wanted)
+            # The same two refusals the citekey pass makes, for the same
+            # reasons: never overwrite an existing file, and never rename a
+            # source a previous change in this run already moved.
+            if str(current_path) in planned_sources:
+                errors.append(
+                    f"would repoint {citekey} rather than rename: {current} "
+                    "shares its PDF with another entry"
+                )
+                continue
+            if os.path.exists(destination) or destination in planned_destinations:
+                errors.append(
+                    f"keeping PDF for {citekey} at {current}: "
+                    f"{destination} already exists"
+                )
+                continue
+            planned_destinations.add(destination)
+            planned_sources.add(str(current_path))
+            changed.append({
+                "citekey": citekey,
+                "old_pdf": str(current_path),
+                "new_pdf": destination,
+                "renamed_pdf": True,
+            })
+
+        backup_path: Path | None = None
+        if not dry_run and changed:
+            # Backup before anything moves, as the citekey pass now does.
+            backup_path = backup_path_for(bib_path, "reindex")
+            backup_path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+            shutil.copy2(bib_path, backup_path)
+            moved: list[tuple[str, str]] = []
+            try:
+                for change in changed:
+                    os.rename(change["old_pdf"], change["new_pdf"])
+                    moved.append((change["old_pdf"], change["new_pdf"]))
+                for index, entry in enumerate(entries):
+                    record = records[index] if index < len(records) else {}
+                    for change in changed:
+                        if record.get("local_pdf_path") == change["old_pdf"]:
+                            entry.setdefault("fields", {})["file"] = change["new_pdf"]
+                rewrite_entries_in_order_locked(
+                    bib_path, entries, file_path_style=file_path_style
+                )
+            except BaseException:
+                for old_pdf, new_pdf in reversed(moved):
+                    try:
+                        os.rename(new_pdf, old_pdf)
+                    except OSError:  # pragma: no cover - best-effort undo
+                        pass
+                backup_path.unlink(missing_ok=True)
+                raise
+
+        return {
+            "status": "ok",
+            "bib_path": bib_path,
+            "total_entries": len(entries),
+            "changed": changed,
+            "errors": errors,
+            "warnings": [],
+            "backup_path": str(backup_path) if backup_path else None,
+            "skipped_cosmetic": skipped_cosmetic,
         }

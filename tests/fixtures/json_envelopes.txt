@@ -85,6 +85,7 @@ pzi library clean [ok]
     bib_path
     command
     duplicate_citekeys
+    duplicate_orphan_pdfs
     errors
     issues
     items

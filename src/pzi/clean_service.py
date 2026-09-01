@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 from collections.abc import Mapping, Sequence
@@ -31,6 +32,10 @@ class CleanResult(TypedDict):
     duplicate_citekeys: list[str]
     missing_pdfs: list[str]
     orphan_pdfs: list[str]
+    #: Orphans whose *content* is byte-identical to a PDF an entry still points
+    #: at — a superseded copy `pdf attach` deliberately left behind, not a paper
+    #: that was never catalogued. A subset of `orphan_pdfs`.
+    duplicate_orphan_pdfs: list[str]
     #: True when the parser dropped a block, so the counts above describe only
     #: what could be read. `clean_library` refuses to quarantine anything while
     #: this holds.
@@ -45,6 +50,92 @@ class CleanResult(TypedDict):
     #: "the configured bib does not exist". Printed by `print_read_warnings`.
     warnings: NotRequired[list[str]]
     actions: NotRequired[list[dict[str, Any]]]
+
+
+#: Sub-directory of the quarantine holding redundant copies, kept apart from
+#: genuinely unclaimed papers: both leave `papers_dir`, but only one of them is
+#: a candidate for deletion without reading it first.
+DUPLICATE_DIRNAME = "duplicates"
+
+#: LaTeX commands that *name a character*. A title containing them is not using
+#: markup, it is carrying the escaped text of markup — `\textbackslash texttt`
+#: says "print a backslash then 'texttt'". Zotero/Better BibTeX exports produce
+#: this, and it renders as raw source in a bibliography.
+_ESCAPED_LATEX_COMMANDS = (
+    "\\textbackslash", "\\textbraceleft", "\\textbraceright",
+    "\\textasciicircum", "\\textasciitilde",
+)
+
+
+def _digest(path: Path) -> str | None:
+    """SHA-256 of *path*, or None when it cannot be read."""
+    hasher = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1 << 20), b""):
+                hasher.update(chunk)
+    except OSError:
+        return None
+    return hasher.hexdigest()
+
+
+def _size(path: Path) -> int | None:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return None
+
+
+def find_duplicate_orphans(
+    orphan_pdfs: Sequence[str], referenced_paths: Sequence[str]
+) -> list[str]:
+    """Orphans whose bytes match a PDF the library still references.
+
+    Sizes first, hashes second: two files of different sizes cannot be
+    identical, and `stat` is orders of magnitude cheaper than reading. On a
+    23k-entry library that is the difference between hashing tens of gigabytes
+    and hashing the handful of size collisions — the first version of this
+    check, written as a one-off script, read the whole library and was wrong to.
+    """
+    orphan_sizes: dict[int, list[Path]] = {}
+    for orphan in orphan_pdfs:
+        path = Path(orphan)
+        size = _size(path)
+        if size is not None:
+            orphan_sizes.setdefault(size, []).append(path)
+    if not orphan_sizes:
+        return []
+
+    referenced_digests: set[str] = set()
+    for candidate in referenced_paths:
+        path = Path(candidate)
+        if _size(path) in orphan_sizes:
+            digest = _digest(path)
+            if digest:
+                referenced_digests.add(digest)
+    if not referenced_digests:
+        return []
+
+    duplicates: list[str] = []
+    for paths in orphan_sizes.values():
+        for path in paths:
+            digest = _digest(path)
+            if digest and digest in referenced_digests:
+                duplicates.append(str(path))
+    return sorted(duplicates)
+
+
+def escaped_latex_titles(records: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Citekeys whose title carries the *escaped text* of LaTeX markup."""
+    found: list[str] = []
+    for record in records:
+        title = record.get("title")
+        if not isinstance(title, str):
+            continue
+        if any(command in title for command in _ESCAPED_LATEX_COMMANDS):
+            citekey = record.get("citekey")
+            found.append(str(citekey) if citekey else "?")
+    return found
 
 
 def validate_library(
@@ -109,6 +200,7 @@ def validate_library(
             "duplicate_citekeys": [],
             "missing_pdfs": [],
             "orphan_pdfs": [],
+            "duplicate_orphan_pdfs": [],
             "partial_parse": True,
             # A malformed block in the file's own content, not a bad flag or
             # an unavailable dependency — the fix is to correct the file, not
@@ -167,6 +259,7 @@ def validate_library(
             "duplicate_citekeys": duplicate_citekeys,
             "missing_pdfs": [],
             "orphan_pdfs": [],
+            "duplicate_orphan_pdfs": [],
             "partial_parse": partial_parse,
             "errors": [],
             "issues": issues,
@@ -230,6 +323,30 @@ def validate_library(
                     "message": f"orphan PDF: {pdf_file.name}",
                 })
 
+    # Which orphans are merely superseded copies of a file still attached.
+    # Reported as its own kind because the two demand different judgement: a
+    # redundant copy can go unread, an uncatalogued paper cannot.
+    duplicate_orphan_pdfs = find_duplicate_orphans(orphan_pdfs, sorted(referenced_paths))
+    for duplicate in duplicate_orphan_pdfs:
+        issues.append({
+            "severity": "warning",
+            "type": "duplicate_orphan_pdf",
+            "message": (
+                f"orphan PDF duplicates an attached file: {Path(duplicate).name}"
+            ),
+        })
+
+    for citekey in escaped_latex_titles(records):
+        issues.append({
+            "severity": "warning",
+            "type": "escaped_latex_title",
+            "message": (
+                f"{citekey}: title carries escaped LaTeX commands "
+                "(\\textbackslash, \\textbraceleft, …), which render as raw "
+                "source in a bibliography and degrade the PDF filename"
+            ),
+        })
+
     return {
         "status": "ok",
         "bib_path": bib_path,
@@ -238,6 +355,7 @@ def validate_library(
         "duplicate_citekeys": duplicate_citekeys,
         "missing_pdfs": missing_pdfs,
         "orphan_pdfs": orphan_pdfs,
+        "duplicate_orphan_pdfs": duplicate_orphan_pdfs,
         "partial_parse": partial_parse,
         "errors": sibling_errors,
         "issues": issues,
@@ -459,13 +577,26 @@ def clean_library(
     # --- Move orphan PDFs ---
     if move_orphans and validation["orphan_pdfs"]:
         orphan_dir = Path(papers_dir) / QUARANTINE_DIRNAME
+        duplicate_dir = orphan_dir / DUPLICATE_DIRNAME
+        # Redundant copies go to their own shelf. Both kinds leave `papers_dir`,
+        # but only one of them can be deleted without reading it first, and
+        # mixing them is what made sifting 262 files by hand necessary.
+        redundant = set(validation.get("duplicate_orphan_pdfs") or [])
+        unclaimed = [p for p in validation["orphan_pdfs"] if p not in redundant]
         actions = plan_orphan_quarantine(
-            orphan_pdfs=validation["orphan_pdfs"],
+            orphan_pdfs=unclaimed,
             orphan_dir=str(orphan_dir),
             taken_names=_names_in_dir(orphan_dir),
         )
+        actions += plan_orphan_quarantine(
+            orphan_pdfs=sorted(redundant),
+            orphan_dir=str(duplicate_dir),
+            taken_names=_names_in_dir(duplicate_dir),
+        )
         if not dry_run:
             orphan_dir.mkdir(parents=True, exist_ok=True)
+            if redundant:
+                duplicate_dir.mkdir(parents=True, exist_ok=True)
             for action in actions:
                 try:
                     shutil.move(action["source"], action["destination"])

@@ -521,3 +521,85 @@ def test_clean_reports_nothing_unwritable_for_a_healthy_library(tmp_path):
     )
     result = validate_library(bib_path=str(bib), papers_dir=str(tmp_path / "papers"))
     assert [i for i in result["issues"] if i["type"] == "unwritable_entry"] == []
+
+
+# ── redundant orphans, and titles carrying escaped LaTeX (2026-09-02) ────────
+
+
+def test_an_orphan_that_duplicates_an_attached_pdf_is_reported_as_such() -> None:
+    """`pdf attach` leaves the superseded file behind by design, so every
+    re-attach mints a redundant copy — and until now pzi offered no way to tell
+    those apart from genuinely unclaimed papers. Sifting 262 orphans by hand to
+    find which 28 were safe to delete is what this finding replaces.
+
+    Identity is content, never the name: the whole point is that the two files
+    have *different* names (that is why one was re-attached).
+    """
+    with tempfile.TemporaryDirectory() as td:
+        papers = Path(td) / "papers"
+        papers.mkdir()
+        attached = papers / "Smith-2024-A Good Name.pdf"
+        attached.write_bytes(b"%PDF-1.4 identical bytes\n")
+        redundant = papers / "Smith-2024-An Old Mangled textbraceleft Name.pdf"
+        redundant.write_bytes(b"%PDF-1.4 identical bytes\n")
+        unrelated = papers / "Some Paper Never Catalogued.pdf"
+        unrelated.write_bytes(b"%PDF-1.4 totally different content\n")
+        bib = Path(td) / "t.bib"
+        _write_bib(str(bib), f"@article{{smith2024,\n  file = {{{attached}}},\n}}\n")
+
+        result = validate_library(bib_path=str(bib), papers_dir=str(papers))
+
+        assert sorted(Path(p).name for p in result["orphan_pdfs"]) == [
+            "Smith-2024-An Old Mangled textbraceleft Name.pdf",
+            "Some Paper Never Catalogued.pdf",
+        ]
+        # The redundant one is called out; the genuinely unclaimed one is not.
+        assert [Path(p).name for p in result["duplicate_orphan_pdfs"]] == [
+            "Smith-2024-An Old Mangled textbraceleft Name.pdf"
+        ]
+        kinds = {issue["type"] for issue in result["issues"]}
+        assert "duplicate_orphan_pdf" in kinds
+
+
+def test_fix_files_a_redundant_orphan_apart_from_unclaimed_ones() -> None:
+    """A redundant copy and an uncatalogued paper both leave `papers_dir`, but
+    they are different things to a human sifting the pile afterwards."""
+    with tempfile.TemporaryDirectory() as td:
+        papers = Path(td) / "papers"
+        papers.mkdir()
+        attached = papers / "kept.pdf"
+        attached.write_bytes(b"%PDF-1.4 same\n")
+        (papers / "redundant copy.pdf").write_bytes(b"%PDF-1.4 same\n")
+        (papers / "unclaimed.pdf").write_bytes(b"%PDF-1.4 other\n")
+        bib = Path(td) / "t.bib"
+        _write_bib(str(bib), f"@article{{k2024,\n  file = {{{attached}}},\n}}\n")
+
+        clean_library(bib_path=str(bib), papers_dir=str(papers), dry_run=False)
+
+        assert attached.exists(), "the attached file must never move"
+        assert (papers / ".orphans" / "duplicates" / "redundant copy.pdf").exists()
+        assert (papers / ".orphans" / "unclaimed.pdf").exists()
+
+
+def test_a_title_carrying_escaped_latex_commands_is_reported() -> None:
+    """A Zotero export can write `\\textbackslash texttt\\textbraceleft{{X}}`,
+    which *says* "print the literal characters" — so the title renders as raw
+    LaTeX source in any bibliography built from it, and degrades the PDF
+    filename too. It was invisible for months because nothing looked at it.
+    Report only: repairing 96 of these needed a human reading every diff.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        papers = Path(td) / "papers"
+        papers.mkdir()
+        bib = Path(td) / "t.bib"
+        _write_bib(str(bib), (
+            "@article{good2024,\n  title = {A Perfectly Ordinary Title},\n}\n\n"
+            "@article{bad2024,\n"
+            "  title = {\\$\\textbackslash texttt\\textbraceleft{{X}}\\textbraceright\\$},\n}\n"
+        ))
+
+        result = validate_library(bib_path=str(bib), papers_dir=str(papers))
+
+        escaped = [i for i in result["issues"] if i["type"] == "escaped_latex_title"]
+        assert len(escaped) == 1
+        assert "bad2024" in escaped[0]["message"]
