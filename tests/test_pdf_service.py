@@ -1409,3 +1409,84 @@ def test_remove_new_pdf_deletes_only_what_this_operation_created(tmp_path: Path)
 
     remove_new_pdf(str(freshly_written), existing_paths)
     assert not freshly_written.exists()
+
+
+# ── retry discovers a URL rather than refusing (2026-09-01) ─────────────────
+
+
+def _retry_env(monkeypatch, record, *, captured):
+    """Wire retry_pdf against an in-memory bib whose entry is *record*."""
+    monkeypatch.setattr(
+        pdf_service, "load_bib_target",
+        lambda **kw: (_app_config(), {"name": "ml", "path": "/b", "papers_dir": "/p"}),
+    )
+    monkeypatch.setattr(
+        pdf_service, "read_bib_file",
+        lambda path: {
+            "entries": [{"citekey": record["citekey"], "fields": {}}],
+            "records": [record],
+        },
+    )
+
+    class _Outcome:
+        local_pdf_path = "/p/smith2024.pdf"
+        warning = None
+        errors: list[str] = []
+
+        def __init__(self, url):
+            # The real outcome carries the record back, because the winning
+            # source may differ from the URL it was handed.
+            self.record = {"pdf_url": url}
+
+    def _fetch(*, url, **kw):
+        captured["url"] = url
+        return _Outcome(url)
+
+    monkeypatch.setattr(pdf_service, "fetch_and_store_pdf_trying_sources", _fetch)
+    def _update(path, citekey, mutate, **kw):
+        captured["written"] = {"citekey": citekey, "path": path}
+        return {"found": True}
+
+    monkeypatch.setattr(pdf_service, "update_bib_entry", _update)
+
+
+def test_retry_derives_an_arxiv_pdf_url_instead_of_refusing(monkeypatch) -> None:
+    """An entry with `eprint` carries `arxiv_id`, and `arxiv_step` is a *pure*
+    step that turns it into a PDF URL with no network call.
+
+    Ten entries with usable identifiers were refused with "no PDF URL on entry"
+    on 2026-09-01 and the URLs had to be pasted in by hand — pzi owned the
+    discovery machinery the whole time and `retry` simply never called it.
+    """
+    captured: dict = {}
+    _retry_env(
+        monkeypatch,
+        {"citekey": "smith2024", "arxiv_id": "2211.03782", "title": "T"},
+        captured=captured,
+    )
+
+    result = pdf_service.retry_pdf(
+        config_path="/f", home_dir="/h", bib_selector=None, citekey="smith2024",
+    )
+
+    assert result["status"] == "ok", result
+    assert captured["url"] == "https://arxiv.org/pdf/2211.03782"
+    # Decision 2a: the derived URL is persisted, so the next retry is instant
+    # and the provenance is visible in the entry.
+    assert captured["written"]["citekey"] == "smith2024"
+    # And the user is told the URL was derived rather than stored.
+    assert any("derived" in w for w in result["warnings"]), result["warnings"]
+
+
+def test_retry_still_refuses_when_nothing_can_be_derived(monkeypatch) -> None:
+    """No identifiers at all is still the documented NOT_FOUND refusal."""
+    captured: dict = {}
+    _retry_env(monkeypatch, {"citekey": "smith2024", "title": "T"}, captured=captured)
+
+    result = pdf_service.retry_pdf(
+        config_path="/f", home_dir="/h", bib_selector=None, citekey="smith2024",
+    )
+
+    assert result["status"] == "error"
+    assert result["message"] == "no PDF URL on entry"
+    assert result["reason"] == REASON_NOT_FOUND

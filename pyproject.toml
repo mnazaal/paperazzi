@@ -28,7 +28,16 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Information Analysis",
     "Topic :: Text Processing :: Markup :: LaTeX",
 ]
-dependencies = ["argcomplete>=3", "bibtexparser>=2.0.0b9,<3", "portalocker>=2", "pypdf>=4.0"]
+dependencies = [
+    "argcomplete>=3",
+    "bibtexparser>=2.0.0b9,<3",
+    "portalocker>=2",
+    # Already required by bibtexparser; declared explicitly because pzi
+    # imports it directly (LaTeX decoding for PDF filenames) and must not
+    # depend on another package's dependency staying put.
+    "pylatexenc~=2.10",
+    "pypdf>=4.0",
+]
 
 [project.optional-dependencies]
 # Playwright powers the optional browser-profile PDF fallback

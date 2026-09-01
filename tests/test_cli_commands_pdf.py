@@ -112,6 +112,9 @@ def test_run_pdf_command_failed_only_uses_injected_service(tmp_path: Path) -> No
             "config_path": str(tmp_path / "config.toml"),
             "home_dir": str(tmp_path),
             "bib_selector": "ml",
+            # `--discover` is off by default: the batch derives URLs from
+            # identifiers the entries already carry, without network calls.
+            "deep": False,
         }
     ]
     assert stdout.getvalue().splitlines() == [

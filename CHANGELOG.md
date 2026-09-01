@@ -21,11 +21,15 @@ next to the diff it explains.
 
 ### Added
 
+- `pzi pdf retry` derives a PDF URL from the identifiers an entry already carries instead of refusing. An entry holding `eprint = {2211.03782}` was previously turned away with "no PDF URL on entry" although pzi owned the machinery to build the link. Only the *pure* discovery steps run by default — arithmetic on identifiers already present, so no network call and nothing to rate-limit — and `--discover` adds the HTTP sources (Unpaywall, DOI resolution, publisher pages). The derived URL is reported as a warning naming the step that supplied it, and stored on the entry so the next retry is immediate. `--failed-only` applies the same derivation rather than skipping those entries as URL-less.
+
 - `pzi delete` accepts several citekeys in one call (`pzi delete a b c`); a repeated citekey counts once. Each entry gets its own `.bak` and its own PDF disposal; a call where only some citekeys exist exits `4`, and one where none of them do stays `3`. **`pzi delete --json` now reports per-entry detail under `items`**: the envelope carries `citekeys`, `deleted` and `message`, and the `citekey`, `title`, `pdf_path`, `pdf_action`, `backup_path`, `dry_run` and `errors` keys that used to sit at the top level are in `items[0]` for a single-citekey call. A call that removed nothing still emits the failure envelope with its `reason`, unchanged.
 
 - `pdf_filename_format` accepts a second `replaceFrom2`/`replaceTo2` substitution pair, applied after the first, and reads capture groups in Zotero's `$1` syntax as well as Python's `\1`. Together with the `firstCreator` fix below, a library previously renamed by Zotero can now be matched file-for-file; `config.template.toml` gives the template.
 
 ### Fixed
+
+- LaTeX markup in a stored title no longer reaches the PDF filename. A Zotero/Better BibTeX export escapes specials into LaTeX commands and protects case with braces, and the filename sanitizer's brace/backslash stripping left each command's *name* behind as a word — files were written as `... textasciicircum textbraceleft st textbraceright ...`. Titles are now decoded (via `pylatexenc`, already required by `bibtexparser`) before sanitizing, so `$21^{st}$ {{Century}}` files as `$21 st$ Century` and `Kl{\"a}ser` as `Klaser`. Content is never traded for prettiness: a macro the decoder cannot render is unwrapped to its text rather than dropped, so `$\texttt{MiniMol}$` keeps `MiniMol`. Titles without markup are untouched.
 
 - A `file =` path whose *filename* contains a `;` is read whole instead of being split as a multi-attachment list. Title-derived names produce these ("Metric Elicitation; Moving from Theory to Practice.pdf"), and the split invented a phantom relative path from the fragment after the `;` — on a real 23k-entry library, `clean` reported each such entry as one missing PDF plus one orphan. A Better BibTeX join of several bare paths still splits: the discriminator is that a genuine join is made of complete paths, while a split filename strands extension-less fragments. Newly written paths were already `\;`-escaped and are unaffected.
 

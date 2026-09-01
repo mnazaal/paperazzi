@@ -748,3 +748,33 @@ DEFAULT_DISCOVERY_STEPS: list[PdfDiscoveryStep] = [
     pdf_url_candidates_step,         # 7 — extension-supplied fallback candidates
     browser_pdf_step,                # 8 — Playwright headless browser hook
 ]
+
+
+def discover_pdf_url_for_record(
+    record: NormalizedRecord,
+    *,
+    config: Mapping[str, Any] | None = None,
+    deep: bool = False,
+) -> NormalizedRecord:
+    """Fill a record's ``pdf_url`` from the identifiers it already carries.
+
+    For the commands that operate on an *existing* entry (`pdf retry`), as
+    opposed to capture, which composes its own context. `retry` previously
+    demanded a stored `pdf_url` and did no discovery, so an entry holding
+    `eprint = {2211.03782}` — everything needed to build the link — was refused.
+
+    *deep* selects the step set. The default is the phase-``pure`` steps only:
+    they derive a URL arithmetically from an identifier already on the record,
+    so they make no network call, cannot be rate-limited, and cannot hang. With
+    *deep*, the HTTP steps join in (Unpaywall, DOI resolution, landing pages),
+    which is worth an explicit opt-in because a `--failed-only` sweep across
+    them is long and provider-throttled. Browser steps are never included: they
+    need a live session this caller does not own.
+    """
+    steps = [
+        step
+        for step in DEFAULT_DISCOVERY_STEPS
+        if phase_of(step) == "pure" or (deep and phase_of(step) == "http")
+    ]
+    context: PdfDiscoveryContext = dict(config or {})
+    return apply_pdf_discovery(record, steps, context)

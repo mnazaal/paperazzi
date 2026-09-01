@@ -449,6 +449,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="retry PDF for all entries with no local PDF (cannot be combined with a citekey)",
     )
     pdf_retry.add_argument(
+        "--discover", action="store_true",
+        help=(
+            "also try network sources (Unpaywall, DOI resolution, publisher pages) "
+            "when the entry has no stored PDF URL; slower and rate-limited"
+        ),
+    )
+    pdf_retry.add_argument(
         "--json", action="store_true", help="emit the result as a JSON envelope",
     )
     pdf_attach = pdf_sub.add_parser("attach", help="Attach a PDF by URL or file path")

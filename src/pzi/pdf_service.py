@@ -32,6 +32,7 @@ from pzi.pdf import (
 )
 from pzi.pdf import remove_new_pdf as _remove_new_pdf
 from pzi.pdf import snapshot_pdf_paths as _snapshot_pdf_paths
+from pzi.pdf_discovery import discover_pdf_url_for_record
 from pzi.pdf_download import copy_pdf_to_papers_dir
 from pzi.pdf_planning import pdf_file_present
 from pzi.protocols import BinaryFetcher
@@ -148,6 +149,7 @@ def retry_pdf(
     bib_selector: str | None,
     citekey: str,
     fetch_binary: BinaryFetcher | None = None,
+    deep: bool = False,
 ) -> PdfRetryResult:
     resolved = load_bib_target(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector
@@ -164,6 +166,7 @@ def retry_pdf(
             "errors": resolved.errors,
         }
     config, bib = resolved
+    discovered_from: str | None = None
 
     read_result = read_bib_file(bib["path"])
     entries = read_result["entries"]
@@ -180,7 +183,33 @@ def retry_pdf(
             "errors": [f"citekey not found: {citekey}"],
         }
 
-    pdf_url = _record_at(read_result, index).get("pdf_url")
+    record = _record_at(read_result, index)
+    pdf_url = record.get("pdf_url")
+    if not isinstance(pdf_url, str) or not pdf_url:
+        # Derive one rather than refuse. `retry` used to demand a *stored*
+        # `pdf_url` and did no discovery at all, so an entry carrying `eprint`
+        # or a preprint URL — everything needed to build the link — was turned
+        # away with "no PDF URL on entry" and the user pasted the URL by hand.
+        # Pure steps only by default: they are arithmetic on identifiers the
+        # entry already has, so this costs no network call and cannot rate-limit.
+        # `--discover` adds the HTTP steps (Unpaywall, DOI resolution, landing
+        # pages), which are worth a flag because a `--failed-only` sweep of them
+        # is long and provider-throttled.
+        record = discover_pdf_url_for_record(
+            cast(NormalizedRecord, record), config=config, deep=deep,
+        )
+        pdf_url = record.get("pdf_url")
+        if isinstance(pdf_url, str) and pdf_url:
+            source = record.get("pdf_source")
+            # Say so: a URL that was *derived* rather than read off the entry is
+            # a different claim, and naming the step is what makes a wrong guess
+            # diagnosable instead of mysterious.
+            discovered_from = (
+                f"derived PDF URL from {source}: {pdf_url}"
+                if isinstance(source, str) and source
+                else f"derived PDF URL: {pdf_url}"
+            )
+
     if not isinstance(pdf_url, str) or not pdf_url:
         return {
             "status": "error",
@@ -203,7 +232,7 @@ def retry_pdf(
     existing_pdf_paths = _snapshot_pdf_paths(bib["papers_dir"])
     outcome = fetch_and_store_pdf_trying_sources(
         url=pdf_url,
-        record=cast(NormalizedRecord, _record_at(read_result, index)),
+        record=cast(NormalizedRecord, record),
         next_candidate=next_pdf_candidate_for_config(config, bib),
         papers_dir=bib["papers_dir"],
         citekey=citekey,
@@ -211,6 +240,7 @@ def retry_pdf(
         filename_format=filename_format,
         **_fallback_kwargs(config),
     )
+    discovery_notes = [discovered_from] if discovered_from else []
     local_pdf_path = outcome.local_pdf_path
     # The URL that produced the file, which is not necessarily the stored one:
     # the whole point of the fallback is that a different source may have
@@ -274,6 +304,7 @@ def retry_pdf(
         "warnings": [
             note
             for note in (
+                *discovery_notes,
                 warning,
                 _superseded_pdf_warning(_record_at(read_result, index), local_pdf_path),
             )
@@ -288,10 +319,18 @@ def retry_failed_pdfs(
     config_path: str,
     home_dir: str,
     bib_selector: str | None,
+    deep: bool = False,
 ) -> PdfRetryResult:
-    """Retry PDF download for all entries that need it (no local PDF, have a PDF URL).
+    """Retry PDF download for all entries that need it (no local PDF).
 
     Returns a summary result with per-entry success/failure details.
+
+    An entry with no *stored* PDF URL is not skipped before discovery has had a
+    look: the single-entry path derives one from the identifiers the entry
+    already carries, and a batch that applied a stricter test would report
+    "skipped, no URL" for entries `pzi pdf retry <citekey>` handles fine — the
+    same fix landing at one call site and not its sibling. *deep* has the same
+    meaning as there: pure steps only unless asked for the network ones.
     """
     resolved = load_bib_target(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector
@@ -333,8 +372,13 @@ def retry_failed_pdfs(
             skipped_already_has_pdf += 1
             continue
 
-        # Check if entry has a PDF URL
+        # Check if entry has a PDF URL, deriving one when it does not.
         pdf_url = record.get("pdf_url") if isinstance(record, dict) else None
+        if (not isinstance(pdf_url, str) or not pdf_url) and isinstance(record, dict):
+            derived = discover_pdf_url_for_record(
+                cast(NormalizedRecord, record), config=config, deep=deep,
+            )
+            pdf_url = derived.get("pdf_url")
         if not isinstance(pdf_url, str) or not pdf_url:
             skipped_no_url += 1
             continue

@@ -8,6 +8,8 @@ import unicodedata
 from collections.abc import Mapping
 from typing import Any
 
+from pylatexenc.latex2text import LatexNodes2Text
+
 from pzi.bibtex import generate_citekey_base, normalize_authors, resolve_citekey_collision
 from pzi.similarity import split_family_given
 
@@ -478,8 +480,80 @@ def _sanitize_citekey(value: str) -> str:
     return _NON_CITEKEY.sub("", _ascii(value).lower())
 
 
+#: A `%` opens a LaTeX comment, so the decoder drops the rest of the line.
+#: `record_to_bibtex_entry` writes provider titles verbatim (`bibtex.py`), so an
+#: unescaped one really does reach here — "50% Faster Training" would have been
+#: filed as "50". Escaping a bare `%` first costs nothing on the common path.
+_BARE_PERCENT = re.compile(r"(?<!\\)%")
+
+#: `\cmd{content}` — an unhandled macro wrapping text. Unwrapped to its content
+#: as a last resort, so the content survives even when the decoder cannot render
+#: the macro.
+_MACRO_WRAPPING_TEXT = re.compile(r"\\[A-Za-z]+\s*\{([^{}]*)\}")
+
+_LATEX_TEXT = LatexNodes2Text(math_mode="text")
+
+
+def _unwrapped(value: str) -> str:
+    """*value* with macro names removed but their braced content kept."""
+    previous = None
+    while previous != value:
+        previous = value
+        value = _MACRO_WRAPPING_TEXT.sub(r"\1", value)
+    return value
+
+
+def _lost_braced_content(source: str, decoded: str) -> bool:
+    """Did decoding drop the *content* of a macro it could not render?
+
+    Counting characters cannot answer this: rendering legitimately shrinks text
+    (``\\infty`` is five characters and ``∞`` is one), so a length test flagged
+    every well-decoded formula. What matters is narrower — a macro that wraps
+    text, whose text is gone afterwards. ``$\\texttt{MiniMol}$`` decoded to the
+    empty string and took the paper's name with it, while ``$\\mathcal{H}$``
+    became ``ℋ``, which still *is* the H once folded to ASCII.
+    """
+    folded = _ascii(decoded)
+    for content in _MACRO_WRAPPING_TEXT.findall(source):
+        stripped = _ascii(content).strip()
+        if stripped and stripped not in folded:
+            return True
+    return False
+
+
+def _latex_to_text(value: str) -> str:
+    """Decode LaTeX markup in a stored field to the text it represents.
+
+    A Zotero/Better BibTeX export escapes specials into LaTeX *commands* and
+    protects case with braces, so a title is stored as
+    ``\\$21\\textasciicircum\\textbraceleft st\\textbraceright\\$ {{Century ...}}``.
+    :func:`_sanitize_filename_stem` strips backslashes and braces, which left
+    each command's *name* behind as a word — a real 2026-09-01 repair filed 22
+    PDFs as ``... textasciicircum textbraceleft st textbraceright ...``.
+
+    `pylatexenc` does the decoding; it already ships with pzi as a required
+    dependency of `bibtexparser`, so this adds nothing to an install.
+
+    **Content is never traded for prettiness.** The decoder renders known math
+    well but silently drops a macro it does not know inside math mode. When that
+    costs a macro's text (see :func:`_lost_braced_content`), the value is
+    decoded again with those macros unwrapped to their content first — less
+    pretty than a rendered symbol, but complete.
+    """
+    if "\\" not in value and "{" not in value and "%" not in value:
+        return value  # the overwhelming majority: nothing to decode
+    escaped = _BARE_PERCENT.sub(r"\\%", value)
+    try:
+        decoded = _LATEX_TEXT.latex_to_text(escaped)
+        if _lost_braced_content(escaped, decoded):
+            decoded = _LATEX_TEXT.latex_to_text(_unwrapped(escaped))
+    except Exception:  # pragma: no cover - defensive; a name is not worth raising
+        return value
+    return decoded.strip() or value
+
+
 def _sanitize_filename_stem(value: str) -> str:
-    cleaned = _ascii(value)
+    cleaned = _ascii(_latex_to_text(value))
     cleaned = _FILENAME_FORBIDDEN.sub(" ", cleaned)
     cleaned = _WHITESPACE.sub(" ", cleaned).strip().strip(".")
     # Truncate by encoded byte length to avoid exceeding filesystem limits

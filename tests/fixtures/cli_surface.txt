@@ -135,6 +135,7 @@ pzi pdf attach
 
 pzi pdf retry
     --config dest=config
+    --discover dest=discover nargs=0
     --failed-only dest=failed_only nargs=0
     --json dest=json nargs=0
     --target dest=target

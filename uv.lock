@@ -610,6 +610,7 @@ dependencies = [
     { name = "argcomplete" },
     { name = "bibtexparser" },
     { name = "portalocker" },
+    { name = "pylatexenc" },
     { name = "pypdf" },
 ]
 
@@ -637,6 +638,7 @@ requires-dist = [
     { name = "playwright", marker = "extra == 'dev'", specifier = ">=1.40" },
     { name = "playwright", marker = "extra == 'playwright'", specifier = ">=1.40" },
     { name = "portalocker", specifier = ">=2" },
+    { name = "pylatexenc", specifier = "~=2.10" },
     { name = "pypdf", specifier = ">=4.0" },
     { name = "pyright", marker = "extra == 'dev'", specifier = ">=1.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },

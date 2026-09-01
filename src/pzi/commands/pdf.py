@@ -73,6 +73,7 @@ def run_pdf_command(
             config_path=config_path,
             home_dir=home_dir,
             bib_selector=bib_selector,
+            deep=getattr(args, "discover", False),
         )
         if as_json:
             cli_json.emit_result(
@@ -117,6 +118,7 @@ def run_pdf_command(
         home_dir=home_dir,
         bib_selector=bib_selector,
         citekey=args.citekey,
+        deep=getattr(args, "discover", False),
     )
     if as_json:
         cli_json.emit_result(result, stdout, command="pdf retry", items=[])

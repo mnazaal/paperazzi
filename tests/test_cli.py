@@ -1122,6 +1122,9 @@ def test_cli_pdf_retry_dispatches_to_pdf_service(tmp_path: Path) -> None:
             "home_dir": str(tmp_path),
             "bib_selector": None,
             "citekey": "smith2024graph",
+            # Off unless `--discover` is passed: the default derivation uses
+            # only the pure steps, which make no network call.
+            "deep": False,
         }
     ]
     assert "fetched" in stdout.getvalue()

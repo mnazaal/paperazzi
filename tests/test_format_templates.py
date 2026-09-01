@@ -322,3 +322,93 @@ def test_describe_template_error_checks_better_bibtex_formulas() -> None:
     assert "authr" in (describe_template_error("authr.lower + year") or "")
     assert "lowr" in (describe_template_error("auth.lowr + year") or "")
     assert describe_template_error("this is not a formula") is not None
+
+
+# ── LaTeX markup in stored titles (2026-09-01) ──────────────────────────────
+
+#: The title is what carries the markup, so the template has to render it —
+#: with no template `format_pdf_filename` falls back to the citekey.
+_TITLE_ONLY = "{{ title }}"
+
+
+@pytest.mark.parametrize(
+    ("title", "expected_in_name"),
+    [
+        # The case that produced 22 mangled files during the 2026-09-01 repair:
+        # a Zotero/BBT export escapes specials into LaTeX *commands*, and the
+        # filename sanitizer's brace/backslash stripping turned each command
+        # into its own name as a word.
+        (
+            r"\$21\textasciicircum\textbraceleft st\textbraceright\$ "
+            r"{{Century Statistical Disclosure Limitation}}",
+            "Century Statistical Disclosure Limitation",
+        ),
+        # Accents: `encode('ascii','ignore')` cannot save these because the
+        # markup is a command, not a composed character.
+        (r"Kl{\"a}ser and the {{MiniMol}} Model", "Klaser"),
+        (r"Schr{\"o}dinger {{PCA}}", "Schrodinger"),
+        (r"Generalized P{\'o}lya Urn", "Polya"),
+        # Case-protection braces are markup, never content.
+        (r"{{Bayesian Prompt Ensembles}}", "Bayesian Prompt Ensembles"),
+    ],
+)
+def test_latex_markup_never_reaches_a_filename(title, expected_in_name) -> None:
+    """A stored title carries LaTeX; the file on disk should not name it.
+
+    Before this, `\\textasciicircum` rendered as the literal word
+    "textasciicircum" — the sanitizer deleted the backslash and braces and left
+    the command name behind.
+    """
+    name = format_pdf_filename(_TITLE_ONLY, {"citekey": "x2024", "title": title})
+    assert expected_in_name in name
+    for command in ("textasciicircum", "textbraceleft", "textbraceright",
+                    "textbackslash", "{{", "}}"):
+        assert command not in name, f"{command!r} leaked into {name!r}"
+
+
+def test_a_percent_in_a_title_does_not_truncate_the_filename() -> None:
+    """`%` opens a LaTeX comment, so decoding eats the rest of the line.
+
+    `bibtex.py` writes provider titles verbatim, so an unescaped `%` reaches
+    the decoder and "50% Faster Training" would otherwise be filed as "50".
+    """
+    name = format_pdf_filename(
+        _TITLE_ONLY, {"citekey": "x2024", "title": "50% Faster Training"}
+    )
+    assert "Faster Training" in name
+
+
+def test_a_title_without_markup_is_untouched() -> None:
+    """The no-markup path must not move: this is the overwhelming majority."""
+    title = "Attention Is All You Need"
+    assert format_pdf_filename(_TITLE_ONLY, {"citekey": "x2017", "title": title}) == (
+        f"{title}.pdf"
+    )
+
+
+def test_an_unrenderable_macro_keeps_its_text_in_the_filename() -> None:
+    """Decoding must never trade a paper's name for a prettier symbol.
+
+    `pylatexenc` renders math it knows and silently drops a macro it does not:
+    `$\\texttt{MiniMol}$` decoded to the empty string, so the model's own name
+    vanished from its file. Detected per-macro rather than by length, because
+    rendering legitimately shrinks text (`\\infty` is five characters, `∞` is
+    one) and a length test flagged every correctly decoded formula.
+    """
+    name = format_pdf_filename(
+        _TITLE_ONLY,
+        {"citekey": "k2024", "title": r"$\texttt{MiniMol}$ - A Parameter-Efficient Model"},
+    )
+    assert "MiniMol" in name
+    assert "texttt" not in name
+
+
+def test_a_renderable_macro_still_decodes_to_its_symbol() -> None:
+    """The fallback above must not fire on math the decoder handles: `\\mathcal{H}`
+    becomes `ℋ`, which folds to `H` — the content is present, not lost."""
+    name = format_pdf_filename(
+        _TITLE_ONLY,
+        {"citekey": "k2022", "title": r"On the Regret of $\mathcal{H}_{\infty}$ Control"},
+    )
+    assert "mathcal" not in name
+    assert name.startswith("On the Regret of H")
