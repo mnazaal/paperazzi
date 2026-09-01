@@ -27,6 +27,8 @@ next to the diff it explains.
 
 ### Fixed
 
+- A `file =` path whose *filename* contains a `;` is read whole instead of being split as a multi-attachment list. Title-derived names produce these ("Metric Elicitation; Moving from Theory to Practice.pdf"), and the split invented a phantom relative path from the fragment after the `;` — on a real 23k-entry library, `clean` reported each such entry as one missing PDF plus one orphan. A Better BibTeX join of several bare paths still splits: the discriminator is that a genuine join is made of complete paths, while a split filename strands extension-less fragments. Newly written paths were already `\;`-escaped and are unaffected.
+
 - Killing `pzi add`/`pzi inbox` with SIGTERM (a `timeout`, systemd, tmux) no longer leaves the auto-started translation-server running: the signal now unwinds the session's `finally:` on every command, not only `pzi server`. The node child is its own session leader, so nothing else would ever have stopped it.
 
 - A Firefox download no longer times out the desktop-browser watch: Firefox creates the final-named file empty and streams into `.part`, and the empty placeholder permanently disqualified its own path, so the finished PDF appearing there seconds later was never re-examined.

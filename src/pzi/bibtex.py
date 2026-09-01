@@ -488,6 +488,12 @@ def _unescape_file_component(value: str) -> str:
     return "".join(out)
 
 
+#: A trailing dot-suffix of 1-6 alphanumerics — what a complete attachment
+#: path ends in. Spaces excluded on purpose: "Vol. 2" is a title fragment,
+#: not an extension.
+_FILE_EXTENSION_RE = re.compile(r"\.[A-Za-z0-9]{1,6}$")
+
+
 def parse_file_field(value: str | None) -> list[str]:
     """Attachment paths from a BibTeX ``file`` field, in order.
 
@@ -508,11 +514,30 @@ def parse_file_field(value: str | None) -> list[str]:
     more is ``desc:path:mime`` (a 4th is JabRef's source URL). A 2-component
     value is ambiguous — most often a path that simply contains a colon — and is
     treated as a path, which is what JabRef's parser does with ``file.pdf::``.
+
+    A ``;`` is likewise ambiguous: Better BibTeX joins several bare paths with
+    it, but a title-derived filename can *contain* one ("Metric Elicitation;
+    Moving from Theory to Practice.pdf" — pzi's own `pdf_filename_format`
+    produces these). The discriminator is what the split leaves behind: a BBT
+    join is made of complete paths, so every fragment carries a file extension,
+    while splitting a semicolon-bearing filename strands its leading fragments
+    extensionless. A split in which no record is composite-shaped and some
+    fragment has no extension is therefore content, not structure — the whole
+    value is one path. (Zotero escapes a literal ``;`` in composites as
+    a backslash-escaped ``;``, so composite values never reach this heuristic.)
     """
     if not value or not value.strip():
         return []
+    records = [r for r in _split_unescaped(value.strip(), ";") if r.strip()]
+    if len(records) > 1 and not any(
+        len(_split_unescaped(record, ":")) >= 3 for record in records
+    ):
+        if any(
+            not _FILE_EXTENSION_RE.search(record.strip()) for record in records
+        ):
+            records = [value.strip()]
     paths: list[str] = []
-    for record in _split_unescaped(value.strip(), ";"):
+    for record in records:
         if not record.strip():
             continue
         parts = _split_unescaped(record, ":")

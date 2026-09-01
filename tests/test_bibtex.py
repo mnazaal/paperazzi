@@ -446,6 +446,20 @@ def test_merge_projected_entry_handles_an_eprint_without_a_prefix() -> None:
         (":file.pdf", ["file.pdf"]),
         # A 4th component is JabRef's source URL; the path is still second.
         ("desc:file.pdf:PDF:http://example.com", ["file.pdf"]),
+        # A real filename containing ';' (a title-derived name — "Metric
+        # Elicitation; Moving from Theory to Practice"). Splitting here turned
+        # one existing attachment into a phantom title-fragment path plus an
+        # orphan; 23k-library `clean` reported both. The discriminator against
+        # the BBT join above: a split filename leaves its first fragment with
+        # no file extension, while a BBT multi-attachment join is made of
+        # complete paths.
+        (
+            "/abs/Ali et al-2022-Metric Elicitation; Moving from Theory to Practice.pdf",
+            ["/abs/Ali et al-2022-Metric Elicitation; Moving from Theory to Practice.pdf"],
+        ),
+        ("A; B.pdf", ["A; B.pdf"]),
+        # …but composite-shaped records keep splitting even alongside a ';',
+        # and extension-complete fragments still split (the BBT case above).
         # Nothing at all.
         ("", []),
         ("   ", []),

@@ -196,6 +196,7 @@ def test_sigterm_to_the_server_is_the_documented_interrupted_code() -> None:
     import signal
 
     from pzi.cli_parser import build_parser
+
     # The shim moved to its seam (`backend_session` installs it for every
     # command, item 585); `pzi server` imports and uses the same one.
     from pzi.ts_backend import sigterm_unwinds
