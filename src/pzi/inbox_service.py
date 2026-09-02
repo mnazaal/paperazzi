@@ -15,7 +15,7 @@ from typing import Any, NotRequired, TypedDict
 
 import portalocker
 
-from pzi.add_planning import classify_capture_outcome
+from pzi.add_planning import BatchPreviewState, batch_status, classify_capture_outcome
 from pzi.bib_repository import (
     LOCK_TIMEOUT_SECONDS,
     acquire_lock_with_timeout,
@@ -243,6 +243,11 @@ def drain_inbox(
     counts: dict[str, int] = {"added": 0, "exists": 0, "failed": 0}
     items: list[DrainItem] = []
     failed_indices: set[int] = set()
+    # One mutable state for the whole drain, so line K previews against the
+    # library plus lines 1..K-1 rather than the library alone. Dry-run only: a
+    # real drain writes each line before the next one reads. See
+    # `BatchPreviewState`.
+    batch_preview = BatchPreviewState() if dry_run else None
 
     for seq, raw_i in enumerate(processable):
         line = parsed[raw_i]
@@ -256,6 +261,9 @@ def drain_inbox(
         if merged_tags:
             record_overrides["tags"] = merged_tags
 
+        extra: dict[str, Any] = (
+            {} if batch_preview is None else {"batch_preview": batch_preview}
+        )
         try:
             result = add_fn(
                 config_path=config_path,
@@ -265,6 +273,7 @@ def drain_inbox(
                 bib_selector=line.target,
                 dry_run=dry_run,
                 force_new=False,
+                **extra,
             )
         except Exception as exc:
             result = {
@@ -322,7 +331,13 @@ def drain_inbox(
                 _write_inbox_atomically(path, remaining + appended)
 
     return {
-        "status": "ok",
+        # Derived, not hardcoded: a drain in which every line failed exits 5,
+        # and used to report `status: "ok"` alongside it. The inbox-rewrite
+        # error above does not flip this — those entries *were* captured, and
+        # only putting the file back was declined.
+        "status": batch_status(
+            succeeded=counts["added"] + counts["exists"], failed=counts["failed"],
+        ),
         "inbox_file": inbox_file,
         "dry_run": dry_run,
         "total": total,

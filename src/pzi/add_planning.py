@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import urllib.error
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import Any, NotRequired, TypedDict, cast
 from urllib.parse import urlsplit
 
@@ -203,6 +204,61 @@ def classify_capture_outcome(result: Mapping[str, object]) -> str:
     if result.get("status") == "error":
         return "failed"
     return "exists" if result.get("action") == "update" else "added"
+
+
+@dataclass
+class BatchPreviewState:
+    """What a batch has planned so far, so its next preview can see it.
+
+    A dry-run capture writes nothing, and the single-capture path re-reads the
+    library from disk on every call — so in a preview each item was matched
+    against a library that never changed, and two inputs naming one paper both
+    previewed as inserts where the real run inserts then updates. The real run
+    needs none of this: each item is written before the next one reads.
+
+    `import` has the same requirement and meets it with a `batch_write_session`
+    it can apply plans to even in dry-run. `inbox` and `add --from-file` cannot
+    reuse that: they fetch over the network between items, so holding the bib's
+    exclusive lock across a batch would block every other pzi command for the
+    length of the run, and the real run deliberately commits per item so an
+    interrupted batch keeps what it captured. This carries the same information
+    without the lock.
+
+    Passed to :func:`pzi.add_service.add_input_to_bib`, which appends to it.
+    Only ever populated in dry-run: in a real run the entries are on disk
+    already, and adding them here as well would double them in the index.
+    """
+
+    records: list[NormalizedRecord] = field(default_factory=list)
+    entries: list[Any] = field(default_factory=list)
+
+    def remember(self, record: NormalizedRecord, entry: Any) -> None:
+        """Record what one item planned, for the items after it."""
+        self.records.append(record)
+        self.entries.append(entry)
+
+
+def batch_status(*, succeeded: int, failed: int) -> str:
+    """The `status` a batch envelope reports, from its own outcome counts.
+
+    The envelope half of the pair whose other half is
+    :func:`pzi.commands.common.batch_exit_code` — same two inputs, deliberately
+    the same argument names, because they are two channels reporting one
+    verdict and a run where they disagree is a bug. That is what this exists to
+    stop: `inbox` and `import` hardcoded `"status": "ok"` and so answered `ok`
+    while `batch_exit_code` was returning ENVIRONMENT for the same counts.
+
+    A batch that captured *something* is `ok` however many items failed — the
+    exit code already distinguishes PARTIAL from clean, and calling a
+    half-successful capture an error made `.status` contradict it. Only a batch
+    that captured nothing at all is an `error`.
+
+    What counts as succeeded differs per front end (`import` counts a skipped
+    duplicate, having found the paper already present), so callers supply the
+    totals and this owns only the rule. The sibling of
+    :func:`classify_capture_outcome`, and here for the same reason.
+    """
+    return "error" if failed and not succeeded else "ok"
 
 
 def identifies_a_paper(record: Mapping[str, object]) -> bool:

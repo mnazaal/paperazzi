@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from pzi import cli_json, exit_codes
-from pzi.add_planning import classify_capture_outcome
+from pzi.add_planning import BatchPreviewState, classify_capture_outcome
 from pzi.add_service import describe_invalid_add_input
 from pzi.capture_core import capture_to_bib
 from pzi.capture_models import AuthHints, CaptureInput
@@ -298,6 +298,12 @@ def _run_batch(
         service_kwargs["fetch_web"] = fetch_web
     if fetch_search is not None:
         service_kwargs["fetch_search"] = fetch_search
+    if args.dry_run:
+        # One mutable state for the whole batch, so item K previews against the
+        # library plus items 1..K-1 rather than the library alone. Dry-run only:
+        # a real run writes each item before the next one reads. See
+        # `BatchPreviewState`.
+        service_kwargs["batch_preview"] = BatchPreviewState()
 
     raw_delay = getattr(args, "delay", None)
     delay = max(0.0, 1.0 if raw_delay is None else raw_delay)

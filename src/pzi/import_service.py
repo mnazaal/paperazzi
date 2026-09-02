@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict
 
+from pzi.add_planning import batch_status
 from pzi.add_service import add_records_to_bib_batch
 from pzi.bib_serialize import parse_bibtex_for_import
 from pzi.bibtex import bibtex_entry_to_record
@@ -279,7 +280,12 @@ def import_from_bibtex(
 
     prefix = "DRY RUN: " if dry_run else ""
     return {
-        "status": "ok",
+        # Derived, not hardcoded — see `batch_status`. A skipped duplicate
+        # counts as succeeded: the importer found the paper already present,
+        # which is an answer, not a failure.
+        "status": batch_status(
+            succeeded=imported + updated + skipped_dupes, failed=skipped_errors,
+        ),
         "warnings": warnings,
         "source_path": source_path,
         "bib_name": bib["name"],

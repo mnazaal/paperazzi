@@ -167,6 +167,7 @@ def add_input_to_bib(
     cookies: str | None = None,
     force_new: bool = False,
     metadata_strict: bool = False,
+    batch_preview: _add_planning.BatchPreviewState | None = None,
 ) -> AddRecordResult:
     context, context_error = _resolve_capture_context(
         config_path=config_path,
@@ -278,6 +279,7 @@ def add_input_to_bib(
             api_auth_token=api_auth_token,
             desktop_fallback_hosts=desktop_fallback_hosts,
             ezproxy_host=ezproxy_host,
+            batch_preview=batch_preview,
         )
 
     provider_errors: list[str] = []
@@ -626,6 +628,21 @@ def _resolve_capture_context(
     return context, None
 
 
+def _targets_batch_only_entry(
+    plan: WritePlan, on_disk_entries: list[BibtexEntry]
+) -> bool:
+    """Whether *plan* updates an entry that exists only in the batch preview.
+
+    True for the second and later items of a dry-run batch that name one paper:
+    the plan is an update, and the entry it updates is one an earlier item in
+    the same batch would insert, so the library on disk has never seen it.
+    """
+    if plan["action"] != "update":
+        return False
+    citekey = plan["entry"].get("citekey")
+    return not any(entry.get("citekey") == citekey for entry in on_disk_entries)
+
+
 def add_record_with_bib(
     *,
     bib: BibConfig,
@@ -645,11 +662,19 @@ def add_record_with_bib(
     ezproxy_host: str | None = None,
     file_path_style: str = "absolute",
     next_pdf_candidate: NextPdfCandidate | None = None,
+    batch_preview: _add_planning.BatchPreviewState | None = None,
 ) -> AddRecordResult:
     read_result = read_bib_file(bib["path"])
     typed_existing_records = [
         cast(NormalizedRecord, existing) for existing in read_result["records"]
     ]
+    existing_entries: list[BibtexEntry] = read_result["entries"]
+    if batch_preview is not None:
+        # What earlier items in this batch planned counts as existing, or a
+        # preview matches every item against a library that dry-run never
+        # changes. See `BatchPreviewState`; only ever set in dry-run.
+        typed_existing_records = [*typed_existing_records, *batch_preview.records]
+        existing_entries = [*existing_entries, *batch_preview.entries]
     # Build the identity index once and reuse it across the several exact-match
     # lookups this write performs, instead of rebuilding it per call.
     existing_index = build_identity_index(typed_existing_records)
@@ -713,7 +738,7 @@ def add_record_with_bib(
             existing_entries=existing_entries,
         )
 
-    record_with_hint, plan = _build_plan(typed_existing_records, read_result["entries"])
+    record_with_hint, plan = _build_plan(typed_existing_records, existing_entries)
 
     if not dry_run:
         record_with_hint, plan = _execute_plan_with_retry(
@@ -733,9 +758,27 @@ def add_record_with_bib(
     )
 
     if dry_run:
-        result["diff"] = preview_write_plan(
-            bib["path"], plan, file_path_style=file_path_style
-        )["diff"]
+        # An update onto an entry an *earlier item in this batch* planned has
+        # nothing on disk to diff against — `preview_write_plan` reads the file
+        # and would refuse with "the bib changed while this write was being
+        # prepared". Rendering it truthfully means diffing against the
+        # batch-so-far, which only `bib_repository` can do; the action and
+        # status above are already right, so the honest cheap answer is to say
+        # why there is no diff rather than to show a wrong one or fail the item.
+        if batch_preview is not None and _targets_batch_only_entry(
+            plan, read_result["entries"]
+        ):
+            result["diff"] = ""
+            result.setdefault("warnings", []).append(
+                "no diff: this updates an entry an earlier item in this batch "
+                "would insert, which is not in the library yet"
+            )
+        else:
+            result["diff"] = preview_write_plan(
+                bib["path"], plan, file_path_style=file_path_style
+            )["diff"]
+        if batch_preview is not None:
+            batch_preview.remember(record_with_hint, plan["entry"])
 
     return result
 
