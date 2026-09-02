@@ -248,3 +248,63 @@ def test_preprint_doi_prefixes_has_one_source() -> None:
     # The arXiv entry in the general table must not drift from the dedicated
     # arXiv constant `is_preprint_doi` uses.
     assert PREPRINT_DOI_PREFIXES[0] == PREPRINT_DOI_PREFIX.rstrip("/")
+
+
+# ---------------------------------------------------------------------------
+# arXiv input forms — audit C6 and C7
+# ---------------------------------------------------------------------------
+
+
+def test_every_spelling_of_one_arxiv_paper_classifies_alike() -> None:
+    """C6. A bare ID and a pasted URL name one paper and must take one path.
+
+    They did not: the bare form returned `kind: "url"` pointing at the abs
+    page, the pasted URL returned `kind: "doi"` with the DataCite DOI. So the
+    identifier arXiv papers are actually cited by got neither a DOI nor the
+    provider cascade, and failed outright whenever the translation server was
+    down — while the same paper pasted as a URL captured fine. The inline
+    comment claimed the two matched.
+    """
+    from pzi.identifiers import classify_input
+
+    forms = [
+        "2301.07041",
+        "arXiv:2301.07041",
+        "arXiv:2301.07041v2",
+        "https://arxiv.org/abs/2301.07041",
+        "https://arxiv.org/abs/2301.07041v2",
+        "https://arxiv.org/pdf/2301.07041",
+    ]
+    classified = [classify_input(form) for form in forms]
+    assert {c["kind"] for c in classified} == {"doi"}, [
+        (f, c["kind"]) for f, c in zip(forms, classified, strict=True)
+    ]
+    assert {c["normalized"] for c in classified} == {"10.48550/arxiv.2301.07041"}
+
+
+def test_old_style_arxiv_ids_with_hyphenated_subject_classes_parse() -> None:
+    """C7. The subclass is a word, not a two-letter code.
+
+    `(?:\\.[a-z]{2})?` admitted `math.GT` and `astro-ph.CO` and nothing else,
+    so `cond-mat.mes-hall/0402594` — a perfectly ordinary condensed-matter
+    identifier — fell through and lost its DOI mapping entirely.
+    """
+    from pzi.identifiers import normalize_arxiv_id
+
+    for value in (
+        "math.GT/0309136",
+        "astro-ph.CO/0512345",
+        "cond-mat.mes-hall/0402594",
+        "physics.flu-dyn/0601001",
+        "hep-th/9901001",
+    ):
+        assert normalize_arxiv_id(value) == value, value
+
+
+def test_widening_the_arxiv_pattern_does_not_swallow_dois() -> None:
+    """The risk the C7 widening carries, asserted rather than assumed."""
+    from pzi.identifiers import classify_input, normalize_arxiv_id
+
+    for doi in ("10.1145/3372297", "10.1038/s41586-021-03819-2", "10.1000/xyz123"):
+        assert normalize_arxiv_id(doi) is None, doi
+        assert classify_input(doi)["normalized"] == doi.lower()

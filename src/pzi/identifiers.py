@@ -33,10 +33,15 @@ DOI_PATTERN = re.compile(
 # Without it those URLs yielded no DOI at all. Kept to a lowercase word rather
 # than `[^/]+/`, which would start swallowing arbitrary junk.
 DOI_IN_PATH_PATTERN = re.compile(r"(?i)/doi/(?:[a-z]+/)?(10\.\d{4,9}/[^\s?#]+)")
-# `(?:\.[a-z]{2})?` admits the dotted subject class in old-style arXiv IDs
-# (math.GT/0309136); `[a-z\-]+` alone excluded the dot, so those fell through to
-# being classified as a plain URL and lost their DOI mapping.
-_ARXIV_ID = r"[a-z\-]+(?:\.[a-z]{2})?/\d{7}|\d{4}\.\d{4,5}"
+# `(?:\.[a-z\-]+)?` admits the dotted subject class in old-style arXiv IDs;
+# `[a-z\-]+` alone excluded the dot, so those fell through to being classified
+# as a plain URL and lost their DOI mapping. The subclass was `[a-z]{2}` until
+# it was measured against real IDs: that admits `math.GT` and `astro-ph.CO` but
+# not `cond-mat.mes-hall/0402594` or `physics.flu-dyn/0601001`, whose subclasses
+# are hyphenated words rather than two-letter codes. Nothing here can swallow a
+# DOI: both alternatives require either letters before the `/` or the modern
+# `NNNN.NNNNN` shape, and every use of this pattern is anchored.
+_ARXIV_ID = r"[a-z\-]+(?:\.[a-z\-]+)?/\d{7}|\d{4}\.\d{4,5}"
 ARXIV_ABS_PATTERN = re.compile(rf"(?i)^/abs/({_ARXIV_ID})(v\d+)?/?$")
 ARXIV_PDF_PATTERN = re.compile(rf"(?i)^/pdf/({_ARXIV_ID})(v\d+)?(?:\.pdf)?/?$")
 # A bare arXiv ID, however it was handed to us: Zotero's `archiveID` carries an
@@ -166,14 +171,20 @@ def classify_input(value: str) -> ClassifiedInput:
         # `normalize_arxiv_id` has handled prefixes, versions and old-style
         # subject classes all along; `classify_input` simply never consulted it,
         # so the identifier arXiv papers are *actually* cited by was "not a DOI,
-        # URL, or local PDF path". Resolved through the abs page, which is what
-        # a user pasting the URL would have got.
+        # URL, or local PDF path".
+        #
+        # Resolved to the DataCite DOI, which is what pasting the abs URL gives
+        # (see the arxiv.org host branch below). This used to claim it matched
+        # the pasted-URL path while returning `kind: "url"` instead — so the two
+        # spellings of one identifier took different pipelines: the URL form got
+        # a DOI and the full provider cascade, the bare form got neither and
+        # failed outright whenever the translation server was down.
         arxiv_id = normalize_arxiv_id(stripped)
         if arxiv_id is not None:
             return {
-                "kind": "url",
+                "kind": "doi",
                 "raw": value,
-                "normalized": f"https://arxiv.org/abs/{arxiv_id}",
+                "normalized": f"10.48550/arxiv.{arxiv_id}",
             }
         return {"kind": "unknown", "raw": value, "normalized": None}
 

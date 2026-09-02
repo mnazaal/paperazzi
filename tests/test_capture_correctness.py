@@ -16,13 +16,22 @@ def test_a_bare_arxiv_id_is_accepted(tmp_path: Path) -> None:
 
     `normalize_arxiv_id` has handled prefixes, versions and old-style subject
     classes all along; `classify_input` never consulted it.
+
+    **Assertion changed on purpose (audit C6).** This pinned `kind == "url"`
+    resolving to the abs page, which was the very divergence C6 reports: the
+    same paper pasted as a URL classified as `doi` with the DataCite DOI, so
+    the two spellings took different pipelines and the bare form got neither a
+    DOI nor the provider cascade. The property this test exists for — a bare ID
+    is accepted at all, and prose still is not — is unchanged. The agreement
+    between the spellings is pinned in
+    `test_every_spelling_of_one_arxiv_paper_classifies_alike`.
     """
     from pzi.identifiers import classify_input
 
     for value in ("2301.07041", "arXiv:2301.07041v2", "arxiv:2301.07041", "math.GT/0309136"):
         classified = classify_input(value)
-        assert classified["kind"] == "url", value
-        assert "arxiv.org/abs/" in (classified["normalized"] or ""), value
+        assert classified["kind"] == "doi", value
+        assert (classified["normalized"] or "").startswith("10.48550/arxiv."), value
 
     # Still not a paper identifier.
     assert classify_input("just some words")["kind"] == "unknown"
