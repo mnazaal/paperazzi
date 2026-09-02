@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 import os
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from pathlib import Path
 from typing import Any, TypeAlias, cast
 
@@ -43,6 +43,7 @@ def _update_entry_keeping_pdf_consistent(
     *,
     new_pdf: str | None,
     existing_pdf_paths: set[Path],
+    keep: Collection[str] = (),
 ) -> Any:
     """Run *update*, removing a newly downloaded PDF if the write raises.
 
@@ -56,11 +57,15 @@ def _update_entry_keeping_pdf_consistent(
     Only files this operation created are removed; *existing_pdf_paths* is the
     snapshot taken before the download, so a pre-existing PDF is never touched.
     `capture_local_pdf` already does exactly this around its own write.
+
+    *keep* is what the snapshot alone cannot express: files an *earlier item in
+    the same batch* has already committed. The snapshot is taken once before
+    the batch, so those look new to every later item — see `remove_new_pdf`.
     """
     try:
         return update()
     except BaseException:
-        _remove_new_pdf(new_pdf, existing_pdf_paths)
+        _remove_new_pdf(new_pdf, existing_pdf_paths, keep=keep)
         raise
 
 
@@ -399,6 +404,10 @@ def retry_failed_pdfs(
     succeeded = 0
     failures: list[dict[str, Any]] = []
     warnings: list[str] = []
+    # Files a committed entry in this batch now points at. `existing_pdf_paths`
+    # is a single pre-batch snapshot, so it cannot know about them, and a later
+    # item's rollback would happily unlink one — see `remove_new_pdf`.
+    committed_pdfs: list[str] = []
 
     for index, citekey, pdf_url in needs_retry:
         record = records[index] if index < len(records) else None
@@ -437,13 +446,17 @@ def retry_failed_pdfs(
             ),
             new_pdf=local_pdf_path,
             existing_pdf_paths=existing_pdf_paths,
+            keep=committed_pdfs,
         )
         if not update_result["found"]:
-            _remove_new_pdf(local_pdf_path, existing_pdf_paths)
+            _remove_new_pdf(local_pdf_path, existing_pdf_paths, keep=committed_pdfs)
             failures.append({"citekey": citekey, "error": "citekey disappeared during update"})
             continue
 
         succeeded += 1
+        # From here the entry references this file, so it is no longer "new" as
+        # far as any later item's rollback is concerned.
+        committed_pdfs.append(local_pdf_path)
         if warning:
             warnings.append(f"{citekey}: {warning}")
 

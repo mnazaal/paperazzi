@@ -8,7 +8,7 @@ import sys
 import time as _time
 import urllib.error
 import webbrowser
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from pathlib import Path
 from typing import Any, NamedTuple
 from urllib.parse import quote, urlsplit
@@ -594,9 +594,32 @@ def snapshot_pdf_paths(papers_dir: str) -> set[Path]:
         return set()
 
 
-def remove_new_pdf(path: str | None, existing_paths: set[Path]) -> None:
-    """Remove path only when it was not present in prior snapshot."""
+def remove_new_pdf(
+    path: str | None,
+    existing_paths: set[Path],
+    *,
+    keep: Collection[str] = (),
+) -> None:
+    """Remove path only when it was not present in prior snapshot.
+
+    *keep* names files another item in the same batch is relying on, and is
+    what stops one item's rollback from deleting another item's PDF. The
+    snapshot alone cannot express this: it is taken once before the batch, so
+    every file the batch creates looks removable to every later item — and two
+    items can legitimately share one file. ``resolve_pdf_destination`` returns
+    an *existing* path when the bytes are identical, and two entries plan the
+    same filename whenever their author/year/title render alike, which in a
+    real 23k library is 33 filenames across 67 entries: preprint/published
+    pairs and duplicate imports, exactly the entries whose PDFs are
+    byte-identical.
+
+    So without *keep*, a later item that fails to write its entry unlinks the
+    file an earlier, already-committed entry points at — leaving a live entry
+    referencing a deleted PDF, with nothing reporting it.
+    """
     if not path:
+        return
+    if path in keep:
         return
     candidate = Path(path)
     try:

@@ -933,7 +933,14 @@ def add_records_to_bib_batch(
                     validate_bibtex_roundtrip([plan["entry"]])
                 except Exception as exc:
                     if not dry_run:
-                        _remove_new_pdf(record_pdf, existing_pdf_paths)
+                        # `keep=batch_pdfs`: a record already applied to the
+                        # session may share this exact file, because identical
+                        # bytes under one planned filename resolve to the same
+                        # path. Removing it here would delete the PDF an
+                        # earlier record is about to be committed with.
+                        _remove_new_pdf(
+                            record_pdf, existing_pdf_paths, keep=batch_pdfs
+                        )
                     results.append(_error_result(
                         message="failed to import record", errors=[str(exc)],
                         dry_run=dry_run, warnings=[], bib=bib,
