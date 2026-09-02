@@ -58,9 +58,10 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
             for change in result["changed"]:
                 print(f"  {change['citekey']}: {Path(change['new_pdf']).name}",
                       file=stdout)
-            if result.get("skipped_cosmetic") and not getattr(args, "all", False):
+            skipped_cosmetic = result.get("skipped_cosmetic") or 0
+            if skipped_cosmetic and not getattr(args, "all", False):
                 print(
-                    f"  ({result['skipped_cosmetic']} name(s) differ only "
+                    f"  ({skipped_cosmetic} name(s) differ only "
                     "cosmetically and were left alone; --all includes them)",
                     file=stderr,
                 )

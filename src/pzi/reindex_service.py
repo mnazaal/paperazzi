@@ -57,6 +57,10 @@ class ReindexResult(TypedDict):
     #: Where the pre-rewrite library was copied, or ``None`` when nothing was
     #: rewritten (a dry run, or a library already matching ``citekey_format``).
     backup_path: NotRequired[str | None]
+    #: Attached files whose name differs from the template only in case and
+    #: punctuation, which ``--rename-files`` leaves alone without ``--all``.
+    #: Only the filename pass sets it; the citekey pass does not.
+    skipped_cosmetic: NotRequired[int]
 
 
 def _entries_with_planned_citekeys(
