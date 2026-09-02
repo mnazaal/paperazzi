@@ -458,3 +458,76 @@ def test_resolution_match_year_delegates_to_the_one_coercer() -> None:
     for value in (123, "2024", "2024a", True, False, -5, "-5", "", None, "abc", "  2024  "):
         record = {"year": value}
         assert resolution_match._year(record) == as_int_year(value), value
+
+
+# ---------------------------------------------------------------------------
+# Title folding — audit C5
+# ---------------------------------------------------------------------------
+
+
+def test_no_known_special_letter_vanishes_from_a_title() -> None:
+    """The invariant behind C5: folding may change a letter, never delete it.
+
+    `normalize_title` used NFKD then `encode("ascii", "ignore")`, and NFKD has
+    no combining form for stroke/bar letters — so they were dropped outright.
+    `Søren` became `sren` and `Đorđe` became `ore`: a title silently missing a
+    letter, matching nothing, with nothing to say why.
+
+    Asserted over the author table rather than a list of examples, so a
+    character added there in future is covered here without anyone remembering
+    to add it twice.
+    """
+    from pzi.similarity import _TRANSLITERATIONS, normalize_title
+
+    for code_point in _TRANSLITERATIONS:
+        char = chr(code_point)
+        folded = normalize_title(f"aaa {char}bbb ccc")
+        assert "bbb" in folded, char
+        middle = [w for w in folded.split() if "bbb" in w][0]
+        assert middle != "bbb", (
+            f"{char!r} vanished from a title instead of folding to a letter"
+        )
+
+
+def test_title_folding_keeps_umlauts_unexpanded_on_purpose() -> None:
+    """Titles and authors fold differently, and the difference is deliberate.
+
+    A surname has a conventional two-letter spelling its bearer is published
+    under, so the author path expands `ö → oe` (`Müller`/`Mueller`). A title is
+    not a name: the one such title in a real 23k library is `Discrete Adjoint
+    Schrödinger Bridge Sampler`, which English-language sources ASCII-fold as
+    `Schrodinger`. Expanding here would introduce the mismatch it looks like it
+    prevents.
+
+    Pinned so the two tables are not "tidied" into one.
+    """
+    from pzi.similarity import _to_ascii, normalize_title
+
+    assert normalize_title("Schrödinger Bridge") == "schrodinger bridge"
+    assert normalize_title("Über Netzwerke") == "uber netzwerke"
+    # The author path, on the same characters, deliberately does not agree.
+    assert "schroedinger" in _to_ascii("Schrödinger").lower()
+
+
+def test_title_folding_decodes_entities_before_comparing() -> None:
+    """`&amp;` folded to the token `amp` — a word in neither title.
+
+    Providers emit entities (DBLP `&apos;`) and a real library holds
+    `Efficient &amp; Scalable`, so this reached comparisons in practice.
+    """
+    from pzi.similarity import normalize_title, title_tokens
+
+    assert normalize_title("Efficient &amp; Scalable Video") == (
+        "efficient scalable video"
+    )
+    assert "amp" not in title_tokens("Efficient &amp; Scalable Video")
+
+
+def test_stroke_letters_fold_to_the_letter_a_keyboard_would_type() -> None:
+    """True digraphs expand; stroke and bar letters lose the stroke."""
+    from pzi.similarity import normalize_title
+
+    assert normalize_title("Søren Bjørn") == "soren bjorn"
+    assert normalize_title("Łukasz Đorđe") == "lukasz dorde"
+    assert normalize_title("Halldór Þorgeirsson") == "halldor thorgeirsson"
+    assert normalize_title("Straße Æon Œuvre") == "strasse aeon oeuvre"

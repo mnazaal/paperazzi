@@ -193,12 +193,50 @@ def _deduplicate_identities(identities: list[Identity]) -> list[Identity]:
 
 _NON_ALNUM = re.compile(r"[^a-z0-9]+")
 
+#: Letters NFKD cannot decompose, so `encode("ascii", "ignore")` **deletes**
+#: them rather than folding them to a base letter: `Søren` became `sren`,
+#: `Đorđe` became `ore`, `Halldór Þorgeirsson` became `halldor orgeirsson`. A
+#: title silently missing a letter matches nothing, and nothing said so.
+#:
+#: Deliberately *not* the author table `_TRANSLITERATIONS`, and the difference
+#: is the point. That table also expands `ö → oe` and `ü → ue`, because a
+#: surname has a conventional two-letter spelling its bearer is published under
+#: (`Müller`/`Mueller`). A title is not a name: the one title in a real 23k
+#: library carrying such a character is `Discrete Adjoint Schrödinger Bridge
+#: Sampler`, and English-language sources ASCII-fold that as `Schrodinger`, not
+#: `Schroedinger` — so expanding here would *introduce* the mismatch it looks
+#: like it prevents. Umlauts already fold to a base letter and are left to do
+#: so; only the characters that would otherwise vanish are listed.
+#:
+#: True digraphs (`ß`, `æ`, `œ`) expand, because they really are two letters.
+#: Stroke and bar letters (`ø`, `ł`, `đ`, `ħ`) lose the stroke, matching how
+#: the same words are written when an ASCII keyboard is all there is.
+_TITLE_FOLDINGS = {
+    ord("ß"): "ss",
+    ord("æ"): "ae", ord("Æ"): "Ae",
+    ord("œ"): "oe", ord("Œ"): "Oe",
+    ord("ø"): "o", ord("Ø"): "O",
+    ord("ł"): "l", ord("Ł"): "L",
+    ord("đ"): "d", ord("Đ"): "D",
+    ord("ð"): "d", ord("Ð"): "D",
+    ord("þ"): "th", ord("Þ"): "Th",
+    ord("ħ"): "h", ord("Ħ"): "H",
+    ord("ı"): "i",
+}
+
 
 def normalize_title(title: str | None) -> str:
+    """A title reduced to lowercase ASCII words, for comparison only.
+
+    Entities are decoded first: providers emit them (DBLP `&apos;`, and a real
+    library holds `Efficient &amp; Scalable`), and folding one left the token
+    `amp` in every comparison — a word in neither title.
+    """
     if title is None:
         return ""
+    decoded = html.unescape(title).translate(_TITLE_FOLDINGS)
     ascii_title = (
-        unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode("ascii")
+        unicodedata.normalize("NFKD", decoded).encode("ascii", "ignore").decode("ascii")
     )
     return _NON_ALNUM.sub(" ", ascii_title.lower()).strip()
 
