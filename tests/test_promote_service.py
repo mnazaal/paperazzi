@@ -6,7 +6,7 @@ import pytest
 
 import pzi.promote_service as promote_service
 import pzi.update_service as update_service
-from pzi import promote_ledger
+from pzi import ledger
 from pzi.add_service import add_record_with_bib
 from pzi.bib_repository import ConcurrentEditError, StalePlanError
 from pzi.config import BibResolutionFailure, load_bib_target
@@ -2443,7 +2443,7 @@ def _ledger_setup(tmp_path, **config_kwargs):
         tmp_path, bib_path, pzi_data_home=str(data_home), **config_kwargs
     )
     _seed_bib_with_preprint(tmp_path, bib_path, config_path)
-    return config_path, promote_ledger.ledger_path(data_home)
+    return config_path, ledger.ledger_path(data_home, ledger.PROMOTE_FILENAME)
 
 
 def _promote(config_path, tmp_path, **kwargs):
@@ -2463,14 +2463,14 @@ def test_promote_records_a_preprint_that_is_still_unpublished(tmp_path):
     result = _promote(config_path, tmp_path, **_NOTHING_FOUND)
 
     assert result["summary"]["skipped_no_candidate"] == 1
-    assert promote_ledger.load(ledger_file)["bibs"]["ml"].keys() == {"smith2024graph"}
+    assert ledger.load(ledger_file)["bibs"]["ml"].keys() == {"smith2024graph"}
 
 
 def test_promote_skips_a_preprint_it_checked_inside_the_horizon(tmp_path):
     """The whole point: the second sweep must not redo the first sweep's work."""
     config_path, ledger_file = _ledger_setup(tmp_path)
     _promote(config_path, tmp_path, **_NOTHING_FOUND)
-    assert promote_ledger.load(ledger_file)["bibs"]["ml"]
+    assert ledger.load(ledger_file)["bibs"]["ml"]
 
     def _must_not_be_called(query: str, *, server_url: str):
         raise AssertionError("a recently-checked preprint was looked up again")
@@ -2492,11 +2492,11 @@ def test_promote_re_asks_once_the_horizon_has_passed(tmp_path):
     _promote(config_path, tmp_path, **_NOTHING_FOUND)
 
     # Age the recorded answer past the horizon, exactly as the clock would.
-    stale = promote_ledger.record_checked(
+    stale = ledger.record_checked(
         {}, "ml", "smith2024graph",
-        now=promote_ledger.utc_now() - timedelta(days=31),
+        now=ledger.utc_now() - timedelta(days=31),
     )
-    promote_ledger.save(ledger_file, stale)
+    ledger.save(ledger_file, stale)
 
     result = _promote(config_path, tmp_path, **_NOTHING_FOUND)
 
@@ -2519,7 +2519,7 @@ def test_promote_does_not_record_when_a_provider_failed(tmp_path):
 
     assert result["summary"]["skipped_no_candidate"] == 1
     assert result["summary"]["provider_errors"] >= 1
-    assert promote_ledger.load(ledger_file) == {}
+    assert ledger.load(ledger_file) == {}
 
 
 def test_promote_records_under_dry_run_but_still_does_not_touch_the_bib(tmp_path):
@@ -2530,7 +2530,7 @@ def test_promote_records_under_dry_run_but_still_does_not_touch_the_bib(tmp_path
 
     _promote(config_path, tmp_path, dry_run=True, **_NOTHING_FOUND)
 
-    assert promote_ledger.load(ledger_file)["bibs"]["ml"]
+    assert ledger.load(ledger_file)["bibs"]["ml"]
     assert bib_path.read_text() == before
 
 
@@ -2557,7 +2557,7 @@ def test_a_corrupt_ledger_does_not_fail_the_run(tmp_path):
     assert result["status"] == "ok"
     assert result["summary"]["checked"] == 1
     # And the run repairs it on the way out.
-    assert promote_ledger.load(ledger_file)["bibs"]["ml"]
+    assert ledger.load(ledger_file)["bibs"]["ml"]
 
 
 # --- Chunked writes (item 570) --------------------------------------------

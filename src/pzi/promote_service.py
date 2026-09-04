@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict, cast
 
-from pzi import promote_ledger
+from pzi import ledger
 from pzi.add_planning import next_pdf_candidate_for_config
 from pzi.bib_repository import (
     BatchWriteSession,
@@ -202,9 +202,9 @@ def promote_bib(
     # The negative-lookup ledger. Loaded before the read so a disabled horizon
     # costs nothing at all: nothing is consulted and nothing is written.
     recheck_after_days = config["promote_recheck_after_days"]
-    ledger_file = promote_ledger.ledger_path(config["pzi_data_home"])
-    ledger = promote_ledger.load(ledger_file) if recheck_after_days > 0 else {}
-    ledger_now = promote_ledger.utc_now()
+    ledger_file = ledger.ledger_path(config["pzi_data_home"], ledger.PROMOTE_FILENAME)
+    ledger_state = ledger.load(ledger_file) if recheck_after_days > 0 else {}
+    ledger_now = ledger.utc_now()
     #: Citekeys this run confirmed are still unpublished, written once at the
     #: end rather than per item.
     checked_negative: list[str] = []
@@ -269,8 +269,8 @@ def promote_bib(
         if mark_resolved and _RESOLVED_TAG in (record.get("tags") or []):
             # Already promoted on a previous --mark-resolved run.
             return "skipped_already_resolved"
-        if promote_ledger.is_recently_checked(
-            ledger,
+        if ledger.is_recently_checked(
+            ledger_state,
             bib["name"],
             str(record.get("citekey")),
             now=ledger_now,
@@ -613,13 +613,13 @@ def promote_bib(
     # stays read-only against the `.bib`. Pruning here is what bounds the file.
     if recheck_after_days > 0 and checked_negative:
         for citekey in checked_negative:
-            ledger = promote_ledger.record_checked(
-                ledger, bib["name"], citekey, now=ledger_now
+            ledger_state = ledger.record_checked(
+                ledger_state, bib["name"], citekey, now=ledger_now
             )
-        promote_ledger.save(
+        ledger.save(
             ledger_file,
-            promote_ledger.prune(
-                ledger, now=ledger_now, horizon_days=recheck_after_days
+            ledger.prune(
+                ledger_state, now=ledger_now, horizon_days=recheck_after_days
             ),
         )
 

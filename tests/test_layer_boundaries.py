@@ -80,10 +80,11 @@ CORE: frozenset[str] = frozenset(
         # and no service imports, which is what lets both `check_service` and
         # `promote_planning` import it without a cycle.
         "provider_cascade",
-        # Promotion's negative-lookup ledger. CORE like `config` and
+        # The "already answered, do not re-ask" sidecar, shared by
+        # `update --promote` and `library check`. CORE like `config` and
         # `metadata_cache`: it reads and writes one JSON file and imports
         # nothing but stdlib and `fileio`.
-        "promote_ledger",
+        "ledger",
         # Promotion's candidate discovery, split out of `promote_service`.
         # CORE rather than SERVICE beside the service it came from: it only
         # queries providers and scores what they return, so nothing it imports

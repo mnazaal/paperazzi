@@ -1,22 +1,39 @@
-"""Remember that a promote lookup found nothing, so the next sweep can skip it.
+"""Remember that a per-entry lookup was already answered, so the next sweep can skip it.
 
-`update --promote` is a periodic audit: most of a working library is preprints,
-and most preprints are not published yet, so the overwhelmingly common outcome
-is "asked every provider, found nothing".  Without a memory of that answer each
-sweep redoes the entire search — at ~13k candidates and seconds apiece, that is
-the difference between a periodic audit and a thing you run once.
+Two commands are periodic audits over the whole library, and both are unusable
+without a memory between runs:
 
-Only *negative* answers live here.  A promoted entry stops being a candidate on
-its own (promote strips `arxiv_id`, so `has_preprint_identity` goes False) and
-`--mark-resolved` covers the keep-both case, so a positive marker would be
-redundant with two mechanisms that already exist.  Provider *failures* are
-deliberately not recorded either: an outage is not an answer, and freezing one
-into a month of silence would hide exactly the entries the sweep exists to
-find.
+* `update --promote` — most of a working library is preprints and most are not
+  published yet, so the common outcome is "asked every provider, found
+  nothing".  At ~13k candidates and seconds apiece, remembering that answer is
+  the difference between a periodic audit and a thing you run once.
+* `library check` — the politeness gate floors it at 0.6 s per entry, so a 22k
+  library is ~3.7 hours.  Without a ledger every run re-audits every entry that
+  was already fine, which is why `--limit` (audit the first N) was the only way
+  to run it at all.
 
-The ledger is a sidecar under `pzi_data_home`, never the `.bib`, so `--dry-run`
-stays read-only against the library while still learning from what it looked
-up.
+**Only the answer that means "stop asking" is recorded**, and each command's
+version of that is the same shape:
+
+* promote records a *negative* — nothing found.  A promoted entry stops being a
+  candidate on its own (promote strips `arxiv_id`, so `has_preprint_identity`
+  goes False) and `--mark-resolved` covers the keep-both case, so a positive
+  marker would be redundant with two mechanisms that already exist.
+* check records a *verified* verdict.  `problematic` is the thing the user has
+  not fixed yet and must be re-asked every run; recording it would turn the
+  ledger into a way to stop being told about a real defect.
+
+Provider *failures* are recorded by neither: an outage is not an answer, and
+freezing one into a month of silence would hide exactly the entries the sweep
+exists to find.  That is why `could_not_verify` is not stored.
+
+The ledger is a sidecar under `pzi_data_home`, never the `.bib`, so both
+commands stay read-only against the library while still learning from what they
+looked up — and so a check run cannot churn 22k entries of git history.
+
+Each caller owns a filename (see `PROMOTE_FILENAME`, `CHECK_FILENAME`) and the
+state within a file is keyed by bib name, so two libraries and two commands
+never read each other's answers.
 
 State is a plain dict and every function that reasons about it is pure; only
 `load` and `save` touch disk.  Unreadable or malformed state is treated as
@@ -37,18 +54,26 @@ from typing import Any
 
 from pzi.fileio import fsync_parent_dir
 
-#: Sidecar filename under ``pzi_data_home``.
-LEDGER_FILENAME = "promote-checked.json"
+#: Sidecar filenames under ``pzi_data_home``, one per calling command. Separate
+#: files rather than one keyed by command: the two horizons are set
+#: independently, and pruning one must not walk the other's entries.
+PROMOTE_FILENAME = "promote-checked.json"
+CHECK_FILENAME = "check-verified.json"
 
 #: Schema version.  A file whose version this code does not recognise is
-#: treated as empty rather than migrated: the content is a cache of negative
-#: lookups, so discarding it costs one sweep and needs no migration code.
+#: treated as empty rather than migrated: the content is a cache of answers
+#: already given, so discarding it costs one sweep and needs no migration code.
 LEDGER_VERSION = 1
 
 
-def ledger_path(data_home: str | Path) -> Path:
-    """Where the ledger lives for a given ``pzi_data_home``."""
-    return Path(str(data_home)) / LEDGER_FILENAME
+def ledger_path(data_home: str | Path, filename: str) -> Path:
+    """Where a ledger lives for a given ``pzi_data_home``.
+
+    *filename* is explicit at every call site rather than defaulted: a default
+    would make "which ledger" invisible at the one place the two commands could
+    silently end up sharing a file.
+    """
+    return Path(str(data_home)) / filename
 
 
 def utc_now() -> datetime:
