@@ -794,6 +794,21 @@ def xdg_data_home(home_dir: str) -> str:
     return _xdg_base_dir("XDG_DATA_HOME", home_dir, ".local/share")
 
 
+def xdg_cache_home(home_dir: str) -> str:
+    """Return ``$XDG_CACHE_HOME`` (if absolute) else ``home_dir/.cache``."""
+    return _xdg_base_dir("XDG_CACHE_HOME", home_dir, ".cache")
+
+
+def default_cache_home(home_dir: str) -> str:
+    """Return the default pzi cache home: ``<xdg-cache-home>/pzi``.
+
+    Cache, not data: everything under here is derived from a `.bib` and is
+    rebuilt on the next read, so ``rm -rf`` on it is always safe and needs no
+    command to do it. `pzi_data_home` is for state that cannot be regenerated.
+    """
+    return os.path.join(xdg_cache_home(home_dir), "pzi")
+
+
 def default_data_home(home_dir: str) -> str:
     """Return the default pzi data home: ``<xdg-data-home>/pzi``."""
     return os.path.join(xdg_data_home(home_dir), "pzi")

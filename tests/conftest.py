@@ -247,15 +247,21 @@ def _clear_xdg_env(request, monkeypatch):
     falls back to the injected home_dir / ``$HOME`` and stays hermetic.
 
     Without this, a developer whose real environment sets ``XDG_CONFIG_HOME``
-    / ``XDG_DATA_HOME`` would have those leak into tests that assert
-    home-relative defaults (config path, ``pzi_data_home``) — and worse, tests
-    could write into the developer's real config/data dirs. Tests that
-    specifically exercise XDG behavior re-set these via ``monkeypatch.setenv``.
+    / ``XDG_DATA_HOME`` / ``XDG_CACHE_HOME`` would have those leak into tests
+    that assert home-relative defaults (config path, ``pzi_data_home``, the
+    parse cache) — and worse, tests could write into the developer's real
+    config/data/cache dirs. Tests that specifically exercise XDG behavior
+    re-set these via ``monkeypatch.setenv``.
+
+    ``XDG_CACHE_HOME`` joined the list when `pzi.parse_cache` landed: it is the
+    first thing pzi *writes* under a cache dir, so before that the variable was
+    read by nothing and clearing it would have been decoration.
     """
     if _is_live_test(request):
         return
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
 
 
 @pytest.fixture

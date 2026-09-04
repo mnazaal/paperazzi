@@ -26,7 +26,7 @@ import portalocker
 from bibtexparser.library import Library
 from bibtexparser.model import Entry as BibtexEntryV2
 
-from pzi import exit_codes
+from pzi import exit_codes, parse_cache
 from pzi.bib_merge import (
     _USER_OWNED_ENTRY_FIELDS,
     MergeableEntry,
@@ -300,11 +300,25 @@ def read_bib_file_raw_with_failures(path: str) -> tuple[ReadBibResult, list[str]
         return {"entries": [], "records": []}, []
 
     text = read_text_utf8(path)
+    # The one place a read is cached. Every read site in pzi funnels through
+    # this function, and the write path parses separately through
+    # `parse_bib_library`, so this covers all of the former and none of the
+    # latter — see `pzi.parse_cache` for why a content digest is the key.
+    cache_dir = parse_cache.default_cache_dir()
+    digest = parse_cache.digest_for(text)
+    cached = parse_cache.load(cache_dir, path, digest)
+    if cached is not None:
+        return cached
+
     entries, failures = parse_bibtex_with_failures(text)
     records: list[NormalizedRecord] = [bibtex_entry_to_record(entry) for entry in entries]
     for record, entry in zip(records, entries):
         resolve_file_field(record, entry, path)
-    return {"entries": entries, "records": records}, failures
+    result: ReadBibResult = {"entries": entries, "records": records}
+    parse_cache.store(
+        cache_dir, path, digest, result, failures, source_bytes=len(text.encode("utf-8"))
+    )
+    return result, failures
 
 
 def _resolve_write_target(path: str) -> Path:

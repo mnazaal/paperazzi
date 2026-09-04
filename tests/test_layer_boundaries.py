@@ -85,6 +85,9 @@ CORE: frozenset[str] = frozenset(
         # `metadata_cache`: it reads and writes one JSON file and imports
         # nothing but stdlib and `fileio`.
         "ledger",
+        # The read-path parse cache. CORE for the same reason as `ledger`:
+        # one JSON file, stdlib plus `config`.
+        "parse_cache",
         # Promotion's candidate discovery, split out of `promote_service`.
         # CORE rather than SERVICE beside the service it came from: it only
         # queries providers and scores what they return, so nothing it imports
