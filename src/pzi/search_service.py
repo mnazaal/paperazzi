@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import NotRequired, TypedDict, cast
 
 from pzi.bib_repository import read_bib_file_with_notices
+from pzi.bib_service import resolve_sort_field, sort_records
 from pzi.bibtex import normalize_authors
 from pzi.config import BibResolutionFailure, load_bib_target
 from pzi.errors import REASON_CONFIG, REASON_USAGE
@@ -30,6 +31,16 @@ class SearchResult(TypedDict):
     status: str
     bib_name: str | None
     matches: list[SearchMatch]
+    #: How many entries matched before `offset`/`limit` were applied. `matches`
+    #: is the page; this is the answer to "how many are there". Without it a
+    #: paged caller cannot tell a last page from a truncated one.
+    total: int
+    offset: int
+    #: The page size in force, or `None` for "all of them". Unlike `entries`,
+    #: search does not default to a page (decision 42): a default cap would
+    #: silently redefine every existing `pzi search ... | wc -l`.
+    limit: int | None
+    sort: str
     errors: list[str]
     #: Blocks the parser dropped (e.g. a duplicate citekey). Non-fatal: the
     #: command succeeded and is reporting what it could read. Absent on the
@@ -47,31 +58,41 @@ def search_bib(
     author: str | None = None,
     year: int | None = None,
     tag: str | None = None,
+    venue: str | None = None,
+    doi: str | None = None,
+    sort: str | None = None,
+    offset: int = 0,
+    limit: int | None = None,
 ) -> SearchResult:
     """Search a bib with combined filters (AND logic).
 
     At least one filter must be provided.  Matches are case-insensitive.
+
+    *sort*, *offset* and *limit* page the results the same way `list_entries`
+    pages a listing, through the same `sort_records` — a common term on a 22k
+    library matched 8029 entries and printed all of them in citekey order.
+    *limit* defaults to `None`, meaning all of them, so no existing invocation
+    changes meaning (decision 42); `entries` defaults to a page because it has
+    always done so.
     """
-    if query is None and author is None and year is None and tag is None:
-        return {
-            "status": "error",
-            "bib_name": None,
-            "matches": [],
-            "errors": ["provide at least one of --query, --author, --year, --tag"],
-            "reason": REASON_USAGE,
-        }
+    if all(f is None for f in (query, author, year, tag, venue, doi)):
+        return _failed_search(
+            bib_name=None,
+            errors=["provide at least one of --query, --author, --year, --tag, --venue, --doi"],
+            reason=REASON_USAGE,
+            sort=sort, offset=offset, limit=limit,
+        )
 
     resolved = load_bib_target(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector
     )
     if isinstance(resolved, BibResolutionFailure):
-        return {
-            "status": "error",
-            "bib_name": None,
-            "matches": [],
-            "errors": resolved.errors,
-            "reason": REASON_CONFIG,
-        }
+        return _failed_search(
+            bib_name=None,
+            errors=resolved.errors,
+            reason=REASON_CONFIG,
+            sort=sort, offset=offset, limit=limit,
+        )
     _config, bib = resolved
 
     normalized_tag = None
@@ -81,13 +102,12 @@ def search_bib(
             # `--tag "!!"` normalizes to nothing. Falling through with
             # `normalized_tag = None` dropped the filter entirely and returned
             # *every* entry — the opposite of a filter that matched nothing.
-            return {
-                "status": "error",
-                "bib_name": bib["name"],
-                "matches": [],
-                "errors": [f"tag {tag!r} contains no searchable characters"],
-                "reason": REASON_USAGE,
-            }
+            return _failed_search(
+                bib_name=bib["name"],
+                errors=[f"tag {tag!r} contains no searchable characters"],
+                reason=REASON_USAGE,
+                sort=sort, offset=offset, limit=limit,
+            )
         normalized_tag = tag_norm[0]
 
     read_result, dropped = read_bib_file_with_notices(bib["path"])
@@ -104,6 +124,8 @@ def search_bib(
             author=author,
             year=year,
             tag=normalized_tag,
+            venue=venue,
+            doi=doi,
         )
         if match_result is not None:
             matches.append(
@@ -117,13 +139,52 @@ def search_bib(
                 }
             )
 
-    matches.sort(key=lambda m: m["citekey"])
+    # Sorted through the same `sort_records` as `list_entries`, so `--sort year`
+    # means the same thing in both commands. A `SearchMatch` carries the fields
+    # the sort reads, so it is its own record here.
+    sort_field = resolve_sort_field(sort)
+    matches = sort_records(matches, sort_field)
+    total = len(matches)
+    page = matches[offset:] if limit is None else matches[offset : offset + limit]
     return {
         "status": "ok",
         "bib_name": bib["name"],
-        "matches": matches,
+        "matches": page,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "sort": sort_field,
         "errors": [],
         "warnings": dropped,
+    }
+
+
+def _failed_search(
+    *,
+    bib_name: str | None,
+    errors: list[str],
+    reason: str,
+    sort: str | None,
+    offset: int,
+    limit: int | None,
+) -> SearchResult:
+    """A refusal, carrying the paging keys a successful result would have.
+
+    `SearchResult` is a total TypedDict, so the three failure paths must fill
+    them too rather than leave a caller guessing whether a missing `total`
+    means zero. One constructor, so a key added above cannot be filled on the
+    success path and forgotten on all three of these.
+    """
+    return {
+        "status": "error",
+        "bib_name": bib_name,
+        "matches": [],
+        "total": 0,
+        "offset": offset,
+        "limit": limit,
+        "sort": resolve_sort_field(sort),
+        "errors": errors,
+        "reason": reason,
     }
 
 
@@ -134,6 +195,8 @@ def _match_record(
     author: str | None,
     year: int | None,
     tag: str | None,
+    venue: str | None = None,
+    doi: str | None = None,
 ) -> list[str] | None:
     """Return matched field names if all active filters match, else None."""
     matched: list[str] = []
@@ -173,6 +236,30 @@ def _match_record(
         stored = normalize_tags(tags) if isinstance(tags, list) else []
         if tag in stored:
             matched.append("tags")
+        else:
+            return None
+
+    if venue is not None:
+        # `journal` and `booktitle` are the same question asked of an article
+        # and of a proceedings paper, so one flag searches both rather than
+        # making the user know which kind of entry they are looking for.
+        venue_lower = venue.lower()
+        hit = False
+        for field in ("journal", "booktitle", "venue"):
+            value = record.get(field)
+            if isinstance(value, str) and venue_lower in value.lower():
+                matched.append(field)
+                hit = True
+        if not hit:
+            return None
+
+    if doi is not None:
+        # Substring, like every other filter here, so a bare suffix finds the
+        # entry — but case-folded, because DOIs are case-insensitive by spec and
+        # a library mixes the casings its sources happened to use.
+        value = record.get("doi")
+        if isinstance(value, str) and doi.lower() in value.lower():
+            matched.append("doi")
         else:
             return None
 

@@ -30,10 +30,10 @@ def run_search_command(
     search_bib_fn: SearchService = search_bib,
 ) -> int:
     """Run `pzi search` using injected service for thin-I/O testing."""
-    if not any((args.query, args.author, args.year, args.tag)):
+    if not any((args.query, args.author, args.year, args.tag, args.venue, args.doi)):
         return emit_usage_error(
             args,
-            "at least one of --query, --author, --year, --tag is required",
+            "at least one of --query, --author, --year, --tag, --venue, --doi is required",
             command_path=("search",),
             stdout=stdout,
             stderr=stderr,
@@ -58,6 +58,11 @@ def run_search_command(
             author=args.author,
             year=args.year,
             tag=args.tag,
+            venue=args.venue,
+            doi=args.doi,
+            sort=getattr(args, "sort", None),
+            offset=getattr(args, "offset", 0) or 0,
+            limit=getattr(args, "limit", None),
         )
         if result["status"] != "ok":
             ok = False
@@ -71,6 +76,16 @@ def run_search_command(
         if result["status"] == "ok":
             print_lines(render_search_matches(result), stdout)
             print_read_warnings(result, stderr)
+            shown = len(result.get("matches", []))
+            total = result.get("total", shown)
+            if shown < total:
+                # Only when a page actually hid something. The counts go to
+                # stderr so a paged `pzi search ... | wc -l` still counts rows.
+                print(
+                    f"showing {shown} of {total} matches "
+                    f"(--offset {result.get('offset', 0)}); raise --limit for more",
+                    file=stderr,
+                )
             if not result.get("matches"):
                 print("no matches", file=stderr)
         else:

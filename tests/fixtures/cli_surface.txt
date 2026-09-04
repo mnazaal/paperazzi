@@ -147,10 +147,15 @@ pzi pdf retry
 pzi search
     --author dest=author
     --config dest=config
+    --doi dest=doi
     --json dest=json nargs=0
+    --limit dest=limit
+    --offset dest=offset default=0
     --query dest=query
+    --sort dest=sort choices=['author', 'citekey', 'title', 'year'] default='citekey'
     --tag dest=tag
     --target dest=target action=append
+    --venue dest=venue
     --year dest=year
 
 pzi server

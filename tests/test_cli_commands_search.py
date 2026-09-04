@@ -7,10 +7,25 @@ from pzi import exit_codes
 from pzi.commands.search import run_search_command
 
 
+def _args(**overrides) -> Namespace:
+    """A `pzi search` Namespace with every flag the parser supplies.
+
+    Built here rather than spelled out per test: each test used to construct
+    its own partial `Namespace`, so adding `--venue` and `--doi` to the parser
+    broke all five at once with `AttributeError` — a failure about the fixture,
+    not about the runner. One builder means the next flag is one line.
+    """
+    base = dict(
+        query=None, author=None, year=None, tag=None, venue=None, doi=None,
+        sort="citekey", offset=0, limit=None,
+    )
+    return Namespace(**{**base, **overrides})
+
+
 def test_run_search_command_requires_at_least_one_filter(tmp_path: Path) -> None:
     stdout = StringIO()
     stderr = StringIO()
-    args = Namespace(query=None, author=None, year=None, tag=None)
+    args = _args()
 
     exit_code = run_search_command(
         args,
@@ -24,7 +39,8 @@ def test_run_search_command_requires_at_least_one_filter(tmp_path: Path) -> None
     assert exit_code == 2
     assert stdout.getvalue() == ""
     assert stderr.getvalue() == (
-        "pzi search: error: at least one of --query, --author, --year, --tag is required\n"
+        "pzi search: error: at least one of --query, --author, --year, --tag, "
+        "--venue, --doi is required\n"
         "Run 'pzi search --help' for usage.\n"
     )
 
@@ -49,7 +65,7 @@ def test_run_search_command_searches_each_target_and_renders_matches(tmp_path: P
 
     stdout = StringIO()
     stderr = StringIO()
-    args = Namespace(query="graph", author="Smith", year="2024", tag="ml")
+    args = _args(query="graph", author="Smith", year="2024", tag="ml")
 
     exit_code = run_search_command(
         args,
@@ -62,26 +78,25 @@ def test_run_search_command_searches_each_target_and_renders_matches(tmp_path: P
     )
 
     assert exit_code == 0
-    assert calls == [
-        {
+    def _expected(selector: str) -> dict:
+        return {
             "config_path": str(tmp_path / "config.toml"),
             "home_dir": str(tmp_path),
-            "bib_selector": "main",
+            "bib_selector": selector,
             "query": "graph",
             "author": "Smith",
             "year": "2024",
             "tag": "ml",
-        },
-        {
-            "config_path": str(tmp_path / "config.toml"),
-            "home_dir": str(tmp_path),
-            "bib_selector": "ml",
-            "query": "graph",
-            "author": "Smith",
-            "year": "2024",
-            "tag": "ml",
-        },
-    ]
+            "venue": None,
+            "doi": None,
+            "sort": "citekey",
+            "offset": 0,
+            "limit": None,
+        }
+
+    # Every filter and paging argument is forwarded per target, unchanged: the
+    # runner picks the library, the service does the searching.
+    assert calls == [_expected("main"), _expected("ml")]
     assert (
         stdout.getvalue()
         == "main2024\t2024\tGraph Paper\t[matched: title]\nml2024\t2024\tGraph Paper\t[matched: title]\n"
@@ -97,7 +112,7 @@ def test_run_search_command_returns_failure_when_any_target_fails(tmp_path: Path
 
     stdout = StringIO()
     stderr = StringIO()
-    args = Namespace(query="graph", author=None, year=None, tag=None)
+    args = _args(query="graph")
 
     exit_code = run_search_command(
         args,
@@ -140,7 +155,7 @@ def test_run_search_command_json_merges_targets_into_one_document(tmp_path: Path
 
     stdout = StringIO()
     stderr = StringIO()
-    args = Namespace(query="graph", author=None, year=None, tag=None, json=True)
+    args = _args(query="graph", json=True)
 
     exit_code = run_search_command(
         args,
@@ -172,7 +187,7 @@ def test_search_with_no_matches_writes_nothing_to_stdout(tmp_path) -> None:
 
     stdout = StringIO()
     stderr = StringIO()
-    args = Namespace(query="nothing", author=None, year=None, tag=None)
+    args = _args(query="nothing")
 
     exit_code = run_search_command(
         args,

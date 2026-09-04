@@ -556,12 +556,25 @@ def search(
     author: str | None = None,
     year: int | None = None,
     tag: str | None = None,
+    venue: str | None = None,
+    doi: str | None = None,
+    sort: str | None = None,
+    offset: int = 0,
+    limit: int | None = None,
     config_path: str | None = None,
     library: str | None = None,
 ) -> list[SearchMatch]:
     """Return entries matching the given filters, combined with AND.
 
     At least one filter is required. Matching is case-insensitive.
+
+    *venue* matches ``journal``, ``booktitle`` or ``venue``; *doi* is a
+    case-insensitive substring, so a bare suffix finds the entry.
+
+    *sort*, *offset* and *limit* page the result the same way :func:`entries`
+    does, through the same ordering. *limit* defaults to `None` — every match —
+    because search has never capped its output and a default page would change
+    what existing callers receive (decision 42).
     """
     # Checked here rather than left to the service, which words the same refusal
     # as "provide at least one of --query, --author, --year, --tag" — flag names
@@ -576,9 +589,24 @@ def search(
     # the warning would have to become a structured discriminator, the way
     # `reason` already is, with each surface rendering its own wording — so it
     # is noted rather than done here.
-    if query is None and author is None and year is None and tag is None:
+    if all(f is None for f in (query, author, year, tag, venue, doi)):
         raise PziError(
-            "search needs at least one of query, author, year or tag",
+            "search needs at least one of query, author, year, tag, venue or doi",
+            code=exit_codes.USAGE,
+            reason=REASON_USAGE,
+        )
+    if offset < 0:
+        raise PziError(
+            f"offset must be zero or greater, got {offset}",
+            code=exit_codes.USAGE,
+            reason=REASON_USAGE,
+        )
+    if limit is not None and limit < 1:
+        raise PziError(
+            # Same reasoning as `check(limit=...)`: this front end has no parser
+            # to reject it, and `limit=0` would silently return no matches from
+            # a search that found some.
+            f"limit must be at least 1, got {limit}",
             code=exit_codes.USAGE,
             reason=REASON_USAGE,
         )
@@ -590,6 +618,11 @@ def search(
         author=author,
         year=year,
         tag=tag,
+        venue=venue,
+        doi=doi,
+        sort=sort,
+        offset=offset,
+        limit=limit,
     )
     typed = dict(result)
     matches = list(_unwrap(typed, "matches"))

@@ -189,5 +189,5 @@ pzi.list_tags(citekey: 'str | None' = None, *, config_path: 'str | None' = None,
 pzi.merge(citekey_a: 'str', citekey_b: 'str', *, dry_run: 'bool' = True, keep_pdf: 'bool' = False, config_path: 'str | None' = None, library: 'str | None' = None) -> 'MergeReport'
 pzi.promote(*, keep_preprint: 'bool' = False, dry_run: 'bool' = True, config_path: 'str | None' = None, library: 'str | None' = None) -> 'PromoteReport'
 pzi.remove_tags(citekey: 'str', tags: 'list[str]', *, dry_run: 'bool' = False, config_path: 'str | None' = None, library: 'str | None' = None) -> 'TagChangeReport'
-pzi.search(query: 'str | None' = None, *, author: 'str | None' = None, year: 'int | None' = None, tag: 'str | None' = None, config_path: 'str | None' = None, library: 'str | None' = None) -> 'list[SearchMatch]'
+pzi.search(query: 'str | None' = None, *, author: 'str | None' = None, year: 'int | None' = None, tag: 'str | None' = None, venue: 'str | None' = None, doi: 'str | None' = None, sort: 'str | None' = None, offset: 'int' = 0, limit: 'int | None' = None, config_path: 'str | None' = None, library: 'str | None' = None) -> 'list[SearchMatch]'
 pzi.update(*, dry_run: 'bool' = True, config_path: 'str | None' = None, library: 'str | None' = None) -> 'UpdateBibReport'

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, NotRequired, TypeAlias, TypedDict
+from collections.abc import Callable, Mapping
+from typing import Any, NotRequired, TypeAlias, TypedDict, TypeVar
 
 from pzi.bib_repository import (
     backup_path_for,
@@ -34,6 +35,9 @@ MIN_LIMIT = 1
 MAX_LIMIT = 500
 DEFAULT_LIMIT = 50
 
+#: What `sort_records` orders — a record, or anything holding one.
+_T = TypeVar("_T")
+
 
 def clamp_limit(limit: int | None) -> int:
     """The requested page size, brought inside `MIN_LIMIT`..`MAX_LIMIT`.
@@ -42,6 +46,43 @@ def clamp_limit(limit: int | None) -> int:
     rather than rejecting is the established behaviour of all three front ends.
     """
     return max(MIN_LIMIT, min(DEFAULT_LIMIT if limit is None else limit, MAX_LIMIT))
+
+
+def resolve_sort_field(sort: str | None) -> str:
+    """The requested sort field, or `citekey` when it is not one we implement."""
+    field = (sort or "").lower().strip()
+    return field if field in SORT_FIELDS else "citekey"
+
+
+def sort_records(
+    items: list[_T],
+    sort: str | None,
+    *,
+    record: Callable[[_T], Mapping[str, Any]] = lambda item: item,  # type: ignore[assignment,return-value]
+) -> list[_T]:
+    """Order *items* by one of `SORT_FIELDS`, newest-first for `year`.
+
+    Shared by `list_entries` and `search_bib` rather than written twice. The
+    two commands sort different things — `list_entries` carries
+    ``(record, entry_type)`` pairs, `search_bib` plain records — so *record*
+    says how to reach the record inside an item, and everything else (which
+    fields exist, how a missing value sorts, and that `year` alone descends)
+    is decided once here.
+    """
+    field = resolve_sort_field(sort)
+    if field == "year":
+        # Missing or non-integer years sort last under `reverse=True`, which is
+        # what a "newest first" listing should do with an undated entry.
+        def year_key(item: _T) -> int:
+            value = record(item).get("year")
+            return value if isinstance(value, int) else 0
+
+        return sorted(items, key=year_key, reverse=True)
+    if field == "author":
+        return sorted(items, key=lambda item: _first_author_sort_key(record(item)).lower())
+    if field == "title":
+        return sorted(items, key=lambda item: str(record(item).get("title") or "").lower())
+    return sorted(items, key=lambda item: str(record(item).get("citekey", "")).lower())
 
 
 class BibInfo(TypedDict):
@@ -309,33 +350,8 @@ def list_entries(
     ]
     total = len(records)
 
-    sort_field: str = sort.lower().strip()
-    if sort_field not in SORT_FIELDS:
-        sort_field = "citekey"
-
-    if sort_field == "year":
-        sorted_records = sorted(
-            typed_records,
-            key=lambda pair: (
-                pair[0].get("year") if isinstance(pair[0].get("year"), int) else 0
-            ),
-            reverse=True,
-        )
-    elif sort_field == "author":
-        sorted_records = sorted(
-            typed_records,
-            key=lambda pair: _first_author_sort_key(pair[0]).lower(),
-        )
-    elif sort_field == "title":
-        sorted_records = sorted(
-            typed_records,
-            key=lambda pair: str(pair[0].get("title") or "").lower(),
-        )
-    else:
-        sorted_records = sorted(
-            typed_records,
-            key=lambda pair: str(pair[0].get("citekey", "")).lower(),
-        )
+    sort_field = resolve_sort_field(sort)
+    sorted_records = sort_records(typed_records, sort_field, record=lambda pair: pair[0])
 
     page = sorted_records[offset : offset + limit]
     items: list[EntrySummary] = [
@@ -461,7 +477,7 @@ def _author_names(record: dict[str, Any]) -> list[str]:
     return names
 
 
-def _first_author_sort_key(record: dict[str, Any]) -> str:
+def _first_author_sort_key(record: Mapping[str, Any]) -> str:
     """Return stable first-author text for parsed BibTeX strings or CSL dicts."""
     authors = record.get("authors")
     if not isinstance(authors, list) or not authors:

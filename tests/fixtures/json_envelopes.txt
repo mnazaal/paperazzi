@@ -174,8 +174,12 @@ pzi search [ok]
     command
     errors
     items
+    limit
+    offset
     searched_bibs
+    sort
     status
+    total
     warnings
 
 pzi tag add [ok]

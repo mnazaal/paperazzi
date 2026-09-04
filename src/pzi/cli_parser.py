@@ -498,12 +498,13 @@ def build_parser() -> argparse.ArgumentParser:
     # ── search ───────────────────────────────────────────────────────────
     search_parser = subparsers.add_parser(
         "search",
-        help="Search BibTeX entries by query, author, year, or tag",
+        help="Search BibTeX entries by query, author, year, venue, DOI, or tag",
         description="Search entries; combine filters to narrow results.",
         formatter_class=_PziHelpFormatter,
         epilog=_subcommand_epilog((
             'pzi search --query "graph neural"',
             "pzi search --author hinton --year 2015",
+            'pzi search --venue neurips --sort year --limit 20',
             "pzi search --tag systems --json",
         )),
     )
@@ -511,6 +512,27 @@ def build_parser() -> argparse.ArgumentParser:
     search_parser.add_argument("--author", help="match author name")
     search_parser.add_argument("--year", type=int, help="match publication year")
     search_parser.add_argument("--tag", help="match an attached tag")
+    search_parser.add_argument("--venue", help="match journal, booktitle, or venue")
+    search_parser.add_argument("--doi", help="match DOI (substring, case-insensitive)")
+    search_parser.add_argument(
+        "--sort",
+        choices=sorted(SORT_FIELDS),
+        default="citekey",
+        help="sort field (default: citekey; year sorts newest first)",
+    )
+    search_parser.add_argument(
+        "--offset", type=_non_negative_int, default=0, help="pagination offset (default: 0)"
+    )
+    search_parser.add_argument(
+        # No default and no `MAX_LIMIT` clamp, unlike `entries --limit`: search
+        # returns everything unless asked otherwise (decision 42), so that
+        # `pzi search ... | wc -l` keeps counting what it counted before.
+        "--limit",
+        type=_positive_int,
+        default=None,
+        metavar="N",
+        help="show at most N matches (default: all)",
+    )
     add_config(search_parser)
     add_multi_target(search_parser)
     search_parser.add_argument("--json", action="store_true", help="output matches as JSON")

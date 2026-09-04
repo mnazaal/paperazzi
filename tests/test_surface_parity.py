@@ -527,3 +527,92 @@ def test_promote_previews_on_both_non_cli_surfaces() -> None:
     """
     assert _http_dry_run_default("/promote", "promote_bib") is True
     assert inspect.signature(pzi.promote).parameters["dry_run"].default is True
+
+
+# ---------------------------------------------------------------------------
+# Sorting: `entries` and `search` must order by one implementation
+# ---------------------------------------------------------------------------
+
+from pzi import bib_service  # noqa: E402 — beside the tests that use it
+
+_SORT_FIXTURE = [
+    # (citekey, title, first author, year) — chosen so that every sort field
+    # produces a *different* order, or the test would pass on a broken sort.
+    ("zulu2001", "Alpha Title", "Adams, Ann", 2001),
+    ("alpha2020", "Zulu Title", "Zimmer, Zoe", 2020),
+    ("mike2010", "Mike Title", "Miller, Max", 2010),
+]
+
+
+def _sort_fixture_config(tmp_path):
+    from pzi.add_service import add_record_with_bib
+    from pzi.config import BibResolutionFailure, load_bib_target
+
+    bib_path = tmp_path / "sorted.bib"
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'[[bibs]]\nname = "main"\npath = "{bib_path}"\ndefault = true\n'
+    )
+    resolved = load_bib_target(
+        config_path=str(config_path), home_dir=str(tmp_path), bib_selector=None
+    )
+    assert not isinstance(resolved, BibResolutionFailure)
+    _config, bib = resolved
+    for citekey, title, author, year in _SORT_FIXTURE:
+        add_record_with_bib(
+            bib=bib,
+            record={
+                "citekey": citekey, "title": title,
+                "authors": [author], "year": year, "doi": f"10.1/{citekey}",
+            },
+            dry_run=False,
+        )
+    return config_path
+
+
+@pytest.mark.parametrize("sort_field", sorted(bib_service.SORT_FIELDS))
+def test_entries_and_search_order_identically(sort_field, tmp_path) -> None:
+    """One `sort_records`, two commands — the sibling test Phase 27 asks for.
+
+    `search` gained `--sort` in item 454 by reusing the block that had been
+    inline in `list_entries`. If a later change re-inlines either, or teaches
+    one command a field the other does not have, these two orders diverge and
+    this fails — which a test of either command alone could never do.
+    """
+    from pzi.bib_service import list_entries
+    from pzi.search_service import search_bib
+
+    config_path = _sort_fixture_config(tmp_path)
+    common = dict(
+        config_path=str(config_path), home_dir=str(tmp_path), bib_selector=None
+    )
+
+    listed = list_entries(**common, sort=sort_field, offset=0, limit=500)
+    # `--year 0` would match nothing, so filter on the DOI prefix every fixture
+    # entry shares: the point is to match all three and compare the ordering.
+    searched = search_bib(**common, doi="10.1/", sort=sort_field)
+
+    assert [item["citekey"] for item in listed["items"]] == [
+        match["citekey"] for match in searched["matches"]
+    ]
+    assert listed["sort"] == searched["sort"] == sort_field
+
+
+def test_search_returns_everything_by_default(tmp_path) -> None:
+    """Decision 42: unlike `entries`, `search` does not default to a page.
+
+    The asymmetry is deliberate and is exactly the kind a future reader would
+    "fix" into consistency, so it is pinned here rather than left to the
+    docstring.
+    """
+    from pzi.bib_service import DEFAULT_LIMIT, list_entries
+    from pzi.search_service import search_bib
+
+    config_path = _sort_fixture_config(tmp_path)
+    common = dict(
+        config_path=str(config_path), home_dir=str(tmp_path), bib_selector=None
+    )
+
+    assert search_bib(**common, doi="10.1/")["limit"] is None
+    assert len(search_bib(**common, doi="10.1/")["matches"]) == len(_SORT_FIXTURE)
+    assert list_entries(**common)["limit"] == DEFAULT_LIMIT
