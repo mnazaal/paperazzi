@@ -410,18 +410,27 @@ def plan_orphan_quarantine(
     Pure.  The quarantine directory is an archive, so a basename already taken —
     whether by an earlier run (*taken_names*) or by an earlier orphan in this
     same batch — gets a numbered suffix rather than overwriting what is stored.
+
+    "Taken" is decided case-folded. On a case-insensitive filesystem — macOS by
+    default — `.orphans/Stale.pdf` and `.orphans/stale.pdf` are one directory
+    entry, so a plan that read them as two free names sent `shutil.move` over
+    the copy an earlier run had archived: the exact overwrite the suffixing
+    exists to prevent, and the archived PDF is unreferenced, so nothing else
+    would have noticed. Folding costs a case-sensitive filesystem only a
+    numbered suffix on a name that was in fact free, which an archive does not
+    care about, and it makes the plan identical on both platforms.
     """
-    used = set(taken_names)
+    used = {name.casefold() for name in taken_names}
     moves: list[dict[str, Any]] = []
 
     for source in orphan_pdfs:
         src = Path(source)
         name = src.name
         attempt = 1
-        while name in used:
+        while name.casefold() in used:
             name = f"{src.stem}-{attempt}{src.suffix}"
             attempt += 1
-        used.add(name)
+        used.add(name.casefold())
         moves.append({
             "type": "move_orphan",
             "source": str(src),

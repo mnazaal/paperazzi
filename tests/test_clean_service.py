@@ -231,6 +231,62 @@ def test_quarantining_a_second_file_of_the_same_name_keeps_the_first() -> None:
         assert archived == [b"%PDF-1.4\nFIRST\n", b"%PDF-1.4\nSECOND\n"]
 
 
+def test_quarantining_a_name_taken_in_another_case_keeps_the_first() -> None:
+    """The archive collision a case-insensitive filesystem presents.
+
+    Asserted on the plan rather than through `clean_library`, because the plan
+    is where the decision is made and it is the only part that behaves the same
+    on both platforms: on Linux the clobber cannot be staged at all, and on
+    macOS the two names are one directory entry, so `shutil.move` would put the
+    new orphan over the archived one.
+    """
+    from pzi.clean_service import plan_orphan_quarantine
+
+    planned = plan_orphan_quarantine(
+        orphan_pdfs=["/papers/Stale.pdf"],
+        orphan_dir="/papers/.orphans",
+        taken_names={"stale.pdf"},
+    )
+
+    destination = Path(planned[0]["destination"])
+    assert destination.name.casefold() != "stale.pdf", (
+        f"would overwrite the archived stale.pdf on macOS: {destination}"
+    )
+    assert destination.name == "Stale-1.pdf"
+
+
+def test_quarantined_names_never_collide_case_insensitively() -> None:
+    """The same property through `clean_library`, covering the wiring.
+
+    Checkable on a case-sensitive filesystem: two archived names that differ
+    only in case are two files here and one file on macOS, so asserting the
+    archive holds no such pair asserts it cannot clobber there.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "case-collide.bib")
+        papers = os.path.join(td, "papers")
+        os.makedirs(papers, exist_ok=True)
+        _write_bib(
+            bib,
+            '@article{smith2024, title = {Test}, author = {S}, year = {2024}}',
+        )
+
+        for name, body in (("Stale.pdf", b"%PDF-1.4\nFIRST\n"),
+                           ("stale.pdf", b"%PDF-1.4\nSECOND\n")):
+            Path(papers, name).write_bytes(body)
+            clean_library(
+                bib_path=bib, papers_dir=papers, dry_run=False, move_orphans=True
+            )
+
+        archived = sorted(Path(papers, ".orphans").glob("*.pdf"))
+        assert len({p.name.casefold() for p in archived}) == len(archived), (
+            f"two archived names are one file on macOS: {[p.name for p in archived]}"
+        )
+        assert sorted(p.read_bytes() for p in archived) == [
+            b"%PDF-1.4\nFIRST\n", b"%PDF-1.4\nSECOND\n"
+        ]
+
+
 def test_clean_library_move_orphans_real() -> None:
     with tempfile.TemporaryDirectory() as td:
         bib = os.path.join(td, "orphan3.bib")
