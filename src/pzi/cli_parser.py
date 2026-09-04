@@ -810,6 +810,19 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="N",
         help="audit only the first N entries (a whole library takes hours)",
     )
+    check_parser.add_argument(
+        # `_non_negative_int`, not `_positive_int`: 0 is the meaningful "ignore
+        # the ledger and re-audit everything" value, which `--limit 0` is not.
+        "--recheck-after",
+        type=_non_negative_int,
+        default=0,
+        metavar="DAYS",
+        help=(
+            "skip entries verified within DAYS (0, the default, re-audits "
+            "everything); combines with --limit to work through a large "
+            "library across runs"
+        ),
+    )
     add_config(check_parser)
     add_single_target(check_parser)
     check_parser.add_argument("--json", action="store_true", help="output the result as JSON")

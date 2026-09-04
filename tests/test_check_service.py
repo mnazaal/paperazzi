@@ -692,3 +692,163 @@ def test_a_config_resolution_failure_says_why_in_the_reason_field(tmp_path):
 
     assert result["status"] == "error"
     assert result["reason"] == REASON_CONFIG
+
+
+# ---------------------------------------------------------------------------
+# The verified-verdict ledger (`--recheck-after`)
+# ---------------------------------------------------------------------------
+
+
+def _confirms(title, **_kw):
+    return {"title": title, "authors": ["Smith, A"], "year": 2020}
+
+
+def _contradicts(title, **_kw):
+    # Same title, wholly different authors — a chimeric citation, which is
+    # positive evidence of a defect. A *different* title would read as an
+    # unrelated hit and score `could_not_verify`, which is a different case
+    # (see `test_could_not_verify_is_not_recorded`).
+    return {"title": title, "authors": ["Random, Person", "Another, Fake"], "year": 2020}
+
+
+def _ledger_run(tmp_path, config_path, *, crossref, days, calls=None):
+    def counting(title, **kw):
+        if calls is not None:
+            calls.append(title)
+        return crossref(title, **kw)
+
+    return check_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        recheck_after_days=days,
+        fetch_crossref=counting,
+        fetch_openalex=_no_source,
+        fetch_dblp=_no_source,
+        fetch_openreview=_no_source,
+        fetch_s2=_no_source,
+    )
+
+
+def test_verified_entry_is_skipped_on_the_next_run(tmp_path, monkeypatch):
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    config_path = _setup(
+        tmp_path, citekey="a", title="Alpha Paper", authors=["Smith, A"], year=2020,
+    )
+
+    calls: list[str] = []
+    first = _ledger_run(tmp_path, config_path, crossref=_confirms, days=30, calls=calls)
+    assert first["counts"]["verified"] == 1
+    assert first["skipped_fresh"] == 0
+    assert len(calls) == 1
+
+    calls.clear()
+    second = _ledger_run(tmp_path, config_path, crossref=_confirms, days=30, calls=calls)
+    assert second["total"] == 0
+    assert second["skipped_fresh"] == 1
+    # The point of the ledger: no provider was dialled at all.
+    assert calls == []
+
+
+def test_problematic_entry_is_re_audited_every_run(tmp_path, monkeypatch):
+    """The rule that keeps the ledger from hiding a defect the user has not fixed."""
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    config_path = _setup(
+        tmp_path, citekey="a", title="Alpha Paper", authors=["Smith, A"], year=2020,
+    )
+
+    first = _ledger_run(tmp_path, config_path, crossref=_contradicts, days=30)
+    assert first["counts"]["problematic"] == 1
+
+    calls: list[str] = []
+    second = _ledger_run(tmp_path, config_path, crossref=_contradicts, days=30, calls=calls)
+    assert second["counts"]["problematic"] == 1
+    assert second["skipped_fresh"] == 0
+    assert len(calls) == 1
+
+
+def test_could_not_verify_is_not_recorded(tmp_path, monkeypatch):
+    """An outage is not an answer — it must not freeze into a month of silence."""
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    config_path = _setup(
+        tmp_path, citekey="a", title="Alpha Paper", authors=["Smith, A"], year=2020,
+    )
+
+    first = _ledger_run(tmp_path, config_path, crossref=_no_source, days=30)
+    assert first["counts"]["could_not_verify"] == 1
+
+    second = _ledger_run(tmp_path, config_path, crossref=_no_source, days=30)
+    assert second["skipped_fresh"] == 0
+    assert second["total"] == 1
+
+
+def test_horizon_zero_ignores_the_ledger_at_both_ends(tmp_path, monkeypatch):
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    config_path = _setup(
+        tmp_path, citekey="a", title="Alpha Paper", authors=["Smith, A"], year=2020,
+    )
+
+    _ledger_run(tmp_path, config_path, crossref=_confirms, days=30)
+    replayed = _ledger_run(tmp_path, config_path, crossref=_confirms, days=0)
+    assert replayed["total"] == 1
+    assert replayed["skipped_fresh"] == 0
+
+    # Nothing written either: a run with the ledger off leaves no trace to
+    # surprise the next run that turns it on.
+    fresh = tmp_path / "elsewhere"
+    fresh.mkdir()
+    assert not list(fresh.rglob("check-verified.json"))
+
+
+def test_ledger_filters_before_limit_so_the_two_compose(tmp_path, monkeypatch):
+    """`--limit` names an amount of work, not a position in the file.
+
+    Filtering after the slice would re-take the same first N entries every run
+    and audit none of them once fresh, which is the shape that made `--limit`
+    unable to work through a library.
+    """
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    bib_path = tmp_path / "ml.bib"
+    config_path = _write_config(tmp_path, bib_path)
+    for index in range(4):
+        _seed(
+            tmp_path, config_path,
+            citekey=f"k{index}", title=f"Paper Number {index}",
+            authors=["Smith, A"], year=2020,
+        )
+
+    seen: list[list[str]] = []
+    for _ in range(2):
+        calls: list[str] = []
+        result = check_bib(
+            config_path=str(config_path),
+            home_dir=str(tmp_path),
+            bib_selector=None,
+            recheck_after_days=30,
+            limit=2,
+            fetch_crossref=lambda t, **kw: (calls.append(t), _confirms(t))[1],
+            fetch_openalex=_no_source,
+            fetch_dblp=_no_source,
+            fetch_openreview=_no_source,
+            fetch_s2=_no_source,
+        )
+        assert result["total"] == 2
+        seen.append(sorted(calls))
+
+    # Two runs of --limit 2 covered four distinct entries, not the same two twice.
+    assert len(set(seen[0]) | set(seen[1])) == 4
+    assert not set(seen[0]) & set(seen[1])
+
+
+def test_check_never_writes_the_library(tmp_path, monkeypatch):
+    """The property that makes this safe to run during the burn-in window."""
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    config_path = _setup(
+        tmp_path, citekey="a", title="Alpha Paper", authors=["Smith, A"], year=2020,
+    )
+    bib_path = tmp_path / "ml.bib"
+    before = bib_path.read_bytes()
+
+    _ledger_run(tmp_path, config_path, crossref=_confirms, days=30)
+
+    assert bib_path.read_bytes() == before

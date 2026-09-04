@@ -184,6 +184,10 @@ class CheckReport(TypedDict):
     counts: dict[str, int]
     items: list[CheckItem]
     warnings: list[str]
+    #: Entries `recheck_after_days` skipped as already verified. `total` counts
+    #: only what was audited, so without this a caller cannot tell a sweep with
+    #: nothing left to do from a library that lost its entries.
+    skipped_fresh: int
 
 
 class DedupeReport(TypedDict):
@@ -767,6 +771,7 @@ def check(
     *,
     strict: bool = False,
     limit: int | None = None,
+    recheck_after_days: int = 0,
     config_path: str | None = None,
     library: str | None = None,
 ) -> CheckReport:
@@ -776,6 +781,16 @@ def check(
     command at 0.6 s/entry best case, so a whole-library run is hours; without
     this the programmatic front end had no way to ask for a smaller one, while
     the CLI has had ``--limit`` since item 550.
+
+    *recheck_after_days* skips entries a previous run verified inside that many
+    days, so repeated calls work through a large library instead of re-auditing
+    its healthy entries. Zero (the default) disables the ledger at both ends.
+    Mirrors the CLI's ``--recheck-after``.
+
+    Raises :class:`PziError` if *recheck_after_days* is negative. The CLI
+    rejects it at the parser (`_non_negative_int`); this front end has none, and
+    a negative horizon would make every stored timestamp read as stale — an
+    argument that looks like it skips work but silently guarantees the most.
 
     Raises :class:`PziError` if *limit* is less than 1. The CLI's `--limit`
     rejects `0` and negatives at the parser (`cli_parser._positive_int`); this
@@ -791,12 +806,19 @@ def check(
             code=exit_codes.USAGE,
             reason=REASON_USAGE,
         )
+    if recheck_after_days < 0:
+        raise PziError(
+            f"recheck_after_days must be zero or greater, got {recheck_after_days}",
+            code=exit_codes.USAGE,
+            reason=REASON_USAGE,
+        )
     result = check_bib(
         config_path=_resolved_config_path(config_path),
         home_dir=_home(),
         bib_selector=library,
         strict=strict,
         limit=limit,
+        recheck_after_days=recheck_after_days,
     )
     typed = result.copy()
     _unwrap(typed, "status")

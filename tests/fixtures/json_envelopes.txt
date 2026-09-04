@@ -75,6 +75,7 @@ pzi library check [error]
     errors
     items
     reason
+    skipped_fresh
     status
     strict
     total

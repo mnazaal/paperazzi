@@ -20,8 +20,10 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Mapping
+from datetime import datetime
 from typing import Literal, NotRequired, TypedDict
 
+from pzi import ledger
 from pzi.bib_repository import read_bib_file_with_notices
 from pzi.bibtex import NormalizedRecord
 from pzi.capture_context import resolve_contact_email, resolve_optional_value
@@ -95,6 +97,10 @@ class CheckResult(TypedDict):
     #: uses for them. Not `errors`: the audit ran and these say what it could
     #: not cover.
     warnings: list[str]
+    #: Entries skipped because the ledger already holds a `verified` verdict
+    #: inside the horizon. Reported separately from `total` so a sweep that
+    #: audited 40 of 22000 entries cannot read as a library that shrank.
+    skipped_fresh: int
     #: Structured failure reason (`pzi.errors.REASON_*`) — present only when
     #: `status` is `error`, which for a completed run means the audit reached no
     #: source at all. Read by `exit_code_for_error` and `pzi.http_status`.
@@ -415,6 +421,8 @@ def check_bib(
     fetch_s2: Callable[..., NormalizedRecord | None] | None = None,
     now_year: int | None = None,
     limit: int | None = None,
+    recheck_after_days: int = 0,
+    now: datetime | None = None,
     on_item: Callable[[CheckItem, int, int], None] | None = None,
 ) -> CheckResult:
     """Validate every entry in a library against authoritative metadata sources.
@@ -423,6 +431,18 @@ def check_bib(
     command at 0.6 s/entry best case and 11.2 s worst, so on a library of any
     size the whole-library run is hours and there was no way to try a smaller
     one.
+
+    *recheck_after_days* skips entries a previous run already verified inside
+    that many days, using the sidecar ledger under `pzi_data_home`. `--limit`
+    only ever audited the *first* N, so a large library could be sampled but
+    never worked through; the ledger is what turns the sweep into something that
+    makes progress across runs. Zero (the default) disables it at both ends —
+    nothing read, nothing written.
+
+    Only the `verified` verdict is recorded. `problematic` is the finding the
+    user has not acted on yet and must be re-raised every run, and
+    `could_not_verify` is usually an outage rather than an answer — see
+    :mod:`pzi.ledger`.
 
     *on_item* is called ``(item, index, total)`` as each verdict is reached,
     before the next entry is fetched. It is how the runner streams `--jsonl` and
@@ -463,6 +483,36 @@ def check_bib(
     # on a file it only partly read.
     read_result, dropped_blocks = read_bib_file_with_notices(bib["path"])
     records = [r for r in read_result["records"] if isinstance(r.get("citekey"), str)]
+
+    ledger_file = ledger.ledger_path(config["pzi_data_home"], ledger.CHECK_FILENAME)
+    ledger_state = ledger.load(ledger_file) if ledger.is_enabled(recheck_after_days) else {}
+    effective_now = now if now is not None else ledger.utc_now()
+    bib_name = bib["name"]
+
+    # The ledger filters *before* `--limit`, not after, and the order is the
+    # whole point. Filtering after would mean `--recheck-after 30 --limit 100`
+    # re-slices the same first hundred entries every run and audits none of
+    # them once they are fresh — `--limit` would still name a position in the
+    # file rather than an amount of work. This way the two compose into the
+    # thing a 22k library actually needs: run it repeatedly and it works
+    # through the library, 100 entries of real work at a time.
+    skipped_fresh = 0
+    if ledger.is_enabled(recheck_after_days):
+        pending = []
+        for record in records:
+            citekey = str(record.get("citekey"))
+            if ledger.is_recently_checked(
+                ledger_state,
+                bib_name,
+                citekey,
+                now=effective_now,
+                horizon_days=recheck_after_days,
+            ):
+                skipped_fresh += 1
+            else:
+                pending.append(record)
+        records = pending
+
     if limit is not None and limit >= 0:
         records = records[:limit]
     total_planned = len(records)
@@ -476,8 +526,21 @@ def check_bib(
         )
         counts[item["verdict"]] += 1
         items.append(item)
+        if item["verdict"] == "verified" and ledger.is_enabled(recheck_after_days):
+            ledger_state = ledger.record_checked(
+                ledger_state, bib_name, str(record.get("citekey")), now=effective_now
+            )
         if on_item is not None:
             on_item(item, index, total_planned)
+
+    if ledger.is_enabled(recheck_after_days):
+        # Saved even when the run was interrupted upstream or every provider was
+        # down: what is in `ledger_state` is what was actually verified, and
+        # discarding it would make a Ctrl-C'd four-hour sweep count for nothing.
+        ledger.save(
+            ledger_file,
+            ledger.prune(ledger_state, now=effective_now, horizon_days=recheck_after_days),
+        )
 
     # Summarize per-source failures once for the run rather than repeating the
     # same "connection refused" under every entry. A `check` that reached no
@@ -520,6 +583,7 @@ def check_bib(
         "errors": run_errors,
         # The shared read-notice channel, rendered by `print_read_warnings`.
         "warnings": [f"not audited: {message}" for message in dropped_blocks],
+        "skipped_fresh": skipped_fresh,
     }
     if audited_nothing:
         # `unavailable`, not `config`: the library was read and the entries were
@@ -542,6 +606,7 @@ def _error_result(
         "items": [],
         "errors": errors,
         "warnings": [],
+        "skipped_fresh": 0,
     }
     if reason is not None:
         result["reason"] = reason

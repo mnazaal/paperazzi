@@ -87,6 +87,7 @@ pzi library check
     --json dest=json nargs=0
     --jsonl dest=jsonl
     --limit dest=limit
+    --recheck-after dest=recheck_after default=0
     --report dest=report
     --strict dest=strict nargs=0
     --target dest=target

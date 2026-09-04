@@ -115,6 +115,7 @@ def run_check_command(
             stderr=stderr,
         )
     limit: int | None = getattr(args, "limit", None)
+    recheck_after_days: int = getattr(args, "recheck_after", 0) or 0
     # `< 1` is no longer checked here: `--limit` is `_positive_int` at the
     # parser (`cli_parser.py`), so a value that reaches this point is already
     # `>= 1` and this guard could never fire.
@@ -199,6 +200,7 @@ def run_check_command(
             bib_selector=bib_selector,
             strict=strict,
             limit=limit,
+            recheck_after_days=recheck_after_days,
             on_item=_on_item,
         )
         if jsonl_stream is not None:
@@ -260,6 +262,19 @@ def run_check_command(
         print(
             f"note: --limit {limit} — counts below cover at most the first "
             f"{limit} entries, not necessarily the whole library",
+            file=stderr,
+        )
+
+    skipped_fresh = result.get("skipped_fresh", 0)
+    if skipped_fresh:
+        # Same reason as the `--limit` note above: without it, "total: 40" on a
+        # 22000-entry library reads as a library that lost its entries rather
+        # than a sweep that had nothing left to do. Names the flag, because the
+        # way to see the other 21960 again is to lower or zero it.
+        print(
+            f"note: --recheck-after {recheck_after_days} — skipped {skipped_fresh} "
+            f"{'entry' if skipped_fresh == 1 else 'entries'} verified within the "
+            f"last {recheck_after_days} days; --recheck-after 0 re-audits everything",
             file=stderr,
         )
 
