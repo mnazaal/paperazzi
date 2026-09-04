@@ -646,3 +646,142 @@ def test_rename_files_applies_and_repoints_the_entry(tmp_path) -> None:
     assert Path(stored).name == "A Real Title.pdf"
     # Same undo artifact as the citekey path.
     assert result["backup_path"]
+
+
+def test_rename_files_refuses_to_overwrite_a_different_file(tmp_path) -> None:
+    """The refusal the same-file guard below must not weaken."""
+    from pzi import reindex_service
+
+    bib, papers = _library_with_names(tmp_path, [
+        ("mangled2024", "A Real Title", "A textbraceleft Mangled Name.pdf"),
+    ])
+    (Path(papers) / "A Real Title.pdf").write_bytes(b"%PDF-1.4\nOTHER\n")
+
+    result = reindex_service.rename_files_to_policy(
+        bib_path=bib, papers_dir=papers,
+        pdf_filename_format="{{ title }}", dry_run=True,
+    )
+
+    assert result["changed"] == []
+    assert any("already exists" in e for e in result["errors"]), result["errors"]
+
+
+def test_rename_files_destination_that_is_the_source_is_not_a_collision(
+    tmp_path,
+) -> None:
+    """A destination resolving to the source file itself does not block it.
+
+    On a case-insensitive filesystem — macOS by default — the target of a
+    case-only rename already "exists": it *is* the source. A bare existence
+    test therefore refused every such rename on macOS while performing it on
+    Linux. A hardlink reproduces the same condition on either platform.
+    """
+    from pzi import reindex_service
+
+    bib, papers = _library_with_names(tmp_path, [
+        ("mangled2024", "A Real Title", "A textbraceleft Mangled Name.pdf"),
+    ])
+    os.link(
+        Path(papers) / "A textbraceleft Mangled Name.pdf",
+        Path(papers) / "A Real Title.pdf",
+    )
+
+    result = reindex_service.rename_files_to_policy(
+        bib_path=bib, papers_dir=papers,
+        pdf_filename_format="{{ title }}", dry_run=True,
+    )
+
+    assert result["errors"] == []
+    assert [c["citekey"] for c in result["changed"]] == ["mangled2024"]
+
+
+def test_reindex_destination_that_is_the_source_is_not_a_collision(tmp_path) -> None:
+    """The citekey pass makes the same judgement, in preview and in the run.
+
+    Same condition as the filename pass above, reached through the other two
+    call sites: the preview's planning loop and `_rename_planned_pdfs`.
+    """
+    from pzi import reindex_service
+    from pzi.bib_repository import read_bib_file
+
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    source = papers / "real-paper.pdf"
+    source.write_bytes(b"%PDF-1.4\n")
+    os.link(source, papers / "doe2025new.pdf")
+    bib = tmp_path / "t.bib"
+    bib.write_text(
+        "@article{oldkey, title = {New Test}, author = {Doe, John}, year = {2025},"
+        f" file = {{{source}}}}}"
+    )
+    common = dict(bib_path=str(bib), papers_dir=str(papers))
+
+    preview = reindex_service.reindex_library(**common, dry_run=True)
+    real = reindex_service.reindex_library(**common, dry_run=False)
+
+    assert preview["errors"] == [], preview["errors"]
+    assert real["errors"] == [], real["errors"]
+    assert preview["changed"][0]["renamed_pdf"] is True
+    assert real["changed"][0]["renamed_pdf"] is True
+    assert (papers / "doe2025new.pdf").exists()
+    stored = read_bib_file(str(bib))["records"][0]["local_pdf_path"]
+    assert Path(stored).name == "doe2025new.pdf"
+
+
+def _case_insensitive_path_ops():
+    """`os.path.exists`/`samefile` as a case-insensitive filesystem answers them.
+
+    macOS's default filesystem folds case; Linux's does not, so the condition
+    that loses a PDF there cannot be staged here directly. Patching the two
+    lookups the rename guard consults reproduces the decision the guard has to
+    make, which is the part under test.
+    """
+    real_exists, real_samefile = os.path.exists, os.path.samefile
+
+    def fold(p):
+        p = os.fspath(p)
+        if real_exists(p):
+            return p
+        directory, name = os.path.split(p)
+        if not real_exists(directory):
+            return p
+        for entry in os.listdir(directory):
+            if entry.lower() == name.lower():
+                return os.path.join(directory, entry)
+        return p
+
+    return (
+        lambda p: real_exists(fold(p)),
+        lambda a, b: real_samefile(fold(a), fold(b)),
+    )
+
+
+def test_rename_files_does_not_clobber_a_sibling_renamed_earlier_in_the_batch(
+    tmp_path, monkeypatch,
+) -> None:
+    """Two targets differing only in case are one file on macOS.
+
+    Both passed the planning check, which compares destination strings and runs
+    before anything has moved; the second `os.rename` then replaced the PDF the
+    first had just written. The guard has to be asked again per move.
+    """
+    from pzi import reindex_service
+
+    bib, papers = _library_with_names(tmp_path, [
+        ("one2024", "Alpha Beta", "one textbraceleft mangled.pdf"),
+        ("two2024", "alpha beta", "two textbraceleft mangled.pdf"),
+    ])
+    ci_exists, ci_samefile = _case_insensitive_path_ops()
+    monkeypatch.setattr(os.path, "exists", ci_exists)
+    monkeypatch.setattr(os.path, "samefile", ci_samefile)
+
+    result = reindex_service.rename_files_to_policy(
+        bib_path=bib, papers_dir=papers,
+        pdf_filename_format="{{ title }}", dry_run=False,
+    )
+
+    assert len(result["changed"]) == 1, result["changed"]
+    assert any("already exists" in e for e in result["errors"]), result["errors"]
+    # Neither PDF was destroyed: one moved, the other stayed where it was.
+    survivors = sorted(p.name for p in Path(papers).glob("*.pdf"))
+    assert len(survivors) == 2, survivors

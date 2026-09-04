@@ -36,6 +36,26 @@ class CitekeyChange(TypedDict):
     kept_external_pdf: NotRequired[str]
 
 
+def _blocks_rename(destination: str, source: str) -> bool:
+    """Is *destination* occupied by something other than *source* itself?
+
+    Not the same question as "does *destination* exist". On a case-insensitive
+    filesystem — macOS by default — renaming ``the complexity of things.pdf`` to
+    ``The Complexity of Things.pdf`` finds the *source* at the destination, so a
+    bare existence test makes every case-only rename an error on macOS while the
+    same library renames cleanly on Linux. ``samefile`` tells the source apart
+    from a genuine second file.
+    """
+    if not os.path.exists(destination):
+        return False
+    try:
+        return not os.path.samefile(destination, source)
+    except OSError:
+        # A missing source, or one that raced away: something is at the
+        # destination and we cannot show it is ours, so refuse.
+        return True
+
+
 def _is_under(path: str, directory: str) -> bool:
     """Is *path* inside *directory*? Compared without touching the filesystem."""
     try:
@@ -185,7 +205,7 @@ def _rename_planned_pdfs(
 
         # os.rename replaces the destination silently; never trade one stored
         # PDF for another.
-        if os.path.exists(new_pdf):
+        if _blocks_rename(new_pdf, old_pdf):
             errors.append(
                 f"kept PDF for {change['old_citekey']} at {old_pdf}: "
                 f"{new_pdf} already exists"
@@ -296,7 +316,10 @@ def reindex_library(
                         f"rename: {old_pdf} shares its PDF with another entry"
                     )
                 elif will_rename and new_pdf:
-                    if os.path.exists(new_pdf) or new_pdf in planned_destinations:
+                    if (
+                        _blocks_rename(new_pdf, str(old_pdf))
+                        or new_pdf in planned_destinations
+                    ):
                         will_rename = False
                         errors.append(
                             f"would keep PDF for {change['old_citekey']} at "
@@ -426,7 +449,10 @@ def rename_files_to_policy(
                     "shares its PDF with another entry"
                 )
                 continue
-            if os.path.exists(destination) or destination in planned_destinations:
+            if (
+                _blocks_rename(destination, str(current_path))
+                or destination in planned_destinations
+            ):
                 errors.append(
                     f"keeping PDF for {citekey} at {current}: "
                     f"{destination} already exists"
@@ -448,13 +474,28 @@ def rename_files_to_policy(
             backup_path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
             shutil.copy2(bib_path, backup_path)
             moved: list[tuple[str, str]] = []
+            applied: list[dict[str, Any]] = []
             try:
                 for change in changed:
+                    # Asked again per move, as the citekey pass does, and not
+                    # only when the plan was made: the planning check ran before
+                    # anything in this batch had moved, so on a case-insensitive
+                    # filesystem two entries whose target names differ only in
+                    # case both passed it as distinct strings, and the second
+                    # `os.rename` then silently replaced the first entry's PDF.
+                    if _blocks_rename(change["new_pdf"], change["old_pdf"]):
+                        errors.append(
+                            f"keeping PDF for {change['citekey']} at "
+                            f"{change['old_pdf']}: {change['new_pdf']} "
+                            "already exists"
+                        )
+                        continue
                     os.rename(change["old_pdf"], change["new_pdf"])
                     moved.append((change["old_pdf"], change["new_pdf"]))
+                    applied.append(change)
                 for index, entry in enumerate(entries):
                     record = records[index] if index < len(records) else {}
-                    for change in changed:
+                    for change in applied:
                         if record.get("local_pdf_path") == change["old_pdf"]:
                             entry.setdefault("fields", {})["file"] = change["new_pdf"]
                 rewrite_entries_in_order_locked(
@@ -468,6 +509,9 @@ def rename_files_to_policy(
                         pass
                 backup_path.unlink(missing_ok=True)
                 raise
+            # What was done, not what was planned: an entry whose move was
+            # refused above keeps its PDF and its `file =` field.
+            changed = applied
 
         return {
             "status": "ok",
