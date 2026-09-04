@@ -1,5 +1,14 @@
 # Changelog
 
+> **Closed after 0.2.0 — not maintained going forward.** paperazzi has no
+> external consumers and no backwards-compatibility obligation, so the
+> changelog was 159 KB of prose written for a reader who does not exist. The
+> record from here on is `git log`, whose commit subjects carry the same
+> information and cannot drift from the code the way a hand-maintained file
+> does. Everything below is the real history up to 0.2.0 and is kept as
+> written. If paperazzi ever ships to PyPI, this file starts again from that
+> release.
+
 All notable changes to paperazzi (CLI command `pzi`) are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),

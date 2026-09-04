@@ -86,7 +86,7 @@ _NUMBER_WORDS: dict[int, str] = {
 }
 
 #: Every file that states the number in prose. Read, not trusted.
-_DOCS_CLAIMING_THE_COUNT = ("docs/security.md", "README.md")
+_DOCS_CLAIMING_THE_COUNT = ("docs/security.md", "README.md", "docs/reference.md")
 
 
 def test_the_documented_route_count_is_the_real_one() -> None:

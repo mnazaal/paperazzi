@@ -15,9 +15,9 @@ that promises one mechanism per frozen surface.
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from docs_sources import REPO_ROOT, user_docs_text  # noqa: E402
+
 README = REPO_ROOT / "README.md"
 SECTION = "## Versioning and compatibility"
 
@@ -28,7 +28,7 @@ _PATH = re.compile(r"`(tests/[\w./]+)`")
 
 
 def _policy_section() -> str:
-    text = README.read_text(encoding="utf-8")
+    text = user_docs_text()
     start = text.index(SECTION)
     end = text.index("\n## ", start + len(SECTION))
     return text[start:end]
@@ -68,7 +68,7 @@ def test_every_test_path_the_readme_names_exists() -> None:
     translation-server stub. A reader has no way to tell which citations are
     checked, so all of them should be.
     """
-    text = README.read_text(encoding="utf-8")
+    text = user_docs_text()
     section_lines = {line for line in _policy_section().splitlines() if _PATH.search(line)}
     outside = [
         line

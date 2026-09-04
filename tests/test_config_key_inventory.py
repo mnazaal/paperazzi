@@ -57,7 +57,7 @@ def test_the_template_and_the_loader_describe_the_same_keys() -> None:
         f"  in the template, not accepted by the loader: {sorted(template - loader)}\n"
         f"  accepted by the loader, absent from the template: {sorted(loader - template)}\n"
         "Config keys are frozen at 1.0 — fix whichever is wrong, and note it in "
-        "CHANGELOG.md if the accepted set changed."
+        "the commit subject if the accepted set changed."
     )
 
 

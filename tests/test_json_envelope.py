@@ -281,7 +281,7 @@ def test_the_envelope_keys_match_their_snapshot(tmp_path: Path) -> None:
 
     If this failed because of a change you meant to make, a `--json` field
     changed name or appeared or vanished — that is a frozen contract at 1.0.
-    Record it in `CHANGELOG.md`, then regenerate:
+    Say so in the commit subject, then regenerate:
 
         PZI_UPDATE_JSON_ENVELOPES=1 pytest tests/test_json_envelope.py
 
@@ -298,6 +298,6 @@ def test_the_envelope_keys_match_their_snapshot(tmp_path: Path) -> None:
     assert current == SNAPSHOT.read_text(encoding="utf-8"), (
         "a `--json` envelope changed shape. Consumers branch on these field "
         "names; they are frozen at 1.0.\n"
-        "If the change is intended, record it in CHANGELOG.md and regenerate:\n"
+        "If the change is intended, say so in the commit subject and regenerate:\n"
         f"    {UPDATE_ENV}=1 pytest {__file__}\n"
     )

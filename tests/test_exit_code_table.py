@@ -17,11 +17,11 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
+from docs_sources import user_docs_text  # noqa: E402
+
 from pzi import exit_codes
 from pzi.cli import main, run_cli
 from pzi.commands.common import batch_exit_code
-
-README = Path(__file__).parent.parent / "README.md"
 
 MINIMAL_CONFIG = """
 [[bibs]]
@@ -45,7 +45,7 @@ def _documented_codes() -> set[int]:
     code — parsed rather than assumed, because that row is exactly the kind of
     thing a naive parser silently drops.
     """
-    text = README.read_text(encoding="utf-8")
+    text = user_docs_text()
     table = re.search(r"\| Code \| Meaning \|\n\|[-| ]+\|\n((?:\|.*\n)+)", text)
     assert table, "the exit-code table is missing from README.md"
     codes: set[int] = set()
@@ -78,7 +78,7 @@ def test_the_readme_table_and_the_exit_codes_module_agree() -> None:
         f"  documented but not defined: {sorted(documented - defined)}\n"
         f"  defined but not documented: {sorted(defined - documented)}\n"
         "Both are frozen at 1.0 — fix whichever is wrong and say so in "
-        "CHANGELOG.md."
+        "the commit subject."
     )
 
 

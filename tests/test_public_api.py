@@ -120,7 +120,8 @@ def test_the_public_api_matches_its_snapshot() -> None:
 
     If this failed because of a change you meant to make, it is a change to a
     **frozen public API**: after 1.0 that is a major version bump, not a patch.
-    Record it in `CHANGELOG.md`, then regenerate:
+    Say so in the commit subject (`CHANGELOG.md` is closed — `git log` is the
+    record), then regenerate:
 
         PZI_UPDATE_PUBLIC_API=1 pytest tests/test_public_api.py
 
@@ -136,7 +137,7 @@ def test_the_public_api_matches_its_snapshot() -> None:
     )
     assert current == SNAPSHOT.read_text(encoding="utf-8"), (
         "the public API changed. `import pzi` is a frozen surface at 1.0.\n"
-        "If the change is intended, record it in CHANGELOG.md and regenerate:\n"
+        "If the change is intended, say so in the commit subject and regenerate:\n"
         f"    {UPDATE_ENV}=1 pytest {__file__}\n"
     )
 

@@ -101,7 +101,7 @@ def test_the_cli_surface_matches_its_snapshot() -> None:
     """Fails on any change to the command tree, a flag name, or a default.
 
     If this failed because of a change you meant to make, that change is a CLI
-    contract change: record it in `CHANGELOG.md`, then regenerate with
+    contract change: say so in the commit subject, then regenerate with
 
         PZI_UPDATE_CLI_SURFACE=1 pytest tests/test_cli_surface.py
 
@@ -119,7 +119,7 @@ def test_the_cli_surface_matches_its_snapshot() -> None:
     assert current == recorded, (
         "the CLI surface changed. This is a frozen contract at 1.0: a renamed "
         "flag, a dropped subcommand or a changed default breaks callers.\n"
-        "If the change is intended, record it in CHANGELOG.md and regenerate:\n"
+        "If the change is intended, say so in the commit subject and regenerate:\n"
         f"    {UPDATE_ENV}=1 pytest {__file__}\n"
     )
 

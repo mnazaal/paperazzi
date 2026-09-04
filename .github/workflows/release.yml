@@ -56,10 +56,6 @@ jobs:
             echo "tag $tag does not match pyproject version $project_version" >&2
             exit 1
           fi
-          if ! grep -q "^## \[$version\]" CHANGELOG.md; then
-            echo "CHANGELOG.md has no section for $version" >&2
-            exit 1
-          fi
 
       - name: Install locked dependencies
         # `--locked`, not `--frozen`. Both install exactly what `uv.lock` pins,
@@ -137,6 +133,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Full history and tags: the release body is now built from
+          # `git log <previous-tag>..<tag>`, and checkout's default shallow
+          # clone has neither, so `git describe --tags` would find nothing and
+          # the range would be empty — an empty release body, not an error.
+          fetch-depth: 0
 
       - name: Download artifacts
         uses: actions/download-artifact@v4
@@ -149,16 +151,20 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="${GITHUB_REF#refs/tags/}"
-          # Extract the changelog section for this version (between the version
-          # header and the next version header or end of file).
           version="${tag#v}"
-          body=$(python -c "
-          import re, sys
-          text = open('CHANGELOG.md').read()
-          pattern = rf'## \[{re.escape(sys.argv[1])}\].*?(?=\n## \[|\Z)'
-          m = re.search(pattern, text, re.DOTALL)
-          print(m.group(0) if m else 'See CHANGELOG.md')
-          " "$version")
+          # Release notes are the commit subjects since the previous tag.
+          # `CHANGELOG.md` was closed after 0.2.0 — it had no external reader
+          # and drifted from the code — so `git log` is the record, and the
+          # gate that used to require a section for $version is gone with it.
+          # `--no-merges` because a merge subject names a branch, not a change.
+          previous=$(git describe --tags --abbrev=0 "${tag}^" 2>/dev/null || true)
+          if [ -n "$previous" ]; then
+            range="${previous}..${tag}"
+          else
+            range="$tag"
+          fi
+          body=$(printf '## %s\n\n%s\n' "$version" \
+            "$(git log --no-merges --format='- %s' "$range")")
           # A version carrying a PEP 440 pre-release segment is not "Latest".
           # Marking a beta as the latest release tells every visitor — and any
           # tool reading /releases/latest — that it is the recommended one.
