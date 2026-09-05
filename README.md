@@ -25,6 +25,33 @@ paperazzi is NOT for those who need:
 - Sync across machines or group libraries → use **Zotero** or **Paperpile**
 - Native Windows support (WSL2 works but adds friction)
 
+## Known limits
+
+Three things a new user meets early. None of them is a bug report — they are
+measured or observed behaviour that is not fixed yet.
+
+- **Titles read out of a PDF are unreliable.** When you run `pzi add
+  <file>.pdf`, pzi extracts a title candidate from the file itself. Measured
+  against a 300-PDF sample of one real 22k-entry library, that candidate failed
+  to match the paper's actual title about a third of the time — usually
+  truncated to the title's first line, sometimes junk such as a report number or
+  "Under review as a conference paper at ICLR 2016". **Check the title on any
+  entry added from a bare PDF.** Capturing by DOI or URL never uses this path.
+
+- **The Zotero translation-server path is barely exercised.** pzi installs and
+  runs Zotero's translation-server to reach its site translators, and the path
+  is covered by the test suite, but every live capture recorded so far was
+  served by the Crossref fallback instead. Treat the translators as unproven
+  against real sites rather than as a path that has seen real use.
+
+- **The persistent browser session serves one request per server process.**
+  Playwright's sync API is bound to the thread that created it and `pzi server`
+  is threaded, so the second browser-assisted capture in the life of a given
+  server fails. Restart `pzi server` between browser-assisted captures.
+
+Native Windows is unsupported — WSL2 works. `docs/reference.md` sets out
+[what 1.0 does not promise](docs/reference.md#what-10-does-not-promise) in full.
+
 ## Quickstart
 
 ### Requirements
@@ -138,6 +165,34 @@ Load the unpacked extension (`<extension-dir>` is the unzipped release folder, o
 In onboarding, keep the default endpoint (`http://127.0.0.1:8765/capture`), set the API token only if configured, then test the connection. Keep `pzi server` running while browsing. Open a paper page, click the paperazzi icon, choose bib/tags/dry-run if needed, then **Capture current page**; or right-click a paper link → **Save to paperazzi**. Entries go to your configured `.bib`; PDFs go to `papers/` when available.
 
 ---
+
+## Migrating from Zotero
+
+Two things to settle before your first capture, both awkward to undo afterwards.
+
+**1. Set `citekey_format` to match the keys you already have.** Left unset, pzi
+uses its own scheme, so a library of Better BibTeX keys like `smith-graph-2024`
+starts growing entries keyed `smith2024graph`. pzi never renames an existing
+key, and neither should you — a rename breaks every `\cite{}` that used the old
+one. The formula that reproduces Better BibTeX's default:
+
+```toml
+citekey_format = 'auth.lower + "-" + shorttitle(1, 0).lower + "-" + year'
+```
+
+[Config](docs/reference.md#config) documents the supported subset of the formula
+language.
+
+**2. Stop Better BibTeX writing the file pzi manages.** Auto-export set to
+`immediate` rewrites its `.bib` on every change in Zotero. pzi notices a write
+it did not make and refuses rather than overwriting it (exit 5), so nothing is
+lost — but the two keep fighting until one of them stops. Switch auto-export to
+manual, or point it at a file pzi does not manage. See [Sharing the library with
+another program](docs/reference.md#sharing-the-library-with-another-program).
+
+Then bring the library in with `pzi import <file.bib>`. That is the widest lock
+pzi ever takes — the whole file, one transaction — so run it when nothing else
+is writing.
 
 ## `pzi server` vs `pzi add` vs `pzi doctor`
 
@@ -323,3 +378,13 @@ pzi understands it today, so those tests prove pzi still handles that shape —
 not that pzi still works with the real server. The pinned commits in
 `ts_backend._TS_REPOS` are what fix the contract; when you bump them, re-run a
 capture by hand, because nothing in the suite will tell you the shape moved.
+
+## License
+
+AGPL-3.0-only. The full text is in [LICENSE](LICENSE).
+
+What it means in practice: you may use, modify and redistribute pzi, and if you
+distribute a modified version — or run one that other people reach over a
+network — you have to offer them the corresponding source. Running pzi
+unmodified on your own machine, which is what the quickstart sets up, carries no
+such obligation; the server binds loopback only.
