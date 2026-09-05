@@ -32,7 +32,7 @@ logging.getLogger("bibtexparser").addHandler(logging.NullHandler())
 
 
 def package_version(
-    distribution_name: str = "paperazzi",
+    distribution_name: str = "pzi",
     *,
     lookup_version: Callable[[str], str] = metadata_version,
 ) -> str:
@@ -46,14 +46,16 @@ def package_version(
 def cli_version_text(
     package_name: str = "pzi",
     *,
-    distribution_name: str = "paperazzi",
+    distribution_name: str = "pzi",
     version_text: str | None = None,
 ) -> str:
     """Return argparse-compatible CLI version string.
 
     ``package_name`` is the printed label (the ``pzi`` command); ``distribution_name``
-    is the installed PyPI distribution (``paperazzi``) used to look up the version —
-    these differ because the distribution name and CLI command name are not the same.
+    is the installed PyPI distribution used to look up the version. Both are ``pzi``
+    since the 1.0 distribution rename, but they stay separate parameters because a
+    label printed to a user and a name looked up in installed package metadata are
+    different things — the project itself is still called paperazzi.
     """
     resolved_version = (
         package_version(distribution_name) if version_text is None else version_text

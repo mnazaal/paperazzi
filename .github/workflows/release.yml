@@ -193,9 +193,10 @@ jobs:
       contents: write
 
   # --- PyPI publishing (dormant) ---
-  # paperazzi is not yet on PyPI. This job is wired for trusted publishing but is
+  # pzi is not yet on PyPI. This job is wired for trusted publishing but is
   # disabled until the PyPI project is registered. To enable:
-  #   1. Register the 'paperazzi' project on PyPI.
+  #   1. Register the 'pzi' project on PyPI (the distribution name; the project
+  #      itself is still called paperazzi).
   #   2. Configure a PyPI trusted publisher for this repo (PyPI web UI).
   #   3. Set the repo variable PYPI_ENABLED to 'true' (repo Settings →
   #      Secrets and variables → Actions → Variables).
@@ -205,7 +206,7 @@ jobs:
     runs-on: ubuntu-24.04
     environment:
       name: pypi
-      url: https://pypi.org/p/paperazzi
+      url: https://pypi.org/p/pzi
     if: vars.PYPI_ENABLED == 'true'
     permissions:
       id-token: write

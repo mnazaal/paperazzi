@@ -214,7 +214,7 @@ def run_init_command(
         )
         print(
             "for the browser PDF fallback, install the optional extra once: "
-            "`pip install 'paperazzi[playwright]'` (or `pipx install 'paperazzi[playwright]'`), "
+            "`pip install 'pzi[playwright]'` (or `pipx install 'pzi[playwright]'`), "
             "then `playwright install chromium` (binaries also install on first use).",
             file=stdout,
         )

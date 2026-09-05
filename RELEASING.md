@@ -110,29 +110,28 @@ Pushing the tag triggers `.github/workflows/release.yml`:
 - Smoke-test the install:
 
 ```sh
-uv tool install 'paperazzi @ git+https://github.com/mnazaal/paperazzi.git@v0.2.0'
+uv tool install 'pzi @ git+https://github.com/mnazaal/paperazzi.git@v0.2.0'
 pzi --version
 ```
 
 ## Enabling PyPI (future)
 
-> **The name `paperazzi` is taken.** Verified 2026-08-15:
-> `https://pypi.org/pypi/paperazzi/json` returns a live, unrelated package — an
-> "LLM-Based Paper Query System with Evaluation Framework", v0.0.8, last
-> uploaded 2026-02-26. So `pip install paperazzi` today installs someone else's
-> project, and **step 1 below cannot be followed as written**. Nothing is
-> blocked by this: pzi installs from git, and decision 11 settled 1.0 as a
-> personal-trust milestone rather than a distribution one.
->
-> If PyPI is ever taken up, the choice is a different distribution name (the
-> CLI is already `pzi`) or dropping PyPI from scope. A rename is not free — the
-> name appears in the extension build, the systemd unit and the install docs.
+> **The distribution is named `pzi`; the project is still called paperazzi.**
+> Renamed 2026-09-05 for the public 1.0. `paperazzi` on PyPI was never
+> available — `https://pypi.org/pypi/paperazzi/json` returns a live, unrelated
+> package, an "LLM-Based Paper Query System with Evaluation Framework", v0.0.8,
+> last uploaded 2026-02-26 — while `https://pypi.org/pypi/pzi/json` returned
+> 404 when checked on 2026-09-05. The rename reaches the `name` field, the
+> `[playwright]` extra wherever it is quoted for a user, the `distribution_name`
+> defaults behind `pzi --version`, and this file. The repository URL, the
+> extension and its zip names, and the systemd unit keep the paperazzi name.
 
 The rest of this section is what publishing *would* involve, kept for whenever
 that is decided:
 
-1. **Register the project** on PyPI: `https://pypi.org/manage/account/` — under
-   a name that is actually available.
+1. **Register the project** on PyPI: `https://pypi.org/manage/account/` — as
+   `pzi`, which was free when last checked (see the note above; re-check before
+   registering, since a name can be taken at any time).
 2. **Configure trusted publishing** (OIDC, no API tokens):
    - Go to PyPI → Account settings → Publishing → Add a publisher.
    - Repository: `mnazaal/paperazzi`, workflow: `.github/workflows/release.yml`,
@@ -141,7 +140,7 @@ that is decided:
    - Settings → Environments → New environment → `pypi`.
 4. **Set the repo variable** `PYPI_ENABLED=true`:
    - Settings → Secrets and variables → Actions → Variables → New variable.
-5. **Update README** install instructions to use `pip install paperazzi` instead of
+5. **Update README** install instructions to use `pip install pzi` instead of
    the git-URL form.
 6. **Update RELEASING.md** — remove this section and note that PyPI publishing
    is active.
@@ -168,7 +167,7 @@ in it, and the gate passed locally, but watch the run rather than assume it.
 | Channel | Status | Notes |
 |---|---|---|
 | GitHub Releases | Active | sdist, wheel, and both extension zips attached to each tag |
-| PyPI | Dormant | wired, not yet enabled |
+| PyPI | Dormant | wired, not yet enabled; distribution name `pzi` |
 | Homebrew (custom tap) | Planned | `homebrew-paperazzi` tap, git archive URL |
 | AUR | Planned | stable PKGBUILD, updated per tag |
 | Nix flake | Planned | `github:mnazaal/paperazzi` |

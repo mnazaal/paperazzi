@@ -92,7 +92,7 @@ def browser_status() -> BrowserStatus:
             missing=True,
             reason=(
                 "playwright is not installed. Install the optional extra: "
-                "pip install 'paperazzi[playwright]'"
+                "pip install 'pzi[playwright]'"
             ),
         )
 

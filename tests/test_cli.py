@@ -870,10 +870,11 @@ def test_cli_init_setup_writes_config_only(tmp_path: Path) -> None:
     out = stdout.getvalue()
     assert "playwright install" in out
     assert "pzi server" in out
-    # regression: distribution is "paperazzi", not "pzi" (pzi is only the CLI
-    # command) — pip/pipx install 'pzi[playwright]' installs the wrong package
-    assert "paperazzi[playwright]" in out
-    assert "'pzi[playwright]'" not in out
+    # regression: the distribution is "pzi" — the same name as the CLI command —
+    # since the 1.0 rename. `paperazzi` on PyPI is an unrelated package, so
+    # guidance that prints that name sends the user to install someone else's.
+    assert "'pzi[playwright]'" in out
+    assert "paperazzi" not in out
 
 
 def test_cli_init_setup_with_firefox(tmp_path: Path) -> None:

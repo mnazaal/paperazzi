@@ -36,15 +36,17 @@ paperazzi is NOT for those who need:
 
 ### 1. Install
 
-paperazzi is not published on PyPI. Install from GitHub:
+paperazzi is not published on PyPI yet. Install from GitHub — the project is
+called paperazzi but ships as the `pzi` distribution, the same name as the
+command:
 
 ```sh
 # uv (recommended):
-uv tool install 'paperazzi @ git+https://github.com/mnazaal/paperazzi.git'
+uv tool install 'pzi @ git+https://github.com/mnazaal/paperazzi.git'
 # or pipx:
 pipx install 'git+https://github.com/mnazaal/paperazzi.git'
 # or plain pip (some systems may need `pip3`):
-pip install --user 'paperazzi @ git+https://github.com/mnazaal/paperazzi.git'
+pip install --user 'pzi @ git+https://github.com/mnazaal/paperazzi.git'
 ```
 
 > **Do not run `pip install paperazzi`.** That name on PyPI belongs to an
@@ -58,9 +60,9 @@ fallback, add the `[playwright]` extra (this installs the `playwright` Python
 package; browser binaries download on first use):
 
 ```sh
-uv tool install 'paperazzi[playwright] @ git+https://github.com/mnazaal/paperazzi.git'
+uv tool install 'pzi[playwright] @ git+https://github.com/mnazaal/paperazzi.git'
 # or:
-pipx install 'paperazzi[playwright] @ git+https://github.com/mnazaal/paperazzi.git'
+pipx install 'pzi[playwright] @ git+https://github.com/mnazaal/paperazzi.git'
 ```
 
 ### 2. Create config
