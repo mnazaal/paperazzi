@@ -19,6 +19,7 @@ from pzi.bib_repository import (
     with_bib_lock,
 )
 from pzi.bibtex import BibtexEntry, NormalizedRecord
+from pzi.fileio import directory_folds_case
 from pzi.format_templates import format_citekey, format_pdf_filename
 from pzi.pdf_planning import plan_pdf_path
 
@@ -54,6 +55,41 @@ def _blocks_rename(destination: str, source: str) -> bool:
         # A missing source, or one that raced away: something is at the
         # destination and we cannot show it is ours, so refuse.
         return True
+
+
+def _destination_key(destination: str, folds: dict[str, bool]) -> str:
+    """*destination* as the filesystem that will hold it compares names.
+
+    The apply-time guard asks the filesystem; the plan-time set of names this
+    run has already claimed cannot, because none of those names exists yet. So
+    it compares strings — and two destinations differing only in case are one
+    directory entry wherever case folds, which made the preview promise two
+    renames where the run does one rename and one refusal.
+
+    Keyed per directory rather than per run: case sensitivity belongs to the
+    mount, and a library may point at PDFs on more than one. *folds* is the
+    caller's cache, so the probe runs once per directory per pass.
+    """
+    directory = os.path.dirname(destination)
+    if directory not in folds:
+        folds[directory] = directory_folds_case(directory)
+    return destination.casefold() if folds[directory] else destination
+
+
+def _source_key(source: str) -> tuple[int, int] | str:
+    """A source PDF's identity rather than its spelling.
+
+    Two entries can name one file two ways — case-only where case folds, or
+    through a hard link anywhere — and the run renames that file once and
+    repoints the second entry. Comparing the paths as strings previewed two
+    clean renames for what is one rename and one error. Falls back to the path
+    when the file is gone, which the callers already treat as "no rename".
+    """
+    try:
+        info = os.stat(source)
+    except OSError:
+        return source
+    return (info.st_dev, info.st_ino)
 
 
 def _is_under(path: str, directory: str) -> bool:
@@ -299,17 +335,19 @@ def reindex_library(
             # to overwrite an existing destination, so previewing a rename the
             # real run declines is a preview of a different command.
             planned_destinations: set[str] = set()
+            #: One case-sensitivity probe per directory, shared by both sets.
+            folds: dict[str, bool] = {}
             #: Sources an earlier change in this same preview already moves. The
             #: real run renames a shared PDF once and repoints the later entry;
             #: without this the preview promised a rename per entry, so two
             #: entries sharing a file previewed two clean renames where the run
             #: performs one rename, one repoint and an error.
-            planned_sources: set[str] = set()
+            planned_sources: set[tuple[int, int] | str] = set()
             for change in changes:
                 old_pdf = change.get("old_pdf")
                 new_pdf = change.get("new_pdf")
                 will_rename = bool(old_pdf) and os.path.exists(str(old_pdf))
-                if will_rename and str(old_pdf) in planned_sources:
+                if will_rename and _source_key(str(old_pdf)) in planned_sources:
                     will_rename = False
                     errors.append(
                         f"would repoint {change['old_citekey']} rather than "
@@ -318,7 +356,7 @@ def reindex_library(
                 elif will_rename and new_pdf:
                     if (
                         _blocks_rename(new_pdf, str(old_pdf))
-                        or new_pdf in planned_destinations
+                        or _destination_key(new_pdf, folds) in planned_destinations
                     ):
                         will_rename = False
                         errors.append(
@@ -326,8 +364,8 @@ def reindex_library(
                             f"{old_pdf}: {new_pdf} already exists"
                         )
                     else:
-                        planned_destinations.add(new_pdf)
-                        planned_sources.add(str(old_pdf))
+                        planned_destinations.add(_destination_key(new_pdf, folds))
+                        planned_sources.add(_source_key(str(old_pdf)))
                 change["renamed_pdf"] = will_rename
         elif changes:
             # Every citekey in the library is about to change, breaking any
@@ -420,7 +458,9 @@ def rename_files_to_policy(
         errors: list[str] = []
         skipped_cosmetic = 0
         planned_destinations: set[str] = set()
-        planned_sources: set[str] = set()
+        planned_sources: set[tuple[int, int] | str] = set()
+        #: One case-sensitivity probe per directory, shared by both sets.
+        folds: dict[str, bool] = {}
 
         for index, entry in enumerate(entries):
             record = records[index] if index < len(records) else {}
@@ -443,7 +483,7 @@ def rename_files_to_policy(
             # The same two refusals the citekey pass makes, for the same
             # reasons: never overwrite an existing file, and never rename a
             # source a previous change in this run already moved.
-            if str(current_path) in planned_sources:
+            if _source_key(str(current_path)) in planned_sources:
                 errors.append(
                     f"would repoint {citekey} rather than rename: {current} "
                     "shares its PDF with another entry"
@@ -451,15 +491,15 @@ def rename_files_to_policy(
                 continue
             if (
                 _blocks_rename(destination, str(current_path))
-                or destination in planned_destinations
+                or _destination_key(destination, folds) in planned_destinations
             ):
                 errors.append(
                     f"keeping PDF for {citekey} at {current}: "
                     f"{destination} already exists"
                 )
                 continue
-            planned_destinations.add(destination)
-            planned_sources.add(str(current_path))
+            planned_destinations.add(_destination_key(destination, folds))
+            planned_sources.add(_source_key(str(current_path)))
             changed.append({
                 "citekey": citekey,
                 "old_pdf": str(current_path),

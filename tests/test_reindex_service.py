@@ -6,6 +6,8 @@ import os
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from pzi.reindex_service import reindex_library
 
 
@@ -785,3 +787,103 @@ def test_rename_files_does_not_clobber_a_sibling_renamed_earlier_in_the_batch(
     # Neither PDF was destroyed: one moved, the other stayed where it was.
     survivors = sorted(p.name for p in Path(papers).glob("*.pdf"))
     assert len(survivors) == 2, survivors
+
+
+def test_rename_files_preview_matches_the_run_where_case_folds(
+    tmp_path, monkeypatch,
+) -> None:
+    """The dry run and the real run must plan the same thing on macOS.
+
+    `planned_destinations` compared destination *strings*, so two targets
+    differing only in case read as two names where the filesystem has one
+    directory entry: the preview offered two renames for what the run performs
+    as one rename and one refusal. No PDF was ever at risk — the apply-time
+    guard catches it — but a preview of a different command is the property
+    `test_reindex_dry_run_matches_what_the_real_run_will_do` exists to hold.
+    """
+    from pzi import reindex_service
+
+    bib, papers = _library_with_names(tmp_path, [
+        ("one2024", "Alpha Beta", "one textbraceleft mangled.pdf"),
+        ("two2024", "alpha beta", "two textbraceleft mangled.pdf"),
+    ])
+    ci_exists, ci_samefile = _case_insensitive_path_ops()
+    monkeypatch.setattr(os.path, "exists", ci_exists)
+    monkeypatch.setattr(os.path, "samefile", ci_samefile)
+
+    preview = reindex_service.rename_files_to_policy(
+        bib_path=bib, papers_dir=papers,
+        pdf_filename_format="{{ title }}", dry_run=True,
+    )
+    run = reindex_service.rename_files_to_policy(
+        bib_path=bib, papers_dir=papers,
+        pdf_filename_format="{{ title }}", dry_run=False,
+    )
+
+    assert len(preview["changed"]) == 1, preview["changed"]
+    assert [c["new_pdf"] for c in preview["changed"]] == [
+        c["new_pdf"] for c in run["changed"]
+    ]
+    assert len(preview["errors"]) == len(run["errors"]) == 1
+    assert "already exists" in preview["errors"][0]
+
+
+def test_rename_files_renames_both_where_case_does_not_fold(tmp_path) -> None:
+    """The same two targets are two files on Linux, and both must rename.
+
+    This is why the planned-destination set is not simply case-folded: folding
+    unconditionally turns a cosmetic divergence on a machine the user does not
+    have into a real refusal on the one they work at. The probe is what tells
+    the two filesystems apart, and this test fails if it is removed.
+    """
+    from pzi import reindex_service
+    from pzi.fileio import directory_folds_case
+
+    bib, papers = _library_with_names(tmp_path, [
+        ("one2024", "Alpha Beta", "one textbraceleft mangled.pdf"),
+        ("two2024", "alpha beta", "two textbraceleft mangled.pdf"),
+    ])
+    if directory_folds_case(papers):
+        pytest.skip("this filesystem folds case; Linux CI covers the other branch")
+
+    result = reindex_service.rename_files_to_policy(
+        bib_path=bib, papers_dir=papers,
+        pdf_filename_format="{{ title }}", dry_run=False,
+    )
+
+    assert len(result["changed"]) == 2, result["changed"]
+    assert result["errors"] == [], result["errors"]
+    assert sorted(p.name for p in Path(papers).glob("*.pdf")) == [
+        "Alpha Beta.pdf", "alpha beta.pdf",
+    ]
+
+
+def test_rename_files_repoints_the_second_entry_sharing_one_file(tmp_path) -> None:
+    """Two entries can name one file without naming it the same way.
+
+    A hard link states it portably; on a case-folding filesystem, two spellings
+    of one name are the same thing. Either way the planned-source set saw two
+    distinct path strings and planned two renames of one file — here that ends
+    with the library holding two names for one inode, and on a folding
+    filesystem with the second `os.rename` finding a source that has already
+    moved. The rule the run applies is rename once, repoint the rest, so the
+    set has to compare identity rather than spelling.
+    """
+    from pzi import reindex_service
+
+    bib, papers = _library_with_names(tmp_path, [
+        ("one2024", "Alpha", "one textbraceleft mangled.pdf"),
+        ("two2024", "Beta", "two textbraceleft mangled.pdf"),
+    ])
+    shared = Path(papers) / "one textbraceleft mangled.pdf"
+    linked = Path(papers) / "two textbraceleft mangled.pdf"
+    linked.unlink()
+    os.link(shared, linked)
+
+    result = reindex_service.rename_files_to_policy(
+        bib_path=bib, papers_dir=papers,
+        pdf_filename_format="{{ title }}", dry_run=False,
+    )
+
+    assert len(result["changed"]) == 1, result["changed"]
+    assert any("shares its PDF" in e for e in result["errors"]), result["errors"]

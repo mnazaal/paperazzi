@@ -1,4 +1,4 @@
-"""Small file-reading helpers that produce user-facing errors.
+"""Small filesystem helpers that produce user-facing errors.
 
 Leaf module (only stdlib + :mod:`pzi.errors`) so any layer can use it without
 import cycles.  Centralizes UTF-8 text reads so that *every* user-supplied file
@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import errno
 import os
+import tempfile
 from pathlib import Path
 
 from pzi.errors import PziError
@@ -30,6 +31,55 @@ def read_text_utf8(path: str | Path) -> str:
     except UnicodeDecodeError as exc:
         raise PziError(f"{path} is not valid UTF-8 text") from exc
 
+
+def directory_folds_case(directory: str | Path) -> bool:
+    """Does *directory*'s filesystem treat two spellings as one name?
+
+    A property of the filesystem, not of the machine. macOS folds case by
+    default and Linux does not, but a synced or network mount can fold beneath
+    a Linux home that does not, and a case-sensitive APFS volume can sit
+    beneath a macOS one that does. So this asks the directory that will hold
+    the files — never ``/tmp``, which is routinely a different filesystem, and
+    never ``sys.platform``.
+
+    Answered from an existing name wherever there is one: its spelling is
+    case-swapped and looked up, then confirmed with ``samefile`` so that a
+    case-sensitive directory genuinely holding both spellings is not misread
+    as folding. A ``.pdf`` extension is itself a cased name, so a papers
+    directory decides this on its first entry, without a write.
+
+    Only an empty directory falls through to creating a temp file. That keeps
+    ``--dry-run`` over a populated library free of filesystem writes, and keeps
+    the probe out of a synced folder where a create-and-delete is upload churn.
+
+    Reported as ``False`` — case-sensitive, pzi's existing behaviour — when the
+    directory is missing, unreadable, or empty and unwritable. Nothing can be
+    renamed into such a directory, so the answer costs nothing.
+    """
+    path = Path(directory)
+    try:
+        with os.scandir(path) as entries:
+            for entry in entries:
+                swapped = entry.name.swapcase()
+                if swapped == entry.name:
+                    continue
+                other = path / swapped
+                if not os.path.exists(other):
+                    return False
+                return os.path.samefile(path / entry.name, other)
+    except OSError:
+        return False
+
+    try:
+        handle, probe = tempfile.mkstemp(dir=str(path), prefix=".pziCase", suffix=".tmp")
+    except OSError:
+        return False
+    os.close(handle)
+    try:
+        head, name = os.path.split(probe)
+        return os.path.exists(os.path.join(head, name.replace(".pziCase", ".pzicase")))
+    finally:
+        os.unlink(probe)
 
 def fsync_parent_dir(path: str | Path) -> None:
     """Best-effort fsync of *path*'s parent directory after an ``os.replace``.
