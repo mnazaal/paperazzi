@@ -30,7 +30,14 @@ classifiers = [
 ]
 dependencies = [
     "argcomplete>=3",
-    "bibtexparser>=2.0.0b9,<3",
+    # Upper bound names the last version the suite has been run against, not a
+    # guess about the future. `<3` used to promise every 2.x beta and the 2.x
+    # final, none of which pzi had tested — and 2.0.0b10 walked through that
+    # door and flipped `Library.add`'s `fail_on_duplicate_key` default. Widen
+    # this deliberately, prompted by the weekly `unlocked` CI job, rather than
+    # leaving it open. (Note the specifier names a prerelease, so PEP 440 has
+    # resolvers consider prereleases for this package.)
+    "bibtexparser>=2.0.0b9,<2.0.0b11",
     "portalocker>=2",
     # Already required by bibtexparser; declared explicitly because pzi
     # imports it directly (LaTeX decoding for PDF filenames) and must not

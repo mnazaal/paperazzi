@@ -3,6 +3,10 @@ name: CI
 on:
   push:
   pull_request:
+  schedule:
+    # Mondays, 05:00 UTC. The only trigger for `unlocked` below, which asks a
+    # question about the outside world rather than about the commit.
+    - cron: "0 5 * * 1"
 
 jobs:
   test:
@@ -138,3 +142,57 @@ jobs:
           PZI_LIVE: "1"
           PZI_CONTACT_EMAIL: "18580527+mnazaal@users.noreply.github.com"
         run: .venv/bin/pytest tests/live/ -m "not browser" -q
+
+  unlocked:
+    name: Fresh resolution (no lockfile)
+    # Every other job installs with `uv sync --locked`, so nothing in CI has
+    # ever run against the dependency set a `pip install` produces. That gap is
+    # not hypothetical: bibtexparser 2.0.0b10 flipped a default pzi depended on,
+    # and the tests that would have caught it already existed — they had simply
+    # never been run against b10.
+    #
+    # Weekly, and never blocking. A failure here is news about someone else's
+    # release, not about the commit under test; wiring it to `push` would let an
+    # upstream publication turn every PR red, which is how a job like this gets
+    # ignored and then deleted.
+    if: github.event_name == 'schedule'
+    continue-on-error: true
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Resolve from pyproject.toml, ignoring the lockfile
+        run: |
+          rm -f uv.lock
+          uv sync --extra dev
+
+      - name: Report drift from the lockfile
+        # The job's own exit condition. If the fresh resolution matches the
+        # lockfile, this run tested the same versions as every other job and
+        # proved nothing — say so rather than reporting a green that means
+        # nothing.
+        run: |
+          git --no-pager diff --stat -- uv.lock
+          if git diff --quiet -- uv.lock; then
+            echo "::warning::fresh resolution matches uv.lock; this run duplicated the locked jobs"
+          fi
+
+      - name: Tests (excluding browser tests)
+        env:
+          PZI_SKIP_AUTO_START: "1"
+        run: .venv/bin/pytest -m "not browser" -q
