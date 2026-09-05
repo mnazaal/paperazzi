@@ -438,7 +438,49 @@ has a PDF, not where it is. `pzi.get()` is the one that carries
 
 paperazzi is local-first and BibTeX-native. Internally, it keeps pure planning logic separate from side effects and uses this ingest pipeline: `classify → fetch → normalize → match → attach PDF → plan → write`.
 
-Three front-ends — the CLI (`pzi.cli` → `pzi.commands.*`), the local HTTP API (`pzi.http_api`, used by the browser extension), and the Python API (`pzi.api`, what `import pzi` gives you) — all converge on one function, `pzi.capture_core.capture_to_bib`, each building the same two frozen request models (`CaptureInput`/`CaptureOptions` in `pzi.capture_models`). The browser extension is a client of the HTTP front end, not a fourth one. Everything below that point, including the `pzi.add_service` core, is shared verbatim, so capture behaves identically however it is triggered. Differences stay above the seam: only the CLI starts the translation-server, and only the HTTP path enforces the request gate (host, origin, token) and refuses bibs that are not configured libraries. SSRF validation is *not* one of those differences — `safe_public_http_url` is applied in shared code (`capture_core`, `safe_http`, `pdf_discovery`, `flaresolverr`, `browser_session`), so every front end gets it. Network access goes through dependency-injected fetcher seams typed in `pzi.protocols` (translation-server, Crossref/OpenAlex/S2, Unpaywall, PDF/binary), which is what lets the test suite run hermetically without hitting the network. Every module is classified into exactly one of five tiers, enforced by `tests/test_layer_boundaries.py`: **CORE** (`bibtex`, `similarity`, `url_safety`, `pdf_planning`, …) imports no front-end and no browser module even transitively; **PIPELINE** is exactly `pdf`, `pdf_discovery` and `pdf_download`, which may reach the browser hooks they need to find a PDF but never a front-end; **SERVICE** (`add_service`, `capture_core`, `bib_repository`, …) may reach both but no front-end; **FRONTEND** is the CLI, the HTTP API and `api`; **BROWSER** is the browser and server-browser drivers. So "pure modules never import the browser layer" is true of CORE and not of PIPELINE — `pdf_discovery` imports `server_browser` and `browser_pdf` deliberately, and the test permits it. Writes are funneled through `pzi.bib_repository`, which holds a `portalocker` lock across the whole read-modify-write and replaces the file atomically. A write prepared before someone else's edit landed is re-projected onto the library as read under the lock; one whose target entry was deleted or renamed meanwhile is refused (exit 5) rather than applied to whatever now sits at that position.
+Three front-ends — the CLI (`pzi.cli` → `pzi.commands.*`), the local HTTP API (`pzi.http_api`, used by the browser extension), and the Python API (`pzi.api`, what `import pzi` gives you) — all converge on one function, `pzi.capture_core.capture_to_bib`, each building the same two frozen request models (`CaptureInput`/`CaptureOptions` in `pzi.capture_models`). The browser extension is a client of the HTTP front end, not a fourth one. Everything below that point, including the `pzi.add_service` core, is shared verbatim, so capture behaves identically however it is triggered. Differences stay above the seam: only the CLI starts the translation-server, and only the HTTP path enforces the request gate (host, origin, token) and refuses bibs that are not configured libraries. SSRF validation is *not* one of those differences — `safe_public_http_url` is applied in shared code (`capture_core`, `safe_http`, `pdf_discovery`, `flaresolverr`, `browser_session`), so every front end gets it. Network access goes through dependency-injected fetcher seams typed in `pzi.protocols` (translation-server, Crossref/OpenAlex/S2, Unpaywall, PDF/binary), which is what lets the test suite run hermetically without hitting the network. Every module is classified into exactly one of five tiers, enforced by `tests/test_layer_boundaries.py`: **CORE** (`bibtex`, `similarity`, `url_safety`, `pdf_planning`, …) imports no front-end and no browser module even transitively; **PIPELINE** is exactly `pdf`, `pdf_discovery` and `pdf_download`, which may reach the browser hooks they need to find a PDF but never a front-end; **SERVICE** (`add_service`, `capture_core`, `bib_repository`, …) may reach both but no front-end; **FRONTEND** is the CLI, the HTTP API and `api`; **BROWSER** is the browser and server-browser drivers. So "pure modules never import the browser layer" is true of CORE and not of PIPELINE — `pdf_discovery` imports `server_browser` and `browser_pdf` deliberately, and the test permits it. Writes are funneled through `pzi.bib_repository`, which holds a `portalocker` lock across the whole read-modify-write and replaces the file atomically. A write prepared before someone else's edit landed is re-projected onto the library as read under the lock; one whose target entry was deleted or renamed meanwhile is refused (exit 5) rather than applied to whatever now sits at that position. That covers other pzi processes, which take the lock. A program that does not take it is covered differently — see [Sharing the library with another program](#sharing-the-library-with-another-program).
+
+## Sharing the library with another program
+
+pzi locks your `.bib` for every read-modify-write and replaces it atomically.
+The lock is *advisory*, and pzi is the only program that takes it. Anything
+else — Zotero's Better BibTeX auto-export, a text editor, Dropbox or OneDrive —
+can write the same file at any moment, including while pzi is working on it.
+
+**What pzi does about it.** Immediately before replacing the file, pzi re-reads
+it and compares it with what it read at the start. If they differ, another
+program wrote to the library in between, so pzi **refuses and writes nothing**
+(exit 5). The other program's write is left intact and pzi's own work is
+discarded, not the other way round. Re-run once the other writer has stopped.
+
+**Which commands are exposed, and for how long.** The window is the time pzi
+holds the lock:
+
+| Command | Lock held for |
+|---|---|
+| `pzi import <file.bib>` | the whole file — every entry, in one transaction |
+| `pzi add`, `update`, `delete`, `merge`, `library reindex` | one read-modify-write, typically well under a second |
+| `pzi add --from-file`, `pzi inbox` | one item at a time; the lock is released between items, on purpose |
+
+`pzi import` is by far the widest, and it is the command you run to migrate a
+library — so it is the one most likely to collide with the tool you are
+migrating away from.
+
+**Migrating from Zotero.** Better BibTeX's auto-export, set to `immediate`,
+rewrites its `.bib` every time anything in your Zotero library changes. If that
+file is also pzi's library, the two will contend. Either:
+
+- set Better BibTeX's auto-export to **manual** for the duration of the
+  migration, or
+- point Better BibTeX at a **different file** from the one pzi manages, and
+  `pzi import` from it.
+
+The second is the safer arrangement to keep permanently if you intend to run
+both tools side by side.
+
+**File-sync clients.** Dropbox, OneDrive and similar write your library
+whenever they pull a remote change, with the same effect and the same refusal.
+Nothing is lost, but a sync landing mid-import costs you the import.
 
 ## Versioning and compatibility
 

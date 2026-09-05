@@ -5,11 +5,13 @@ from unittest.mock import patch
 
 import pytest
 
+from pzi import exit_codes
 from pzi.add_service import ensure_citekey_for_write
 from pzi.bib_repository import (
     StalePlanError,
     _write_bib_text_atomic,
     apply_write_plan,
+    batch_write_session,
     describe_missing_bib,
     execute_write_plan,
     merge_bib_entries,
@@ -608,7 +610,9 @@ def test_write_bib_text_atomic_preserves_original_and_cleans_up_temp_on_failure(
     with patch("os.replace", side_effect=OSError("simulated crash")):
         with pytest.raises(OSError, match="simulated crash"):
             _write_bib_text_atomic(
-                str(path), "@article{smith2024graph,\n  title = {New}\n}\n"
+                str(path),
+                "@article{smith2024graph,\n  title = {New}\n}\n",
+                expected_source="original content\n",
             )
 
     assert path.read_text() == "original content\n"
@@ -629,7 +633,8 @@ def test_write_bib_text_atomic_writes_through_a_symlink(tmp_path: Path) -> None:
     link_path.symlink_to(real_path)
 
     _write_bib_text_atomic(
-        str(link_path), "@article{smith2024,\n  title = {T}\n}\n"
+        str(link_path), "@article{smith2024,\n  title = {T}\n}\n",
+        expected_source="",
     )
 
     assert link_path.is_symlink()
@@ -1036,3 +1041,99 @@ def test_merging_tags_still_reports_a_genuinely_new_tag(tmp_path: Path) -> None:
 
     assert "tags" in decision["changed_fields"]
     assert set(decision["merged"]["tags"]) == {"zeta", "alpha", "newone"}
+
+
+# === an external writer is never silently overwritten ===
+#
+# pzi's lock is advisory and pzi is the only program that takes it. Zotero's
+# Better BibTeX auto-export, an editor, or a file-sync client writes the
+# library whenever it likes, and the commit is an `os.replace` of text rendered
+# from an earlier read — so without a check the other writer's work vanishes
+# whole, with nothing said. These cover the three ways a commit reaches the
+# guard: the atomic writer directly, the `.bak`-taking wrapper, and the batch
+# session, whose lock is held for the length of a `pzi import` and so has by
+# far the widest window.
+
+
+def test_atomic_write_refuses_to_replace_content_it_did_not_read(
+    tmp_path: Path,
+) -> None:
+    bib = tmp_path / "library.bib"
+    bib.write_text("@article{a2020,\n  title = {A},\n}\n", encoding="utf-8")
+
+    with pytest.raises(PziError) as excinfo:
+        _write_bib_text_atomic(
+            str(bib),
+            "@article{a2020,\n  title = {B},\n}\n",
+            expected_source="something pzi read earlier\n",
+        )
+
+    assert excinfo.value.code == exit_codes.ENVIRONMENT
+    assert "changed on disk" in str(excinfo.value)
+    assert bib.read_text(encoding="utf-8") == "@article{a2020,\n  title = {A},\n}\n"
+    # The temporary file is written before the check and must not survive it.
+    assert list(tmp_path.glob(".bib-*.tmp")) == []
+
+
+def test_update_keeps_a_write_that_landed_while_it_held_the_lock(
+    tmp_path: Path,
+) -> None:
+    """The updater callback runs under the lock, which is where the race is."""
+    bib = tmp_path / "library.bib"
+    bib.write_text("@article{a2020,\n  title = {A},\n}\n", encoding="utf-8")
+    foreign = "@article{zotero2020,\n  title = {Exported by Zotero},\n}\n"
+
+    def updater(entry, record):
+        bib.write_text(foreign, encoding="utf-8")
+        return {
+            "entry_type": entry["entry_type"],
+            "citekey": entry["citekey"],
+            "fields": {**entry["fields"], "title": "B"},
+        }
+
+    with pytest.raises(PziError) as excinfo:
+        update_bib_entry(str(bib), "a2020", updater)
+
+    assert excinfo.value.code == exit_codes.ENVIRONMENT
+    assert bib.read_text(encoding="utf-8") == foreign
+
+
+def test_update_leaves_no_backup_when_it_refuses(tmp_path: Path) -> None:
+    """A `.bak` from a write that did not happen invites restoring over content
+    nothing replaced — the rule `_write_bib_with_backup` already applies to a
+    failed write, now reached by a refusal instead of an OSError."""
+    bib = tmp_path / "library.bib"
+    bib.write_text("@article{a2020,\n  title = {A},\n}\n", encoding="utf-8")
+    backup = tmp_path / "library.bib.bak"
+
+    def updater(entry, record):
+        bib.write_text("@article{other2020,\n  title = {Other},\n}\n", encoding="utf-8")
+        return {
+            "entry_type": entry["entry_type"],
+            "citekey": entry["citekey"],
+            "fields": {**entry["fields"], "title": "B"},
+        }
+
+    with pytest.raises(PziError):
+        update_bib_entry(str(bib), "a2020", updater, backup_path=backup)
+
+    assert not backup.exists()
+
+
+def test_import_length_batch_refuses_rather_than_discarding_a_foreign_write(
+    tmp_path: Path,
+) -> None:
+    """`pzi import` holds the lock across a whole file, which is the widest
+    window pzi has — and exactly what someone migrating off Zotero runs while
+    Zotero is still open with auto-export set to immediate."""
+    bib = tmp_path / "library.bib"
+    bib.write_text("@article{a2020,\n  title = {A},\n}\n", encoding="utf-8")
+    foreign = "@article{zotero2020,\n  title = {Exported mid-import},\n}\n"
+
+    with pytest.raises(PziError) as excinfo:
+        with batch_write_session(str(bib)) as session:
+            session.apply_plan(plan_bib_write({"citekey": "b2024", "title": "B"}, []))
+            bib.write_text(foreign, encoding="utf-8")
+
+    assert excinfo.value.code == exit_codes.ENVIRONMENT
+    assert bib.read_text(encoding="utf-8") == foreign

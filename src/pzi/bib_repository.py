@@ -381,7 +381,36 @@ def _existing_file_mode(file_path: Path) -> int | None:
 _write_all = write_all
 
 
-def _write_bib_text_atomic(path: str, text: str) -> None:
+def _assert_unchanged_since_read(path: str, expected_source: str) -> None:
+    """Refuse to commit over a write pzi never read.
+
+    pzi's lock is advisory and only pzi takes it. Better BibTeX's auto-export,
+    an editor, or a file-sync client rewrites the library without asking, and
+    the commit below is an ``os.replace`` of text rendered from an earlier
+    read — so that writer's work would vanish whole, with nothing said. The
+    window is sub-second for a single `add` and the length of the run for
+    `pzi import`, which holds the lock across an entire file and is exactly
+    what someone migrating off Zotero runs while Zotero is still open.
+
+    Re-reads rather than comparing a stat snapshot taken at read time:
+    :func:`read_bib_source` is the same function every caller used to obtain
+    *expected_source*, so equality here is equality by construction, with no
+    BOM, newline or encoding shape to keep in step separately. It also costs
+    nothing to call from a sixth site, which a snapshot threaded through six
+    signatures would not.
+    """
+    if read_bib_source(path) == expected_source:
+        return
+    raise PziError(
+        f"{path} changed on disk while pzi held its lock, so this write would "
+        "discard that change: nothing was written. Another program is writing "
+        "to the library — Zotero's Better BibTeX auto-export does this, as do "
+        "editors and file-sync clients. Re-run once it has stopped.",
+        code=exit_codes.ENVIRONMENT,
+    )
+
+
+def _write_bib_text_atomic(path: str, text: str, *, expected_source: str) -> None:
     """Replace the bib at *path* with *text*, all-or-nothing.
 
     Writes a sibling temporary file, fsyncs it, then ``os.replace``s it over the
@@ -406,6 +435,7 @@ def _write_bib_text_atomic(path: str, text: str) -> None:
             os.fsync(fd)  # flush to disk before rename so a crash can't leave an empty bib
         finally:
             os.close(fd)
+        _assert_unchanged_since_read(path, expected_source)
         if previous_mode is not None:
             # mkstemp creates 0600; without this every write silently tightened
             # a 0644 bib and broke anything else reading it.
@@ -418,7 +448,9 @@ def _write_bib_text_atomic(path: str, text: str) -> None:
     fsync_parent_dir(file_path)
 
 
-def _write_bib_with_backup(path: str, text: str, backup_path: Path | None) -> None:
+def _write_bib_with_backup(
+    path: str, text: str, backup_path: Path | None, *, expected_source: str
+) -> None:
     """Write *text*, leaving a ``.bak`` of the replaced file only if it lands.
 
     The copy is taken here — under the caller's lock, immediately before the
@@ -434,7 +466,7 @@ def _write_bib_with_backup(path: str, text: str, backup_path: Path | None) -> No
         backup_path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
         shutil.copy2(path, backup_path)
     try:
-        _write_bib_text_atomic(path, text)
+        _write_bib_text_atomic(path, text, expected_source=expected_source)
     except BaseException:
         if backup_path is not None:
             backup_path.unlink(missing_ok=True)
@@ -691,7 +723,7 @@ def execute_write_plan(
         path, plan, shared=False, file_path_style=file_path_style
     ) as (source, new_source, updated_entries):
         if new_source != source:
-            _write_bib_text_atomic(path, new_source)
+            _write_bib_text_atomic(path, new_source, expected_source=source)
         return updated_entries
 
 
@@ -903,7 +935,9 @@ def batch_write_session(
             library, session, path, source, file_path_style=file_path_style
         )
         if new_source != source:
-            _write_bib_with_backup(path, new_source, backup_path)
+            _write_bib_with_backup(
+                path, new_source, backup_path, expected_source=source
+            )
 
 
 def preview_write_plan(
@@ -1299,7 +1333,9 @@ def update_bib_entry(
                 file_path_style=file_path_style,
             )
             if new_source != source:
-                _write_bib_with_backup(path, new_source, backup_path)
+                _write_bib_with_backup(
+                    path, new_source, backup_path, expected_source=source
+                )
         return {
             "found": True,
             "entries": entries,
@@ -1363,7 +1399,9 @@ def delete_bib_entry(
         if new_source != source:
             # Only when something is actually deleted, so a missing citekey
             # leaves no stray `.bak`; `_write_bib_with_backup` owns the rest.
-            _write_bib_with_backup(path, new_source, backup_path)
+            _write_bib_with_backup(
+                path, new_source, backup_path, expected_source=source
+            )
         return {"found": True, "entries": remaining, "entry": None, "record": None}
 
 
@@ -1463,7 +1501,9 @@ def merge_bib_entries(
         new_library = build_library(new_blocks)
         new_source = serialize_library(new_library, layout=detect_bib_layout(source))
         if new_source != source:
-            _write_bib_with_backup(path, new_source, backup_path)
+            _write_bib_with_backup(
+                path, new_source, backup_path, expected_source=source
+            )
         return {
             "found": True,
             "merged_record": merged_record,
@@ -1537,5 +1577,5 @@ def rewrite_entries_in_order_locked(
         new_library, layout=detect_bib_layout(source), verbatim_positions=verbatim
     )
     if new_source != source:
-        _write_bib_text_atomic(path, new_source)
+        _write_bib_text_atomic(path, new_source, expected_source=source)
     return entries

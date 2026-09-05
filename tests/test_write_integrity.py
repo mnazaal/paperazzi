@@ -74,7 +74,7 @@ def test_short_write_leaves_the_original_bibliography_untouched(
         return real_write(fd, bytes(data)[:7])
 
     monkeypatch.setattr(os, "write", _one_short_write)
-    _write_bib_text_atomic(path, TWO_ENTRIES)
+    _write_bib_text_atomic(path, TWO_ENTRIES, expected_source=ONE_ENTRY)
 
     assert bib.read_text(encoding="utf-8") == TWO_ENTRIES
 
@@ -90,7 +90,7 @@ def test_failed_write_removes_the_temporary_file_and_keeps_the_original(
 
     monkeypatch.setattr(os, "write", _failing_write)
     with pytest.raises(OSError):
-        _write_bib_text_atomic(path, TWO_ENTRIES)
+        _write_bib_text_atomic(path, TWO_ENTRIES, expected_source=ONE_ENTRY)
 
     assert bib.read_text(encoding="utf-8") == ONE_ENTRY
     assert list(tmp_path.glob(".bib-*.tmp")) == []
@@ -333,7 +333,7 @@ def test_write_preserves_the_existing_file_mode(tmp_path: Path) -> None:
     path = _write(bib, ONE_ENTRY)
     os.chmod(bib, 0o644)
 
-    _write_bib_text_atomic(path, TWO_ENTRIES)
+    _write_bib_text_atomic(path, TWO_ENTRIES, expected_source=ONE_ENTRY)
 
     assert stat.S_IMODE(os.stat(bib).st_mode) == 0o644
 
@@ -342,7 +342,7 @@ def test_write_preserves_crlf_line_endings(tmp_path: Path) -> None:
     bib = tmp_path / "main.bib"
     bib.write_bytes(ONE_ENTRY.replace("\n", "\r\n").encode("utf-8"))
 
-    _write_bib_text_atomic(str(bib), TWO_ENTRIES)
+    _write_bib_text_atomic(str(bib), TWO_ENTRIES, expected_source=ONE_ENTRY)
 
     raw = bib.read_bytes()
     assert b"\r\n" in raw
@@ -356,7 +356,7 @@ def test_write_keeps_a_byte_order_mark_at_the_start_of_the_file(tmp_path: Path) 
     result = read_bib_file(str(bib))
     assert [entry["citekey"] for entry in result["entries"]] == ["smith2020"]
 
-    _write_bib_text_atomic(str(bib), TWO_ENTRIES)
+    _write_bib_text_atomic(str(bib), TWO_ENTRIES, expected_source=ONE_ENTRY)
 
     raw = bib.read_bytes()
     assert raw.startswith(b"\xef\xbb\xbf@article")
@@ -821,7 +821,7 @@ def test_a_failed_write_leaves_no_stale_backup(
     bib_path = _write(tmp_path / "lib.bib", TWO_ENTRIES)
     backup = Path(bib_path + ".bak")
 
-    def explode(_path: str, _text: str) -> None:
+    def explode(_path: str, _text: str, *, expected_source: str) -> None:
         raise OSError("no space left on device")
 
     monkeypatch.setattr("pzi.bib_repository._write_bib_text_atomic", explode)
