@@ -14,7 +14,11 @@ from pzi.bib_repository import (
     read_bib_file_with_failures,
     read_bib_notices,
 )
-from pzi.bib_serialize import failed_block_details, validate_bibtex_roundtrip
+from pzi.bib_serialize import (
+    failed_block_details,
+    parse_bib_library_resolving_macros,
+    validate_bibtex_roundtrip,
+)
 from pzi.bibtex import BibtexEntry
 from pzi.config import AppConfig, BibConfig
 from pzi.errors import REASON_USAGE, PziError
@@ -177,9 +181,7 @@ def validate_library(
     duplicate_citekeys: list[str] = []
     parse_failures: list[str] = []
     if Path(bib_path).exists():
-        from bibtexparser.entrypoint import parse_string as _parse
-
-        library = _parse(read_text_utf8(bib_path))
+        library = parse_bib_library_resolving_macros(read_text_utf8(bib_path))
         for key, message in failed_block_details(library):
             if key is None:
                 parse_failures.append(message)

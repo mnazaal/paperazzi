@@ -28,12 +28,13 @@ from bibtexparser.middlewares.enclosing import (
     AddEnclosingMiddleware,
     RemoveEnclosingMiddleware,
 )
+from bibtexparser.middlewares.interpolate import ResolveStringReferencesMiddleware
 from bibtexparser.model import (
     Block,
-    DuplicateBlockKeyBlock,
     ExplicitComment,
     Field,
     ImplicitComment,
+    String,
 )
 from bibtexparser.model import Entry as BibtexEntryV2
 from bibtexparser.writer import BibtexFormat
@@ -51,34 +52,55 @@ from pzi.errors import PziError
 
 def parse_bibtex(text: str) -> list[BibtexEntry]:
     """Parse BibTeX text into entry dictionaries using bibtexparser v2."""
-    library = parse_string(text)
+    library = parse_bib_library_resolving_macros(text)
     return [library_entry_to_bibtex_entry(entry) for entry in library.entries]
 
 
-def build_library(blocks: Sequence[Block]) -> Library:
-    """Build a ``Library`` from *blocks*, refusing duplicate entry keys.
+def _duplicate_keys(blocks: Sequence[Block], kind: type[Block]) -> set[str]:
+    """Keys appearing more than once among the *kind* blocks in *blocks*."""
+    seen: dict[str, int] = {}
+    for block in blocks:
+        if isinstance(block, kind):
+            key = str(getattr(block, "key", ""))
+            seen[key] = seen.get(key, 0) + 1
+    return {key for key, count in seen.items() if count > 1}
 
-    ``Library.add`` is "key-safe": a block whose key is already present is
-    *silently* replaced with a ``DuplicateBlockKeyBlock``, which the writer then
-    emits under a ``% WARNING Parsing failed`` header. Written to disk that
-    wedges the library — the entry vanishes from ``entries``, ``export``
-    refuses, and the next parse reports a failed block — so every site that
-    constructs a library destined for disk goes through here instead.
+
+def build_library(blocks: Sequence[Block]) -> Library:
+    """Build a ``Library`` from *blocks*, refusing duplicate keys.
+
+    A library that reaches disk with two blocks sharing a key is wedged: the
+    second vanishes from ``entries``, ``export`` refuses, and the next parse
+    reports a failed block. Every site that builds a library destined for disk
+    comes through here.
+
+    **The count is pzi's own, deliberately.** Asking ``Library`` to detect this
+    means depending on how a third party chooses to report it, and that
+    dependence broke once: bibtexparser ``2.0.0b9`` collects duplicates into
+    ``failed_blocks`` while ``b10`` raises ``ValueError`` from the constructor,
+    so on b10 the refusal below became unreachable and the user got bibtexparser
+    advice instead. Counting here depends on nothing but Python.
+
+    :func:`assert_citekeys_unique` answers the same question one layer up, over
+    pzi's own records rather than parsed blocks. The two stay separate — they
+    take different types at different layers — and are held to one wording by
+    ``test_the_two_duplicate_gates_speak_with_one_voice``.
+
+    Keys are counted per block kind, matching BibTeX and ``Library`` itself: an
+    ``@string`` and an entry may share a name without colliding.
     """
-    library = Library(blocks=list(blocks))
-    duplicates = [
-        block.key
-        for block in library.failed_blocks
-        if isinstance(block, DuplicateBlockKeyBlock)
-    ]
+    blocks = list(blocks)
+    duplicates = sorted(
+        _duplicate_keys(blocks, BibtexEntryV2) | _duplicate_keys(blocks, String)
+    )
     if duplicates:
-        listed = ", ".join(sorted(set(duplicates)))
+        listed = ", ".join(duplicates)
         raise PziError(
             f"refusing to write: duplicate citekey {listed} — "
             "two entries would share one key, and BibTeX cannot represent that",
             code=exit_codes.ENVIRONMENT,
         )
-    return library
+    return Library(blocks=blocks)
 
 
 def assert_citekeys_unique(entries: Sequence[BibtexEntry]) -> None:
@@ -345,10 +367,41 @@ def _normalize_file_field(
 
 
 def parse_bib_library(raw_text: str) -> Library:
-    """Parse BibTeX source text into a v2 Library."""
+    """Parse BibTeX source text into a v2 Library, **preserving** ``@string``
+    references.
+
+    The write path's parse. ``journal = jmlr`` stays ``jmlr``, because the
+    ``@string`` definition lives in the same file and rewriting one entry must
+    not expand macros in the rest — the guarantee
+    ``tests/test_bib_stability.py`` states formally.
+
+    The stack is passed rather than defaulted: bibtexparser's default includes
+    ``ResolveStringReferencesMiddleware``, which is the opposite of what this
+    function is for.
+    """
     if not raw_text:
         return Library(blocks=[])
     return parse_string(raw_text, parse_stack=[RemoveEnclosingMiddleware()])
+
+
+def parse_bib_library_resolving_macros(raw_text: str) -> Library:
+    """Parse BibTeX source text into a v2 Library, **expanding** ``@string``
+    references.
+
+    The read and import parse. ``journal = jmlr`` becomes the macro's text,
+    which is what a caller reading entries out of a file wants and what an
+    *import* requires: :func:`parse_bibtex_for_import` returns entries only, so
+    an unexpanded reference would enter the user's library pointing at a macro
+    that never arrived.
+
+    This is bibtexparser's default stack, written out. Stated rather than
+    inherited, so the difference from :func:`parse_bib_library` is a decision
+    on the page instead of an accident of upstream defaults.
+    """
+    return parse_string(
+        raw_text,
+        parse_stack=[ResolveStringReferencesMiddleware(), RemoveEnclosingMiddleware()],
+    )
 
 
 def describe_failed_blocks(library: Library) -> list[str]:
@@ -497,7 +550,7 @@ def _user_facing_parse_error(error: object) -> str:
 
 def parse_bibtex_with_failures(text: str) -> tuple[list[BibtexEntry], list[str]]:
     """Parse BibTeX text, returning entries and a message per dropped block."""
-    library = parse_string(text)
+    library = parse_bib_library_resolving_macros(text)
     entries = [library_entry_to_bibtex_entry(entry) for entry in library.entries]
     return entries, describe_failed_blocks(library)
 
@@ -514,7 +567,7 @@ def parse_bibtex_for_import(text: str) -> tuple[list[BibtexEntry], list[str]]:
     Each unusable entry produces exactly one message. Reporting it as both a
     dropped block and a failed record made a two-entry file import as "0/3".
     """
-    library = parse_string(text)
+    library = parse_bib_library_resolving_macros(text)
     problems = [message for _key, message in failed_block_details(library)]
     entries: list[BibtexEntry] = []
     for block in library.entries:
@@ -672,10 +725,14 @@ def serialize_library(
     # keeping its `% ==` comments flush against the entry they describe — and
     # that is what a Better BibTeX export looks like. Writing each block with no
     # separator and joining by the *following* block's kind reproduces both.
-    # Safe to write per block because `value_column` is 0 (bibtexparser's
-    # default): no alignment is computed across the library, so a block's
-    # rendering does not depend on its neighbours.
     fmt.block_separator = ""
+    # Set, not inherited. Writing per block is only correct while no alignment
+    # is computed across the library — with a non-zero `value_column` a block's
+    # rendering would depend on its neighbours, and every write would pad field
+    # values into columns the user's file never had. That is the whole-file
+    # reformat `BibLayout` exists to prevent, so pzi states the 0 rather than
+    # trusting bibtexparser's default to stay there.
+    fmt.value_column = 0
     unparse_stack = [
         AddEnclosingMiddleware(
             default_enclosing="{",
@@ -736,7 +793,7 @@ def validate_bibtex_roundtrip(entries: list[BibtexEntry]) -> None:
     try:
         blocks = [bibtex_entry_to_library_entry(entry) for entry in entries]
         text = _write_library_text(build_library(blocks))
-        reparsed = parse_string(text)
+        reparsed = parse_bib_library_resolving_macros(text)
     except PziError:
         raise
     except Exception as exc:

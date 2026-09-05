@@ -881,3 +881,62 @@ def test_the_preview_and_the_write_render_the_same_source(
 
     assert preview["changed"] is True
     assert preview["new_source"] == Path(bib_path).read_text(encoding="utf-8")
+
+
+# ── The two duplicate gates (item 594) ───────────────────────────────────────
+
+
+def test_the_two_duplicate_gates_speak_with_one_voice() -> None:
+    """`build_library` and `assert_citekeys_unique` refuse in the same words.
+
+    They are deliberately separate — one counts parsed blocks, the other counts
+    pzi's own records, and they sit at different layers so a write reaching
+    either is refused. Which half catches a duplicate is an implementation
+    detail; the user must not be able to tell. Keeping both is only safe while
+    they agree, so this is the coupling, rather than merging them into one
+    function serving two call shapes.
+    """
+    from bibtexparser.model import Entry, Field
+
+    from pzi.bib_serialize import assert_citekeys_unique, build_library
+
+    blocks = [
+        Entry(entry_type="article", key="dup", fields=[Field(key="title", value="One")]),
+        Entry(entry_type="article", key="dup", fields=[Field(key="title", value="Two")]),
+    ]
+    records = [
+        {"entry_type": "article", "citekey": "dup", "fields": {"title": "One"}},
+        {"entry_type": "article", "citekey": "dup", "fields": {"title": "Two"}},
+    ]
+
+    with pytest.raises(PziError) as from_blocks:
+        build_library(blocks)  # type: ignore[arg-type]
+    with pytest.raises(PziError) as from_records:
+        assert_citekeys_unique(records)  # type: ignore[arg-type]
+
+    assert str(from_blocks.value) == str(from_records.value)
+    assert from_blocks.value.code == from_records.value.code
+
+
+def test_an_entry_and_a_string_may_share_a_name() -> None:
+    """Keys are counted per block kind, as BibTeX itself scopes them.
+
+    ``@string{smith2019graph = ...}`` and ``@article{smith2019graph, ...}`` do
+    not collide — they live in different namespaces, and `Library` keeps two
+    dicts for exactly that reason. Counting keys in one bucket would refuse a
+    file BibTeX accepts, which is the failure mode of replacing someone else's
+    check with your own without reading what theirs did.
+    """
+    from bibtexparser.model import Entry, Field, String
+
+    from pzi.bib_serialize import build_library
+
+    blocks = [
+        String(key="shared", value="{Some Journal}"),
+        Entry(entry_type="article", key="shared", fields=[Field(key="title", value="T")]),
+    ]
+
+    library = build_library(blocks)  # type: ignore[arg-type]
+
+    assert len(library.entries) == 1
+    assert len(library.strings) == 1

@@ -954,3 +954,46 @@ def test_a_batch_preview_runs_the_gates_the_batch_write_runs(tmp_path: Path) -> 
 
     with pytest.raises(RuntimeError):
         preview_batch_write(str(bib), desync)
+
+
+# ── Macro semantics: stated per call site, not inherited (item 596) ──────────
+
+
+MACRO_BIB = r"""@string{jmlr = {Journal of Machine Learning Research}}
+
+@article{smith2020,
+  title = {A Title},
+  journal = jmlr,
+  year = {2020},
+}
+"""
+
+
+def test_the_write_path_preserves_a_macro_the_read_and_import_paths_expand() -> None:
+    """Two parse semantics, one per purpose, and neither left to a default.
+
+    bibtexparser's default parse stack resolves ``@string`` references. The
+    write path must not: the definition lives in the same file, so expanding it
+    would rewrite entries a plan never touched — the guarantee this module
+    exists for. The read and import paths must: ``parse_bibtex_for_import``
+    returns entries only, so an unexpanded reference would enter the user's
+    library naming a macro that never arrived.
+
+    Both are stated explicitly at their call sites. This test is what makes the
+    difference a decision rather than an accident of which default was in force
+    when the code was written.
+    """
+    from pzi.bib_serialize import (
+        parse_bib_library,
+        parse_bibtex,
+        parse_bibtex_for_import,
+    )
+
+    write_side = parse_bib_library(MACRO_BIB)
+    assert write_side.entries[0].fields_dict["journal"].value == "jmlr"
+
+    assert parse_bibtex(MACRO_BIB)[0]["fields"]["journal"] == "Journal of Machine Learning Research"
+
+    imported, problems = parse_bibtex_for_import(MACRO_BIB)
+    assert problems == []
+    assert imported[0]["fields"]["journal"] == "Journal of Machine Learning Research"
