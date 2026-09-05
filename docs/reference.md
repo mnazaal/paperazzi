@@ -488,9 +488,10 @@ paperazzi follows [SemVer](https://semver.org/). This section says what that
 covers — which is not everything, and the boundary is the useful part.
 
 **The freeze takes effect at 1.0.** Until then the version is `0.x.y` and the
-surfaces below still move; several of them moved in the current beta, and the
-`CHANGELOG` says which. What is already true is that each one has a test that
-fails when it changes, so a break is a decision rather than an accident.
+surfaces below still move; several of them moved in the current beta. `git log`
+says which — `CHANGELOG.md` is the record up to 0.2.0 and stops there, and it
+restarts at the 1.0 release. What is already true is that each one has a test
+that fails when it changes, so a break is a decision rather than an accident.
 
 ### The frozen surfaces
 
