@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from pzi.format_templates import (
+    describe_template_error,
     format_citekey,
     format_pdf_filename,
     render_zotero_template,
@@ -443,3 +444,53 @@ def test_nested_braces_do_not_break_a_renderable_macro() -> None:
     )
     assert "SU(N)" in name, name
     assert "mathrm" not in name
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# C11 — the Zotero dialect is validated, not just its quotes
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@pytest.mark.parametrize(
+    ("template", "needle"),
+    [
+        ("{{ titel }}", "unknown variable"),
+        ("{{ title trunkate=20 }}", "unknown option"),
+        ("{{ title case=titlecase }}", "unknown case"),
+        ("{{ title match=[unclosed }}", "not a valid regex"),
+        ("{{ title replaceFrom=( replaceTo=x }}", "not a valid regex"),
+        ("{{ title truncate=lots }}", "must be a whole number"),
+        ("{{ title start=first }}", "must be a whole number"),
+    ],
+)
+def test_describe_template_error_rejects_silent_degradations(
+    template: str, needle: str
+) -> None:
+    """Every case here rendered *something* rather than failing.
+
+    An unknown variable renders the empty string, an unknown option is skipped,
+    and `_apply_options` swallows a bad regex — so `{{ titel }}` loaded clean
+    and every PDF it named fell back to citekey naming, with no diagnostic
+    anywhere. Only unbalanced quotes were caught before.
+    """
+    message = describe_template_error(template)
+    assert message is not None, f"{template!r} was accepted"
+    assert needle in message
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "{{ title }}",
+        "{{ firstCreator }}-{{ year }}",
+        "{{ title case=kebab truncate=40 }}",
+        "{{ auth case=lower }}{{ year }}",
+        "{{ title match=^The replaceFrom=\\s+ replaceTo=- regexOpts=g }}",
+        "{{ citekey }}",
+        "{{ publicationTitle prefix=[ suffix=] }}",
+        # A bare record field: `_template_value` falls through to the record,
+        # so the validator is permissive here on purpose.
+        "{{ abstract }}",
+    ],
+)
+def test_describe_template_error_accepts_usable_templates(template: str) -> None:
+    assert describe_template_error(template) is None

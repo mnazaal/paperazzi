@@ -144,6 +144,109 @@ def _parse_options(text: str) -> dict[str, str]:
     return options
 
 
+#: Options `_apply_options` implements. An unrecognised one is *ignored* at
+#: render time, so `{{ title trunkate=20 }}` silently renders the whole title —
+#: the same silent degradation the filter table above exists to catch.
+_TEMPLATE_OPTIONS = frozenset(
+    {
+        "match",
+        "regexOpts",
+        "replaceFrom",
+        "replaceTo",
+        "replaceFrom2",
+        "replaceTo2",
+        "start",
+        "truncate",
+        "case",
+        "prefix",
+        "suffix",
+    }
+)
+
+#: Values `case=` understands. Anything else leaves the value unchanged.
+_TEMPLATE_CASES = frozenset(
+    {"lower", "lowercase", "upper", "uppercase", "hyphen", "kebab", "snake"}
+)
+
+#: Variables `_template_value` handles by name. Any other bare word falls
+#: through to a record field, so — as in the Better BibTeX validator — a real
+#: `NormalizedRecord` key is accepted and everything else is rejected.
+_TEMPLATE_VARIABLES = frozenset(
+    {
+        "firstCreator",
+        "firstcreator",
+        "auth",
+        "authors",
+        "creators",
+        "year",
+        "title",
+        "citationKey",
+        "citationkey",
+        "citekey",
+        "publicationTitle",
+        "publicationtitle",
+        "venue",
+        "doi",
+        "itemType",
+        "itemtype",
+    }
+)
+
+
+def _describe_zotero_field_error(variable: str, options_text: str) -> str | None:
+    """Why one `{{ … }}` field is unusable, or None.
+
+    Everything checked here degrades silently at render time: an unknown
+    variable renders the empty string, an unknown option is skipped, and a
+    bad regex is swallowed by `_apply_options`. So `{{ titel }}` loaded
+    clean and every PDF it named fell back to the citekey.
+    """
+    from pzi.bibtex import NormalizedRecord
+
+    key = variable[0].lower() + variable[1:]
+    if variable not in _TEMPLATE_VARIABLES and key not in _TEMPLATE_VARIABLES:
+        if key not in set(NormalizedRecord.__annotations__):
+            return (
+                f"unknown variable {variable!r} — expected one of "
+                f"{', '.join(sorted(_TEMPLATE_VARIABLES))}, or a record field"
+            )
+
+    options = _parse_options(options_text)
+    for name in sorted(options):
+        if name not in _TEMPLATE_OPTIONS:
+            return (
+                f"unknown option {name!r} on {variable!r} — expected one of "
+                f"{', '.join(sorted(_TEMPLATE_OPTIONS))}"
+            )
+
+    case = options.get("case")
+    if case is not None and case not in _TEMPLATE_CASES:
+        return (
+            f"unknown case {case!r} on {variable!r} — expected one of "
+            f"{', '.join(sorted(_TEMPLATE_CASES))}"
+        )
+
+    for name in ("match", "replaceFrom", "replaceFrom2"):
+        pattern = options.get(name)
+        if pattern is None:
+            continue
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            return f"{name} on {variable!r} is not a valid regex: {exc}"
+
+    for name in ("start", "truncate"):
+        raw = options.get(name)
+        if raw is None:
+            continue
+        try:
+            int(raw)
+        except ValueError:
+            return f"{name} on {variable!r} must be a whole number, got {raw!r}"
+
+    return None
+
+
 def describe_template_error(template: str | None) -> str | None:
     """Return why *template* is unparseable, or None when it is fine.
 
@@ -167,6 +270,9 @@ def describe_template_error(template: str | None) -> str | None:
             list(lexer)
         except ValueError as exc:
             return f"{exc} in {match.group(0)!r}"
+        field_error = _describe_zotero_field_error(match.group(1), options_text)
+        if field_error is not None:
+            return f"{field_error} in {match.group(0)!r}"
     return None
 
 
