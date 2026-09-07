@@ -738,7 +738,9 @@ def test_delete_bib_entry_writes_the_backup_under_its_own_lock(tmp_path: Path) -
 
     It used to be copied before the exclusive lock was taken, so a writer
     interleaving in that window made the `.bak` a snapshot of a version that no
-    longer existed — restoring it would revert that writer's work too.
+    longer existed — restoring it would revert that writer's work too. The
+    *name* is chosen under the lock as well now, so the caller passes a label
+    and is told where the backup went rather than dictating it.
     """
     from pzi.bib_repository import delete_bib_entry
 
@@ -746,11 +748,12 @@ def test_delete_bib_entry_writes_the_backup_under_its_own_lock(tmp_path: Path) -
     path.write_text(
         "@article{keep2024, title = {Keep}}\n@article{drop2024, title = {Drop}}\n"
     )
-    backup = tmp_path / "library.bak"
 
-    result = delete_bib_entry(str(path), "drop2024", backup_path=backup)
+    result = delete_bib_entry(str(path), "drop2024", backup_label="drop2024")
 
     assert result["found"] is True
+    backup = result["backup_path"]
+    assert backup is not None
     # The backup holds the pre-delete content, taken under the same lock.
     assert "drop2024" in backup.read_text()
     assert "keep2024" in backup.read_text()
@@ -767,12 +770,14 @@ def test_delete_bib_entry_writes_no_backup_when_the_citekey_is_missing(
 
     path = tmp_path / "library.bib"
     path.write_text("@article{keep2024, title = {Keep}}\n")
-    backup = tmp_path / "library.bak"
 
-    result = delete_bib_entry(str(path), "nosuch2024", backup_path=backup)
+    result = delete_bib_entry(str(path), "nosuch2024", backup_label="nosuch2024")
 
     assert result["found"] is False
-    assert not backup.exists()
+    assert result["backup_path"] is None
+    # No `.bak` under any name: the delete picks its own now, so checking one
+    # hard-coded path would pass by looking in the wrong place.
+    assert [child.name for child in tmp_path.iterdir() if ".bak" in child.name] == []
 
 
 def test_with_bib_lock_times_out_instead_of_blocking_forever(tmp_path: Path) -> None:
