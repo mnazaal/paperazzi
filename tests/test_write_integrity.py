@@ -800,16 +800,21 @@ def _retitle(entry: BibtexEntry, _record: object) -> BibtexEntry:
 #: the write it guards raises; these three are the same shape and must too — a
 #: `.bak` that survives a failed write is a snapshot of a file nothing replaced,
 #: and `backup_path_for` then hands the *next* run `.bak2`.
+#: Each writer returns the backup it actually wrote, or None. `delete` and
+#: `merge` choose the name themselves now — under the lock, so two concurrent
+#: writers cannot both pick it — so a caller can no longer dictate the path and
+#: these tests ask where it went instead of asserting where it should be.
 BACKUP_WRITERS = {
     "delete_bib_entry": lambda path, backup: delete_bib_entry(
-        path, "smith2020", backup_path=backup
-    ),
+        path, "smith2020", backup_label="smith2020"
+    ).get("backup_path"),
     "merge_bib_entries": lambda path, backup: merge_bib_entries(
-        path, citekey_a="smith2020", citekey_b="jones2021", backup_path=backup
-    ),
-    "update_bib_entry": lambda path, backup: update_bib_entry(
-        path, "smith2020", _retitle, backup_path=backup
-    ),
+        path, citekey_a="smith2020", citekey_b="jones2021", backup_label="smith2020"
+    ).get("backup_path"),
+    "update_bib_entry": lambda path, backup: (
+        update_bib_entry(path, "smith2020", _retitle, backup_path=backup),
+        backup,
+    )[1],
 }
 
 
@@ -829,7 +834,14 @@ def test_a_failed_write_leaves_no_stale_backup(
     with pytest.raises(OSError):
         BACKUP_WRITERS[writer_name](bib_path, backup)
 
-    assert not backup.exists(), f"{writer_name} left a stale backup at {backup}"
+    # No `.bak` under any name: `delete` and `merge` pick their own now, so
+    # checking one hard-coded path would pass by looking in the wrong place.
+    leftovers = sorted(
+        child.name
+        for child in Path(bib_path).parent.iterdir()
+        if ".bak" in child.name
+    )
+    assert leftovers == [], f"{writer_name} left a stale backup: {leftovers}"
     assert Path(bib_path).read_text(encoding="utf-8") == TWO_ENTRIES
 
 
@@ -841,9 +853,10 @@ def test_a_successful_write_keeps_its_backup(
     bib_path = _write(tmp_path / "lib.bib", TWO_ENTRIES)
     backup = Path(bib_path + ".bak")
 
-    BACKUP_WRITERS[writer_name](bib_path, backup)
+    written = BACKUP_WRITERS[writer_name](bib_path, backup)
 
-    assert backup.read_text(encoding="utf-8") == TWO_ENTRIES
+    assert written is not None, f"{writer_name} reported no backup"
+    assert Path(written).read_text(encoding="utf-8") == TWO_ENTRIES
     assert Path(bib_path).read_text(encoding="utf-8") != TWO_ENTRIES
 
 
@@ -985,3 +998,73 @@ def test_crlf_pair_split_across_the_chunk_boundary_is_counted(tmp_path) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# D8 — the backup name is chosen under the lock
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _order_recording_patches(monkeypatch, order: list[str]):
+    """Record when the lock is taken and when the backup name is probed."""
+    import contextlib
+
+    import pzi.bib_repository as repo
+
+    real_lock = repo.with_bib_lock
+    real_name = repo.backup_path_for
+
+    @contextlib.contextmanager
+    def recording_lock(path):
+        order.append("lock")
+        with real_lock(path):
+            yield
+
+    def recording_name(bib_path, citekey):
+        order.append("name")
+        return real_name(bib_path, citekey)
+
+    monkeypatch.setattr(repo, "with_bib_lock", recording_lock)
+    monkeypatch.setattr(repo, "backup_path_for", recording_name)
+
+
+def test_delete_names_its_backup_inside_the_lock(tmp_path, monkeypatch) -> None:
+    """Two concurrent deletes probing outside the lock choose the same name.
+
+    The probe walks `.bak`, `.bak2`, … looking for a name that does not exist,
+    so two writers probing at once both get `.bak` and the second copy
+    overwrites the first — the backup the user is told to restore from is then
+    the wrong one. The *copy* already happened under the lock; the *name* did
+    not.
+    """
+    from pzi.bib_repository import delete_bib_entry
+
+    path = tmp_path / "library.bib"
+    path.write_text("@article{alpha,\n  title = {Alpha},\n}\n")
+    order: list[str] = []
+    _order_recording_patches(monkeypatch, order)
+
+    result = delete_bib_entry(str(path), "alpha", backup_label="alpha")
+
+    assert order == ["lock", "name"], order
+    backup = result["backup_path"]
+    assert backup is not None and backup.exists()
+
+
+def test_merge_names_its_backup_inside_the_lock(tmp_path, monkeypatch) -> None:
+    """The sibling call site, which had the same probe outside the same lock."""
+    from pzi.bib_repository import merge_bib_entries
+
+    path = tmp_path / "library.bib"
+    path.write_text(
+        "@article{alpha,\n  title = {Alpha},\n}\n\n"
+        "@article{beta,\n  title = {Beta},\n}\n"
+    )
+    order: list[str] = []
+    _order_recording_patches(monkeypatch, order)
+
+    result = merge_bib_entries(
+        str(path), citekey_a="alpha", citekey_b="beta", backup_label="alpha"
+    )
+
+    assert order == ["lock", "name"], order
+    assert result["backup_path"] is not None

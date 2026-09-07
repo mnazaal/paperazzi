@@ -6,7 +6,6 @@ from collections.abc import Callable, Mapping
 from typing import Any, NotRequired, TypeAlias, TypedDict, TypeVar
 
 from pzi.bib_repository import (
-    backup_path_for,
     delete_bib_entry,
     describe_missing_bib,
     find_entry_index,
@@ -541,13 +540,15 @@ def delete_entry(
             "errors": [],
         }
 
-    # The copy happens inside `delete_bib_entry`'s exclusive lock, immediately
-    # before the write. Doing it here left a window in which another writer
-    # could rewrite the bib, making this `.bak` — which the result advertises as
-    # the undo artifact — a snapshot of a version that no longer existed, so
-    # restoring it would revert the other writer's work too.
-    backup_path = backup_path_for(bib_path, citekey)
-    delete_result = delete_bib_entry(bib_path, citekey, backup_path=backup_path)
+    # Both the copy *and* the name are chosen inside `delete_bib_entry`'s
+    # exclusive lock. Copying here left a window in which another writer could
+    # rewrite the bib, making this `.bak` — which the result advertises as the
+    # undo artifact — a snapshot of a version that no longer existed. Naming it
+    # here left a second window: the name is picked by probing for one that does
+    # not exist, so two deletes probing at once both chose `.bak` and the second
+    # copy overwrote the first.
+    delete_result = delete_bib_entry(bib_path, citekey, backup_label=citekey)
+    backup_path = delete_result.get("backup_path")
     if not delete_result["found"]:
         return {
             "status": "error",
@@ -558,7 +559,7 @@ def delete_entry(
             "errors": [f"no entry with citekey {citekey}"],
         }
 
-    return {
+    result: DeleteEntryResult = {
         "status": "ok",
         "citekey": citekey,
         "bib_path": bib_path,
@@ -566,6 +567,10 @@ def delete_entry(
         "message": f"deleted: {title}",
         "title": title,
         "pdf_path": pdf_path,
-        "backup_path": str(backup_path),
         "errors": [],
     }
+    # Set rather than stringified unconditionally: the key is NotRequired, and
+    # `"None"` is not a path.
+    if backup_path is not None:
+        result["backup_path"] = str(backup_path)
+    return result

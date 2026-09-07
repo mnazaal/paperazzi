@@ -6,7 +6,6 @@ from collections.abc import Mapping
 from typing import Any, NotRequired, TypedDict
 
 from pzi.bib_repository import (
-    backup_path_for,
     merge_bib_entries,
     merge_entries,
     read_bib_file,
@@ -367,14 +366,14 @@ def merge_duplicates(
     # @string/@preamble macros, and every other entry's source. The `.bak` is
     # written inside that lock, immediately before the write, exactly as
     # `delete` does — a merge destroys a block just as a delete does.
-    backup_path = backup_path_for(bib_path, citekey_a)
     merge_result = merge_bib_entries(
         bib_path,
         citekey_a=citekey_a,
         citekey_b=citekey_b,
         file_path_style=file_path_style,
-        backup_path=backup_path,
+        backup_label=citekey_a,
     )
+    backup_path = merge_result.get("backup_path")
     if not merge_result["found"]:
         return {
             "status": "error", "citekey_a": citekey_a, "citekey_b": citekey_b,

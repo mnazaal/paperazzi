@@ -1381,7 +1381,7 @@ def update_bib_entry(
 
 
 def delete_bib_entry(
-    path: str, citekey: str, *, backup_path: Path | None = None
+    path: str, citekey: str, *, backup_label: str | None = None
 ) -> UpdateBibEntryResult:
     """Delete the first entry matching *citekey*, preserving all other blocks.
 
@@ -1389,12 +1389,15 @@ def delete_bib_entry(
     ``@preamble`` blocks, and every other entry (including their ``file``
     paths) are left exactly as written.
 
-    *backup_path*, when given, is written from the on-disk file **inside this
-    lock**, immediately before the delete. The caller cannot do it itself: this
+    *backup_label*, when given, names a ``.bak`` written from the on-disk file
+    **inside this lock**, immediately before the delete; the path chosen is
+    returned as ``backup_path``. The caller cannot do any of it itself: this
     function takes the only exclusive lock, and `with_bib_lock` opens a fresh
     descriptor each time, so an outer lock in the same process would block on
     itself. Copying outside the lock left the backup a snapshot of a version
-    another writer may already have replaced.
+    another writer may already have replaced — and *naming* it outside the lock
+    left two concurrent deletes choosing the same name, so the second clobbered
+    the first.
     """
     with with_bib_lock(path):
         source = read_bib_source(path)
@@ -1410,7 +1413,10 @@ def delete_bib_entry(
             new_blocks.append(block)
 
         if not removed:
-            return {"found": False, "entries": [], "entry": None, "record": None}
+            return {
+                "found": False, "entries": [], "entry": None, "record": None,
+                "backup_path": None,
+            }
 
         new_library = build_library(new_blocks)
         remaining, _remaining_records = library_to_entries_records(new_library, path)
@@ -1420,13 +1426,19 @@ def delete_bib_entry(
         # a wedged library used to survive a `delete` unnoticed.
         validate_bibtex_roundtrip(remaining)
         new_source = serialize_library(new_library, layout=detect_bib_layout(source))
+        backup_path: Path | None = None
         if new_source != source:
             # Only when something is actually deleted, so a missing citekey
             # leaves no stray `.bak`; `_write_bib_with_backup` owns the rest.
+            if backup_label is not None:
+                backup_path = backup_path_for(path, backup_label)
             _write_bib_with_backup(
                 path, new_source, backup_path, expected_source=source
             )
-        return {"found": True, "entries": remaining, "entry": None, "record": None}
+        return {
+            "found": True, "entries": remaining, "entry": None, "record": None,
+            "backup_path": backup_path,
+        }
 
 
 def merge_bib_entries(
@@ -1435,7 +1447,7 @@ def merge_bib_entries(
     citekey_a: str,
     citekey_b: str,
     file_path_style: str = "absolute",
-    backup_path: Path | None = None,
+    backup_label: str | None = None,
 ) -> dict[str, Any]:
     """Merge entry A into B (keeping B's citekey) under one exclusive lock.
 
@@ -1450,9 +1462,11 @@ def merge_bib_entries(
     (a conflict B already answers differently), so a caller can preview the
     loss instead of discovering it afterwards.
 
-    *backup_path* is written from the on-disk file **inside this lock**,
-    immediately before the write, exactly as :func:`delete_bib_entry` does — a
-    merge destroys a block just as a delete does.
+    *backup_label*, when given, names a ``.bak`` written from the on-disk file
+    **inside this lock**, immediately before the write, exactly as
+    :func:`delete_bib_entry` does — a merge destroys a block just as a delete
+    does, and the name is chosen here too so two concurrent writers cannot both
+    pick it. The path used comes back as ``backup_path``.
 
     Raises :exc:`PziError` when the two citekeys are the same. The block loop
     drops A's block and then replaces B's, and with one citekey there is only
@@ -1524,7 +1538,10 @@ def merge_bib_entries(
 
         new_library = build_library(new_blocks)
         new_source = serialize_library(new_library, layout=detect_bib_layout(source))
+        backup_path: Path | None = None
         if new_source != source:
+            if backup_label is not None:
+                backup_path = backup_path_for(path, backup_label)
             _write_bib_with_backup(
                 path, new_source, backup_path, expected_source=source
             )
@@ -1533,6 +1550,7 @@ def merge_bib_entries(
             "merged_record": merged_record,
             "changed_fields": decision["changed_fields"],
             "dropped_fields": dropped_fields,
+            "backup_path": backup_path,
         }
 
 
@@ -1542,6 +1560,13 @@ def backup_path_for(bib_path: str, citekey: str) -> Path:
     Shared by the two commands that destroy a block — ``delete`` and
     ``library merge`` — so both leave the same kind of trace under the same
     lock.
+
+    **Call this under the bib lock.** The name is chosen by probing for one
+    that does not exist, so two writers probing concurrently both get
+    ``<bib>.<citekey>.bak`` and the second copy overwrites the first — the
+    backup a user is told to restore from is then the wrong one. `delete` and
+    `library merge` pass a *label* into the locked function and let it probe;
+    `reindex` and `promote` already probe inside their own locks.
     """
     source = Path(bib_path)
     safe_citekey = "".join(
