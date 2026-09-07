@@ -38,16 +38,18 @@ measured or observed behaviour that is not fixed yet.
   "Under review as a conference paper at ICLR 2016". **Check the title on any
   entry added from a bare PDF.** Capturing by DOI or URL never uses this path.
 
-- **The Zotero translation-server path is barely exercised.** pzi installs and
-  runs Zotero's translation-server to reach its site translators, and the path
-  is covered by the test suite, but every live capture recorded so far was
-  served by the Crossref fallback instead. Treat the translators as unproven
-  against real sites rather than as a path that has seen real use.
+- **The Zotero translation-server path has seen little real use.** pzi installs
+  and runs Zotero's translation-server to reach its ~750 site translators. The
+  path works: two live captures have been observed end to end, one through
+  `/search` (a DOI) and one through `/web` (an arXiv page), both answered by the
+  translation server rather than by the Crossref fallback. But two sites is not
+  750 — treat an unfamiliar publisher as untested rather than as covered.
 
-- **The persistent browser session serves one request per server process.**
-  Playwright's sync API is bound to the thread that created it and `pzi server`
-  is threaded, so the second browser-assisted capture in the life of a given
-  server fails. Restart `pzi server` between browser-assisted captures.
+- **Browser-assisted capture drives one page at a time.** Playwright's sync API
+  is bound to the thread that created it, so `pzi server` gives the browser a
+  single owner thread and runs browser work on it. Concurrent requests are
+  therefore serialised rather than run in parallel: a second browser-assisted
+  capture waits for the first to finish.
 
 Native Windows is unsupported — WSL2 works. `docs/reference.md` sets out
 [what 1.0 does not promise](docs/reference.md#what-10-does-not-promise) in full.
