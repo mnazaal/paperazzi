@@ -196,3 +196,87 @@ def test_the_lock_is_held_for_the_whole_delegate_call(
     getattr(manager, method)(argument)
 
     assert acquired_by_other_thread == [False]
+
+
+def test_a_second_request_thread_reuses_the_session_instead_of_relaunching(
+    monkeypatch,
+) -> None:
+    """The persistent session must survive being used from another thread.
+
+    The server is a ``ThreadingHTTPServer``, so consecutive requests arrive on
+    different threads, while Playwright's sync API binds its objects to the
+    thread that created them. The manager launched on whichever request thread
+    arrived first, so the second request touched those objects from the wrong
+    thread. Against a real browser that raises; here the raise was swallowed by
+    ``ensure_session``'s crash-tolerance branch and the browser was relaunched
+    for every request — the same defect, reported as a fresh launch instead of
+    an error.
+
+    Asserting on the launch count rather than the exception is deliberate: it
+    pins the behaviour that is wrong in both readings.
+    """
+    import threading
+
+    sessions = [FakeBrowserSession(), FakeBrowserSession(), FakeBrowserSession()]
+    launched = _install_fake_launcher(monkeypatch, sessions)
+    manager = BrowserSessionManager()
+
+    seen: list = []
+    failures: list[BaseException] = []
+
+    def one_request() -> None:
+        try:
+            seen.append(manager.ensure_session())
+        except BaseException as exc:  # noqa: BLE001 - recorded, then re-reported
+            failures.append(exc)
+
+    for _ in range(3):
+        thread = threading.Thread(target=one_request)
+        thread.start()
+        thread.join()
+
+    assert failures == []
+    assert len(launched) == 1, "the browser was relaunched for a later request"
+    assert seen[0] is seen[1] is seen[2]
+
+
+def test_browser_work_runs_on_one_thread_no_matter_who_calls(monkeypatch) -> None:
+    """Every Playwright touch happens on the session's owner thread.
+
+    The launch count above stays right if the manager merely relaunches less
+    often; this pins the mechanism that makes it right — the session is created
+    and driven from a single thread, so the sync API's binding is never
+    crossed.
+    """
+    import threading
+
+    import pzi.browser_pdf_hook
+
+    _install_fake_launcher(monkeypatch, [FakeBrowserSession()])
+    manager = BrowserSessionManager()
+
+    hook_threads: list[int] = []
+
+    def record(url, **kwargs):
+        hook_threads.append(threading.get_ident())
+        return None
+
+    monkeypatch.setattr(pzi.browser_pdf_hook, "discover_pdf_url", record)
+
+    # Started together, not one at a time: a joined thread's identity can be
+    # reused by the next one, which would make three distinct request threads
+    # look like one and pass this test against the unfixed manager.
+    threads = [
+        threading.Thread(
+            target=lambda: manager.discover_pdf_url("https://journal.test/article")
+        )
+        for _ in range(3)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(hook_threads) == 3
+    assert len(set(hook_threads)) == 1, "browser work ran on more than one thread"
+    assert hook_threads[0] != threading.get_ident()
