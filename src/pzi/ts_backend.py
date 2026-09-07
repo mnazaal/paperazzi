@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import ipaddress
 import json
 import os
 import re
@@ -19,8 +20,9 @@ import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import NotRequired, TextIO, TypedDict
+from typing import NamedTuple, NotRequired, TextIO, TypedDict
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 import portalocker
@@ -682,19 +684,98 @@ def terminate_ts(proc: subprocess.Popen[bytes], *, grace_seconds: float = 5.0) -
         pass
 
 
-def is_ts_reachable(url: str, *, timeout: float = 2.0) -> bool:
-    """Return True if translation-server responds at ``url``."""
+class TranslationServerProbe(NamedTuple):
+    """What probing ``translation_server_url`` actually saw.
+
+    ``detail`` is written for a user reading `pzi doctor`, so it names the
+    observation rather than the verdict.
+    """
+
+    ok: bool
+    detail: str
+
+
+#: The signature the real server answers with, observed against the pinned
+#: upstream checkout (`_TS_REPOS`): `searchEndpoint.handle` runs
+#: ``ctx.assert(ctx.is('text'), 415)`` and then
+#: ``if (!data) ctx.throw(400, "POST data not provided\n")``. So an empty text
+#: body is the cheapest request proving both that the route exists and that its
+#: handler ran, and it fetches nothing on the way.
+#:
+#: The probes here used to send a bare ``GET /`` and count *any* HTTP response
+#: as success — including an error, explicitly. That cannot distinguish
+#: anything: the real server answers ``GET /`` with ``404 Not Found``, which is
+#: also what an unrelated application answers, so a stray service on port 1969
+#: read as a healthy translation server and `doctor` passed while every capture
+#: failed.
+_TS_PROBE_PATH = "/search"
+_TS_PROBE_MARKER = "POST data not provided"
+_TS_PROBE_BODY_LIMIT = 200
+
+
+def probe_translation_server(
+    url: str, *, timeout: float = 2.0
+) -> TranslationServerProbe:
+    """Ask ``url`` for translation-server's own signature.
+
+    Fails closed: anything but the expected answer is reported as not-ready,
+    with what was seen. The alternative — treating an unrecognised responder as
+    ready — is the defect this replaces, and it is silent, whereas a wrong
+    negative names the port and the status it got.
+    """
+    endpoint = url.rstrip("/") + _TS_PROBE_PATH
+    request = Request(endpoint, data=b"", method="POST")
+    request.add_header("Content-Type", "text/plain")
     try:
-        req = Request(url.rstrip("/"), method="GET")
         # `with`, not a bare call: the watchdog probes this every 30s, so a
-        # leaked response object leaks a socket on every tick. Every other
-        # urlopen in the codebase already uses the context-manager form.
-        with urlopen(req, timeout=timeout):
-            return True
-    except HTTPError:
-        return True  # server responded (just not 2xx)
-    except (URLError, OSError, ValueError):
+        # leaked response object leaks a socket on every tick.
+        with urlopen(request, timeout=timeout) as response:
+            status = int(response.status)
+            body = response.read(_TS_PROBE_BODY_LIMIT)
+    except HTTPError as error:
+        # The expected answer arrives here: 400 is an HTTP error to urllib.
+        status = int(error.code)
+        try:
+            body = error.read(_TS_PROBE_BODY_LIMIT)
+        except Exception:
+            body = b""
+    except (URLError, OSError, ValueError) as error:
+        return TranslationServerProbe(
+            False, f"nothing is listening at {url} ({error})"
+        )
+
+    text = body.decode("utf-8", "replace")
+    if status == 400 and _TS_PROBE_MARKER in text:
+        return TranslationServerProbe(True, f"translation-server answered at {url}")
+    return TranslationServerProbe(
+        False,
+        f"something is listening at {url} but it is not translation-server: "
+        f"POST {_TS_PROBE_PATH} answered HTTP {status}",
+    )
+
+
+def is_loopback_ts_url(url: str) -> bool:
+    """Whether ``url`` names a server on this machine.
+
+    Decides whether pzi may *manage* the backend. Everything the bootstrap does
+    — download Node, clone translation-server, spawn a child — only ever
+    produces a server on loopback, so doing any of it for a remote URL cannot
+    make that URL answer.
+    """
+    host = urlparse(url).hostname
+    if host is None:
         return False
+    if host in {"localhost", "::1"}:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def is_ts_reachable(url: str, *, timeout: float = 2.0) -> bool:
+    """Return True if translation-server — not merely *something* — is at ``url``."""
+    return probe_translation_server(url, timeout=timeout).ok
 
 
 #: The file the translation-server child's stderr is written to, under the
@@ -724,6 +805,7 @@ def wait_for_ts(
     returns ``False`` promptly instead of blocking out the full timeout.
     """
     health_url = url.rstrip("/")
+    last_detail = ""
     started_at = time.monotonic()
     deadline = started_at + timeout
     attempt = 0
@@ -748,21 +830,21 @@ def wait_for_ts(
             return False
 
         attempt += 1
-        try:
-            with urlopen(Request(health_url, method="GET"), timeout=2):
-                print(f"translation-server ready (attempt {attempt})", file=stdout)
-                return True
-        except HTTPError:
+        probe = probe_translation_server(health_url, timeout=2)
+        if probe.ok:
             print(f"translation-server ready (attempt {attempt})", file=stdout)
             return True
-        except (URLError, OSError, ValueError):
-            pass
+        last_detail = probe.detail
         time.sleep(2)
     where = (
         str(stderr_log) if stderr_log is not None else f"<data-home>/{TS_STDERR_LOG_NAME}"
     )
+    # `last_detail` names what the port actually answered. Without it a server
+    # that never bound and a *different* service holding the port produce the
+    # same sentence, and only the first is explained by the log file.
+    observed = f" — last probe: {last_detail}" if last_detail else ""
     print(
-        f"translation-server did not become ready within {timeout:.0f}s — "
+        f"translation-server did not become ready within {timeout:.0f}s{observed} — "
         f"its output is in {where}",
         file=stderr,
     )
@@ -893,6 +975,21 @@ def backend_session(
 
         if is_ts_reachable(ts_url):
             yield {"url": ts_url, "ready": True, "owned": False, "proc": None}
+            return
+
+        # A remote URL is not ours to start. Bootstrapping ran regardless —
+        # downloading Node, cloning translation-server, spawning a child on
+        # loopback — and then polled the *remote* URL for the full 90s and
+        # failed, on every command, saying nothing about why.
+        if not is_loopback_ts_url(ts_url):
+            print(
+                f"translation-server at {ts_url} is not reachable, and pzi will "
+                "not start one: the address is not on this machine. Start the "
+                "server there, or point translation_server_url at a loopback "
+                "address for pzi to manage it.",
+                file=stderr,
+            )
+            yield {"url": ts_url, "ready": False, "owned": False, "proc": None}
             return
 
         raw_home = config.get("pzi_data_home", home_dir)

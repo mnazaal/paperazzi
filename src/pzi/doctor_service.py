@@ -5,8 +5,6 @@ from __future__ import annotations
 import os
 import stat
 from typing import Any, NotRequired, TypedDict
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 
 from pzi.capture_context import resolve_optional_value
 from pzi.config import load_config_file
@@ -62,8 +60,10 @@ def doctor_health_problems(result: DoctorResult) -> list[str]:
     if result.get("translation_server_url") and not result.get(
         "translation_server_reachable"
     ):
+        detail = result.get("translation_probe_error")
         problems.append(
             f"translation server unreachable at {result['translation_server_url']}"
+            + (f" ({detail})" if detail else "")
         )
     key_error = (result.get("semantic_scholar") or {}).get("key_error")
     if key_error:
@@ -143,9 +143,18 @@ def doctor_check(
     translation_server_url = config["translation_server_url"]
     reachable = False
     probe_error: str | None = None
-    probe = translation_probe or _probe_translation_server
     try:
-        reachable = bool(probe(translation_server_url))
+        if translation_probe is None:
+            # Straight to the shared probe rather than through the bool-only
+            # seam, so `doctor` can report what the port actually answered.
+            from pzi.ts_backend import probe_translation_server
+
+            observed = probe_translation_server(translation_server_url)
+            reachable = observed.ok
+            if not reachable:
+                probe_error = observed.detail
+        else:
+            reachable = bool(translation_probe(translation_server_url))
     except OSError as exc:
         probe_error = str(exc)
         reachable = False
@@ -247,11 +256,14 @@ def _configured_status(*, cmd: object, value: object) -> str:
 
 
 def _probe_translation_server(url: str, *, timeout: float = 2.0) -> bool:
-    request = Request(url, method="GET")
-    try:
-        with urlopen(request, timeout=timeout):
-            return True
-    except HTTPError:
-        return True
-    except URLError:
-        return False
+    """Whether translation-server — not merely *something* — answers at ``url``.
+
+    Delegates to the one probe in `ts_backend`, so `doctor`, `is_ts_reachable`
+    and the startup wait cannot disagree about what "reachable" means. They
+    used to: each sent a bare `GET /` and counted any HTTP response as success,
+    including an error response, so a 404 from an unrelated application holding
+    the port passed all three while every capture failed.
+    """
+    from pzi.ts_backend import probe_translation_server
+
+    return probe_translation_server(url, timeout=timeout).ok

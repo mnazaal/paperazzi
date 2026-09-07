@@ -10,8 +10,9 @@ reproducible.
 Loopback only, so it passes the autouse socket guard in `conftest.py`.
 
 **What this cannot catch.** It reproduces the contract as pzi understands it
-today: a GET health probe, and a POST to `/web` or `/search` answering with a
-JSON array of Zotero-shaped items. Tests built on it therefore verify *pzi's*
+today: a POST to `/search` with an empty text body answering 400 "POST data not
+provided" (the reachability signature), and a POST to `/web` or `/search`
+answering with a JSON array of Zotero-shaped items. Tests built on it therefore verify *pzi's*
 handling, not the real server's behaviour — if upstream changes its response
 shape, endpoints, or error codes, the stub keeps answering the old way and every
 test here stays green while `pzi add` breaks against the real thing.
@@ -66,6 +67,19 @@ def _handler_class(resolvable: Mapping[str, dict]) -> type[BaseHTTPRequestHandle
                 return
             length = int(self.headers.get("Content-Length") or 0)
             body = self.rfile.read(length).decode("utf-8")
+            if not body:
+                # The real server's own signature, and what pzi probes for:
+                # `searchEndpoint.handle` throws 400 "POST data not provided"
+                # on an empty text body. Answering it here is what lets a
+                # reachability probe tell this stub — and the real server —
+                # from any other process holding the port.
+                payload = b"POST data not provided\n"
+                self.send_response(400)
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
             for needle, item in resolvable.items():
                 if needle in body:
                     payload = json.dumps([item]).encode()

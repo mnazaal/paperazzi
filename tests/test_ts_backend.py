@@ -339,20 +339,48 @@ class FakeHTTPError(HTTPError):
         super().__init__("http://x", code, "msg", {}, None)
 
 
-def test_is_ts_reachable_200() -> None:
-    with patch(
-        "pzi.ts_backend.urlopen",
-        return_value=io.BytesIO(b"ok"),
-    ):
+def ts_signature_response() -> HTTPError:
+    """What the real translation-server answers a probe.
+
+    `POST /search` with an empty text body hits
+    ``if (!data) ctx.throw(400, "POST data not provided\\n")``. urllib raises
+    4xx as HTTPError, so the *success* case arrives as an exception.
+    """
+    return HTTPError(
+        "http://127.0.0.1:1969/search",
+        400,
+        "Bad Request",
+        {},
+        io.BytesIO(b"POST data not provided\n"),
+    )
+
+
+def test_is_ts_reachable_recognises_the_servers_own_answer() -> None:
+    with patch("pzi.ts_backend.urlopen", side_effect=ts_signature_response()):
         assert ts_backend.is_ts_reachable("http://127.0.0.1:1969") is True
 
 
-def test_is_ts_reachable_http_error_still_reachable() -> None:
-    with patch(
-        "pzi.ts_backend.urlopen",
-        side_effect=FakeHTTPError(404),
-    ):
-        assert ts_backend.is_ts_reachable("http://127.0.0.1:1969") is True
+def test_is_ts_reachable_rejects_an_unrelated_responder() -> None:
+    """A 404 from something else on the port is not a translation server.
+
+    This test asserted the opposite until 2026-09-07 — that any HTTP response
+    meant reachable — which is the defect, written down as a guarantee. The
+    real server answers `GET /` with 404 itself, so the old probe could not
+    distinguish it from anything at all.
+    """
+    with patch("pzi.ts_backend.urlopen", side_effect=FakeHTTPError(404)):
+        assert ts_backend.is_ts_reachable("http://127.0.0.1:1969") is False
+
+
+def test_is_ts_reachable_rejects_a_plain_200() -> None:
+    """A web server answering 200 on the port is likewise not the backend."""
+    response = MagicMock()
+    response.status = 200
+    response.read.return_value = b"<html>hello</html>"
+    response.__enter__ = lambda self: self
+    response.__exit__ = lambda self, *a: None
+    with patch("pzi.ts_backend.urlopen", return_value=response):
+        assert ts_backend.is_ts_reachable("http://127.0.0.1:1969") is False
 
 
 def test_is_ts_reachable_connection_refused() -> None:
@@ -370,7 +398,7 @@ def test_is_ts_reachable_connection_refused() -> None:
 def test_wait_for_ts_success() -> None:
     stdout = io.StringIO()
     stderr = io.StringIO()
-    with patch("pzi.ts_backend.urlopen", return_value=io.BytesIO(b"ok")):
+    with patch("pzi.ts_backend.urlopen", side_effect=ts_signature_response()):
         with patch("pzi.ts_backend.time.sleep"):
             assert (
                 ts_backend.wait_for_ts(
@@ -423,7 +451,7 @@ def test_wait_for_ts_polls_when_process_alive() -> None:
     live_proc.poll.return_value = None  # still running
 
     # Server becomes reachable on second attempt
-    urlopen_calls = [URLError("refused"), io.BytesIO(b"ok")]
+    urlopen_calls = [URLError("refused"), ts_signature_response()]
     with patch("pzi.ts_backend.urlopen", side_effect=urlopen_calls):
         with patch("pzi.ts_backend.time.sleep"):
             result = ts_backend.wait_for_ts(
@@ -1093,3 +1121,78 @@ def test_backend_session_converts_sigterm_so_finally_runs() -> None:
         with pytest.raises(KeyboardInterrupt):
             inside(_signal.SIGTERM, None)  # type: ignore[operator]
     assert _signal.getsignal(_signal.SIGTERM) is before
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# A remote translation-server is not ours to start
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_backend_session_does_not_bootstrap_for_a_remote_url(monkeypatch) -> None:
+    """A non-loopback URL must fail fast, not download Node and clone repos.
+
+    Everything the bootstrap does produces a server on *this* machine, so none
+    of it can make a remote URL answer. It ran anyway: Node was fetched, the
+    repos cloned, a child spawned on loopback, and then `wait_for_ts` polled
+    the remote address for the full 90 seconds and failed — on every command,
+    with no message saying why.
+    """
+    # The suite runs under PZI_SKIP_AUTO_START, which returns before any of
+    # this; the flag means "I manage the server myself, do not touch it".
+    monkeypatch.delenv("PZI_SKIP_AUTO_START", raising=False)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with patch("pzi.ts_backend.is_ts_reachable", return_value=False):
+        with patch(
+            "pzi.ts_backend.ensure_node",
+            side_effect=AssertionError("must not bootstrap Node for a remote URL"),
+        ):
+            with ts_backend.backend_session(
+                {"translation_server_url": "http://ts.example.com:1969"},
+                "/home/user",
+                stdout=stdout,
+                stderr=stderr,
+            ) as backend:
+                assert backend["ready"] is False
+                assert backend["owned"] is False
+
+    message = stderr.getvalue()
+    assert "not on this machine" in message
+    assert "ts.example.com" in message
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("http://127.0.0.1:1969", True),
+        ("http://localhost:1969", True),
+        ("http://[::1]:1969", True),
+        ("http://127.5.5.5:1969", True),
+        ("http://ts.example.com:1969", False),
+        ("http://192.168.1.10:1969", False),
+        ("not a url at all", False),
+    ],
+)
+def test_is_loopback_ts_url(url: str, expected: bool) -> None:
+    assert ts_backend.is_loopback_ts_url(url) is expected
+
+
+def test_wait_for_ts_timeout_says_what_answered() -> None:
+    """A port held by something else and a server that never bound differ.
+
+    Without the observed detail both produce the same sentence, and only one of
+    them is explained by the log file the message points at.
+    """
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with patch("pzi.ts_backend.urlopen", side_effect=FakeHTTPError(404)):
+        with patch("pzi.ts_backend.time.sleep"):
+            assert (
+                ts_backend.wait_for_ts(
+                    "http://127.0.0.1:1969", timeout=0.1, stdout=stdout, stderr=stderr
+                )
+                is False
+            )
+    message = stderr.getvalue()
+    assert "did not become ready" in message
+    assert "not translation-server" in message
+    assert "HTTP 404" in message
