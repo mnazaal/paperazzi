@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Literal, TypeAlias, TypedDict
 from urllib.parse import urlsplit
 
+from pzi.fileio import directory_folds_case
 from pzi.format_templates import describe_template_error
 
 # Minimum `resolution_match.score_match` result (0–100) for `update --promote`
@@ -208,6 +209,51 @@ def _expanded_opt(raw: Mapping[str, object], key: str) -> str | None:
     return os.path.expanduser(value) if value is not None else None
 
 
+def _same_bib_file(left: str, right: str) -> bool:
+    """Whether two configured `path` values name one file.
+
+    String equality is not enough: a symlink, a `..`, or a case-folding
+    filesystem all let two different spellings reach the same `.bib`. Where
+    both files exist this asks the filesystem (`samefile`), which is the guard
+    item 593 established — `exists()` was the wrong question there for exactly
+    this reason.
+
+    A library is created on first write, so neither file need exist yet. The
+    fallback resolves both, which still catches `..` and a symlinked parent,
+    and folds case only when the directory that will hold them says its
+    filesystem folds case.
+    """
+    if left == right:
+        return True
+    left_path = Path(left)
+    right_path = Path(right)
+    try:
+        if left_path.exists() and right_path.exists():
+            return left_path.samefile(right_path)
+    except OSError:
+        return False
+
+    resolved_left = left_path.resolve()
+    resolved_right = right_path.resolve()
+    if resolved_left == resolved_right:
+        return True
+    if resolved_left.parent == resolved_right.parent and directory_folds_case(
+        resolved_left.parent
+    ):
+        return resolved_left.name.lower() == resolved_right.name.lower()
+    return False
+
+
+def _duplicate_bib_paths(bibs: list[BibConfig]) -> list[tuple[str, str, str]]:
+    """Every pair of entries whose `path` reaches one file."""
+    duplicates: list[tuple[str, str, str]] = []
+    for index, first in enumerate(bibs):
+        for second in bibs[index + 1 :]:
+            if _same_bib_file(first["path"], second["path"]):
+                duplicates.append((first["name"], second["name"], second["path"]))
+    return duplicates
+
+
 def _validate_bib_list(
     raw_bibs: object, *, home_dir: str, base_dir: str | None = None
 ) -> tuple[list[BibConfig] | None, list[str]]:
@@ -240,6 +286,16 @@ def _validate_bib_list(
     duplicate_names = sorted(duplicates)
     if duplicate_names:
         errors.extend(f"duplicate bib name: {name}" for name in duplicate_names)
+
+    # Duplicate *names* were caught; duplicate *paths* were not. Two entries
+    # reaching one file give a single library two PDF stores selected by name:
+    # `--target ml` and `--target ml2` write the same `.bib` but file their
+    # PDFs into different `papers_dir`s, and nothing said so.
+    for first_name, second_name, path in _duplicate_bib_paths(validated_bibs):
+        errors.append(
+            f"bibs {first_name!r} and {second_name!r} are the same file ({path}) — "
+            "one library with two entries gets two PDF stores, chosen by name"
+        )
 
     default_count = sum(1 for bib in validated_bibs if bib["default"])
     if default_count > 1:

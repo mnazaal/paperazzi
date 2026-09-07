@@ -889,3 +889,68 @@ def test_the_body_size_default_matches_the_http_layer() -> None:
     from pzi.http_security import DEFAULT_MAX_BODY_BYTES as http_default
 
     assert config_module.DEFAULT_MAX_BODY_BYTES == http_default
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# C12 — two entries must not name one file
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_two_bibs_naming_one_file_by_spelling_are_refused(tmp_path) -> None:
+    """One library reached by two names gets two PDF stores, chosen by name.
+
+    `--target ml` and `--target ml2` write the same `.bib` but file their PDFs
+    into different papers_dirs. Duplicate *names* were caught; duplicate paths
+    were accepted with no warning.
+    """
+    bib = tmp_path / "library.bib"
+    bib.write_text("")
+    raw = {
+        "bibs": [
+            {"name": "ml", "path": str(bib), "default": True},
+            {"name": "ml2", "path": str(tmp_path / "." / "library.bib")},
+        ]
+    }
+
+    config, errors = validate_app_config(raw, home_dir=str(tmp_path))
+
+    assert config is None
+    assert any("same file" in error for error in errors)
+    assert any("'ml'" in error and "'ml2'" in error for error in errors)
+
+
+def test_two_bibs_naming_one_file_by_symlink_are_refused(tmp_path) -> None:
+    """String comparison cannot see a symlink; the filesystem can."""
+    real = tmp_path / "library.bib"
+    real.write_text("")
+    link = tmp_path / "alias.bib"
+    link.symlink_to(real)
+    raw = {
+        "bibs": [
+            {"name": "real", "path": str(real), "default": True},
+            {"name": "alias", "path": str(link)},
+        ]
+    }
+
+    config, errors = validate_app_config(raw, home_dir=str(tmp_path))
+
+    assert config is None
+    assert any("same file" in error for error in errors)
+
+
+def test_distinct_bibs_are_still_accepted(tmp_path) -> None:
+    first = tmp_path / "ml.bib"
+    second = tmp_path / "theory.bib"
+    first.write_text("")
+    second.write_text("")
+    raw = {
+        "bibs": [
+            {"name": "ml", "path": str(first), "default": True},
+            {"name": "theory", "path": str(second)},
+        ]
+    }
+
+    config, errors = validate_app_config(raw, home_dir=str(tmp_path))
+
+    assert errors == []
+    assert config is not None
+    assert len(config["bibs"]) == 2
