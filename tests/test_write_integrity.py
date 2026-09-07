@@ -1068,3 +1068,94 @@ def test_merge_names_its_backup_inside_the_lock(tmp_path, monkeypatch) -> None:
 
     assert order == ["lock", "name"], order
     assert result["backup_path"] is not None
+
+
+# ==============================================================================
+# D6 — a quality report leaves with the entry it describes
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_LIBRARY_WITH_REPORTS = """@article{alpha,
+  title = {Alpha},
+}
+% == BibTeX quality report for alpha:
+% ? Title looks like it was stored in title case
+
+@article{beta,
+  title = {Beta},
+}
+% == BibTeX quality report for beta:
+% Missing required field 'journal'
+"""
+
+
+def test_delete_takes_the_entrys_quality_report_with_it(tmp_path) -> None:
+    """Better BibTeX writes its report flush below the entry it describes.
+
+    Deleting the entry alone left the report sitting against the *next* entry,
+    now reading as that paper's report. The library this manages holds 18,650
+    of them, so every delete hit it.
+    """
+    from pzi.bib_repository import delete_bib_entry
+
+    path = tmp_path / "library.bib"
+    path.write_text(_LIBRARY_WITH_REPORTS)
+
+    result = delete_bib_entry(str(path), "alpha")
+
+    assert result["found"] is True
+    text = path.read_text()
+    assert "quality report for alpha" not in text
+    # beta's own report is untouched.
+    assert "quality report for beta" in text
+    assert "Missing required field" in text
+
+
+def test_delete_leaves_a_comment_that_names_another_entry(tmp_path) -> None:
+    """Only the report naming the deleted entry goes; nothing is guessed."""
+    from pzi.bib_repository import delete_bib_entry
+
+    path = tmp_path / "library.bib"
+    path.write_text(
+        "@article{alpha,\n  title = {Alpha},\n}\n"
+        "% == BibTeX quality report for beta:\n% something about beta\n\n"
+        "@article{beta,\n  title = {Beta},\n}\n"
+    )
+
+    delete_bib_entry(str(path), "alpha")
+
+    assert "quality report for beta" in path.read_text()
+
+
+def test_delete_leaves_an_unrelated_comment_alone(tmp_path) -> None:
+    from pzi.bib_repository import delete_bib_entry
+
+    path = tmp_path / "library.bib"
+    path.write_text(
+        "@article{alpha,\n  title = {Alpha},\n}\n"
+        "% my own note about the section below\n\n"
+        "@article{beta,\n  title = {Beta},\n}\n"
+    )
+
+    delete_bib_entry(str(path), "alpha")
+
+    assert "my own note" in path.read_text()
+
+
+def test_merge_takes_the_dropped_entrys_quality_report_with_it(tmp_path) -> None:
+    """The sibling call site: merge destroys A's block exactly as delete does."""
+    from pzi.bib_repository import merge_bib_entries
+
+    path = tmp_path / "library.bib"
+    path.write_text(_LIBRARY_WITH_REPORTS)
+
+    result = merge_bib_entries(str(path), citekey_a="alpha", citekey_b="beta")
+
+    assert result["found"] is True
+    text = path.read_text()
+    assert "quality report for alpha" not in text
+    # B survives the merge, and so does the report that names it: it is stale,
+    # but it names an entry that exists and nothing regenerates it.
+    assert "quality report for beta" in text
+
+
+# ═══════════════════════════════════════════════════════════════════════════════

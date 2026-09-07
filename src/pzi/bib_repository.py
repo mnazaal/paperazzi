@@ -1380,6 +1380,54 @@ def update_bib_entry(
 # ---------------------------------------------------------------------------
 
 
+#: How Better BibTeX opens the quality report it writes for an entry. The
+#: report is flush below the entry it describes, so removing the entry alone
+#: leaves the report sitting against the *next* one, now describing a paper it
+#: has nothing to do with. Measured on the library this manages: 18,650 of
+#: these, so every delete and every merge hit it.
+_QUALITY_REPORT_PREFIX = "% == BibTeX quality report for "
+
+
+def _is_quality_report_for(block: object, citekey: str) -> bool:
+    """Whether *block* is the Better BibTeX quality report for *citekey*.
+
+    Matched on the citekey the report names, not on position alone: the report
+    says which entry it belongs to, so nothing is removed on a guess about
+    blank lines. A comment that names another entry, or no entry, is left where
+    it is.
+    """
+    comment = getattr(block, "comment", None)
+    if not isinstance(comment, str):
+        return False
+    first_line = comment.split("\n", 1)[0].strip()
+    return first_line == f"{_QUALITY_REPORT_PREFIX}{citekey}:"
+
+
+def drop_block_and_its_quality_report(
+    blocks: Sequence[Any], citekey: str
+) -> tuple[list[Any], bool]:
+    """Remove *citekey*'s entry block, and the quality report that follows it.
+
+    Returns the new block list and whether the entry was found. Shared by
+    `delete_bib_entry` and `merge_bib_entries` because both destroy a block,
+    and a fix applied to only one of them is this project's most common defect.
+    """
+    new_blocks: list[Any] = []
+    found = False
+    report_pending = False
+    for block in blocks:
+        if not found and isinstance(block, BibtexEntryV2) and block.key == citekey:
+            found = True
+            report_pending = True
+            continue
+        if report_pending:
+            report_pending = False
+            if _is_quality_report_for(block, citekey):
+                continue
+        new_blocks.append(block)
+    return new_blocks, found
+
+
 def delete_bib_entry(
     path: str, citekey: str, *, backup_label: str | None = None
 ) -> UpdateBibEntryResult:
@@ -1404,13 +1452,9 @@ def delete_bib_entry(
         library = parse_bib_library(source)
         validate_library_parseable(library)
 
-        new_blocks: list = []
-        removed = False
-        for block in library.blocks:
-            if not removed and isinstance(block, BibtexEntryV2) and block.key == citekey:
-                removed = True
-                continue
-            new_blocks.append(block)
+        new_blocks, removed = drop_block_and_its_quality_report(
+            library.blocks, citekey
+        )
 
         if not removed:
             return {
@@ -1522,19 +1566,29 @@ def merge_bib_entries(
             bib_dir=str(Path(path).parent),
         )
 
-        new_blocks: list = []
-        removed_a = False
+        # A drops out, and its quality report with it: the report describes an
+        # entry that is going away, and left behind it would sit flush against
+        # whatever follows, now reading as that entry's report.
+        new_blocks, removed_a = drop_block_and_its_quality_report(
+            library.blocks, citekey_a
+        )
+        # B is replaced in place and keeps its own report. That report is stale
+        # after the merge, but it still names an entry that exists, and nothing
+        # regenerates it now that Better BibTeX no longer writes this file —
+        # so deleting it would destroy the user's data to fix a wording problem.
         replaced_b = False
-        for block in library.blocks:
-            if isinstance(block, BibtexEntryV2):
-                if not removed_a and block.key == citekey_a:
-                    removed_a = True
-                    continue
-                if not replaced_b and block.key == citekey_b:
-                    replaced_b = True
-                    new_blocks.append(merged_block)
-                    continue
-            new_blocks.append(block)
+        merged_blocks: list = []
+        for block in new_blocks:
+            if (
+                not replaced_b
+                and isinstance(block, BibtexEntryV2)
+                and block.key == citekey_b
+            ):
+                replaced_b = True
+                merged_blocks.append(merged_block)
+                continue
+            merged_blocks.append(block)
+        new_blocks = merged_blocks
 
         new_library = build_library(new_blocks)
         new_source = serialize_library(new_library, layout=detect_bib_layout(source))
