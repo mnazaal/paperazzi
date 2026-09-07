@@ -940,3 +940,48 @@ def test_an_entry_and_a_string_may_share_a_name() -> None:
 
     assert len(library.entries) == 1
     assert len(library.strings) == 1
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# D9 — line endings are sniffed over the whole file
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_crlf_past_the_first_64kb_is_preserved(tmp_path) -> None:
+    """A file whose head is LF and whose tail is CRLF was rewritten wholly LF.
+
+    The sniff read only the first 64 KB, so everything past it was converted on
+    the next write — turning a one-tag edit into a 100%-changed file in git for
+    the whole tail.
+    """
+    from pzi.bib_repository import _detect_text_shape
+
+    path = tmp_path / "library.bib"
+    # Enough LF padding to fill the old sniff window, then CRLF-dominant text.
+    padding = b"% padding line\n" * 6000
+    tail = b"% tail line\r\n" * 8000
+    path.write_bytes(padding + tail)
+
+    assert len(padding) > 65536
+    assert _detect_text_shape(path).newline == "\r\n"
+
+
+def test_lf_file_still_reads_as_lf(tmp_path) -> None:
+    from pzi.bib_repository import _detect_text_shape
+
+    path = tmp_path / "library.bib"
+    path.write_bytes(b"% line\n" * 100)
+    assert _detect_text_shape(path).newline == "\n"
+
+
+def test_crlf_pair_split_across_the_chunk_boundary_is_counted(tmp_path) -> None:
+    """The scan reads in chunks, so a \\r\\n straddling one must not be lost."""
+    from pzi.bib_repository import _NEWLINE_SNIFF_BYTES, _detect_text_shape
+
+    path = tmp_path / "library.bib"
+    # Land a `\r` exactly on the boundary: the `\n` opens the next chunk.
+    head = b"x" * (_NEWLINE_SNIFF_BYTES - 1)
+    path.write_bytes(head + b"\r\n" + b"y\r\n")
+    assert _detect_text_shape(path).newline == "\r\n"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
