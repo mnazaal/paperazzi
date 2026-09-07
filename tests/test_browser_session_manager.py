@@ -39,6 +39,9 @@ def _install_fake_launcher(monkeypatch, sessions: list) -> list:
 
     def fake_launch(browser, profile_path, *, headless=True, url_allowed=None):
         session = queue.pop(0)
+        # `launch_browser` builds the real session on the thread that calls it,
+        # so the fake takes its owner thread here rather than at construction.
+        session._adopt_current_thread()
         launched.append((browser, profile_path, headless, session))
         return session
 
