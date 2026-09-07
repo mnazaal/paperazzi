@@ -251,3 +251,59 @@ def test_find_duplicates_still_silent_on_unrelated_entries() -> None:
 
         assert result["exact_duplicates"] == []
         assert result["fuzzy_candidates"] == []
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# C15 — the applied report describes the merge that happened
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_the_applied_report_describes_the_locked_merge_not_the_preview(
+    tmp_path, monkeypatch
+) -> None:
+    """The report came from analysis done before the lock was taken.
+
+    `merge_duplicates` reads the file once without a lock to build its preview,
+    then `merge_bib_entries` re-reads under the lock and merges *that*. Anything
+    that changed in between was described by the pre-lock reading — and one of
+    the fields it describes, `orphaned_pdf`, drives PDF disposal.
+
+    Here A gains a `volume` field between the two reads. It is a field only A
+    carries, so it must appear as carried by the merge that ran.
+    """
+    import pzi.dedupe_service as dedupe
+
+    bib = tmp_path / "lib.bib"
+    bib.write_text(
+        "@article{alpha,\n  title = {A Paper},\n  author = {Smith, Jane},\n}\n\n"
+        "@article{beta,\n  title = {A Paper},\n  author = {Smith, Jane},\n}\n"
+    )
+
+    real_read = dedupe.read_bib_file
+    calls = {"n": 0}
+
+    def read_then_change(path):
+        result = real_read(path)
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # The unlocked read has happened; the locked one has not.
+            bib.write_text(
+                "@article{alpha,\n  title = {A Paper},\n"
+                "  author = {Smith, Jane},\n  volume = {12},\n}\n\n"
+                "@article{beta,\n  title = {A Paper},\n"
+                "  author = {Smith, Jane},\n}\n"
+            )
+        return result
+
+    monkeypatch.setattr(dedupe, "read_bib_file", read_then_change)
+
+    result = dedupe.merge_duplicates(
+        bib_path=str(bib),
+        citekey_a="alpha",
+        citekey_b="beta",
+        dry_run=False,
+    )
+
+    assert result["status"] == "ok"
+    assert "volume" in result["carried_fields"], (
+        "the report describes the pre-lock read, not the merge that ran"
+    )

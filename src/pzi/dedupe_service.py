@@ -10,6 +10,7 @@ from pzi.bib_repository import (
     merge_entries,
     read_bib_file,
     read_bib_file_with_notices,
+    summarise_merge,
 )
 from pzi.bibtex import NormalizedRecord
 from pzi.errors import REASON_NOT_FOUND, REASON_USAGE
@@ -221,20 +222,6 @@ def _identity_components(
 
 
 #: Where a record field lands in a BibTeX entry, for the few that are not
-#: spelled the same. Used to say which raw fields a merge overwrites.
-_RAW_KEYS_FOR_RECORD_FIELD: dict[str, tuple[str, ...]] = {
-    # `authors` is the one whose record name and BibTeX name differ only by a
-    # plural, which is presumably how it went missing. Without it the preview
-    # could not tell that a changed `authors` means the raw `author` field is
-    # overwritten, so it reported the survivor's author as "kept (conflict)"
-    # while the run replaced it — the single most load-bearing field in the
-    # entry, previewed backwards.
-    "authors": ("author",),
-    "venue": ("journal", "booktitle"),
-    "tags": ("keywords",),
-    "local_pdf_path": ("file",),
-    "canonical_url": ("url",),
-}
 
 
 def merge_duplicates(
@@ -302,44 +289,22 @@ def merge_duplicates(
     merged_record = merge_decision["merged"]
     changed_fields = merge_decision.get("changed_fields", [])
 
-    # What happens to the BibTeX fields the record model does not carry. Read
-    # off the entries so the preview can name them; the real merge recomputes
-    # the same thing under the lock.
-    fields_a = entries[idx_a].get("fields", {})
-    fields_b = entries[idx_b].get("fields", {})
-    carried_fields = sorted(key for key in fields_a if key not in fields_b)
-    # A field present in both is only "kept from B" when the merge actually
-    # keeps B's value. `merge_entries` prefers the *longer* string for title,
-    # venue and abstract, so B's value is routinely replaced by A's — and this
-    # list was reported as "fields kept from B (conflict)" regardless, telling
-    # the user the opposite of what the run does. The dry run is where the user
-    # decides, so the two outcomes are now separated by what the merge decided.
-    overwritten_raw_keys = {
-        raw
-        for field in changed_fields
-        for raw in _RAW_KEYS_FOR_RECORD_FIELD.get(field, (field,))
-    }
-    conflicting_fields = sorted(
-        key for key, value in fields_a.items()
-        if key in fields_b and fields_b[key] != value
-        and key not in overwritten_raw_keys
+    # What happens to the BibTeX fields the record model does not carry, and to
+    # the dropped entry's PDF. Computed by the same function the locked merge
+    # uses, from the records read here without a lock — so a preview and the run
+    # it previews describe the same merge in the same terms, and differ only
+    # where the file changed between them.
+    preview_summary = summarise_merge(
+        fields_a=entries[idx_a].get("fields", {}),
+        fields_b=entries[idx_b].get("fields", {}),
+        changed_fields=changed_fields,
+        record_a=record_a,
+        merged_record=merged_record,
     )
-    overwritten_fields = sorted(
-        key for key, value in fields_a.items()
-        if key in fields_b and fields_b[key] != value
-        and key in overwritten_raw_keys
-    )
-
-    # The dropped entry's PDF, when the merge does not keep it. The file stays
-    # on disk with nothing referring to it, and a later `library clean --fix`
-    # quarantines it — a second command undoing what this one caused. The dry
-    # run is where the user decides whether to accept that, and it reported
-    # carried and dropped *fields* while never mentioning the file.
-    pdf_a = record_a.get("local_pdf_path")
-    kept_pdf = merged_record.get("local_pdf_path")
-    orphaned_pdf = (
-        str(pdf_a) if isinstance(pdf_a, str) and pdf_a and pdf_a != kept_pdf else None
-    )
+    carried_fields = preview_summary["carried_fields"]
+    conflicting_fields = preview_summary["conflicting_fields"]
+    overwritten_fields = preview_summary["overwritten_fields"]
+    orphaned_pdf = preview_summary["orphaned_pdf"]
 
     if dry_run:
         preview: MergeResult = {
@@ -382,6 +347,11 @@ def merge_duplicates(
             "errors": ["entry disappeared between reads"],
         }
 
+    # Falls back to the preview's reading only if the repository did not return
+    # one, so the report degrades to today's behaviour rather than to an
+    # exception.
+    applied_summary = merge_result.get("summary") or preview_summary
+
     applied: MergeResult = {
         "status": "ok",
         "citekey_a": citekey_a, "citekey_b": citekey_b,
@@ -390,13 +360,16 @@ def merge_duplicates(
         "dry_run": False,
         "message": f"merged {citekey_a} into {citekey_b}",
         "errors": [],
-        "changed_fields": changed_fields,
-        "carried_fields": carried_fields,
-        "dropped_fields": merge_result.get("dropped_fields", conflicting_fields),
-        # Set on the preview only, so the run that actually destroyed a field
-        # was the one that stayed silent about it — the reverse of what a
-        # preview/apply pair should do.
-        "overwritten_fields": overwritten_fields,
+        # All of these come from the merge that happened, not from the analysis
+        # done before the lock was taken. Only `dropped_fields` did, which is
+        # the shape this project keeps hitting: a fix applied at one call site
+        # while its siblings kept the bug.
+        "changed_fields": merge_result.get("changed_fields", changed_fields),
+        "carried_fields": applied_summary["carried_fields"],
+        "dropped_fields": merge_result.get(
+            "dropped_fields", applied_summary["conflicting_fields"]
+        ),
+        "overwritten_fields": applied_summary["overwritten_fields"],
         "backup_path": str(backup_path),
     }
     if orphaned_pdf:

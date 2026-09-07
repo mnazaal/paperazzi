@@ -15,12 +15,12 @@ import shutil
 import stat
 import tempfile
 import time
-from collections.abc import Callable, Collection, Iterator, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from pathlib import Path
-from typing import Any, TypeAlias, cast
+from typing import Any, TypeAlias, TypedDict, cast
 
 import portalocker
 from bibtexparser.library import Library
@@ -1485,6 +1485,93 @@ def delete_bib_entry(
         }
 
 
+#: BibTeX field names behind each record field, for deciding whether a changed
+#: record field means a raw field was overwritten. Lives here, beside the merge
+#: that happens under the lock, because both the preview and the applied run
+#: need the same answer — `dedupe_service` imports it rather than keeping a
+#: second copy.
+RAW_KEYS_FOR_RECORD_FIELD: dict[str, tuple[str, ...]] = {
+    # `authors` is the one whose record name and BibTeX name differ only by a
+    # plural, which is presumably how it went missing. Without it the preview
+    # could not tell that a changed `authors` means the raw `author` field is
+    # overwritten, so it reported the survivor's author as "kept (conflict)"
+    # while the run replaced it — the single most load-bearing field in the
+    # entry, previewed backwards.
+    "authors": ("author",),
+    "venue": ("journal", "booktitle"),
+    "tags": ("keywords",),
+    "local_pdf_path": ("file",),
+    "canonical_url": ("url",),
+}
+
+
+class MergeSummary(TypedDict):
+    """What a merge does to the fields and the PDF, as a report.
+
+    Computed by one function called from two places: `dedupe_service`'s
+    preview, from the records it read without a lock, and `merge_bib_entries`,
+    from the entries it actually merged under one. The applied run used to
+    report the *preview's* numbers — so anything that changed between the two
+    reads was described wrongly by the only run that changed the file, and
+    `orphaned_pdf` drives PDF disposal.
+    """
+
+    carried_fields: list[str]
+    conflicting_fields: list[str]
+    overwritten_fields: list[str]
+    orphaned_pdf: str | None
+
+
+def summarise_merge(
+    *,
+    fields_a: Mapping[str, Any],
+    fields_b: Mapping[str, Any],
+    changed_fields: Sequence[str],
+    record_a: Mapping[str, Any],
+    merged_record: Mapping[str, Any],
+) -> MergeSummary:
+    """Describe a merge of A into B in the terms the report uses.
+
+    Pure: no I/O, no lock. That is what lets the preview and the real run share
+    it instead of computing the same four lists twice and disagreeing.
+    """
+    carried_fields = sorted(key for key in fields_a if key not in fields_b)
+    # A field present in both is only "kept from B" when the merge actually
+    # keeps B's value. `merge_entries` prefers the *longer* string for title,
+    # venue and abstract, so B's value is routinely replaced by A's — and this
+    # list was reported as "fields kept from B (conflict)" regardless, telling
+    # the user the opposite of what the run does.
+    overwritten_raw_keys = {
+        raw
+        for field in changed_fields
+        for raw in RAW_KEYS_FOR_RECORD_FIELD.get(field, (field,))
+    }
+    conflicting_fields = sorted(
+        key
+        for key, value in fields_a.items()
+        if key in fields_b and fields_b[key] != value and key not in overwritten_raw_keys
+    )
+    overwritten_fields = sorted(
+        key
+        for key, value in fields_a.items()
+        if key in fields_b and fields_b[key] != value and key in overwritten_raw_keys
+    )
+    # The dropped entry's PDF, when the merge does not keep it. The file stays
+    # on disk with nothing referring to it, and a later `library clean --fix`
+    # quarantines it — a second command undoing what this one caused.
+    pdf_a = record_a.get("local_pdf_path")
+    kept_pdf = merged_record.get("local_pdf_path")
+    orphaned_pdf = (
+        str(pdf_a) if isinstance(pdf_a, str) and pdf_a and pdf_a != kept_pdf else None
+    )
+    return {
+        "carried_fields": carried_fields,
+        "conflicting_fields": conflicting_fields,
+        "overwritten_fields": overwritten_fields,
+        "orphaned_pdf": orphaned_pdf,
+    }
+
+
 def merge_bib_entries(
     path: str,
     *,
@@ -1534,6 +1621,13 @@ def merge_bib_entries(
         idx_b = find_entry_index(entries, citekey_b)
         if idx_a is None or idx_b is None:
             return {"found": False, "merged_record": None, "changed_fields": []}
+
+        # Snapshotted before the merge runs: the report is about the entries as
+        # they were read under this lock, and nothing downstream can rebuild
+        # them out from under it.
+        fields_a_at_read = dict(entries[idx_a].get("fields", {}))
+        fields_b_at_read = dict(entries[idx_b].get("fields", {}))
+        record_a_at_read = dict(records[idx_a])
 
         decision = merge_entries(
             cast(MergeableEntry, dict(records[idx_b])),
@@ -1605,6 +1699,15 @@ def merge_bib_entries(
             "changed_fields": decision["changed_fields"],
             "dropped_fields": dropped_fields,
             "backup_path": backup_path,
+            # The report, from the entries this lock actually merged. The
+            # caller used to report its own pre-lock analysis instead.
+            "summary": summarise_merge(
+                fields_a=fields_a_at_read,
+                fields_b=fields_b_at_read,
+                changed_fields=decision["changed_fields"],
+                record_a=record_a_at_read,
+                merged_record=merged_record,
+            ),
         }
 
 
