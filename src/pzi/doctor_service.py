@@ -3,13 +3,31 @@
 from __future__ import annotations
 
 import os
+import shlex
+import shutil
 import stat
+from collections.abc import Mapping
+from pathlib import Path
 from typing import Any, NotRequired, TypedDict
 
 from pzi.capture_context import resolve_optional_value
 from pzi.config import load_config_file
 from pzi.errors import REASON_CONFIG, PziError
 from pzi.metadata_sources import probe_s2_api
+
+#: Config keys that name a shell-style command, checked for a resolvable
+#: `argv[0]` without ever running them (`doctor` is a diagnostic, not a
+#: trigger). `semantic_scholar_api_key_cmd` is also executed elsewhere in this
+#: module to resolve the key itself — this check is additional, not a
+#: replacement.
+CMD_CONFIG_KEYS = (
+    "browser_pdf_cmd",
+    "page_metadata_cmd",
+    "api_auth_token_cmd",
+    "contact_email_cmd",
+    "unpaywall_email_cmd",
+    "semantic_scholar_api_key_cmd",
+)
 
 
 class DoctorBibStatus(TypedDict):
@@ -19,6 +37,22 @@ class DoctorBibStatus(TypedDict):
     papers_dir: str
     papers_dir_exists: bool
     default: bool
+
+
+class DoctorCmdCheck(TypedDict):
+    key: str
+    command: str
+    resolved: str | None
+    error: NotRequired[str]
+
+
+class DoctorNodeStatus(TypedDict):
+    configured: bool
+    source: str
+    value: str
+    ok: bool
+    resolved: NotRequired[str]
+    error: NotRequired[str]
 
 
 class DoctorResult(TypedDict):
@@ -39,6 +73,20 @@ class DoctorResult(TypedDict):
     credentials: dict[str, str]
     semantic_scholar: dict[str, Any]
     config_permissions_warning: str | None
+    #: Whether `argv[0]` of every command-valued config key resolves. Never
+    #: executes any of them.
+    cmd_checks: list[DoctorCmdCheck]
+    #: `node_path` / `PZI_NODE`, resolved the way `node_runtime.
+    #: _resolve_node_override` resolves it. `None` when no override is set.
+    node: DoctorNodeStatus | None
+    #: `git` and `npm` presence on PATH — needed only to install the
+    #: translation-server, and checked at install time and never again.
+    dev_tools: dict[str, bool]
+    #: The advisory (FINDINGS, exit 1) tier: optional-path degradations that
+    #: leave every core operation working. Kept separate from `errors` (the
+    #: ENVIRONMENT, exit 5, tier) — `doctor --json` carries both as distinct
+    #: fields rather than merging them into one list.
+    findings: list[str]
     #: Structured failure reason (`pzi.errors.REASON_*`) — present only on
     #: failure. Both the exit-code and HTTP-status mappers read it.
     reason: NotRequired[str]
@@ -72,6 +120,136 @@ def doctor_health_problems(result: DoctorResult) -> list[str]:
         # not the user's config being wrong.
         problems.append(f"semantic_scholar_api_key_cmd failed: {key_error}")
     return problems
+
+
+def doctor_advisory_problems(result: Mapping[str, Any]) -> list[str]:
+    """Every optional-path degradation worth reporting without failing the run.
+
+    Sibling to :func:`doctor_health_problems`: that one is the fatal
+    (ENVIRONMENT, exit 5) tier; this is the advisory (FINDINGS, exit 1) tier —
+    a `*_cmd` whose `argv[0]` does not resolve, a broken `node_path`/`PZI_NODE`
+    override, a missing `git`/`npm`, a missing `papers_dir`, or a
+    `semantic_scholar_api_key` the API rejected. Every one of these leaves
+    every core operation working, which is what keeps it out of the other
+    tier. Kept as its own list rather than folded into `doctor_health_problems`
+    so `doctor --json` can carry the two tiers as distinct fields instead of
+    merging them into one.
+    """
+    problems: list[str] = []
+    for check in result.get("cmd_checks") or []:
+        error = check.get("error")
+        if error:
+            problems.append(f"{check['key']}: {error} ({check.get('command')})")
+    node = result.get("node")
+    if node is not None and not node.get("ok", True):
+        problems.append(str(node.get("error") or "node override is broken"))
+    dev_tools = result.get("dev_tools") or {}
+    for tool in ("git", "npm"):
+        if dev_tools.get(tool) is False:
+            problems.append(
+                f"{tool} is not installed (needed to install the translation server)"
+            )
+    for bib in result.get("bibs") or []:
+        if bib.get("path_exists") and not bib.get("papers_dir_exists"):
+            problems.append(
+                f"papers_dir not found: {bib.get('papers_dir')} (bib {bib.get('name')})"
+            )
+    if (result.get("semantic_scholar") or {}).get("key_effective") is False:
+        problems.append(
+            "semantic_scholar_api_key is configured but the API rejected it"
+        )
+    return problems
+
+
+def _resolve_cmd_argv0(command: str) -> tuple[str | None, str | None]:
+    """Resolve `argv[0]` of a config `*_cmd` string without executing it.
+
+    Splits with `shlex.split`, expands `~` on the first token, then checks it
+    resolves and is executable: `shutil.which` for a bare name, `os.access`
+    for a path (anything containing a path separator). Returns
+    `(resolved_path, None)` on success or `(None, error_message)` — an
+    unparsable or empty command is itself a reportable problem, not a crash.
+    """
+    try:
+        tokens = shlex.split(command)
+    except ValueError as exc:
+        return None, f"unparsable command: {exc}"
+    if not tokens or not tokens[0]:
+        return None, "empty command"
+    raw_argv0 = tokens[0]
+    argv0 = os.path.expanduser(raw_argv0)
+    if os.sep in raw_argv0 or (os.altsep and os.altsep in raw_argv0):
+        if os.path.isfile(argv0) and os.access(argv0, os.X_OK):
+            return argv0, None
+        return None, f"not found or not executable: {argv0}"
+    resolved = shutil.which(argv0)
+    if resolved is not None:
+        return resolved, None
+    return None, f"not found on PATH: {argv0}"
+
+
+def check_cmd_resolutions(config: dict[str, Any]) -> list[DoctorCmdCheck]:
+    """Whether `argv[0]` resolves for every configured command-valued key.
+
+    Covers `CMD_CONFIG_KEYS`. A key that is unset or blank is skipped rather
+    than reported — that is what "not configured" means everywhere else in
+    `doctor`. Never runs any of the commands.
+    """
+    checks: list[DoctorCmdCheck] = []
+    for key in CMD_CONFIG_KEYS:
+        value = config.get(key)
+        if not isinstance(value, str) or not value.strip():
+            continue
+        resolved, error = _resolve_cmd_argv0(value)
+        entry: DoctorCmdCheck = {"key": key, "command": value, "resolved": resolved}
+        if error:
+            entry["error"] = error
+        checks.append(entry)
+    return checks
+
+
+def check_node_override(node_path: str | None) -> DoctorNodeStatus | None:
+    """Report a configured-but-broken `node_path` / `PZI_NODE` override.
+
+    Resolves it exactly the way `node_runtime._resolve_node_override` does
+    (env wins), so this can never disagree with what a real run would pick.
+    That function runs `node --version` locally to check the minimum
+    version — no network, no install, and this never calls `ensure_node`.
+    Returns `None` when no override is set at all.
+    """
+    override = os.environ.get("PZI_NODE") or node_path
+    if not override:
+        return None
+    source = "PZI_NODE" if os.environ.get("PZI_NODE") else "node_path"
+    from pzi.node_runtime import _resolve_node_override
+
+    try:
+        resolved = _resolve_node_override(node_path)
+    except RuntimeError as exc:
+        return {
+            "configured": True,
+            "source": source,
+            "value": override,
+            "ok": False,
+            "error": str(exc),
+        }
+    return {
+        "configured": True,
+        "source": source,
+        "value": override,
+        "ok": True,
+        "resolved": resolved or "",
+    }
+
+
+def check_dev_tools() -> dict[str, bool]:
+    """Whether `git` and `npm` are on PATH.
+
+    Both are needed only to install the translation-server (`ts_backend.py`)
+    and are checked once at install time and never again — this is the first
+    time `doctor` reports their absence ahead of that.
+    """
+    return {"git": shutil.which("git") is not None, "npm": shutil.which("npm") is not None}
 
 
 def config_permissions_warning(config_path: str) -> str | None:
@@ -119,6 +297,10 @@ def doctor_check(
             "translation_probe_error": None,
             "credentials": {},
             "semantic_scholar": {},
+            "cmd_checks": [],
+            "node": None,
+            "dev_tools": {},
+            "findings": [],
             "config_permissions_warning": config_permissions_warning(
                 config_result["path"]
             ),
@@ -126,16 +308,15 @@ def doctor_check(
     config = config_result["config"]
 
     bibs: list[DoctorBibStatus] = []
-    from pathlib import Path as _Path
 
     for bib in config["bibs"]:
         bibs.append(
             {
                 "name": bib["name"],
                 "path": bib["path"],
-                "path_exists": _Path(bib["path"]).exists(),
+                "path_exists": Path(bib["path"]).exists(),
                 "papers_dir": bib["papers_dir"],
-                "papers_dir_exists": _Path(bib["papers_dir"]).exists(),
+                "papers_dir_exists": Path(bib["papers_dir"]).exists(),
                 "default": bib["default"],
             }
         )
@@ -196,6 +377,12 @@ def doctor_check(
         except OSError as exc:
             s2_probe_error = str(exc)
 
+    cmd_checks = check_cmd_resolutions(config)
+    node_status = check_node_override(
+        config.get("node_path") if isinstance(config.get("node_path"), str) else None
+    )
+    dev_tools = check_dev_tools()
+
     result: DoctorResult = {
         "status": "ok",
         "errors": [],
@@ -220,15 +407,21 @@ def doctor_check(
             "probe_error": s2_probe_error,
             "key_error": s2_key_error,
         },
+        "cmd_checks": cmd_checks,
+        "node": node_status,
+        "dev_tools": dev_tools,
+        "findings": [],
         "config_permissions_warning": config_permissions_warning(
             config_result["path"]
         ),
     }
 
     # One source of truth: `status` and the runner's exit code are now two
-    # readings of the same list.
+    # readings of the same list. `findings` is the sibling reading for the
+    # advisory tier — see `doctor_advisory_problems`.
     result["errors"] = doctor_health_problems(result)
     result["status"] = "ok" if not result["errors"] else "error"
+    result["findings"] = doctor_advisory_problems(result)
     return result
 
 

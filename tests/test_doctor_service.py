@@ -1,11 +1,18 @@
 """Edge tests for doctor_service.py uncovered lines (line 80: _probe_translation_server)."""
 
 import os
+import stat
 
 from pzi.doctor_service import (
     _probe_translation_server,
+    _resolve_cmd_argv0,
+    check_cmd_resolutions,
+    check_dev_tools,
+    check_node_override,
     config_permissions_warning,
+    doctor_advisory_problems,
     doctor_check,
+    doctor_health_problems,
 )
 
 
@@ -397,3 +404,295 @@ def test_doctor_itself_still_probes(tmp_path) -> None:
     doctor_check(config_path=str(config), home_dir=str(tmp_path), s2_probe=_probe)
 
     assert calls, "doctor stopped probing Semantic Scholar"
+
+
+# ---------------------------------------------------------------------------
+# argv[0] resolution for command-valued config keys (item 614)
+# ---------------------------------------------------------------------------
+
+
+def _make_executable(path) -> None:
+    path.write_text("#!/bin/sh\necho hi\n")
+    path.chmod(path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+
+
+def test_resolve_cmd_argv0_finds_a_bare_name_on_path(tmp_path, monkeypatch) -> None:
+    script = tmp_path / "my-tool"
+    _make_executable(script)
+    monkeypatch.setenv("PATH", str(tmp_path))
+
+    resolved, error = _resolve_cmd_argv0("my-tool --flag")
+
+    assert error is None
+    assert resolved == str(script)
+
+
+def test_resolve_cmd_argv0_reports_a_bare_name_not_on_path(monkeypatch) -> None:
+    monkeypatch.setenv("PATH", "")
+
+    resolved, error = _resolve_cmd_argv0("definitely-not-a-real-binary-xyz --flag")
+
+    assert resolved is None
+    assert error is not None
+
+
+def test_resolve_cmd_argv0_expands_tilde_on_a_path(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    script = tmp_path / "bin" / "tool"
+    script.parent.mkdir()
+    _make_executable(script)
+
+    resolved, error = _resolve_cmd_argv0("~/bin/tool --flag")
+
+    assert error is None
+    assert resolved == str(script)
+
+
+def test_resolve_cmd_argv0_reports_a_path_that_is_not_executable(tmp_path) -> None:
+    script = tmp_path / "tool"
+    script.write_text("not executable")
+
+    resolved, error = _resolve_cmd_argv0(f"{script} --flag")
+
+    assert resolved is None
+    assert error is not None
+
+
+def test_resolve_cmd_argv0_reports_an_unparsable_command() -> None:
+    resolved, error = _resolve_cmd_argv0('unterminated "quote')
+
+    assert resolved is None
+    assert error is not None
+
+
+def test_resolve_cmd_argv0_reports_an_empty_command() -> None:
+    resolved, error = _resolve_cmd_argv0('""')
+
+    assert resolved is None
+    assert error is not None
+
+
+def test_check_cmd_resolutions_covers_all_six_keys(tmp_path, monkeypatch) -> None:
+    script = tmp_path / "ok-tool"
+    _make_executable(script)
+    monkeypatch.setenv("PATH", str(tmp_path))
+
+    config = {
+        "browser_pdf_cmd": "ok-tool",
+        "page_metadata_cmd": "ok-tool",
+        "api_auth_token_cmd": "ok-tool",
+        "contact_email_cmd": "ok-tool",
+        "unpaywall_email_cmd": "ok-tool",
+        "semantic_scholar_api_key_cmd": "missing-binary-xyz",
+    }
+
+    checks = check_cmd_resolutions(config)
+
+    assert {c["key"] for c in checks} == set(config)
+    broken = next(c for c in checks if c["key"] == "semantic_scholar_api_key_cmd")
+    assert broken.get("error")
+    ok = next(c for c in checks if c["key"] == "browser_pdf_cmd")
+    assert not ok.get("error")
+
+
+def test_check_cmd_resolutions_skips_unconfigured_keys() -> None:
+    checks = check_cmd_resolutions({"browser_pdf_cmd": None, "page_metadata_cmd": "  "})
+
+    assert checks == []
+
+
+# ---------------------------------------------------------------------------
+# node_path / PZI_NODE override (item 614)
+# ---------------------------------------------------------------------------
+
+
+def test_check_node_override_returns_none_when_unset(monkeypatch) -> None:
+    monkeypatch.delenv("PZI_NODE", raising=False)
+
+    assert check_node_override(None) is None
+
+
+def test_check_node_override_reports_a_broken_override(monkeypatch) -> None:
+    monkeypatch.delenv("PZI_NODE", raising=False)
+
+    status = check_node_override("/no/such/node/binary")
+
+    assert status is not None
+    assert status["ok"] is False
+    assert "PZI_NODE" in status["error"] or "node_path" in status["error"]
+
+
+def test_check_node_override_never_downloads_or_installs(tmp_path, monkeypatch) -> None:
+    """A broken override must report, not attempt to fetch a portable Node.js."""
+    import pzi.node_runtime as node_runtime
+
+    def _boom(*a, **k):
+        raise AssertionError("check_node_override must not call ensure_node")
+
+    monkeypatch.setattr(node_runtime, "ensure_node", _boom)
+    monkeypatch.delenv("PZI_NODE", raising=False)
+
+    status = check_node_override("/no/such/node/binary")
+
+    assert status["ok"] is False
+
+
+def test_check_node_override_reports_a_working_override(tmp_path, monkeypatch) -> None:
+    fake_node = tmp_path / "node"
+    fake_node.write_text("#!/bin/sh\necho v22.0.0\n")
+    fake_node.chmod(fake_node.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    monkeypatch.delenv("PZI_NODE", raising=False)
+
+    status = check_node_override(str(fake_node))
+
+    assert status is not None
+    assert status["ok"] is True
+
+
+def test_check_node_override_env_wins_over_node_path(tmp_path, monkeypatch) -> None:
+    fake_node = tmp_path / "node"
+    fake_node.write_text("#!/bin/sh\necho v22.0.0\n")
+    fake_node.chmod(fake_node.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    monkeypatch.setenv("PZI_NODE", str(fake_node))
+
+    status = check_node_override("/no/such/node/binary")
+
+    assert status is not None
+    assert status["ok"] is True
+    assert status["value"] == str(fake_node)
+
+
+# ---------------------------------------------------------------------------
+# git / npm presence (item 614)
+# ---------------------------------------------------------------------------
+
+
+def test_check_dev_tools_reports_missing_and_present(monkeypatch) -> None:
+    def fake_which(name):
+        return "/usr/bin/git" if name == "git" else None
+
+    monkeypatch.setattr("pzi.doctor_service.shutil.which", fake_which)
+
+    tools = check_dev_tools()
+
+    assert tools == {"git": True, "npm": False}
+
+
+# ---------------------------------------------------------------------------
+# The advisory (FINDINGS) tier, sibling to doctor_health_problems
+# ---------------------------------------------------------------------------
+
+
+def test_doctor_advisory_problems_flags_a_broken_cmd_argv0() -> None:
+    result = {
+        "cmd_checks": [
+            {"key": "browser_pdf_cmd", "command": "nope", "resolved": None,
+             "error": "not found on PATH: nope"},
+        ],
+    }
+
+    problems = doctor_advisory_problems(result)
+
+    assert any("browser_pdf_cmd" in p for p in problems)
+
+
+def test_doctor_advisory_problems_flags_a_broken_node_override() -> None:
+    result = {"node": {"configured": True, "value": "bad", "ok": False,
+                        "error": "PZI_NODE/node_path is set to 'bad' but ..."}}
+
+    assert doctor_advisory_problems(result) != []
+
+
+def test_doctor_advisory_problems_ignores_a_working_node_override() -> None:
+    result = {"node": {"configured": True, "value": "node", "ok": True,
+                        "resolved": "/usr/bin/node"}}
+
+    assert doctor_advisory_problems(result) == []
+
+
+def test_doctor_advisory_problems_flags_missing_dev_tools() -> None:
+    result = {"dev_tools": {"git": False, "npm": True}}
+
+    problems = doctor_advisory_problems(result)
+
+    assert any("git" in p for p in problems)
+    assert not any("npm is not installed" in p for p in problems)
+
+
+def test_doctor_advisory_problems_flags_a_missing_papers_dir() -> None:
+    result = {
+        "bibs": [
+            {"name": "ml", "path": "/x/ml.bib", "path_exists": True,
+             "papers_dir": "/x/papers", "papers_dir_exists": False},
+        ],
+    }
+
+    problems = doctor_advisory_problems(result)
+
+    assert any("papers" in p for p in problems)
+
+
+def test_doctor_advisory_problems_flags_a_rejected_key() -> None:
+    result = {"semantic_scholar": {"key_effective": False}}
+
+    assert doctor_advisory_problems(result) != []
+
+
+def test_doctor_advisory_problems_ignores_an_unconfigured_key() -> None:
+    result = {"semantic_scholar": {"key_effective": None}}
+
+    assert doctor_advisory_problems(result) == []
+
+
+def test_doctor_advisory_problems_empty_for_a_clean_result() -> None:
+    assert doctor_advisory_problems({}) == []
+
+
+def test_doctor_advisory_and_health_problems_stay_disjoint_tiers() -> None:
+    """FINDINGS-tier issues must never also appear in the ENVIRONMENT-tier list.
+
+    They are two separate fields carried on the result; `doctor --json` must
+    not merge them into one list.
+    """
+    result = {
+        "config_ok": True,
+        "bibs": [{"path_exists": True, "papers_dir": "/x", "papers_dir_exists": False}],
+        "translation_server_url": None,
+        "semantic_scholar": {},
+        "dev_tools": {"git": False},
+    }
+
+    assert doctor_health_problems(result) == []
+    assert doctor_advisory_problems(result) != []
+
+
+def test_doctor_check_reports_argv0_and_papers_dir_and_dev_tools(tmp_path, monkeypatch) -> None:
+    """End-to-end: `doctor_check` wires the new checks into the result."""
+    monkeypatch.setenv("PATH", "")
+    monkeypatch.delenv("PZI_NODE", raising=False)
+    config_path = tmp_path / "config.toml"
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text("")
+    papers_dir = tmp_path / "papers"  # deliberately never created
+    config_path.write_text(
+        'api_listen_host = "127.0.0.1"\n'
+        'api_listen_port = 8765\n'
+        'browser_pdf_cmd = "definitely-not-a-real-binary-xyz"\n'
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\ndefault = true\n'
+        f'papers_dir = "{papers_dir}"\n'
+    )
+
+    result = doctor_check(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        translation_probe=lambda _url: True,
+        s2_probe=lambda **_kw: False,
+    )
+
+    assert result["status"] == "ok"  # advisory findings must not fail the run
+    assert any(c["key"] == "browser_pdf_cmd" for c in result["cmd_checks"])
+    assert any(c.get("error") for c in result["cmd_checks"])
+    assert result["bibs"][0]["papers_dir_exists"] is False
+    assert "git" in result["dev_tools"]
+    assert result["findings"], "the broken browser_pdf_cmd should be a FINDINGS-tier item"
+    assert doctor_health_problems(result) == []

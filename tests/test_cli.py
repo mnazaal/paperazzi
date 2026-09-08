@@ -1371,6 +1371,167 @@ def test_doctor_config_only_reports_invalid_config(tmp_path: Path) -> None:
     assert "config invalid" in stderr.getvalue()
 
 
+def test_doctor_config_only_reports_a_broken_cmd_argv0(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """--config-only stays offline but still catches a dangling `*_cmd`.
+
+    An `argv[0]` that does not resolve is advisory (FINDINGS, exit 1) — the
+    config itself is well-formed, so this must not become exit 5.
+    """
+    monkeypatch.setenv("PATH", "")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'browser_pdf_cmd = "definitely-not-a-real-binary-xyz"\n'
+        f'[[bibs]]\nname = "ml"\npath = "{tmp_path / "lib.bib"}"\ndefault = true\n'
+    )
+    stdout = StringIO()
+    exit_code = run_cli(
+        ["doctor", "--config-only", "--config", str(config_path)],
+        home_dir=str(tmp_path), stdout=stdout, stderr=StringIO(),
+    )
+    assert exit_code == exit_codes.FINDINGS
+    assert "browser_pdf_cmd" in stdout.getvalue()
+
+
+def test_doctor_config_only_json_carries_cmd_checks(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("PATH", "")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'browser_pdf_cmd = "definitely-not-a-real-binary-xyz"\n'
+        f'[[bibs]]\nname = "ml"\npath = "{tmp_path / "lib.bib"}"\ndefault = true\n'
+    )
+    stdout = StringIO()
+    exit_code = run_cli(
+        ["doctor", "--config-only", "--config", str(config_path), "--json"],
+        home_dir=str(tmp_path), stdout=stdout, stderr=StringIO(),
+    )
+    payload = json.loads(stdout.getvalue())
+    assert exit_code == exit_codes.FINDINGS
+    assert payload["cmd_checks"]
+    assert payload["findings"]
+    # ENVIRONMENT tier (`errors`) and FINDINGS tier (`findings`) never merge.
+    assert payload["errors"] == []
+
+
+# === doctor: the three-way severity split (item 614) ===
+
+
+def _stub_reachable_translation_server(monkeypatch) -> None:
+    """Make the translation-server probe report reachable, without a network.
+
+    Isolates the new advisory (FINDINGS) checks from the pre-existing
+    ENVIRONMENT-tier "translation server unreachable" check, which would
+    otherwise always fire in a sandbox with nothing listening on the port.
+    """
+    import io
+    from urllib.error import HTTPError
+
+    import pzi.ts_backend as ts_backend
+
+    def fake_urlopen(request, *, timeout):
+        raise HTTPError(
+            "http://localhost:1969/search", 400, "Bad Request", {},
+            io.BytesIO(b"POST data not provided\n"),
+        )
+
+    monkeypatch.setattr(ts_backend, "urlopen", fake_urlopen)
+
+
+def test_doctor_bare_exits_findings_for_a_broken_cmd_argv0(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A dangling `*_cmd` degrades an optional path; core operation still works.
+
+    FINDINGS (1), not ENVIRONMENT (5) — the fatal tier is reserved for
+    config-unloadable / bib-missing / translation-server-unreachable /
+    `semantic_scholar_api_key_cmd`-fails-to-run, and this is none of those.
+    """
+    monkeypatch.setenv("PATH", "")
+    _stub_reachable_translation_server(monkeypatch)
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text("")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        'browser_pdf_cmd = "definitely-not-a-real-binary-xyz"\n'
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\ndefault = true\n'
+    )
+    stdout = StringIO()
+
+    exit_code = run_cli(
+        ["doctor", "--config", str(config_path)],
+        home_dir=str(tmp_path), stdout=stdout, stderr=StringIO(),
+    )
+
+    assert exit_code == exit_codes.FINDINGS
+    assert "browser_pdf_cmd" in stdout.getvalue()
+
+
+def test_doctor_bare_exits_ok_with_nothing_to_report(tmp_path: Path, monkeypatch) -> None:
+    _stub_reachable_translation_server(monkeypatch)
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text("")
+    papers_dir = tmp_path / "papers"
+    papers_dir.mkdir()
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\n'
+        f'papers_dir = "{papers_dir}"\ndefault = true\n'
+    )
+    stdout = StringIO()
+
+    exit_code = run_cli(
+        ["doctor", "--config", str(config_path)],
+        home_dir=str(tmp_path), stdout=stdout, stderr=StringIO(),
+    )
+
+    assert exit_code == exit_codes.OK
+
+
+def test_doctor_bare_json_carries_findings_and_errors_as_separate_fields(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("PATH", "")
+    _stub_reachable_translation_server(monkeypatch)
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text("")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        'browser_pdf_cmd = "definitely-not-a-real-binary-xyz"\n'
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\ndefault = true\n'
+    )
+    stdout = StringIO()
+
+    exit_code = run_cli(
+        ["doctor", "--config", str(config_path), "--json"],
+        home_dir=str(tmp_path), stdout=stdout, stderr=StringIO(),
+    )
+    payload = json.loads(stdout.getvalue())
+
+    assert exit_code == exit_codes.FINDINGS
+    assert payload["status"] == "ok"  # the fatal tier is untouched
+    assert payload["errors"] == []
+    assert payload["findings"]
+
+
+def test_doctor_bare_exits_environment_for_a_missing_bib(tmp_path: Path) -> None:
+    """The fatal tier is unchanged: a missing bib is still ENVIRONMENT."""
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'[[bibs]]\nname = "ml"\npath = "{tmp_path / "missing.bib"}"\ndefault = true\n'
+    )
+    stdout = StringIO()
+
+    exit_code = run_cli(
+        ["doctor", "--config", str(config_path)],
+        home_dir=str(tmp_path), stdout=stdout, stderr=StringIO(),
+    )
+
+    assert exit_code == exit_codes.ENVIRONMENT
+
+
 # === reindex: read-only audit by default, rename only on opt-in ===
 
 

@@ -368,6 +368,29 @@ def render_doctor_result(result: Mapping[str, Any]) -> list[str]:
         state = ok if bib.get("path_exists") else "missing"
         default = " (default)" if bib.get("default") else ""
         lines.append(f"bib {bib.get('name')}{default}: {state} ({bib.get('path')})")
+        papers_dir = bib.get("papers_dir")
+        if papers_dir:
+            papers_state = ok if bib.get("papers_dir_exists") else "missing"
+            lines.append(f"  papers_dir: {papers_state} ({papers_dir})")
+
+    for check in result.get("cmd_checks") or []:
+        state = bad if check.get("error") else ok
+        lines.append(f"{check.get('key')}: {state} ({check.get('command')})")
+        if check.get("error"):
+            lines.append(f"  - {check['error']}")
+
+    node = result.get("node")
+    if node:
+        state = ok if node.get("ok") else bad
+        lines.append(f"node ({node.get('source')}): {state} ({node.get('value')})")
+        if node.get("error"):
+            lines.append(f"  - {node['error']}")
+
+    dev_tools = result.get("dev_tools") or {}
+    for name in ("git", "npm"):
+        if name in dev_tools:
+            state = ok if dev_tools[name] else bad
+            lines.append(f"{name}: {state}")
 
     ts_url = result.get("translation_server_url")
     if ts_url:
@@ -397,6 +420,11 @@ def render_doctor_result(result: Mapping[str, Any]) -> list[str]:
             )
         if s2.get("key_error"):
             lines.append(f"  - semantic_scholar_api_key_cmd failed: {s2['key_error']}")
+        if s2.get("key_effective") is False:
+            lines.append(
+                "  - configured key was rejected by the API "
+                "(falling back to the anonymous quota)"
+            )
         if s2.get("probe_error"):
             lines.append(f"  - {s2['probe_error']}")
 

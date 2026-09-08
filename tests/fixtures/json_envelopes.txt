@@ -19,10 +19,12 @@ pzi delete [ok]
 
 pzi doctor [ok]
     bib_name
+    cmd_checks
     command
     config_ok
     config_path
     errors
+    findings
     items
     status
     warnings

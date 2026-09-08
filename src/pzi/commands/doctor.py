@@ -8,7 +8,11 @@ from pzi import cli_json, exit_codes
 from pzi.cli_render import error_lines, render_doctor_result
 from pzi.commands.common import emit_usage_error, print_lines
 from pzi.config import load_config_file
-from pzi.doctor_service import doctor_check
+from pzi.doctor_service import (
+    check_cmd_resolutions,
+    doctor_advisory_problems,
+    doctor_check,
+)
 from pzi.errors import REASON_CONFIG, REASON_UNAVAILABLE
 
 
@@ -34,6 +38,11 @@ def run_doctor_command(args, *, home_dir, config_path, stdout, stderr) -> int:
         # Offline config check (no live service probes) — formerly `config validate`.
         cfg = load_config_file(config_path, home_dir=home_dir)
         valid = cfg["config"] is not None
+        # `argv[0]` resolution is a pure filesystem lookup, so it stays inside
+        # the "offline" contract `--config-only` documents — unlike the rest of
+        # `doctor_check`, which probes live services.
+        cmd_checks = check_cmd_resolutions(cfg["config"]) if valid else []
+        findings = doctor_advisory_problems({"cmd_checks": cmd_checks}) if valid else []
         if getattr(args, "json", False):
             # This branch returns before the `--json` check below, so
             # `doctor --config-only --json` emitted prose — and on a *passing*
@@ -48,30 +57,42 @@ def run_doctor_command(args, *, home_dir, config_path, stdout, stderr) -> int:
                     # newer pzi still loads) but a typo'd key silently did
                     # nothing, which is exactly what `doctor` is for.
                     "warnings": list(cfg.get("warnings") or []),
+                    "cmd_checks": cmd_checks,
+                    "findings": findings,
                 },
                 stdout,
                 command="doctor --config-only",
                 items=[],
             )
-            return exit_codes.OK if valid else exit_codes.ENVIRONMENT
+            if not valid:
+                return exit_codes.ENVIRONMENT
+            return exit_codes.FINDINGS if findings else exit_codes.OK
         for warning in cfg.get("warnings") or []:
             print(f"warning: {warning}", file=stderr)
-        if valid:
-            print(f"config valid: {cfg['path']}", file=stdout)
-            return exit_codes.OK
-        print_lines(error_lines("config invalid", cfg["errors"]), stderr)
-        return exit_codes.ENVIRONMENT
+        if not valid:
+            print_lines(error_lines("config invalid", cfg["errors"]), stderr)
+            return exit_codes.ENVIRONMENT
+        print(f"config valid: {cfg['path']}", file=stdout)
+        for finding in findings:
+            print(f"  - {finding}", file=stdout)
+        return exit_codes.FINDINGS if findings else exit_codes.OK
 
     result = doctor_check(config_path=config_path, home_dir=home_dir)
     if getattr(args, "json", False):
         cli_json.emit_result(result, stdout, command="doctor")
     else:
         print_lines(render_doctor_result(result), stdout)
-    # A health check has to fail when the health is bad: reporting an
-    # unreachable translation-server and exiting 0 makes it useless as a gate.
-    # `status` is computed from the same problem list the report prints, so the
-    # envelope and the exit code can no longer disagree.
-    return exit_codes.OK if result["status"] == "ok" else exit_codes.ENVIRONMENT
+    # Three-way severity: the fatal (ENVIRONMENT) tier is `status`, computed
+    # from `errors` by `doctor_health_problems` — unchanged. `findings` is the
+    # sibling advisory (FINDINGS) tier from `doctor_advisory_problems`: an
+    # optional-path degradation that leaves every core operation working, so
+    # it must not fail the run the way a bad config or an unreachable
+    # translation-server does. `status` is computed from the same problem list
+    # the report prints, so the envelope and the exit code can no longer
+    # disagree.
+    if result["status"] != "ok":
+        return exit_codes.ENVIRONMENT
+    return exit_codes.FINDINGS if result.get("findings") else exit_codes.OK
 
 
 def _reinstall_server(*, config_path, home_dir, stdout, stderr, args=None) -> int:

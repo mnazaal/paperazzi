@@ -3,6 +3,7 @@ from pzi.cli_render import (
     render_add_success,
     render_bib_promote_items,
     render_bib_update_items,
+    render_doctor_result,
     render_pdf_success,
     render_search_matches,
     render_tag_mutation_success,
@@ -299,3 +300,83 @@ def test_render_bib_promote_items_omits_skip_counters_that_are_zero() -> None:
 
     assert "recently checked" not in lines[-1]
     assert "already resolved" not in lines[-1]
+
+
+# ---------------------------------------------------------------------------
+# render_doctor_result: the new checks (item 614)
+# ---------------------------------------------------------------------------
+
+
+def test_render_doctor_result_prints_papers_dir() -> None:
+    lines = render_doctor_result({
+        "config_ok": True, "config_path": "/x/config.toml",
+        "bibs": [
+            {"name": "ml", "path": "/x/ml.bib", "path_exists": True,
+             "papers_dir": "/x/papers", "papers_dir_exists": False, "default": True},
+        ],
+    })
+
+    text = "\n".join(lines)
+    assert "/x/papers" in text
+    assert "missing" in text
+
+
+def test_render_doctor_result_prints_a_broken_cmd_check() -> None:
+    lines = render_doctor_result({
+        "config_ok": True, "config_path": "/x/config.toml",
+        "cmd_checks": [
+            {"key": "browser_pdf_cmd", "command": "nope --flag", "resolved": None,
+             "error": "not found on PATH: nope"},
+        ],
+    })
+
+    text = "\n".join(lines)
+    assert "browser_pdf_cmd" in text
+    assert "not found on PATH: nope" in text
+
+
+def test_render_doctor_result_prints_a_working_cmd_check() -> None:
+    lines = render_doctor_result({
+        "config_ok": True, "config_path": "/x/config.toml",
+        "cmd_checks": [
+            {"key": "browser_pdf_cmd", "command": "firefox", "resolved": "/usr/bin/firefox"},
+        ],
+    })
+
+    text = "\n".join(lines)
+    assert "browser_pdf_cmd: ok" in text
+
+
+def test_render_doctor_result_prints_a_broken_node_override() -> None:
+    lines = render_doctor_result({
+        "config_ok": True, "config_path": "/x/config.toml",
+        "node": {"configured": True, "source": "PZI_NODE", "value": "bad",
+                 "ok": False, "error": "PZI_NODE/node_path is set to 'bad' but ..."},
+    })
+
+    text = "\n".join(lines)
+    assert "bad" in text
+    assert "PZI_NODE" in text
+
+
+def test_render_doctor_result_prints_missing_dev_tools() -> None:
+    lines = render_doctor_result({
+        "config_ok": True, "config_path": "/x/config.toml",
+        "dev_tools": {"git": False, "npm": True},
+    })
+
+    text = "\n".join(lines)
+    assert "git" in text
+    assert "npm" in text
+
+
+def test_render_doctor_result_prints_a_rejected_key() -> None:
+    lines = render_doctor_result({
+        "config_ok": True, "config_path": "/x/config.toml",
+        "semantic_scholar": {
+            "reachable": False, "configured": "cmd", "key_effective": False,
+        },
+    })
+
+    text = "\n".join(lines)
+    assert "rejected" in text.lower()
