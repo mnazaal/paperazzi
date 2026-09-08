@@ -18,7 +18,8 @@ from pzi.bib_repository import (
     validate_library_parseable,
     with_bib_lock,
 )
-from pzi.bibtex import BibtexEntry, NormalizedRecord
+from pzi.bib_serialize import plan_file_field_fold, resolved_bib_dir
+from pzi.bibtex import BibtexEntry, NormalizedRecord, parse_file_field
 from pzi.fileio import directory_folds_case
 from pzi.format_templates import format_citekey, format_pdf_filename
 from pzi.pdf_planning import plan_pdf_path
@@ -562,4 +563,126 @@ def rename_files_to_policy(
             "warnings": [],
             "backup_path": str(backup_path) if backup_path else None,
             "skipped_cosmetic": skipped_cosmetic,
+        }
+
+
+class FoldedField(TypedDict):
+    citekey: str
+    old: str
+    new: str
+
+
+class LeftAloneField(TypedDict):
+    citekey: str
+    path: str
+    reason: str
+
+
+class ConvertFilePathsResult(TypedDict):
+    status: str
+    bib_path: str
+    total_entries: int
+    style: str
+    to_convert: int
+    converted: list[FoldedField]
+    left_alone: list[LeftAloneField]
+    errors: list[str]
+    warnings: list[str]
+    backup_path: str | None
+
+
+def convert_file_paths(
+    *, bib_path: str, file_path_style: str, dry_run: bool = True,
+) -> ConvertFilePathsResult:
+    """One-time pass: fold every entry's ``file`` field to *file_path_style*.
+
+    The style normally applies only as each entry is rewritten (see
+    :func:`pzi.bib_serialize._normalize_file_field`), so changing the default
+    or a config value never touches entries nobody has written since — a
+    22,818-entry library imported under the old ``"absolute"`` default stays
+    absolute forever unless something deliberately visits every entry. This
+    is that pass: it reports what it would fold (or, applied, does fold) and,
+    field by field, what it leaves alone and why — never guessing, so a path
+    :func:`pzi.bib_serialize.plan_file_field_fold` cannot fold losslessly
+    (outside the target root, already relative, or a composite Zotero/JabRef
+    attachment) is left exactly as it is.
+    """
+    with with_bib_lock(bib_path, shared=dry_run):
+        raw, dropped = read_bib_file_raw_with_failures(bib_path)
+        entries: list[BibtexEntry] = raw["entries"]
+        warnings = [*read_bib_notices(bib_path), *dropped]
+
+        if not entries:
+            return {
+                "status": "ok",
+                "bib_path": bib_path,
+                "total_entries": 0,
+                "style": file_path_style,
+                "to_convert": 0,
+                "converted": [],
+                "left_alone": [],
+                "errors": [],
+                "warnings": warnings,
+                "backup_path": None,
+            }
+
+        bib_dir = resolved_bib_dir(bib_path)
+        home_dir = os.path.expanduser("~")
+        converted: list[FoldedField] = []
+        left_alone: list[LeftAloneField] = []
+        for entry in entries:
+            citekey = str(entry.get("citekey", ""))
+            raw_value = entry.get("fields", {}).get("file")
+            if not raw_value:
+                continue
+            value = str(raw_value).strip()
+            # A composite (Zotero/JabRef `description:path:mimetype`, possibly
+            # several joined by `;`) is not a bare path — `plan_file_field_fold`
+            # only ever sees single-path values, same guard as
+            # `_normalize_file_field`.
+            parts = parse_file_field(value)
+            if len(parts) != 1 or parts[0] != value:
+                left_alone.append({
+                    "citekey": citekey, "path": value,
+                    "reason": "composite file field — left exactly as written",
+                })
+                continue
+            new_value, reason = plan_file_field_fold(
+                value, style=file_path_style, bib_dir=bib_dir, home_dir=home_dir,
+            )
+            if new_value is None:
+                left_alone.append({"citekey": citekey, "path": value, "reason": reason})
+            else:
+                # Not written back here: `rewrite_entries_in_order_locked` below
+                # applies the same fold to every entry as it serializes, via
+                # `file_path_style` — this loop exists to *report* what that
+                # write will do, not to pre-empt it.
+                converted.append({"citekey": citekey, "old": value, "new": new_value})
+
+        errors: list[str] = []
+        backup_path: Path | None = None
+        if not dry_run and converted:
+            backup_path = backup_path_for(bib_path, "convert-file-paths")
+            backup_path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+            shutil.copy2(bib_path, backup_path)
+            try:
+                rewrite_entries_in_order_locked(
+                    bib_path, entries, file_path_style=file_path_style,
+                )
+            except BaseException:
+                backup_path.unlink(missing_ok=True)
+                backup_path = None
+                raise
+
+        return {
+            "status": "ok",
+            "bib_path": bib_path,
+            "total_entries": len(entries),
+            "style": file_path_style,
+            "to_convert": len(converted),
+            "converted": converted,
+            "left_alone": left_alone,
+            "errors": errors,
+            "warnings": warnings,
+            "backup_path": str(backup_path) if backup_path is not None else None,
         }

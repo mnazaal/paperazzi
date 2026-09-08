@@ -14,7 +14,12 @@ from pzi.commands.common import (
     print_read_warnings,
     resolve_target,
 )
-from pzi.reindex_service import reindex_library, rename_files_to_policy
+from pzi.config import DEFAULT_PDF_FILE_PATH_STYLE
+from pzi.reindex_service import (
+    convert_file_paths,
+    reindex_library,
+    rename_files_to_policy,
+)
 
 
 def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_selector) -> int:
@@ -25,14 +30,58 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
     as_json = getattr(args, "json", False)
     rename = getattr(args, "rename_citekeys", False)
     rename_files = getattr(args, "rename_files", False)
-    if rename and rename_files:
+    convert_paths = getattr(args, "convert_file_paths", False)
+    passes_requested = sum((rename, rename_files, convert_paths))
+    if passes_requested > 1:
         return emit_usage_error(
             args,
-            "--rename-citekeys and --rename-files are separate passes; run one, "
-            "then the other",
+            "--rename-citekeys, --rename-files and --convert-file-paths are "
+            "separate passes; run one, then the other",
             command_path=("library", "reindex"),
             stdout=stdout,
             stderr=stderr,
+        )
+    if convert_paths:
+        # A one-time pass, distinct from the two above: it does not touch
+        # citekeys or filenames, only folds an already-written `file =`
+        # field to the configured `pdf_file_path_style`. Every other write
+        # path (add, import, tag, promote, this command's own citekey pass)
+        # already applies the style going forward — this exists only to
+        # catch up entries written before the style changed or was set.
+        style = config.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE)
+        result = convert_file_paths(
+            bib_path=target["path"],
+            file_path_style=style,
+            dry_run=getattr(args, "dry_run", False),
+        )
+        if as_json:
+            cli_json.emit_result(
+                result, stdout, command="library reindex",
+                items=result.get("converted") or [], bib_name=target["name"],
+            )
+        else:
+            verb = "would convert" if getattr(args, "dry_run", False) else "converted"
+            print(
+                f"{verb} {result['to_convert']} file field(s) to {style!r}",
+                file=stdout,
+            )
+            for change in result["converted"]:
+                print(f"  {change['citekey']}: {change['old']} -> {change['new']}",
+                      file=stdout)
+            left_alone = result.get("left_alone") or []
+            if left_alone:
+                print(f"  ({len(left_alone)} field(s) left alone:)", file=stderr)
+                for item in left_alone:
+                    print(f"    {item['citekey']}: {item['reason']}", file=stderr)
+            for error in result["errors"]:
+                print(f"  {error}", file=stderr)
+            backup = result.get("backup_path")
+            if backup:
+                print(f"backup saved to {backup}", file=stderr)
+        return (
+            exit_codes.FINDINGS
+            if result["to_convert"] or result["errors"]
+            else exit_codes.OK
         )
     if rename_files:
         # A distinct pass, deliberately: bare `reindex` keeps reporting citekeys
@@ -45,7 +94,7 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
             pdf_filename_format=config.get("pdf_filename_format"),
             dry_run=getattr(args, "dry_run", False),
             include_all=getattr(args, "all", False),
-            file_path_style=config.get("pdf_file_path_style", "absolute"),
+            file_path_style=config.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE),
         )
         if as_json:
             cli_json.emit_result(
@@ -152,7 +201,7 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
         citekey_format=config.get("citekey_format"),
         pdf_filename_format=config.get("pdf_filename_format"),
         dry_run=not apply,
-        file_path_style=config.get("pdf_file_path_style", "absolute"),
+        file_path_style=config.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE),
     )
 
     # Computed once above the format branch, as `library dedupe` does. Keying only

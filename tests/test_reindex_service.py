@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from pzi.reindex_service import reindex_library
+from pzi.reindex_service import convert_file_paths, reindex_library
 
 
 def _write_bib(path: str, content: str) -> None:
@@ -152,6 +152,42 @@ def test_reindex_renames_pdf_real() -> None:
         # Old PDF should be renamed
         assert not os.path.exists(old_pdf)
         assert os.path.exists(os.path.join(papers, f"{new_citekey}.pdf"))
+
+
+def test_reindex_folds_a_renamed_pdf_to_home_relative(monkeypatch) -> None:
+    """A citekey-driven PDF rename must not pin a portable entry.
+
+    `_rename_planned_pdfs` writes the freshly resolved *absolute* `new_pdf`
+    straight into the entry's `file` field; that value only stays absolute in
+    the finished bib if the configured style leaves it alone. Under `"home"`
+    it must come back out folded, same as an untouched `~/...` field would.
+    """
+    home = os.path.expanduser("~")
+    papers = os.path.join(home, "Papers")
+    os.makedirs(papers, exist_ok=True)
+    old_pdf = os.path.join(papers, "oldkey.pdf")
+    Path(old_pdf).write_bytes(b"%PDF-1.4\n")
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "rename.bib")
+        _write_bib(
+            bib,
+            '@article{oldkey, title = {New Test}, author = {Doe, John}, year = {2025},'
+            f' file = {{{old_pdf}}}}}',
+        )
+        result = reindex_library(
+            bib_path=bib, papers_dir=papers,
+            dry_run=False, file_path_style="home",
+        )
+        assert result["status"] == "ok"
+        changed = result["changed"]
+        assert len(changed) >= 1
+        new_citekey = changed[0]["new_citekey"]
+        new_pdf = os.path.join(papers, f"{new_citekey}.pdf")
+        assert os.path.exists(new_pdf)
+
+        content = Path(bib).read_text()
+        assert f"~/Papers/{new_citekey}.pdf" in content
+        assert new_pdf not in content
 
 
 def test_reindex_renames_the_entrys_own_pdf_not_a_stray_namesake() -> None:
@@ -887,3 +923,118 @@ def test_rename_files_repoints_the_second_entry_sharing_one_file(tmp_path) -> No
 
     assert len(result["changed"]) == 1, result["changed"]
     assert any("shares its PDF" in e for e in result["errors"]), result["errors"]
+
+
+# ── convert_file_paths (one-time `pdf_file_path_style` conversion) ──────
+
+
+def test_convert_file_paths_dry_run_counts_without_writing() -> None:
+    home = os.path.expanduser("~")
+    papers = os.path.join(home, "Papers")
+    os.makedirs(papers, exist_ok=True)
+    pdf = os.path.join(papers, "a2024.pdf")
+    Path(pdf).write_bytes(b"%PDF-1.4\n")
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "lib.bib")
+        _write_bib(
+            bib,
+            '@article{a2024, title = {A}, author = {Doe}, year = {2024},'
+            f' file = {{{pdf}}}}}',
+        )
+        before = Path(bib).read_text()
+
+        result = convert_file_paths(bib_path=bib, file_path_style="home", dry_run=True)
+
+        assert result["status"] == "ok"
+        assert result["total_entries"] == 1
+        assert result["to_convert"] == 1
+        assert result["converted"] == [
+            {"citekey": "a2024", "old": pdf, "new": "~/Papers/a2024.pdf"}
+        ]
+        assert result["left_alone"] == []
+        assert result["backup_path"] is None
+        # Dry run never writes.
+        assert Path(bib).read_text() == before
+
+
+def test_convert_file_paths_applies_and_backs_up() -> None:
+    home = os.path.expanduser("~")
+    papers = os.path.join(home, "Papers")
+    os.makedirs(papers, exist_ok=True)
+    pdf = os.path.join(papers, "a2024.pdf")
+    Path(pdf).write_bytes(b"%PDF-1.4\n")
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "lib.bib")
+        original = (
+            '@article{a2024, title = {A}, author = {Doe}, year = {2024},'
+            f' file = {{{pdf}}}}}\n'
+        )
+        _write_bib(bib, original)
+
+        result = convert_file_paths(bib_path=bib, file_path_style="home", dry_run=False)
+
+        assert result["status"] == "ok"
+        assert result["to_convert"] == 1
+        assert result["converted"][0]["new"] == "~/Papers/a2024.pdf"
+        after = Path(bib).read_text()
+        assert "~/Papers/a2024.pdf" in after
+        assert pdf not in after
+        assert result["backup_path"] is not None
+        assert Path(result["backup_path"]).read_text() == original
+
+
+def test_convert_file_paths_leaves_a_path_outside_home_with_a_reason() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        outside = os.path.join(td, "elsewhere", "a2024.pdf")
+        os.makedirs(os.path.dirname(outside), exist_ok=True)
+        Path(outside).write_bytes(b"%PDF-1.4\n")
+        bib = os.path.join(td, "lib.bib")
+        original = (
+            '@article{a2024, title = {A}, author = {Doe}, year = {2024},'
+            f' file = {{{outside}}}}}\n'
+        )
+        _write_bib(bib, original)
+
+        result = convert_file_paths(bib_path=bib, file_path_style="home", dry_run=False)
+
+        assert result["to_convert"] == 0
+        assert result["converted"] == []
+        assert result["left_alone"] == [
+            {"citekey": "a2024", "path": outside, "reason": "outside the home directory"}
+        ]
+        # Never touched: the file is byte-identical, no backup was made.
+        assert Path(bib).read_text() == original
+        assert result["backup_path"] is None
+
+
+def test_convert_file_paths_never_touches_a_composite_field() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        home = os.path.expanduser("~")
+        pdf = os.path.join(home, "Papers", "a2024.pdf")
+        composite = f"Full Text PDF:{pdf}:application/pdf"
+        bib = os.path.join(td, "lib.bib")
+        original = (
+            '@article{a2024, title = {A}, author = {Doe}, year = {2024},'
+            f' file = {{{composite}}}}}\n'
+        )
+        _write_bib(bib, original)
+
+        result = convert_file_paths(bib_path=bib, file_path_style="home", dry_run=False)
+
+        assert result["to_convert"] == 0
+        assert result["left_alone"][0]["reason"].startswith("composite file field")
+        assert Path(bib).read_text() == original
+
+
+def test_convert_file_paths_leaves_entries_without_a_file_field_alone() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "lib.bib")
+        original = '@article{a2024, title = {A}, author = {Doe}, year = {2024}}\n'
+        _write_bib(bib, original)
+
+        result = convert_file_paths(bib_path=bib, file_path_style="home", dry_run=False)
+
+        assert result["total_entries"] == 1
+        assert result["to_convert"] == 0
+        assert result["converted"] == []
+        assert result["left_alone"] == []
