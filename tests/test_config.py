@@ -157,7 +157,7 @@ def test_validate_app_config_applies_defaults() -> None:
         "browser_pdf_cmd": None,
         "citekey_format": None,
         "pdf_filename_format": None,
-        "pdf_file_path_style": "absolute",
+        "pdf_file_path_style": "home",
         "page_metadata_cmd": None,
         "page_metadata_timeout_seconds": 5,
         "metadata_confidence_min_score": 0,
@@ -202,6 +202,20 @@ def test_validate_app_config_accepts_relative_pdf_file_path_style() -> None:
     assert errors == []
     assert config is not None
     assert config["pdf_file_path_style"] == "relative"
+
+
+def test_validate_app_config_accepts_home_pdf_file_path_style() -> None:
+    config, errors = validate_app_config(
+        {
+            "pdf_file_path_style": "home",
+            "bibs": [{"name": "ml", "path": "~/ml.bib"}],
+        },
+        home_dir=HOME,
+    )
+
+    assert errors == []
+    assert config is not None
+    assert config["pdf_file_path_style"] == "home"
 
 
 def test_validate_app_config_accepts_page_metadata_cmd() -> None:
@@ -775,7 +789,11 @@ _BAD_VALUES: list[tuple[str, object, str]] = [
         "page_metadata_timeout_seconds must be a positive integer",
     ),
     ("pdf_discovery_parallel", "yes", "pdf_discovery_parallel must be a boolean"),
-    ("pdf_file_path_style", "somewhere", "pdf_file_path_style must be 'absolute' or 'relative'"),
+    (
+        "pdf_file_path_style",
+        "somewhere",
+        "pdf_file_path_style must be 'home', 'absolute' or 'relative'",
+    ),
     (
         "pdf_filename_format",
         '{{ title truncate="100 }}',

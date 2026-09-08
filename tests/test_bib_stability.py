@@ -21,6 +21,7 @@ means the whole file where its layout is uniform, and field-for-field where it
 is not.
 """
 
+import os
 from pathlib import Path
 
 import pytest
@@ -32,7 +33,12 @@ from pzi.bib_repository import (
     serialize_library,
     update_bib_entry,
 )
-from pzi.bib_serialize import describe_failed_blocks, detect_bib_layout, serialize_bibtex
+from pzi.bib_serialize import (
+    bibtex_entry_to_library_entry,
+    describe_failed_blocks,
+    detect_bib_layout,
+    serialize_bibtex,
+)
 from pzi.errors import PziError
 
 # ── Fixtures ──────────────────────────────────────────────────────────
@@ -997,3 +1003,159 @@ def test_the_write_path_preserves_a_macro_the_read_and_import_paths_expand() -> 
     imported, problems = parse_bibtex_for_import(MACRO_BIB)
     assert problems == []
     assert imported[0]["fields"]["journal"] == "Journal of Machine Learning Research"
+
+
+# ── pdf_file_path_style = "home" ────────────────────────────────────────
+
+
+def test_home_style_folds_an_absolute_path_under_home() -> None:
+    home = os.path.expanduser("~")
+    entry = {
+        "entry_type": "article",
+        "citekey": "smith2024",
+        "fields": {"file": f"{home}/Documents/Papers/smith2024.pdf"},
+    }
+    block = bibtex_entry_to_library_entry(
+        entry, "/some/bib/dir/lib.bib", file_path_style="home",
+    )
+    assert block.fields_dict["file"].value == "~/Documents/Papers/smith2024.pdf"
+
+
+def test_home_style_leaves_a_path_outside_home_absolute() -> None:
+    entry = {
+        "entry_type": "article",
+        "citekey": "smith2024",
+        "fields": {"file": "/opt/shared/papers/smith2024.pdf"},
+    }
+    block = bibtex_entry_to_library_entry(
+        entry, "/some/bib/dir/lib.bib", file_path_style="home",
+    )
+    assert block.fields_dict["file"].value == "/opt/shared/papers/smith2024.pdf"
+
+
+def test_home_style_leaves_an_already_relative_path_untouched() -> None:
+    entry = {
+        "entry_type": "article",
+        "citekey": "smith2024",
+        "fields": {"file": "papers/smith2024.pdf"},
+    }
+    block = bibtex_entry_to_library_entry(
+        entry, "/some/bib/dir/lib.bib", file_path_style="home",
+    )
+    assert block.fields_dict["file"].value == "papers/smith2024.pdf"
+
+
+def test_home_style_leaves_an_already_tilde_path_untouched() -> None:
+    entry = {
+        "entry_type": "article",
+        "citekey": "smith2024",
+        "fields": {"file": "~/Documents/Papers/smith2024.pdf"},
+    }
+    block = bibtex_entry_to_library_entry(
+        entry, "/some/bib/dir/lib.bib", file_path_style="home",
+    )
+    assert block.fields_dict["file"].value == "~/Documents/Papers/smith2024.pdf"
+
+
+def test_home_style_leaves_a_composite_field_untouched() -> None:
+    """The composite-field guard (description:path:mimetype) is style-agnostic."""
+    home = os.path.expanduser("~")
+    composite = f"Full Text PDF:{home}/Documents/Papers/x.pdf:application/pdf"
+    entry = {
+        "entry_type": "article",
+        "citekey": "smith2024",
+        "fields": {"file": composite},
+    }
+    block = bibtex_entry_to_library_entry(
+        entry, "/some/bib/dir/lib.bib", file_path_style="home",
+    )
+    assert block.fields_dict["file"].value == composite
+
+
+def test_relative_style_unaffected_by_the_home_branch(tmp_path: Path) -> None:
+    """`relative` still relativizes under the bib dir and no-ops outside it —
+    the home branch must not have changed this existing, documented behavior.
+    """
+    bib_dir = tmp_path / "bib"
+    bib_dir.mkdir()
+    inside = bib_dir / "papers" / "smith2024.pdf"
+    entry_inside = {
+        "entry_type": "article",
+        "citekey": "smith2024",
+        "fields": {"file": str(inside)},
+    }
+    block = bibtex_entry_to_library_entry(
+        entry_inside, str(bib_dir / "lib.bib"), file_path_style="relative",
+    )
+    assert block.fields_dict["file"].value == "papers/smith2024.pdf"
+
+    outside = tmp_path / "elsewhere" / "smith2024.pdf"
+    entry_outside = {
+        "entry_type": "article",
+        "citekey": "smith2024",
+        "fields": {"file": str(outside)},
+    }
+    block2 = bibtex_entry_to_library_entry(
+        entry_outside, str(bib_dir / "lib.bib"), file_path_style="relative",
+    )
+    assert block2.fields_dict["file"].value == str(outside)
+
+
+def test_absolute_style_never_folds(tmp_path: Path) -> None:
+    """`absolute` is still a pure pass-through, home dir or not."""
+    home = os.path.expanduser("~")
+    entry = {
+        "entry_type": "article",
+        "citekey": "smith2024",
+        "fields": {"file": f"{home}/Documents/Papers/smith2024.pdf"},
+    }
+    block = bibtex_entry_to_library_entry(
+        entry, "/some/bib/dir/lib.bib", file_path_style="absolute",
+    )
+    assert block.fields_dict["file"].value == f"{home}/Documents/Papers/smith2024.pdf"
+
+
+def test_single_entry_write_under_home_style_does_not_reformat_other_entries(
+    tmp_path: Path,
+) -> None:
+    """Changing the default file-path style to `home` must not turn an
+    ordinary single-entry write into a rewrite of the whole library.
+
+    `update_bib_entry` rebuilds only the touched entry's block; a sibling
+    entry's absolute `file` field must survive byte-for-byte even though
+    `pdf_file_path_style = "home"` could fold it, if the write ever reached it.
+    """
+    home = os.path.expanduser("~")
+    untouched_pdf = f"{home}/Documents/Papers/jones2023.pdf"
+    bib_text = (
+        "@article{smith2024,\n"
+        "  author = {John Smith},\n"
+        "  title  = {An Article},\n"
+        "  year   = {2024},\n"
+        "}\n\n"
+        "@inproceedings{jones2023,\n"
+        "  author    = {Alice Jones},\n"
+        "  title     = {Graph Parsing},\n"
+        f"  file      = {{{untouched_pdf}}},\n"
+        "  year      = {2023},\n"
+        "}\n"
+    )
+    bib_path = tmp_path / "test.bib"
+    bib_path.write_text(bib_text)
+
+    def add_abstract(entry, record):
+        new_entry = dict(entry)
+        new_entry["fields"] = {**entry["fields"], "abstract": "Added."}
+        return new_entry
+
+    result = update_bib_entry(
+        str(bib_path), "smith2024", add_abstract, file_path_style="home",
+    )
+    assert result["found"] is True
+
+    after = bib_path.read_text()
+    assert "Added." in after
+    # The untouched sibling's absolute `file` field is byte-identical — not
+    # folded to `~/...` — because the write never rebuilt its block.
+    assert untouched_pdf in after
+    assert "~/Documents/Papers/jones2023.pdf" not in after

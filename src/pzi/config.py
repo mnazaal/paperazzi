@@ -25,6 +25,17 @@ DEFAULT_PROMOTE_CONFIDENCE_THRESHOLD = 60
 #: cannot have changed. Zero disables the ledger at both ends.
 DEFAULT_PROMOTE_RECHECK_AFTER_DAYS = 30
 
+# The `file =` path style a write with no configured preference falls back to.
+# Named once, like the threshold above, because it is read from three places —
+# the loader, the validator, and every write-path caller's own `config.get(...,
+# "absolute")` fallback — and a copy that drifts silently changes what a bare
+# config produces. `"home"` (`~/...`) is the default because the measured
+# alternative, `"relative"`, is a no-op whenever the bib and its PDFs sit in
+# different directory trees, which the read side already tolerates (`~` is
+# expanded by `pdf_planning.pdf_file_present` and left alone by
+# `resolve_file_field`) — only the write side never produced one until now.
+DEFAULT_PDF_FILE_PATH_STYLE = "home"
+
 # Where the translation-server is assumed to be when the config does not say.
 # Named for the same reason as the threshold above — it was written out twice,
 # in the loader and the validator — and additionally so the test suite can
@@ -359,7 +370,7 @@ def _normalize_app_config(
     raw_pzi_data_home = raw.get("pzi_data_home")
     raw_browser_engine = raw.get("browser_engine", DEFAULT_BROWSER_ENGINE)
     raw_pdf_discovery_parallel = raw.get("pdf_discovery_parallel", False)
-    raw_pdf_file_path_style = raw.get("pdf_file_path_style", "absolute")
+    raw_pdf_file_path_style = raw.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE)
     raw_page_metadata_timeout_seconds = raw.get("page_metadata_timeout_seconds", 5)
     raw_desktop_fallback_hosts = raw.get(
         "desktop_fallback_hosts", DEFAULT_DESKTOP_FALLBACK_HOSTS
@@ -392,7 +403,9 @@ def _normalize_app_config(
         "browser_pdf_cmd": opt("browser_pdf_cmd"),
         "citekey_format": opt("citekey_format"),
         "pdf_filename_format": opt("pdf_filename_format"),
-        "pdf_file_path_style": str(raw_pdf_file_path_style).strip() or "absolute",
+        "pdf_file_path_style": (
+            str(raw_pdf_file_path_style).strip() or DEFAULT_PDF_FILE_PATH_STYLE
+        ),
         "page_metadata_cmd": opt("page_metadata_cmd"),
         "page_metadata_timeout_seconds": max(
             1, _safe_int(raw_page_metadata_timeout_seconds, 5, min_value=1)
@@ -530,9 +543,9 @@ def validate_app_config(
     ):
         errors.append("metadata_cache_ttl must be a non-negative integer")
 
-    raw_pdf_file_path_style = raw.get("pdf_file_path_style", "absolute")
-    if raw_pdf_file_path_style not in {"absolute", "relative"}:
-        errors.append("pdf_file_path_style must be 'absolute' or 'relative'")
+    raw_pdf_file_path_style = raw.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE)
+    if raw_pdf_file_path_style not in {"home", "absolute", "relative"}:
+        errors.append("pdf_file_path_style must be 'home', 'absolute' or 'relative'")
 
     # Both are URLs and both were discarded in silence when malformed:
     # `flaresolverr_url` was nulled by the normalizer with no error at all,

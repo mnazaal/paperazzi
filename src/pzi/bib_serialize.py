@@ -47,6 +47,7 @@ from pzi.bibtex import (
     parse_file_field,
     primary_pdf_path,
 )
+from pzi.config import tildify_path
 from pzi.errors import PziError
 
 
@@ -326,15 +327,57 @@ def resolved_bib_dir(bib_path: str) -> Path:
     return Path(bib_path).parent.resolve()
 
 
-def _normalize_file_field(
-    entry: BibtexEntry, bib_path: str, bib_dir: Path | None = None
-) -> BibtexEntry:
-    """Normalise an absolute ``file`` field to a relative path.
+def plan_file_field_fold(
+    value: str, *, style: str, bib_dir: Path, home_dir: str | None = None
+) -> tuple[str | None, str]:
+    """Plan folding one single-path ``file`` field value to *style*.
 
-    Paths under the bib file directory are shortened (e.g.
-    ``/home/alice/bibs/papers/x.pdf`` → ``papers/x.pdf``).
-    Paths outside the bib directory, already-relative paths, and
-    home-relative paths (``~/...``) are kept as-is.
+    Returns ``(new_value, reason)``. *new_value* is ``None`` when the field
+    would be left exactly as it is — whether because it is already in the
+    target shape or because folding it would be lossy or ambiguous — and
+    *reason* explains the outcome either way. Used both by
+    :func:`_normalize_file_field` (which already knows *value* is a single
+    absolute path before it calls this) and by the ``library reindex
+    --convert-file-paths`` report, which calls it on every value up front and
+    needs the reason regardless of shape.
+
+    Never guesses through the filesystem: a value that does not sit under
+    *bib_dir* (for ``"relative"``) or *home_dir* (for ``"home"``) comes back
+    unchanged rather than resolved and compared some other way.
+    """
+    if not value.startswith("/"):
+        if value.startswith("~"):
+            return None, "already home-relative"
+        return None, "already relative to the bib file"
+    if style == "absolute":
+        return None, "target style is absolute — nothing to fold"
+    if style == "home":
+        home = home_dir if home_dir is not None else os.path.expanduser("~")
+        folded = tildify_path(value, home_dir=home)
+        if folded == value:
+            return None, "outside the home directory"
+        return folded, "folded to a home-relative path"
+    if style == "relative":
+        try:
+            rel = str(Path(value).resolve().relative_to(bib_dir))
+        except ValueError:
+            return None, "outside the bib file's directory"
+        return rel, "folded to a path relative to the bib file"
+    return None, f"unknown pdf_file_path_style {style!r}"
+
+
+def _normalize_file_field(
+    entry: BibtexEntry, bib_path: str, bib_dir: Path | None = None, *, style: str = "relative"
+) -> BibtexEntry:
+    """Normalise an absolute ``file`` field per *style*.
+
+    ``"relative"`` shortens a path under the bib file's directory (e.g.
+    ``/home/alice/bibs/papers/x.pdf`` → ``papers/x.pdf``); a path outside it is
+    kept absolute. ``"home"`` folds a path under the user's home directory to
+    ``~/...``; a path outside home is kept absolute. Either way,
+    already-relative paths and already-``~`` paths are kept as-is, and this is
+    never called for ``"absolute"`` (see :func:`bibtex_entry_to_library_entry`,
+    which is the only caller and skips it for that style).
 
     *bib_dir* is the **resolved** parent directory of *bib_path*, computed here
     when the caller has not already done it. Resolving is a syscall walk, and
@@ -356,13 +399,12 @@ def _normalize_file_field(
         return entry  # already relative, home-relative, or non-path
     if bib_dir is None:
         bib_dir = resolved_bib_dir(bib_path)
-    try:
-        rel = str(Path(value).resolve().relative_to(bib_dir))
-    except ValueError:
-        return entry  # not under bib dir — keep absolute
+    new_value, _reason = plan_file_field_fold(value, style=style, bib_dir=bib_dir)
+    if new_value is None:
+        return entry  # could not fold losslessly — keep absolute
     new_entry: BibtexEntry = dict(entry)  # type: ignore[assignment]
     new_entry["fields"] = dict(entry["fields"])
-    new_entry["fields"]["file"] = rel
+    new_entry["fields"]["file"] = new_value
     return new_entry
 
 
@@ -1238,16 +1280,17 @@ def bibtex_entry_to_library_entry(
 ) -> BibtexEntryV2:
     """Convert an internal BibtexEntry dict to a bibtexparser v2 Entry.
 
-    When requested, absolute ``file`` fields are normalised to relative
-    paths. When *bib_path* is empty, no normalisation is performed (used
-    for round-trip validation).
+    When requested (``"relative"`` or ``"home"``), an absolute ``file`` field
+    is folded per :func:`_normalize_file_field`. ``"absolute"`` and any other
+    value pass the field through unchanged. When *bib_path* is empty, no
+    normalisation is performed (used for round-trip validation).
 
     *bib_dir* is :func:`resolved_bib_dir`'s answer for *bib_path*, passed by a
     caller converting a whole library so the resolve happens once per write
     rather than once per entry.
     """
-    if bib_path and file_path_style == "relative":
-        entry = _normalize_file_field(entry, bib_path, bib_dir)
+    if bib_path and file_path_style in ("relative", "home"):
+        entry = _normalize_file_field(entry, bib_path, bib_dir, style=file_path_style)
     entry_type = _UNSAFE_ENTRY_TYPE.sub("", entry["entry_type"]) or "misc"
     return BibtexEntryV2(
         entry_type=entry_type,
