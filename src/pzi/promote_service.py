@@ -51,6 +51,7 @@ from pzi.identifiers import (
 from pzi.pdf import NextPdfCandidate, fetch_and_store_pdf_trying_sources
 from pzi.pdf import remove_new_pdf as _remove_new_pdf
 from pzi.pdf import snapshot_pdf_paths as _snapshot_pdf_paths
+from pzi.pdf_planning import PdfFallbackSettings
 from pzi.promote_planning import (
     AcceptanceGate,
     find_published_candidate_with_diagnostics,
@@ -512,6 +513,11 @@ def promote_bib(
             browser_pdf_cmd=effective_browser_pdf_cmd,
             pdf_filename_format=config.get("pdf_filename_format"),
             browser_hook=config.get("browser_hook", True),
+            # The third of the three seams that build these knobs from config
+            # (`pdf_service._fallback_kwargs` and `capture_context` are the
+            # others). `browser_profile_path` reaching only some of them is how
+            # a config key comes to work in `add` and not in `promote`.
+            settings=PdfFallbackSettings.from_config(config),
             # Built once for the run: it resolves credentials, which do not vary
             # per entry. Without it `promote` retries one URL through every
             # transport and gives up, the same defect `add` and `retry` had.
@@ -863,6 +869,7 @@ def _handle_keep_preprint(
     browser_hook: bool = True,
     file_path_style: str = "absolute",
     next_candidate: NextPdfCandidate | None = None,
+    settings: PdfFallbackSettings | None = None,
 ) -> tuple[PromoteItem, _PendingWrite | None]:
     """The item this promotion produces, and the write it still owes the run.
 
@@ -1198,6 +1205,7 @@ def _handle_update_in_place(
     browser_hook: bool = True,
     file_path_style: str = "absolute",
     next_candidate: NextPdfCandidate | None = None,
+    settings: PdfFallbackSettings | None = None,
 ) -> tuple[PromoteItem, _PendingWrite | None]:
     """The item this promotion produces, and the write it still owes the run.
 
@@ -1282,6 +1290,7 @@ def _maybe_attach_pdf(
     pdf_filename_format: str | None = None,
     browser_hook: bool = True,
     next_candidate: NextPdfCandidate | None = None,
+    settings: PdfFallbackSettings | None = None,
 ) -> tuple[NormalizedRecord, bool]:
     pdf_url = record.get("pdf_url")
     if not isinstance(pdf_url, str) or not pdf_url.strip() or dry_run:
@@ -1298,6 +1307,7 @@ def _maybe_attach_pdf(
         browser_pdf_cmd=browser_pdf_cmd,
         browser_hook=browser_hook,
         filename_format=pdf_filename_format,
+        settings=settings,
     )
     if outcome.local_pdf_path is None:
         return record, False
