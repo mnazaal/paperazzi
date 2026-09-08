@@ -34,7 +34,7 @@ from pzi.pdf import remove_new_pdf as _remove_new_pdf
 from pzi.pdf import snapshot_pdf_paths as _snapshot_pdf_paths
 from pzi.pdf_discovery import discover_pdf_url_for_record
 from pzi.pdf_download import copy_pdf_to_papers_dir
-from pzi.pdf_planning import pdf_file_present
+from pzi.pdf_planning import PdfFallbackSettings, pdf_file_present
 from pzi.protocols import BinaryFetcher
 
 
@@ -122,6 +122,10 @@ def _fallback_kwargs(config: AppConfig) -> dict[str, Any]:
         "api_auth_token": resolve_api_auth_token(config),
         "desktop_fallback_hosts": set(config.get("desktop_fallback_hosts") or []),
         "ezproxy_host": config.get("ezproxy_host"),
+        # Resolved from the config, not just the environment: `browser_profile_
+        # path` was a documented key that only `pzi server` read, so setting it
+        # did nothing for `pdf retry`, `pdf attach` or `add`.
+        "settings": PdfFallbackSettings.from_config(config),
     }
 
 

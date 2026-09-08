@@ -15,7 +15,7 @@ import configparser
 import os
 import shlex
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -349,6 +349,62 @@ class PdfFallbackSettings:
             browser_profile=source.get("PZI_BROWSER_PROFILE"),
             browser=source.get("PZI_BROWSER", "firefox") or "firefox",
         )
+
+    @classmethod
+    def from_config(
+        cls, config: Mapping[str, object], env: Mapping[str, str] | None = None
+    ) -> PdfFallbackSettings:
+        """Settings from *config*, falling back to the environment.
+
+        `browser_profile_path` was a documented config key that only `pzi server`
+        ever read (`commands/server.py`). Every CLI acquisition path took the
+        profile from `PZI_BROWSER_PROFILE` or auto-detection and ignored the
+        config entirely, so a user who set the key got no profile and no warning
+        — the project's one-call-site defect shape, applied to a config key.
+
+        The config wins over the environment here, matching the rule already
+        documented for `PZI_BROWSER_PDF_CMD` ("the config value **wins**: this is
+        a fallback, not an override") rather than the opposite rule `PZI_NODE`
+        follows.
+        """
+        base = cls.from_environment(env)
+        configured_profile = config.get("browser_profile_path")
+        profile = (
+            configured_profile if isinstance(configured_profile, str) and
+            configured_profile else base.browser_profile
+        )
+        configured_cmd = config.get("browser_pdf_cmd")
+        return replace(
+            base,
+            browser_pdf_cmd=(
+                configured_cmd if isinstance(configured_cmd, str) and configured_cmd
+                else base.browser_pdf_cmd
+            ),
+            browser_profile=profile,
+            browser=browser_for_profile(profile) or base.browser,
+        )
+
+
+def browser_for_profile(profile: str | None) -> str | None:
+    """Which browser a profile directory belongs to, or None if unrecognised.
+
+    Inferred rather than stored as a separate key: the profile path already says
+    which browser it is, and a fourth browser-related config setting beside
+    `browser_engine`, `browser_pdf_cmd` and `PZI_BROWSER` would be one more
+    place for the answer to disagree with itself.
+
+    A guess, deliberately narrow: an unrecognised path returns None and the
+    caller keeps whatever it had, rather than this picking the wrong engine for
+    a directory it does not understand.
+    """
+    if not profile:
+        return None
+    lowered = profile.replace("\\", "/").lower()
+    if "/.mozilla/" in lowered or "/firefox" in lowered:
+        return "firefox"
+    if "chromium" in lowered or "chrome" in lowered:
+        return "chrome"
+    return None
 
 
 #: Values that read as "off" when an env var is used as a boolean flag.

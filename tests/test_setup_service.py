@@ -98,13 +98,42 @@ def test_render_config_writes_no_token_reference() -> None:
     assert "\napi_auth_token_cmd = " not in result
 
 
-def test_render_config_with_browser_adds_browser_line() -> None:
+def test_render_config_never_writes_a_browser_command() -> None:
+    """The regression this whole change exists for.
+
+    `render_config` used to interpolate `sys.executable` into a
+    `browser_pdf_cmd` line. That is an install-time snapshot of the environment
+    written into a file the user is told to commit to their dotfiles, and it
+    went stale the moment the distribution was renamed — after which every
+    browser PDF fetch failed with [Errno 2] and reported "no PDF returned".
+    pzi builds the command at run time now; the config must not pin one.
+    """
     result = render_config(
         bib_name="ml",
         bib_path="~/bib/ml.bib",
         with_browser=True,
     )
-    assert '-m pzi.browser_pdf_hook --browser chromium"' in result
+    assert "browser_pdf_cmd" not in result
+    assert "browser_pdf_hook" not in result
+
+
+def test_render_config_does_not_depend_on_the_running_interpreter() -> None:
+    """The invariant, stated directly: two runs under different interpreters
+    produce byte-identical config. Anything derived from the running process is
+    a staleness bug waiting for a reinstall."""
+    with patch("sys.executable", "/opt/one/bin/python3"):
+        first = render_config(
+            bib_name="ml", bib_path="~/bib/ml.bib", with_browser=True,
+            home_dir="/home/tester",
+        )
+    with patch("sys.executable", "/somewhere/else/bin/python3.13"):
+        second = render_config(
+            bib_name="ml", bib_path="~/bib/ml.bib", with_browser=True,
+            home_dir="/home/tester",
+        )
+    assert first == second
+    assert "/opt/one" not in first
+    assert "/somewhere/else" not in second
 
 
 def test_render_config_folds_home_bib_path_to_tilde() -> None:
@@ -121,32 +150,26 @@ def test_render_config_folds_home_bib_path_to_tilde() -> None:
     assert "/home/tester" not in result
 
 
-def test_render_config_folds_home_interpreter_to_tilde() -> None:
-    with patch("pzi.setup_service.sys.executable", "/home/tester/.venv/bin/python"):
+def test_render_config_folds_a_home_profile_path_to_tilde() -> None:
+    """The profile path is the one environment-derived value still written, so
+    it carries the fold the interpreter path used to."""
+    with patch(
+        "pzi.setup_service._find_firefox_profile",
+        return_value="/home/tester/.mozilla/firefox/abc.default-release",
+    ):
         result = render_config(
             bib_name="ml",
             bib_path="~/bib/ml.bib",
             with_browser=True,
+            browser="firefox",
             home_dir="/home/tester",
         )
-    assert 'browser_pdf_cmd = "~/.venv/bin/python -m pzi.browser_pdf_hook' in result
+    assert 'browser_profile_path = "~/.mozilla/firefox/abc.default-release"' in result
+    # No absolute home path leaks into the committed config.
     assert "/home/tester" not in result
 
 
-def test_render_config_keeps_system_interpreter_absolute() -> None:
-    with patch("pzi.setup_service.sys.executable", "/usr/bin/python3"):
-        result = render_config(
-            bib_name="ml",
-            bib_path="~/bib/ml.bib",
-            with_browser=True,
-            home_dir="/home/tester",
-        )
-    # A system interpreter outside home is not a leak; leave it absolute.
-    assert 'browser_pdf_cmd = "/usr/bin/python3 -m pzi.browser_pdf_hook' in result
-
-
-def test_render_config_with_firefox_adds_browser_line() -> None:
-    """When browser=firefox, the command includes --browser firefox + --profile."""
+def test_render_config_with_firefox_records_the_profile_not_a_command() -> None:
     with patch(
         "pzi.setup_service._find_firefox_profile",
         return_value="/tmp/fake/default-release",
@@ -157,9 +180,9 @@ def test_render_config_with_firefox_adds_browser_line() -> None:
             with_browser=True,
             browser="firefox",
             )
-    assert '--browser firefox' in result
-    assert '--profile' in result
+    assert 'browser_profile_path = "/tmp/fake/default-release"' in result
     assert "authenticated PDF access" in result
+    assert "browser_pdf_cmd" not in result
 
 
 def test_render_config_firefox_no_profile_detected(monkeypatch) -> None:
@@ -179,8 +202,10 @@ def test_render_config_firefox_no_profile_detected(monkeypatch) -> None:
     finally:
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)
-    assert '--browser firefox' in result
-    assert "no Firefox profile auto-detected" in result
+    assert "no firefox profile auto-detected" in result
+    assert '# browser_profile_path = ' in result
+    # Still no command, even on the path that has nothing to record.
+    assert "browser_pdf_cmd" not in result
 
 
 def test_render_config_with_papers_dir() -> None:

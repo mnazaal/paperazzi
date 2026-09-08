@@ -4,25 +4,11 @@ from __future__ import annotations
 
 import os
 import secrets
-import shlex
-import sys
 from pathlib import Path
 
 from pzi import exit_codes
 from pzi.config import escape_toml_string, tildify_path
 from pzi.errors import REASON_UNAVAILABLE, PziError
-
-
-def _quote_token(token: str) -> str:
-    """Quote *token* for the browser command only when needed to round-trip.
-
-    ``shlex.quote`` is shell-safety oriented and always single-quotes a leading
-    ``~``, but the browser command is split with ``shlex.split`` and run with
-    ``shell=False`` (never via a shell), and pzi expands ``~`` itself. So emit a
-    bare ``~/...`` token when it survives ``shlex.split`` intact, and only fall
-    back to quoting for tokens that otherwise would not (e.g. embedded spaces).
-    """
-    return token if shlex.split(token) == [token] else shlex.quote(token)
 
 
 def provision_api_token(data_home: Path, *, rotate: bool = False) -> tuple[Path, bool]:
@@ -131,30 +117,7 @@ def render_config(
     ]
     home = home_dir if home_dir is not None else os.path.expanduser("~")
     if with_browser:
-        python = _quote_token(tildify_path(sys.executable, home_dir=home))
-        cmd = f'{python} -m pzi.browser_pdf_hook --browser {browser}'
-        if browser == "firefox":
-            profile = _find_firefox_profile()
-            if profile:
-                cmd += f" --profile {_quote_token(tildify_path(profile, home_dir=home))}"
-                lines.append(
-                    "# browser_pdf_cmd uses your Firefox profile for authenticated"
-                    " PDF access"
-                )
-            else:
-                lines.append(
-                    "# no Firefox profile auto-detected — add --profile <path> below"
-                    " if needed"
-                )
-                lines.append(
-                    "# find your profile: ls ~/.mozilla/firefox/*.default-release"
-                )
-        # Escaped, like `bib_name` and `bib_path` five lines down. A Firefox
-        # profile path containing a backslash (every Windows path, and any
-        # profile directory with one) produced a config.toml that TOML cannot
-        # parse — `pzi init --setup --browser firefox` exited 0 and every later
-        # command failed to load the config it had just written.
-        lines.append(f'browser_pdf_cmd = "{escape_toml_string(cmd)}"')
+        lines.extend(_browser_lines(browser=browser, home=home))
     lines.extend(
         [
             "",
@@ -170,6 +133,72 @@ def render_config(
         lines.append("# papers_dir = \"~/bibs/papers\"  # defaults to <bib-dir>/papers/")
     lines.append("default = true")
     return "\n".join(lines) + "\n"
+
+
+def _browser_lines(*, browser: str, home: str) -> list[str]:
+    """Config lines recording a browser choice, without pinning an interpreter.
+
+    **This function used to write `browser_pdf_cmd`, and that was the bug.** It
+    interpolated the *then-current* `sys.executable`, producing a line like
+    ``~/.local/share/uv/tools/<dist>/bin/python3 -m pzi.browser_pdf_hook``. That
+    path is an install-time snapshot of the environment, written into a file the
+    docstring above tells the user to commit to their dotfiles — so it went
+    stale on a reinstall under a different tool directory, a Python upgrade, a
+    distribution rename, or simply the second machine. Worse, a configured
+    command *wins* over the one pzi builds at run time (`pdf.py`), so the stale
+    value shadowed a mechanism that would have worked.
+
+    Nothing here is derived from the running process any more. `pdf_planning.
+    build_browser_pdf_command` synthesizes the command from `sys.executable`
+    at the moment it is needed, which cannot be stale by construction, and is
+    now the only place that builds one.
+
+    The profile path *is* still recorded, because auto-detection cannot know
+    which of several profiles the user meant. That one is validated on read
+    rather than trusted — `pzi doctor` reports a `browser_profile_path` that has
+    gone missing, instead of Playwright silently creating an empty profile and
+    every authenticated fetch failing as "no PDF".
+    """
+    lines = ["# browser hook: pzi builds the command at run time from the",
+             "# interpreter it is running under, so nothing here pins one."]
+    profile = (
+        _find_firefox_profile() if browser == "firefox" else _find_chrome_profile(home)
+    )
+    if profile:
+        lines.append(
+            f"# {browser} profile below is used for authenticated PDF access"
+        )
+        # Escaped, like `bib_name` and `bib_path` further down. A profile path
+        # containing a backslash (every Windows path, and any profile directory
+        # with one) produced a config.toml that TOML cannot parse — `pzi init
+        # --setup --browser firefox` exited 0 and every later command failed to
+        # load the config it had just written.
+        folded = escape_toml_string(tildify_path(profile, home_dir=home))
+        lines.append(f'browser_profile_path = "{folded}"')
+    else:
+        lines.append(
+            f"# no {browser} profile auto-detected — set browser_profile_path"
+            " below if you need an authenticated session"
+        )
+        lines.append('# browser_profile_path = "~/.config/google-chrome"')
+    return lines
+
+
+def _find_chrome_profile(home: str) -> str | None:
+    """The Chrome/Chromium user-data directory under *home*, or None.
+
+    Chrome honors ``$XDG_CONFIG_HOME``, so resolve it the same way rather than
+    hardcoding ``~/.config`` — matching `pdf._default_chrome_profile`, which
+    answers the same question at run time.
+
+    *home* is threaded in rather than read from the environment so the path this
+    writes and the path `tildify_path` folds are the same one; reading `$HOME`
+    here is how an absolute home path leaks into a config meant to be committed.
+    """
+    from pzi.config import xdg_config_home
+
+    base = Path(xdg_config_home(home)) / "google-chrome"
+    return str(base) if base.is_dir() else None
 
 
 def _find_firefox_profile() -> str | None:
