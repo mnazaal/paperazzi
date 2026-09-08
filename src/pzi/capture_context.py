@@ -132,7 +132,7 @@ def run_shell_command(command: str, *, config_key: str | None = None) -> str:
     try:
         # `shell=False` means the shell never expands `~` — expand it here, so
         # a `*_cmd` naming `~/bin/hook` behaves the same as it already does for
-        # `browser_pdf_cmd` (`browser_pdf._validate_browser_command`).
+        # `browser_pdf_cmd` (`browser_pdf.resolve_browser_command`).
         tokens = [os.path.expanduser(token) for token in shlex.split(command)]
     except ValueError as exc:
         raise PziError(

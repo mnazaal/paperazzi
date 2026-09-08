@@ -13,6 +13,7 @@ from pzi.bib_repository import (
     summarise_merge,
 )
 from pzi.bibtex import NormalizedRecord
+from pzi.config import DEFAULT_PDF_FILE_PATH_STYLE
 from pzi.errors import REASON_NOT_FOUND, REASON_USAGE
 from pzi.similarity import (
     best_fuzzy_matches,
@@ -230,7 +231,7 @@ def merge_duplicates(
     citekey_a: str,
     citekey_b: str,
     dry_run: bool = True,
-    file_path_style: str = "absolute",
+    file_path_style: str = DEFAULT_PDF_FILE_PATH_STYLE,
 ) -> MergeResult:
     """Merge two entries in a BibTeX library by citekey.
 

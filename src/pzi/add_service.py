@@ -70,7 +70,7 @@ from pzi.capture_local_pdf import (
     build_add_record_result,
     plan_with_applied_record,
 )
-from pzi.config import BibConfig, BibResolutionFailure, load_bib_target
+from pzi.config import DEFAULT_PDF_FILE_PATH_STYLE, BibConfig, BibResolutionFailure, load_bib_target
 from pzi.errors import (
     REASON_CONFIG,
     REASON_UNAVAILABLE,
@@ -274,7 +274,7 @@ def add_input_to_bib(
             citekey_format=citekey_format,
             pdf_filename_format=pdf_filename_format,
             force_new=force_new,
-            file_path_style=config.get("pdf_file_path_style", "absolute"),
+            file_path_style=config.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE),
             api_url=api_url,
             api_auth_token=api_auth_token,
             desktop_fallback_hosts=desktop_fallback_hosts,
@@ -337,7 +337,7 @@ def add_input_to_bib(
             pdf_filename_format=pdf_filename_format,
             strict_metadata=effective_strict,
             force_new=force_new,
-            file_path_style=config.get("pdf_file_path_style", "absolute"),
+            file_path_style=config.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE),
         ))
 
     def _metadata_cascade_failure(exc: Exception, *, settled: bool) -> AddRecordResult:
@@ -660,7 +660,7 @@ def add_record_with_bib(
     api_auth_token: str | None = None,
     desktop_fallback_hosts: set[str] | None = None,
     ezproxy_host: str | None = None,
-    file_path_style: str = "absolute",
+    file_path_style: str = DEFAULT_PDF_FILE_PATH_STYLE,
     next_pdf_candidate: NextPdfCandidate | None = None,
     batch_preview: _add_planning.BatchPreviewState | None = None,
 ) -> AddRecordResult:
@@ -859,7 +859,7 @@ def add_records_to_bib_batch(
     browser_hook: bool = True,
     citekey_format: str | None = None,
     pdf_filename_format: str | None = None,
-    file_path_style: str = "absolute",
+    file_path_style: str = DEFAULT_PDF_FILE_PATH_STYLE,
     fetch_binary: BinaryFetcher | None = None,
     source_entries: Sequence[BibtexEntry | None] | None = None,
 ) -> list[AddRecordResult]:

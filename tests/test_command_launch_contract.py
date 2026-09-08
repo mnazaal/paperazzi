@@ -88,3 +88,36 @@ def test_every_owned_command_key_agrees_on_a_broken_command(
         f"{config_key} under {failure_mode!r} raised reason="
         f"{excinfo.value.reason!r}, not REASON_CONFIG"
     )
+
+
+@pytest.mark.parametrize("failure_mode", sorted(_FAILURE_MODES))
+def test_browser_pdf_cmd_differs_on_purpose_and_still_says_why(
+    failure_mode: str, tmp_path: Path,
+) -> None:
+    """The excluded key's row, added by the hook-command lane at integration.
+
+    `browser_pdf_cmd` is the one launcher that does **not** raise. It sits
+    mid-way down a fallback chain — server browser, then this hook, then
+    FlareSolverr, then the desktop-download watcher — and raising here aborts
+    the rungs below it, which is worse than the misconfiguration. So it returns
+    `None`, and the chain continues.
+
+    What it owes in exchange is the reason. Reporting a hook that could not
+    start as "no PDF returned" is what let a `browser_pdf_cmd` naming a deleted
+    interpreter look like a paper that simply has no PDF available, for three
+    days across a whole library. The soft return is the exception; staying
+    silent never was.
+    """
+    from pzi.browser_pdf import download_pdf_with_browser
+
+    command = _FAILURE_MODES[failure_mode](tmp_path)
+    errors: list[str] = []
+
+    result = download_pdf_with_browser(
+        command=command, pdf_url="https://example.com/a.pdf", errors=errors
+    )
+
+    assert result is None, "the fallback chain must continue past a broken hook"
+    assert errors, (
+        f"browser_pdf_cmd under {failure_mode!r} returned None without saying why"
+    )

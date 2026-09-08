@@ -47,7 +47,7 @@ from pzi.bibtex import (
     parse_file_field,
     primary_pdf_path,
 )
-from pzi.config import tildify_path
+from pzi.config import DEFAULT_PDF_FILE_PATH_STYLE, tildify_path
 from pzi.errors import PziError
 
 
@@ -1275,7 +1275,7 @@ def bibtex_entry_to_library_entry(
     entry: BibtexEntry,
     bib_path: str = "",
     *,
-    file_path_style: str = "absolute",
+    file_path_style: str = DEFAULT_PDF_FILE_PATH_STYLE,
     bib_dir: Path | None = None,
 ) -> BibtexEntryV2:
     """Convert an internal BibtexEntry dict to a bibtexparser v2 Entry.

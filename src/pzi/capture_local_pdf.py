@@ -16,7 +16,7 @@ from pzi.add_planning import (
 )
 from pzi.bib_repository import WritePlan, read_bib_file
 from pzi.bibtex import BibtexEntry, NormalizedRecord, bibtex_entry_to_record
-from pzi.config import BibConfig
+from pzi.config import DEFAULT_PDF_FILE_PATH_STYLE, BibConfig
 from pzi.identifiers import normalize_doi
 from pzi.pdf import (
     NextPdfCandidate,
@@ -256,7 +256,7 @@ def add_local_pdf(
     # overrides a caller supplies for a PDF with no usable metadata — the
     # commonest reason to add one by path — never took effect.
     force_new: bool = False,
-    file_path_style: str = "absolute",
+    file_path_style: str = DEFAULT_PDF_FILE_PATH_STYLE,
 ) -> AddRecordResult:
     read_result = read_bib_file(bib["path"])
     existing_records = [

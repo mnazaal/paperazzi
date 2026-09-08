@@ -20,6 +20,7 @@ from pzi.capture_context import resolve_api_auth_token
 from pzi.config import (
     DEFAULT_API_LISTEN_HOST,
     DEFAULT_API_LISTEN_PORT,
+    DEFAULT_PDF_FILE_PATH_STYLE,
     AppConfig,
     BibResolutionFailure,
     load_bib_target,
@@ -282,7 +283,7 @@ def retry_pdf(
                 local_pdf_path=local_pdf_path,
                 pdf_url=pdf_url,
             ),
-            file_path_style=config.get("pdf_file_path_style", "absolute"),
+            file_path_style=config.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE),
         ),
         new_pdf=local_pdf_path,
         existing_pdf_paths=existing_pdf_paths,
@@ -446,7 +447,7 @@ def retry_failed_pdfs(
                     local_pdf_path=cast(str, local_pdf_path),
                     pdf_url=pdf_url,
                 ),
-                file_path_style=config.get("pdf_file_path_style", "absolute"),
+                file_path_style=config.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE),
             ),
             new_pdf=local_pdf_path,
             existing_pdf_paths=existing_pdf_paths,
@@ -574,7 +575,7 @@ def attach_pdf(
                 local_pdf_path=local_pdf_path,
                 pdf_url=source if source.startswith(("http://", "https://")) else None,
             ),
-            file_path_style=config.get("pdf_file_path_style", "absolute"),
+            file_path_style=config.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE),
         ),
         new_pdf=local_pdf_path,
         existing_pdf_paths=existing_pdf_paths,
@@ -673,7 +674,7 @@ def attach_pdf_bytes(
         data=data,
         source_url=source_url,
         filename_format=config.get("pdf_filename_format"),
-        file_path_style=config.get("pdf_file_path_style", "absolute"),
+        file_path_style=config.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE),
     )
 
 
@@ -724,7 +725,7 @@ def attach_pdf_raw_bytes(
         data=pdf_bytes,
         source_url=source_url,
         filename_format=config.get("pdf_filename_format"),
-        file_path_style=config.get("pdf_file_path_style", "absolute"),
+        file_path_style=config.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE),
     )
 
 
@@ -737,7 +738,7 @@ def _attach_pdf_data(
     data: bytes,
     source_url: str | None,
     filename_format: str | None = None,
-    file_path_style: str = "absolute",
+    file_path_style: str = DEFAULT_PDF_FILE_PATH_STYLE,
 ) -> PdfAttachBytesResult:
     read_result = read_bib_file(bib_path)
     entries = read_result["entries"]

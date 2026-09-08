@@ -26,7 +26,7 @@ from pzi.bibtex import (
     bibtex_entry_to_record,
     changed_fields,
 )
-from pzi.config import BibResolutionFailure, load_bib_target
+from pzi.config import DEFAULT_PDF_FILE_PATH_STYLE, BibResolutionFailure, load_bib_target
 from pzi.errors import REASON_CONFIG, REASON_UNAVAILABLE
 from pzi.identifiers import has_preprint_identity
 from pzi.protocols import SearchTranslationFetcher
@@ -106,7 +106,7 @@ def update_bib(
     config, bib = resolved
     search_fn = fetch_search or fetch_search_translations
     metadata_confidence_min_score = int(config.get("metadata_confidence_min_score", 0))
-    file_path_style = str(config.get("pdf_file_path_style", "absolute"))
+    file_path_style = str(config.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE))
     read_result = read_bib_file(bib["path"])
     records = read_result["records"]
     entries = read_result["entries"]
@@ -202,7 +202,7 @@ def _plan_update_for_record(
     entries: list[BibtexEntry],
     dry_run: bool,
     metadata_confidence_min_score: int,
-    file_path_style: str = "absolute",
+    file_path_style: str = DEFAULT_PDF_FILE_PATH_STYLE,
 ) -> UpdatePlanItem | None:
     """Plan (and, unless *dry_run*, apply) one record's metadata enrichment.
 

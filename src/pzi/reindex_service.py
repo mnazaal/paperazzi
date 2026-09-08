@@ -20,6 +20,7 @@ from pzi.bib_repository import (
 )
 from pzi.bib_serialize import plan_file_field_fold, resolved_bib_dir
 from pzi.bibtex import BibtexEntry, NormalizedRecord, parse_file_field
+from pzi.config import DEFAULT_PDF_FILE_PATH_STYLE
 from pzi.fileio import directory_folds_case
 from pzi.format_templates import format_citekey, format_pdf_filename
 from pzi.pdf_planning import plan_pdf_path
@@ -276,7 +277,7 @@ def reindex_library(
     citekey_format: str | None = None,
     pdf_filename_format: str | None = None,
     dry_run: bool = True,
-    file_path_style: str = "absolute",
+    file_path_style: str = DEFAULT_PDF_FILE_PATH_STYLE,
 ) -> ReindexResult:
     """Regenerate citekeys for all entries and fix file references.
 
@@ -432,7 +433,7 @@ def rename_files_to_policy(
     pdf_filename_format: str | None = None,
     dry_run: bool = True,
     include_all: bool = False,
-    file_path_style: str = "absolute",
+    file_path_style: str = DEFAULT_PDF_FILE_PATH_STYLE,
 ) -> ReindexResult:
     """Rename attached PDFs to the name ``pdf_filename_format`` now produces.
 

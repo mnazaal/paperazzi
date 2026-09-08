@@ -52,6 +52,7 @@ from pzi.capture_models import CaptureInput, CaptureOptions
 from pzi.check_service import CheckItem, CheckResult, check_bib
 from pzi.clean_service import plan_pdf_disposal
 from pzi.config import (
+    DEFAULT_PDF_FILE_PATH_STYLE,
     AppConfig,
     BibConfig,
     BibResolutionFailure,
@@ -1036,7 +1037,7 @@ def merge(
         # Read from the config, as both other front ends do. Defaulting to
         # `absolute` here would rewrite a relative-path library's `file =`
         # fields to absolute ones on an unrelated merge.
-        file_path_style=config.get("pdf_file_path_style", "absolute"),
+        file_path_style=config.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE),
     ).copy()
     _unwrap(typed, "status")
     pdf_action = plan_pdf_disposal(

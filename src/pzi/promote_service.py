@@ -38,7 +38,7 @@ from pzi.bibtex import (
 )
 from pzi.bibtex import changed_fields as changed_fields_between
 from pzi.capture_context import resolve_contact_email, resolve_optional_value
-from pzi.config import BibResolutionFailure, load_bib_target
+from pzi.config import DEFAULT_PDF_FILE_PATH_STYLE, BibResolutionFailure, load_bib_target
 from pzi.errors import REASON_CONFIG, REASON_UNAVAILABLE
 from pzi.fetch_helpers import ProviderBreaker, build_metadata_fetch_text
 from pzi.format_templates import format_citekey
@@ -183,7 +183,7 @@ def promote_bib(
     contact_email = resolve_contact_email(config)
     effective_flaresolverr_url = flaresolverr_url or config.get("flaresolverr_url")
     effective_browser_pdf_cmd = browser_pdf_cmd or config.get("browser_pdf_cmd")
-    file_path_style = str(config.get("pdf_file_path_style", "absolute"))
+    file_path_style = str(config.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE))
     # Subscript, not `.get(..., default)`: `AppConfig` is a total TypedDict, so
     # the loader always supplies this. The old fallback of 3 predated the move
     # to `score_match`'s 0-100 scale (where the default is 60) and would have
@@ -867,7 +867,7 @@ def _handle_keep_preprint(
     pdf_filename_format: str | None = None,
     citekey_format: str | None = None,
     browser_hook: bool = True,
-    file_path_style: str = "absolute",
+    file_path_style: str = DEFAULT_PDF_FILE_PATH_STYLE,
     next_candidate: NextPdfCandidate | None = None,
     settings: PdfFallbackSettings | None = None,
 ) -> tuple[PromoteItem, _PendingWrite | None]:
@@ -1203,7 +1203,7 @@ def _handle_update_in_place(
     browser_pdf_cmd: str | None,
     pdf_filename_format: str | None = None,
     browser_hook: bool = True,
-    file_path_style: str = "absolute",
+    file_path_style: str = DEFAULT_PDF_FILE_PATH_STYLE,
     next_candidate: NextPdfCandidate | None = None,
     settings: PdfFallbackSettings | None = None,
 ) -> tuple[PromoteItem, _PendingWrite | None]:

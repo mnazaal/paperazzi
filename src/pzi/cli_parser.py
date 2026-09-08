@@ -911,6 +911,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="with --rename-files, include names that differ only cosmetically",
     )
     reindex_parser.add_argument(
+        "--convert-file-paths", action="store_true",
+        help=(
+            "rewrite every file= path to the configured pdf_file_path_style "
+            "(default 'home', i.e. ~/...); a one-time pass for a library whose "
+            "paths were written before the style changed"
+        ),
+    )
+    reindex_parser.add_argument(
         "--json", action="store_true", help="emit the result as a JSON envelope",
     )
     reindex_parser.add_argument(

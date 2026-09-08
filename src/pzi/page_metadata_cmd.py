@@ -81,7 +81,7 @@ def run_page_metadata_cmd(
     try:
         # `shell=False` means the shell never expands `~` — expand it here, so
         # `page_metadata_cmd = "~/bin/hook"` works the same as it already does
-        # for `browser_pdf_cmd` (`browser_pdf._validate_browser_command`).
+        # for `browser_pdf_cmd` (`browser_pdf.resolve_browser_command`).
         argv = [os.path.expanduser(token) for token in shlex.split(command)]
     except ValueError as exc:
         # An unclosed quote in the configured command. `shlex.split` raises, and

@@ -9,7 +9,7 @@ from pzi.add_planning import batch_status
 from pzi.add_service import add_records_to_bib_batch
 from pzi.bib_serialize import parse_bibtex_for_import
 from pzi.bibtex import bibtex_entry_to_record
-from pzi.config import BibResolutionFailure, load_bib_target
+from pzi.config import DEFAULT_PDF_FILE_PATH_STYLE, BibResolutionFailure, load_bib_target
 from pzi.errors import REASON_CONFIG, REASON_UNAVAILABLE, REASON_USAGE
 from pzi.fileio import read_text_utf8
 
@@ -188,7 +188,7 @@ def import_from_bibtex(
             browser_hook=config.get("browser_hook", True),
             citekey_format=config.get("citekey_format"),
             pdf_filename_format=config.get("pdf_filename_format"),
-            file_path_style=config.get("pdf_file_path_style", "absolute"),
+            file_path_style=config.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE),
         )
     except Exception as exc:  # reported, not swallowed
         # The batch write is transactional: if it raised, nothing was written.
