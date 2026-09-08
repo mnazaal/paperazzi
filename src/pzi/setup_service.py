@@ -111,7 +111,7 @@ def render_config(
         "# pdf_filename_format = "
         '"{{ firstCreator suffix=\\" - \\" }}{{ year suffix=\\" - \\" }}'
         '{{ title truncate=\\"100\\" }}"',
-        '# pdf_file_path_style = "absolute" # or "relative" for paths relative to .bib',
+        '# pdf_file_path_style = "home" # or "relative" / "absolute"',
         '# page_metadata_cmd = "paper-meta --json" # optional page HTML metadata hook',
         '# page_metadata_timeout_seconds = 5',
     ]

@@ -44,8 +44,13 @@ api_listen_port = 8765
 #   backslashes in a "..." string)
 #   pdf_filename_format = '{{ firstCreator suffix="-" replaceFrom="\s+and\s+" replaceTo="-" replaceFrom2="\.$" replaceTo2="" }}{{ year suffix="-" }}{{ title truncate="100" }}'
 #   yielding Chow-Tsitsiklis-1989-Title.pdf and Blondel et al-2001-Title.pdf.
-# PDF file fields default to absolute paths. Set "relative" to write paths relative to the .bib file.
-# pdf_file_path_style = "absolute"  # "absolute" or "relative"
+# PDF file fields are written home-relative (~/...) by default, so a .bib shared
+# between machines keeps working. "relative" writes paths relative to the .bib
+# file, and only for PDFs stored under the .bib's own directory. "absolute" pins
+# them to this machine.
+# pdf_file_path_style = "home"  # "home", "relative", or "absolute"
+# Converting a library written before this default changed:
+#   pzi library reindex --convert-file-paths --dry-run
 # Optional external page processor: reads {url, html, metadata} JSON from stdin; writes metadata JSON.
 # page_metadata_cmd = "paper-meta --json"
 # page_metadata_timeout_seconds = 5
