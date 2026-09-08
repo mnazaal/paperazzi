@@ -6,6 +6,7 @@ from pzi import exit_codes
 from pzi.capture_context import resolve_api_auth_token
 from pzi.cli_server import build_server_plan
 from pzi.config import load_config_file
+from pzi.errors import PziError
 from pzi.http_api import run_server
 
 
@@ -21,7 +22,11 @@ def run_server_command(args, *, home_dir, config_path, stdout, stderr) -> int:
     if config is not None:
         try:
             auth_token = resolve_api_auth_token(config)
-        except (RuntimeError, ValueError) as exc:
+        except PziError as exc:
+            # `resolve_api_auth_token` (`capture_context.py`) raises `PziError`
+            # for a broken `api_auth_token_cmd`, which subclasses `Exception`,
+            # not `RuntimeError`/`ValueError` — this tailored message never
+            # printed, and the generic CLI handler answered instead.
             print(f"failed to resolve api_auth_token_cmd: {exc}", file=stderr)
             return exit_codes.ENVIRONMENT
     plan = build_server_plan(

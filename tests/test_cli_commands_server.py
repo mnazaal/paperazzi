@@ -17,6 +17,7 @@ import pytest
 
 from pzi import exit_codes
 from pzi.commands import server as server_command
+from pzi.errors import REASON_CONFIG, PziError
 
 MINIMAL_CONFIG = """
 [[bibs]]
@@ -105,14 +106,22 @@ def test_an_authenticated_server_says_that_instead(
 def test_an_unresolvable_auth_token_command_stops_the_server(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Starting anyway would serve unauthenticated under a config that asked for auth."""
+    """Starting anyway would serve unauthenticated under a config that asked for auth.
+
+    `resolve_api_auth_token` raises `PziError` (`capture_context.py`), which
+    subclasses `Exception`, not `RuntimeError`/`ValueError` — a mock that
+    raised a bare `RuntimeError` here would pass while the real failure mode
+    fell through to the generic CLI handler instead of this message.
+    """
     bib_path = tmp_path / "ml.bib"
     bib_path.write_text("", encoding="utf-8")
     config_path = tmp_path / "config.toml"
     config_path.write_text(MINIMAL_CONFIG.format(bib_path=bib_path), encoding="utf-8")
 
     def _boom(_config):
-        raise RuntimeError("api_auth_token_cmd exited 127")
+        raise PziError(
+            "the api_auth_token_cmd command exited with code 127", reason=REASON_CONFIG
+        )
 
     monkeypatch.setattr(server_command, "resolve_api_auth_token", _boom)
     monkeypatch.setattr(
@@ -125,7 +134,31 @@ def test_an_unresolvable_auth_token_command_stops_the_server(
 
     assert code == exit_codes.ENVIRONMENT
     assert "failed to resolve api_auth_token_cmd" in stderr
-    assert "exited 127" in stderr
+    assert "exited with code 127" in stderr
+    assert stdout == ""
+
+
+def test_a_real_broken_auth_token_cmd_stops_the_server_end_to_end(
+    tmp_path: Path,
+) -> None:
+    """No mocking: a missing binary in `api_auth_token_cmd` walks the real
+    `resolve_api_auth_token` -> `run_shell_command` chain and must still be
+    caught here, not escape as an unhandled `PziError`."""
+    bib_path = tmp_path / "ml.bib"
+    bib_path.write_text("", encoding="utf-8")
+    config_path = tmp_path / "config.toml"
+    # The `api_auth_token_cmd` line must precede `[[bibs]]` — TOML puts any
+    # bare key after a table header inside that table, not at the top level.
+    config_path.write_text(
+        f'api_auth_token_cmd = "{tmp_path / "no-such-binary"}"\n'
+        + MINIMAL_CONFIG.format(bib_path=bib_path),
+        encoding="utf-8",
+    )
+
+    code, stdout, stderr = _run(_args(), tmp_path, config_path)
+
+    assert code == exit_codes.ENVIRONMENT
+    assert "failed to resolve api_auth_token_cmd" in stderr
     assert stdout == ""
 
 
