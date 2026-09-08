@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shlex
 import subprocess
 from collections.abc import Callable, Mapping
@@ -11,7 +12,7 @@ from typing import Any
 
 from pzi import exit_codes
 from pzi.config import AppConfig, BibConfig
-from pzi.errors import PziError
+from pzi.errors import REASON_CONFIG, REASON_UNAVAILABLE, PziError
 
 DEFAULT_TOKEN_FILENAME = "api_token"
 
@@ -110,14 +111,41 @@ def run_shell_command(command: str, *, config_key: str | None = None) -> str:
     deliberately lets unrecognized exceptions through so real bugs stay visible —
     turned a typo'd ``*_cmd`` into a traceback, including in ``pzi doctor``, the
     command whose job is to report that misconfiguration.
+
+    Shared contract with the sibling launchers (`page_metadata_cmd.py`,
+    another lane's `browser_pdf.py`): a command that **cannot be run at all**
+    — unparseable, empty, a missing or non-executable binary — is
+    ``reason=REASON_CONFIG``. A command that **ran and failed** — a timeout, a
+    non-zero exit — is ``reason=REASON_UNAVAILABLE`` instead: unlike
+    `page_metadata_cmd`, no caller of this function has a safe fallback once
+    the command is configured (falling back to a stale plaintext secret or the
+    auto-read token file on a *broken* command hides the misconfiguration
+    behind a wrong credential), so it always raises here — but the two
+    failure classes are still distinguished, the way they are everywhere else,
+    so a consumer such as `pzi doctor` can tell "fix your config" apart from
+    "retry later".
     """
     try:
         _reject_shell_metacharacters(command, config_key=config_key)
-        tokens = shlex.split(command)
     except ValueError as exc:
-        raise PziError(str(exc), code=exit_codes.ENVIRONMENT) from exc
+        raise PziError(str(exc), code=exit_codes.ENVIRONMENT, reason=REASON_CONFIG) from exc
+    try:
+        # `shell=False` means the shell never expands `~` — expand it here, so
+        # a `*_cmd` naming `~/bin/hook` behaves the same as it already does for
+        # `browser_pdf_cmd` (`browser_pdf._validate_browser_command`).
+        tokens = [os.path.expanduser(token) for token in shlex.split(command)]
+    except ValueError as exc:
+        raise PziError(
+            f"{_secret_command_label(config_key)} could not be parsed: {exc}",
+            code=exit_codes.ENVIRONMENT,
+            reason=REASON_CONFIG,
+        ) from exc
     if not tokens:
-        raise PziError("empty shell command in config", code=exit_codes.ENVIRONMENT)
+        raise PziError(
+            f"{_secret_command_label(config_key)} is empty; remove it or give it a command",
+            code=exit_codes.ENVIRONMENT,
+            reason=REASON_CONFIG,
+        )
     try:
         result = subprocess.run(tokens, capture_output=True, text=True, timeout=10)
     except subprocess.TimeoutExpired as exc:
@@ -125,18 +153,26 @@ def run_shell_command(command: str, *, config_key: str | None = None) -> str:
             f"{_secret_command_label(config_key)} timed out after 10s "
             "(did it prompt for input?)",
             code=exit_codes.ENVIRONMENT,
+            reason=REASON_UNAVAILABLE,
         ) from exc
     except OSError as exc:
         raise PziError(
             f"{_secret_command_label(config_key)} could not run: "
             f"{exc.strerror or type(exc).__name__}",
             code=exit_codes.ENVIRONMENT,
+            reason=REASON_CONFIG,
         ) from exc
     if result.returncode != 0:
+        # Ran and failed. Deliberately does *not* forward stderr the way
+        # `page_metadata_cmd.py` does: this command's job is to print a
+        # secret, so its stderr can carry one (see `_secret_command_label`),
+        # and `test_a_failing_secret_command_does_not_echo_the_command_or_its_stderr`
+        # pins that it never reaches this message.
         raise PziError(
             f"{_secret_command_label(config_key)} exited with code "
             f"{result.returncode}",
             code=exit_codes.ENVIRONMENT,
+            reason=REASON_UNAVAILABLE,
         )
     return result.stdout
 
@@ -161,6 +197,17 @@ def _reject_shell_metacharacters(command: str, *, config_key: str | None = None)
     token argument, a vault path — and echoing it put that in stderr,
     scrollback, logs and bug reports. Every other failure in
     :func:`run_shell_command` already refuses to quote it.
+
+    `page_metadata_cmd.py` and `browser_pdf.py` (another lane) do not screen
+    for this at all, and every one of the three runs ``shell=False`` — so this
+    is not an injection guard (the shell never interprets these characters
+    either way) but a deliberate extra check kept only here: a secret command
+    is more often copy-pasted from documentation that assumes real shell
+    syntax (``pass show x | head -1``), where failing loudly on the first
+    metacharacter is worth the false-positive risk. A page-metadata or
+    browser hook is a fixed script the user wrote for pzi specifically, so
+    that risk buys nothing there. Not an inconsistency to fix — see
+    `page_metadata_cmd.py`'s module docstring for the reciprocal note.
     """
     # Reject characters / patterns that a shell would interpret even
     # though we use shell=False — a config typo or injection attempt
