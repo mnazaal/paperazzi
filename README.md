@@ -251,11 +251,13 @@ the versioning promise, and source coverage.
 
 ## PDF download for paywalled papers
 
-Many publisher sites require authentication. Prefer the browser extension. For CLI fallback, point `browser_pdf_cmd` at an authenticated browser profile:
+Many publisher sites require authentication. Prefer the browser extension. For CLI fallback, name an authenticated browser profile:
 
 ```toml
-browser_pdf_cmd = "... python -m pzi.browser_pdf_hook --profile ~/.config/chromium"
+browser_profile_path = "~/.config/chromium"
 ```
+
+pzi builds the hook command around that profile using the interpreter it is running under, so your config pins no install path. Set `browser_pdf_cmd` only to run a hook that is not pzi's own.
 
 For Cloudflare-gated pages, optionally configure FlareSolverr:
 
