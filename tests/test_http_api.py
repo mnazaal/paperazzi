@@ -516,6 +516,49 @@ def test_post_capture_accepts_page_metadata_overrides(tmp_path: Path) -> None:
     assert "10.1234/browser-meta" in text
 
 
+def test_post_capture_with_a_broken_page_metadata_cmd_is_400_not_500(tmp_path: Path) -> None:
+    """A `page_metadata_cmd` naming a missing binary is a config fault
+    (`PziError`, `REASON_CONFIG`) raised from deep inside `capture_to_bib`.
+    Nothing between there and `_guarded` caught it, so it reached the
+    generic 500 handler like an unclassified server bug — indistinguishable
+    from the server actually breaking, and useless to the extension, which
+    branches on the HTTP status.
+    """
+    config_path, _bib_path = _seed(tmp_path)
+    # The new line must precede `[[bibs]]` — TOML puts a bare key after a
+    # table header inside that table, not at the top level.
+    config_path.write_text(
+        f'page_metadata_cmd = "{tmp_path / "no-such-binary"}"\n'
+        + config_path.read_text()
+    )
+    port, _thread, server = _serve_once(config_path, tmp_path)
+    try:
+        body = json.dumps(
+            {
+                "url": "https://example.com/broken-hook-page",
+                "page_html": "<html></html>",
+                "doi": "10.1234/broken-hook",
+            }
+        ).encode("utf-8")
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{port}/capture",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            urllib.request.urlopen(request, timeout=10)
+            pytest.fail("expected an HTTP error status")
+        except urllib.error.HTTPError as exc:
+            status = exc.code
+            payload = json.loads(exc.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert status == 400
+    assert "page_metadata_cmd" in payload["error"]
+
+
 def test_origin_allowed_accepts_local_and_extension_origins() -> None:
     security = build_http_security_config()
 

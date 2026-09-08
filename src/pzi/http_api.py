@@ -9,6 +9,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from typing import Any, Protocol, TextIO
 from urllib.parse import parse_qs, urlsplit
 
+from pzi.errors import PziError
 from pzi.http_binary_routes import (
     ExportBytesResponse,
     PdfFileResponse,
@@ -31,6 +32,7 @@ from pzi.http_security import (
     request_security_error,
     validated_content_length,
 )
+from pzi.http_status import status_for_service_result
 from pzi.pdf_attach_session_store import AttachSessionStore
 
 
@@ -315,6 +317,23 @@ def _guarded(
     request._response_started = False  # type: ignore[attr-defined]
     try:
         handler()
+    except PziError as exc:
+        # A configured `*_cmd` (e.g. `page_metadata_cmd`) misconfigured deep
+        # inside a service call — `capture_to_bib` and friends raise
+        # `PziError` and nothing between there and here caught it, so a config
+        # typo answered exactly like the server actually breaking: a bare 500,
+        # with `exc.message` (already phrased for the user, per `errors.py`)
+        # discarded. `status_for_service_result` is the same reason -> status
+        # map every other route already answers with; an unclassified
+        # `PziError` keeps the old 500 rather than guessing.
+        if getattr(request, "_response_started", False):
+            raise
+        status = status_for_service_result(
+            {"reason": exc.reason}, default_error_status=500
+        )
+        _respond(request, status, {"error": exc.message}, security)
+        if status == 500:
+            raise
     except Exception:  # boundary of last resort; re-raised below
         if getattr(request, "_response_started", False):
             # Headers (and possibly a partial body) already went out — a second
