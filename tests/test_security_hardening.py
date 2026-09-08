@@ -232,9 +232,12 @@ def test_a_browser_command_with_a_backslash_still_parses(tmp_path: Path) -> None
         )
 
     # The whole file has to parse, which is what a backslash used to break.
+    # The value moved from `browser_pdf_cmd` to `browser_profile_path` when
+    # setup stopped writing an interpreter path, but the property under test is
+    # unchanged: a Windows-shaped profile path must survive TOML escaping.
     parsed = tomllib.loads(rendered)
-    assert "browser_pdf_cmd" in parsed
-    assert "\\" in parsed["browser_pdf_cmd"]
+    assert "browser_profile_path" in parsed
+    assert "\\" in parsed["browser_profile_path"]
 
 
 def test_non_latin_tags_survive_normalization() -> None:

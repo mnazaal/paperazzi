@@ -120,6 +120,7 @@ pzi library merge
 pzi library reindex
     --all dest=all nargs=0
     --config dest=config
+    --convert-file-paths dest=convert_file_paths nargs=0
     --dry-run dest=dry_run nargs=0
     --force dest=force nargs=0
     --json dest=json nargs=0

@@ -853,7 +853,9 @@ def test_cli_init_setup_writes_config_only(tmp_path: Path) -> None:
     assert exit_code == 0
     assert stderr.getvalue() == ""
     config = config_path.read_text()
-    assert '-m pzi.browser_pdf_hook --browser chromium"' in config
+    # No interpreter path is written: pzi builds the hook command at run time.
+    assert "browser_pdf_cmd" not in config
+    assert "browser_pdf_hook" not in config
     assert 'path = "~/bibs/main.bib"' in config
     assert "flaresolverr_url" not in config
     assert "pzi_data_home" in config
@@ -900,7 +902,11 @@ def test_cli_init_setup_with_firefox(tmp_path: Path) -> None:
 
     assert exit_code == 0
     config = config_path.read_text()
-    assert '--browser firefox' in config
+    # `--browser firefox` used to appear inside a generated `browser_pdf_cmd`.
+    # The choice is now recorded as the profile it selects, and the browser is
+    # inferred from that path at use time.
+    assert "browser_profile_path" in config
+    assert "firefox" in config
 
 
 def test_doctor_reinstall_server_handles_missing_config(tmp_path: Path) -> None:
