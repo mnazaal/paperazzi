@@ -88,7 +88,7 @@ from pzi.pdf_discovery import (
     apply_pdf_discovery,
     web_attachment_step,
 )
-from pzi.pdf_planning import is_pdf_bytes, plan_pdf_path
+from pzi.pdf_planning import PdfFallbackSettings, is_pdf_bytes, plan_pdf_path
 from pzi.protocols import (
     BinaryFetcher,
     HtmlFetcher,
@@ -271,6 +271,7 @@ def add_input_to_bib(
             browser_pdf_cmd=effective_browser_pdf_cmd,
             browser=effective_browser,
             browser_hook=config.get("browser_hook", True),
+            settings=context.settings,
             citekey_format=citekey_format,
             pdf_filename_format=pdf_filename_format,
             force_new=force_new,
@@ -651,6 +652,7 @@ def add_record_with_bib(
     fetch_binary: BinaryFetcher | None = None,
     flaresolverr_url: str | None = None,
     browser_pdf_cmd: str | None = None,
+    settings: PdfFallbackSettings | None = None,
     browser: str | None = None,
     browser_hook: bool = True,
     citekey_format: str | None = None,
@@ -698,6 +700,7 @@ def add_record_with_bib(
             papers_dir=bib["papers_dir"],
             dry_run=dry_run,
             fetch_binary=fetch_binary,
+            settings=settings,
             flaresolverr_url=flaresolverr_url,
             browser_pdf_cmd=browser_pdf_cmd,
             browser=browser,
@@ -857,6 +860,7 @@ def add_records_to_bib_batch(
     dry_run: bool,
     force_new: bool = False,
     browser_hook: bool = True,
+    settings: PdfFallbackSettings | None = None,
     citekey_format: str | None = None,
     pdf_filename_format: str | None = None,
     file_path_style: str = DEFAULT_PDF_FILE_PATH_STYLE,
@@ -919,6 +923,7 @@ def add_records_to_bib_batch(
                         record=typed, papers_dir=papers_dir, dry_run=dry_run,
                         fetch_binary=fetch_binary, browser_hook=browser_hook,
                         pdf_filename_format=pdf_filename_format,
+                        settings=settings,
                     )
                     pdf_path = typed.get("local_pdf_path")
                     record_pdf = pdf_path if isinstance(pdf_path, str) else None

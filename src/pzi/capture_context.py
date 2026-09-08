@@ -13,6 +13,7 @@ from typing import Any
 from pzi import exit_codes
 from pzi.config import AppConfig, BibConfig
 from pzi.errors import REASON_CONFIG, REASON_UNAVAILABLE, PziError
+from pzi.pdf_planning import PdfFallbackSettings
 
 DEFAULT_TOKEN_FILENAME = "api_token"
 
@@ -77,6 +78,12 @@ class CaptureContext:
     desktop_fallback_hosts: set[str]
     pdf_discovery_parallel: bool
     ezproxy_host: str | None
+    #: Fallback-chain knobs resolved from `config` once per capture. Three
+    #: seams build these from config — `pdf_service._fallback_kwargs`,
+    #: `promote_service`, and this one — and resolving them per call site
+    #: is exactly how `browser_profile_path` came to work in some commands
+    #: and not others.
+    settings: PdfFallbackSettings
 
 
 def resolve_optional_value(
@@ -270,6 +277,7 @@ def build_capture_context(
             "semantic_scholar_api_key_cmd",
         ),
         browser_pdf_cmd=browser_pdf_cmd_override or config.get("browser_pdf_cmd"),
+        settings=PdfFallbackSettings.from_config(config),
         browser=browser,
         citekey_format=config.get("citekey_format"),
         pdf_filename_format=config.get("pdf_filename_format"),

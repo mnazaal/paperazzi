@@ -25,7 +25,7 @@ from pzi.pdf import (
     snapshot_pdf_paths,
 )
 from pzi.pdf_download import copy_pdf_to_papers_dir
-from pzi.pdf_planning import plan_pdf_path
+from pzi.pdf_planning import PdfFallbackSettings, plan_pdf_path
 from pzi.pdf_service import extract_pdf_metadata
 from pzi.protocols import (
     BinaryFetcher,
@@ -393,6 +393,7 @@ def attach_pdf_if_available(
     desktop_fallback_hosts: set[str] | None = None,
     ezproxy_host: str | None = None,
     next_candidate: NextPdfCandidate | None = None,
+    settings: PdfFallbackSettings | None = None,
 ) -> tuple[NormalizedRecord, list[str]]:
     pdf_url = record.get("pdf_url")
     if not isinstance(pdf_url, str) or not pdf_url.strip():
@@ -450,6 +451,7 @@ def attach_pdf_if_available(
         api_auth_token=api_auth_token,
         desktop_fallback_hosts=desktop_fallback_hosts,
         ezproxy_host=ezproxy_host,
+        settings=settings,
     )
     if outcome.local_pdf_path is None:
         return record, outcome.errors
