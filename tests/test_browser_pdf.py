@@ -2,32 +2,37 @@ import base64
 import json
 import os
 import subprocess
+import sys
 from unittest.mock import patch
 
 import pytest
 
 from pzi.browser_pdf import (
     _HOOK_OVERHEAD_SECONDS,
-    _validate_browser_command,
     discover_pdf_url_with_browser,
     download_pdf_with_browser,
+    resolve_browser_command,
 )
 
 
-def test_validate_browser_command_expands_tilde_tokens() -> None:
-    tokens = _validate_browser_command(
-        "~/.local/bin/python -m pzi.browser_pdf_hook --profile ~/.mozilla/p"
+def test_resolve_browser_command_expands_tilde_tokens() -> None:
+    """``~`` is expanded in every token, because ``shell=False`` means no shell
+    ever will. argv[0] here is the running interpreter, which exists, so nothing
+    is substituted — the substitution path is covered in
+    ``test_browser_pdf_command_resolution.py``."""
+    profile = os.path.join("~", ".mozilla", "p")
+    tokens = resolve_browser_command(
+        f"{sys.executable} -m pzi.browser_pdf_hook --profile {profile}"
     )
-    home = os.path.expanduser("~")
-    assert tokens[0] == f"{home}/.local/bin/python"
-    assert tokens[-1] == f"{home}/.mozilla/p"
+    assert tokens[0] == sys.executable
+    assert tokens[-1] == os.path.expanduser(profile)
     # Non-path tokens are untouched.
     assert "--profile" in tokens
 
 
-def test_validate_browser_command_leaves_plain_tokens_unchanged() -> None:
-    assert _validate_browser_command("python -m pzi.browser_pdf_hook") == [
-        "python",
+def test_resolve_browser_command_leaves_plain_tokens_unchanged() -> None:
+    assert resolve_browser_command(f"{sys.executable} -m pzi.browser_pdf_hook") == [
+        sys.executable,
         "-m",
         "pzi.browser_pdf_hook",
     ]

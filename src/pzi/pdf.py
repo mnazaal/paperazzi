@@ -315,9 +315,20 @@ def fetch_and_store_pdf_with_fallbacks(
     ):
         from pzi.browser_pdf import download_pdf_with_browser
 
-        pdf_bytes = download_pdf_with_browser(command=effective_browser_pdf_cmd, pdf_url=url)
+        # "no PDF returned" was reported for every way this rung can fail,
+        # including the ones where it never ran: a `browser_pdf_cmd` naming a
+        # deleted interpreter read as "this paper has no PDF", which is what
+        # made a three-day-old misconfiguration invisible across a whole
+        # `--failed-only` sweep. A hook that could not start says so.
+        hook_errors: list[str] = []
+        pdf_bytes = download_pdf_with_browser(
+            command=effective_browser_pdf_cmd, pdf_url=url, errors=hook_errors
+        )
         if not pdf_bytes:
-            stage_errors.append("browser_pdf_cmd: no PDF returned")
+            if hook_errors:
+                stage_errors.extend(f"browser_pdf_cmd: {d}" for d in hook_errors)
+            else:
+                stage_errors.append("browser_pdf_cmd: no PDF returned")
         elif not is_pdf_bytes(pdf_bytes):
             stage_errors.append("browser_pdf_cmd: response was not a PDF")
         if pdf_bytes and is_pdf_bytes(pdf_bytes):

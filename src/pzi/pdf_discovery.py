@@ -478,11 +478,21 @@ def browser_pdf_step(
         # Fall back to subprocess browser hook.
         if pdf_url is None and browser_pdf_cmd is not None:
             from pzi.browser_pdf import discover_pdf_url_with_browser
+
+            # Reported the same way as the server-browser rung above: a stage
+            # that produced nothing says why, so `--json` can tell "the hook
+            # found no PDF" from "the hook could not start".
+            hook_errors: list[str] = []
             pdf_url = discover_pdf_url_with_browser(
                 command=browser_pdf_cmd,
                 page_url=url,
                 doi=doi,
+                errors=hook_errors,
             )
+            for detail in hook_errors:
+                context.setdefault("discovery_diagnostics", []).append(
+                    f"browser_pdf_cmd: {detail}"
+                )
 
         if pdf_url and safe_public_http_url(pdf_url):
             updated = dict(record)

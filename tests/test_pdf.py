@@ -274,7 +274,7 @@ def test_fetch_and_store_pdf_with_fallbacks_uses_browser_after_direct_fail(
     monkeypatch.setattr(
         pzi.browser_pdf,
         "download_pdf_with_browser",
-        lambda *, command, pdf_url: b"%PDF-browser",
+        lambda *, command, pdf_url, errors=None: b"%PDF-browser",
     )
 
     local_path, warning, error = fetch_and_store_pdf_with_fallbacks(
@@ -304,7 +304,7 @@ def test_fetch_and_store_pdf_with_fallbacks_uses_flaresolverr_after_failures(
     monkeypatch.setattr(
         pzi.browser_pdf,
         "download_pdf_with_browser",
-        lambda *, command, pdf_url: b"not pdf",
+        lambda *, command, pdf_url, errors=None: b"not pdf",
     )
     monkeypatch.setattr(
         pzi.flaresolverr,
@@ -402,7 +402,9 @@ def test_resolved_settings_reach_every_fallback_rung(
 
     commands: list[str] = []
 
-    def record_command(*, command: str, pdf_url: str) -> bytes | None:
+    def record_command(
+        *, command: str, pdf_url: str, errors: list[str] | None = None
+    ) -> bytes | None:
         commands.append(command)
         return None
 
@@ -466,7 +468,7 @@ def test_unwritable_download_dir_keeps_the_earlier_stage_errors(
     blocker = tmp_path / "not-a-dir"
     blocker.write_bytes(b"")
     monkeypatch.setattr(
-        pzi.browser_pdf, "download_pdf_with_browser", lambda *, command, pdf_url: None
+        pzi.browser_pdf, "download_pdf_with_browser", lambda *, command, pdf_url, errors=None: None
     )
 
     local_path, _warning, error = fetch_and_store_pdf_with_fallbacks(

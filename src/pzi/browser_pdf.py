@@ -10,9 +10,18 @@ import shlex
 import subprocess
 import sys
 
+#: The module a pzi-owned hook command runs. The interpreter in front of it is
+#: interchangeable *because* the code behind it is ours; see
+#: `resolve_browser_command`.
+_OWN_HOOK_MODULE = "pzi.browser_pdf_hook"
 
-def _validate_browser_command(command: str) -> list[str]:
-    """Split and validate a browser PDF hook command, raising on unsafe input.
+#: Stale interpreters already announced, so a `--failed-only` sweep across 200
+#: entries says it once rather than once per entry.
+_notified: set[str] = set()
+
+
+def resolve_browser_command(command: str) -> list[str]:
+    """Split a browser PDF hook command into argv, raising on unusable input.
 
     ``shell=False`` execution means the shell never expands ``~``, so do it
     here: this lets ``config.toml`` carry ``~/...`` paths (e.g. the interpreter
@@ -23,6 +32,84 @@ def _validate_browser_command(command: str) -> list[str]:
     if not tokens:
         raise ValueError("empty browser command in config")
     return [os.path.expanduser(token) for token in tokens]
+
+
+def healed_tokens(tokens: list[str]) -> list[str] | None:
+    """*tokens* with a stale interpreter replaced, or None if that is not safe.
+
+    ``pzi init --setup`` used to bake the *then-current* ``sys.executable`` into
+    ``browser_pdf_cmd``. That path is an install-time snapshot: renaming the
+    distribution, a reinstall under a different tool directory, a Python upgrade,
+    or another machine sharing the same dotfiles each leave it naming an
+    interpreter that no longer exists. Setup no longer writes it, but configs in
+    the field still carry it — this is what makes those keep working.
+
+    Substituting is safe **only because the module being run is pzi's own**: the
+    interpreter that can import `pzi.browser_pdf_hook` is by definition the one
+    running this code. The reasoning does not extend one step further, so a
+    third-party hook that has gone missing returns None and is reported as the
+    configuration fault it is.
+    """
+    if tokens[1:3] != ["-m", _OWN_HOOK_MODULE]:
+        return None
+    if tokens[0] == sys.executable:
+        return None  # already us; the failure was something else
+    return [sys.executable, *tokens[1:]]
+
+
+def _announce_substitution(stale: str) -> None:
+    """Say once per process that a stale interpreter was replaced.
+
+    Once, not once per entry: `pdf retry --failed-only` runs this hook for every
+    PDF-less entry in the library, and a per-entry notice buries the summary it
+    is trying to explain.
+    """
+    if stale in _notified:
+        return
+    _notified.add(stale)
+    print(
+        f"browser_pdf_cmd names an interpreter that no longer exists ({stale}); "
+        f"using {sys.executable} instead. Remove the browser_pdf_cmd line from "
+        "your config to stop pinning it — pzi builds the command at run time.",
+        file=sys.stderr,
+    )
+
+
+def _run_browser_hook(command: str, payload: str) -> subprocess.CompletedProcess[str]:
+    """Run the hook, retrying once with the running interpreter if argv[0] is gone.
+
+    One body for both hook directions. They had two copies of the split, the run
+    and the timeout, and the copies had already drifted — only one of them read
+    the child's stderr. Healing added a third thing to keep in step, so the
+    copies were merged instead.
+
+    The staleness check is the failure itself, not a `which` probe beforehand:
+    `subprocess.run` already answers "can this be executed", and asking twice is
+    how the two answers get to disagree.
+    """
+    tokens = resolve_browser_command(command)
+    try:
+        return subprocess.run(
+            tokens,
+            input=payload,
+            shell=False,
+            capture_output=True,
+            text=True,
+            timeout=_hook_timeout_seconds(tokens),
+        )
+    except FileNotFoundError:
+        healed = healed_tokens(tokens)
+        if healed is None:
+            raise
+        _announce_substitution(tokens[0])
+        return subprocess.run(
+            healed,
+            input=payload,
+            shell=False,
+            capture_output=True,
+            text=True,
+            timeout=_hook_timeout_seconds(healed),
+        )
 
 
 # Control characters (U+0000-U+001F) — stripped from subprocess stderr
@@ -36,29 +123,34 @@ def _safe_stderr(text: str) -> str:
 
 
 def discover_pdf_url_with_browser(
-    *, command: str, page_url: str, doi: str | None = None
+    *,
+    command: str,
+    page_url: str,
+    doi: str | None = None,
+    errors: list[str] | None = None,
 ) -> str | None:
-    """Discover PDF URL from a page using external browser hook."""
+    """Discover PDF URL from a page using external browser hook.
+
+    *errors* collects the reason this stage produced nothing, the way
+    `download_via_server_api` already does for the server-browser rung. A hook
+    that could not *start* and a hook that ran and found no PDF are different
+    facts, and the caller reported both as "no PDF returned".
+    """
     payload = json.dumps({"page_url": page_url, "doi": doi})
     try:
-        tokens = _validate_browser_command(command)
-        result = subprocess.run(
-            tokens,
-            input=payload,
-            shell=False,
-            capture_output=True,
-            text=True,
-            timeout=_hook_timeout_seconds(tokens),
-        )
+        result = _run_browser_hook(command, payload)
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
-        # `ValueError` too: `_validate_browser_command` raises it for an empty
+        # `ValueError` too: `resolve_browser_command` raises it for an empty
         # command, and `shlex.split` for an unbalanced quote. A config typo must
         # read as "this hook found nothing", like every other failure here —
         # but it must still *say so*. `download_pdf_with_browser` forwards the
         # child's stderr on every failure; this function read `result.stderr`
         # nowhere, so "install the playwright extra" reached the user down one
         # path and vanished down the other.
-        print(f"browser hook could not run: {exc}", file=sys.stderr)
+        message = f"browser hook could not run: {exc}"
+        print(message, file=sys.stderr)
+        if errors is not None:
+            errors.append(message)
         return None
     if result.returncode != 0:
         child_stderr = getattr(result, "stderr", "")
@@ -121,7 +213,7 @@ def _hook_timeout_seconds(tokens: list[str]) -> int:
 
 
 def download_pdf_with_browser(
-    *, command: str, pdf_url: str
+    *, command: str, pdf_url: str, errors: list[str] | None = None
 ) -> bytes | None:
     """Download PDF bytes using external browser hook.
 
@@ -134,20 +226,12 @@ def download_pdf_with_browser(
     """
     payload = json.dumps({"action": "download_pdf", "pdf_url": pdf_url})
     try:
-        tokens = _validate_browser_command(command)
-        result = subprocess.run(
-            tokens,
-            input=payload,
-            shell=False,
-            capture_output=True,
-            text=True,
-            timeout=_hook_timeout_seconds(tokens),
-        )
+        result = _run_browser_hook(command, payload)
     except subprocess.TimeoutExpired:
-        print(
-            "browser PDF hook timed out while trying to download PDF",
-            file=sys.stderr,
-        )
+        message = "browser PDF hook timed out while trying to download PDF"
+        print(message, file=sys.stderr)
+        if errors is not None:
+            errors.append(message)
         return None
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         # `fetch_and_store_pdf_with_fallbacks` advances on a falsy return and has
@@ -158,7 +242,10 @@ def download_pdf_with_browser(
         # which is worse than the misconfiguration itself. Note this is
         # reachable without any `browser_pdf_cmd` in config, because
         # `_auto_browser_pdf_cmd_for_url` synthesizes one for known hosts.
-        print(f"browser PDF hook could not run: {exc}", file=sys.stderr)
+        message = f"browser PDF hook could not run: {exc}"
+        print(message, file=sys.stderr)
+        if errors is not None:
+            errors.append(message)
         return None
     pdf_bytes = _decode_hook_pdf(result)
     if pdf_bytes is not None:
