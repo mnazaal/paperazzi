@@ -186,6 +186,11 @@ def test_format_pdf_filename_empty_stem_becomes_paper() -> None:
     assert format_pdf_filename("///", {}) == "paper.pdf"
 
 
+@pytest.mark.parametrize("forbidden", ['?', '"', "*", "<", ">", "|"])
+def test_format_pdf_filename_removes_windows_forbidden_characters(forbidden: str) -> None:
+    assert format_pdf_filename(f"Before{forbidden}After", {}) == "Before After.pdf"
+
+
 def test_format_pdf_filename_truncates_overlong_stem() -> None:
     record = {"citekey": "x" * 400}
     out = format_pdf_filename(None, record)

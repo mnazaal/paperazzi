@@ -23,7 +23,7 @@ _ALPHANUMERIC_OR_INNER_HYPHEN = re.compile(r"[^A-Za-z0-9-]+")
 #: Trailing/leading/doubled separators, once empty components are dropped.
 _SEPARATOR_RUN = re.compile(r"[-_:.]{2,}")
 _NON_CITEKEY_KEEPING_SEPARATORS = re.compile(r"[^A-Za-z0-9\-_:.]+")
-_FILENAME_FORBIDDEN = re.compile(r"[\\/\x00-\x1f:]+")
+_FILENAME_FORBIDDEN = re.compile(r'[\\/\x00-\x1f:?"*<>|]+')
 _WHITESPACE = re.compile(r"\s+")
 #: Zotero's capture-group syntax in a `replaceTo` value: `$1`, or `$$` for a
 #: literal dollar.
