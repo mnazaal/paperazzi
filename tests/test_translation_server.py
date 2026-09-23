@@ -248,9 +248,14 @@ def test_stub_translation_server_rejects_a_matching_body_on_the_wrong_path() -> 
 
     item = translation_item(title="A Stub Paper")
     with stub_translation_server({"10.1/x": item}) as server_url:
-        for path in ("/web", "/search"):
+        for path, body, content_type in (
+            ("/web", b'{"url": "https://doi.org/10.1/x", "session": "pzi"}',
+             "application/json"),
+            ("/search", b"10.1/x", "text/plain"),
+        ):
             req = urllib.request.Request(
-                f"{server_url}{path}", data=b"10.1/x", method="POST"
+                f"{server_url}{path}", data=body, method="POST",
+                headers={"Content-Type": content_type},
             )
             with urllib.request.urlopen(req) as resp:
                 assert resp.status == 200
@@ -264,6 +269,35 @@ def test_stub_translation_server_rejects_a_matching_body_on_the_wrong_path() -> 
             assert exc.code == 404
         else:
             raise AssertionError("expected HTTPError 404 for an unknown POST path")
+
+
+def test_stub_translation_server_refuses_a_body_of_the_wrong_shape() -> None:
+    """The stub matched a needle anywhere in the raw body (audit D15), so a
+    client that sent `/web` a bare string, or JSON without `url`, still got the
+    item back. `/web` takes a JSON object with a string `url`, as
+    `fetch_web_translations` sends; `/search` takes a text/plain query."""
+    import urllib.error
+    import urllib.request
+
+    item = translation_item(title="A Stub Paper")
+    wrong = (
+        ("/web", b"10.1/x", "text/plain"),
+        ("/web", b'{"query": "10.1/x"}', "application/json"),
+        ("/web", b'["10.1/x"]', "application/json"),
+        ("/search", b'{"query": "10.1/x"}', "application/json"),
+    )
+    with stub_translation_server({"10.1/x": item}) as server_url:
+        for path, body, content_type in wrong:
+            req = urllib.request.Request(
+                f"{server_url}{path}", data=body, method="POST",
+                headers={"Content-Type": content_type},
+            )
+            try:
+                urllib.request.urlopen(req)
+            except urllib.error.HTTPError as exc:
+                assert exc.code == 400, (path, body)
+            else:
+                raise AssertionError(f"expected 400 for {path} {body!r}")
 
 
 def test_stub_translation_server_get_only_answers_the_health_probe_root() -> None:

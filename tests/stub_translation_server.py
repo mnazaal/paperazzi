@@ -80,8 +80,17 @@ def _handler_class(resolvable: Mapping[str, dict]) -> type[BaseHTTPRequestHandle
                 self.end_headers()
                 self.wfile.write(payload)
                 return
+            subject = self._subject(body)
+            if subject is None:
+                payload = b"malformed request body\n"
+                self.send_response(400)
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
             for needle, item in resolvable.items():
-                if needle in body:
+                if needle in subject:
                     payload = json.dumps([item]).encode()
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
@@ -94,6 +103,28 @@ def _handler_class(resolvable: Mapping[str, dict]) -> type[BaseHTTPRequestHandle
             self.send_header("Content-Length", "14")
             self.end_headers()
             self.wfile.write(b"no translator\n")
+
+        def _subject(self, body: str) -> str | None:
+            """The field the real client puts the identifier in, or None.
+
+            Matching the needle anywhere in the raw body (audit D15) meant a
+            client sending `/web` a bare string, or JSON without `url`, still
+            got its item back. The shapes are `fetch_web_translations`' and
+            `fetch_search_translations`': a JSON object with a string `url` for
+            `/web`, a text/plain query for `/search`.
+            """
+            content_type = (self.headers.get("Content-Type") or "").split(";")[0]
+            if self.path == "/search":
+                return body if content_type == "text/plain" else None
+            if content_type != "application/json":
+                return None
+            try:
+                parsed = json.loads(body)
+            except ValueError:
+                return None
+            if not isinstance(parsed, dict) or not isinstance(parsed.get("url"), str):
+                return None
+            return parsed["url"]
 
         def log_message(self, *_args: object) -> None:
             """Silence the default stderr access log."""
@@ -130,9 +161,10 @@ def translation_item(
 def stub_translation_server(resolvable: Mapping[str, dict]) -> Iterator[str]:
     """Serve *resolvable* on loopback, yielding the base URL.
 
-    Any request body containing one of the keys gets the matching item; every
-    other request gets a 500, so a batch mixing known and unknown inputs
-    produces a mix of successes and failures.
+    A well-formed request whose identifier (the `/web` JSON `url`, or the
+    `/search` text body) contains one of the keys gets the matching item; a
+    malformed body gets a 400, and every other request gets a 500, so a batch
+    mixing known and unknown inputs produces a mix of successes and failures.
     """
     server = HTTPServer(("127.0.0.1", 0), _handler_class(resolvable))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
