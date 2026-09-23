@@ -27,6 +27,7 @@ pzi delete
     --force dest=force nargs=0
     --json dest=json nargs=0
     --keep-pdf dest=keep_pdf nargs=0
+    --no-backup dest=no_backup nargs=0
     --target dest=target
     <citekey> dest=citekey nargs='+' required
 
@@ -113,6 +114,7 @@ pzi library merge
     --dry-run dest=dry_run nargs=0
     --json dest=json nargs=0
     --keep-pdf dest=keep_pdf nargs=0
+    --no-backup dest=no_backup nargs=0
     --target dest=target
     <citekey_a> dest=citekey_a required
     <citekey_b> dest=citekey_b required
