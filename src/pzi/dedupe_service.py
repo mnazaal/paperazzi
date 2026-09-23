@@ -232,6 +232,7 @@ def merge_duplicates(
     citekey_b: str,
     dry_run: bool = True,
     file_path_style: str = DEFAULT_PDF_FILE_PATH_STYLE,
+    backup: bool = True,
 ) -> MergeResult:
     """Merge two entries in a BibTeX library by citekey.
 
@@ -337,7 +338,10 @@ def merge_duplicates(
         citekey_a=citekey_a,
         citekey_b=citekey_b,
         file_path_style=file_path_style,
-        backup_label=citekey_a,
+        # `backup=False` is for scripted batches: 69 merges against a 17.6 MiB
+        # library left 69 full copies (item 624). `None` is the repository's
+        # own "no copy" — naming and remove-on-failure are untouched.
+        backup_label=citekey_a if backup else None,
     )
     backup_path = merge_result.get("backup_path")
     if not merge_result["found"]:
@@ -371,8 +375,12 @@ def merge_duplicates(
             "dropped_fields", applied_summary["conflicting_fields"]
         ),
         "overwritten_fields": applied_summary["overwritten_fields"],
-        "backup_path": str(backup_path),
     }
+    # Set rather than stringified unconditionally, as `delete_entry` does: the
+    # key is NotRequired, and with `backup=False` there is no copy — `"None"`
+    # is not a path.
+    if backup_path is not None:
+        applied["backup_path"] = str(backup_path)
     if orphaned_pdf:
         applied["orphaned_pdf"] = orphaned_pdf
     return applied

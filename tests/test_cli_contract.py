@@ -618,6 +618,22 @@ def test_delete_removes_the_entry_and_leaves_a_backup(tmp_path: Path) -> None:
     assert backups[0].read_text(encoding="utf-8") == _TWO_ENTRIES
 
 
+def test_delete_with_no_backup_leaves_no_bak(tmp_path: Path) -> None:
+    """A scripted batch of deletes left one full copy of the library per call
+    (item 624). `--no-backup` skips the copy; the delete itself is unchanged."""
+    config_path, bib = _library(tmp_path, _TWO_ENTRIES)
+
+    code, _stdout, stderr = _run(
+        ["delete", "drop2020", "--force", "--no-backup", "--config", str(config_path)],
+        tmp_path,
+    )
+
+    assert code == exit_codes.OK
+    assert "drop2020" not in bib.read_text(encoding="utf-8")
+    assert "backup saved to" not in stderr
+    assert not list(tmp_path.glob("*.bak*"))
+
+
 def test_delete_without_force_refuses_when_stdin_is_not_a_terminal(tmp_path: Path) -> None:
     config_path, bib = _library(tmp_path, _TWO_ENTRIES)
 
@@ -663,6 +679,29 @@ def test_library_merge_folds_one_entry_into_the_other(tmp_path: Path) -> None:
     assert "pages = {1--10}" in written
     assert "merged" in stdout
     assert list(tmp_path.glob("*.bak"))
+
+
+def test_library_merge_with_no_backup_leaves_no_bak(tmp_path: Path) -> None:
+    """69 scripted merges left 69 full copies of a 17.6 MiB library (item 624)."""
+    config_path, bib = _library(
+        tmp_path,
+        "@article{a2020,\n  title = {Same Paper},\n  year = {2020},\n"
+        "  doi = {10.1000/same},\n}\n\n"
+        "@article{b2020,\n  title = {Same Paper},\n  year = {2020},\n"
+        "  doi = {10.1000/same},\n}\n",
+    )
+
+    code, stdout, _stderr = _run(
+        ["library", "merge", "a2020", "b2020", "--no-backup", "--json",
+         "--config", str(config_path)],
+        tmp_path,
+    )
+
+    assert code == exit_codes.OK
+    assert "@article{a2020" not in bib.read_text(encoding="utf-8")
+    assert not list(tmp_path.glob("*.bak*"))
+    # Absent, not the string "None" — `"None"` is not a path.
+    assert '"None"' not in stdout
 
 
 def test_library_merge_dry_run_writes_nothing(tmp_path: Path) -> None:

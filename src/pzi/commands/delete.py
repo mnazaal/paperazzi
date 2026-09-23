@@ -74,6 +74,7 @@ def run_delete_command(args, *, home_dir, config_path, stdout, stderr, bib_selec
             bib_path=target["path"],
             citekey=citekey,
             dry_run=args.dry_run,
+            backup=not getattr(args, "no_backup", False),
         ))
         if result["status"] == "ok":
             # The bib write is the commit point; the PDF moves after it. A move

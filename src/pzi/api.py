@@ -916,6 +916,7 @@ def delete(
     *,
     dry_run: bool = True,
     keep_pdf: bool = False,
+    backup: bool = True,
     config_path: str | None = None,
     library: str | None = None,
 ) -> DeleteEntryReport:
@@ -926,7 +927,9 @@ def delete(
     ``backup_path``. The entry's PDF is moved to ``papers_dir/.orphans/`` and
     the move reported as ``pdf_action``; pass ``keep_pdf=True`` to leave it
     where it is. It is never unlinked, so ``backup_path`` and the quarantined
-    file together undo the call.
+    file together undo the call. ``backup=False`` skips the copy, for scripted
+    batches against a library already under version control; ``backup_path``
+    is then absent.
 
     Previewing is the odd one out among the writers here, and deliberately so.
     The general rule is that a function naming exactly what it touches acts —
@@ -941,6 +944,7 @@ def delete(
         bib_path=target["path"],
         citekey=citekey,
         dry_run=dry_run,
+        backup=backup,
     ).copy()
     _unwrap(typed, "status")
     pdf_action = plan_pdf_disposal(
@@ -1013,6 +1017,7 @@ def merge(
     *,
     dry_run: bool = True,
     keep_pdf: bool = False,
+    backup: bool = True,
     config_path: str | None = None,
     library: str | None = None,
 ) -> MergeReport:
@@ -1027,6 +1032,9 @@ def merge(
     dropped entry (``overwritten_fields``), and the PDF left orphaned if the
     survivor keeps its own (``orphaned_pdf``). The CLI writes because you typed
     the command; the same split as :func:`promote`.
+
+    ``backup=False`` skips the ``.bak`` copy, as ``--no-backup`` does: for a
+    scripted batch of merges against a library already under version control.
     """
     config, bib = _bib_target(config_path, library)
     typed = merge_duplicates(
@@ -1038,6 +1046,7 @@ def merge(
         # `absolute` here would rewrite a relative-path library's `file =`
         # fields to absolute ones on an unrelated merge.
         file_path_style=config.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE),
+        backup=backup,
     ).copy()
     _unwrap(typed, "status")
     pdf_action = plan_pdf_disposal(

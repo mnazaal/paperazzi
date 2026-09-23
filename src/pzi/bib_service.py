@@ -499,6 +499,7 @@ def delete_entry(
     bib_path: str,
     citekey: str,
     dry_run: bool = False,
+    backup: bool = True,
 ) -> DeleteEntryResult:
     """Delete a BibTeX entry by citekey, creating a backup first.
 
@@ -547,7 +548,9 @@ def delete_entry(
     # here left a second window: the name is picked by probing for one that does
     # not exist, so two deletes probing at once both chose `.bak` and the second
     # copy overwrote the first.
-    delete_result = delete_bib_entry(bib_path, citekey, backup_label=citekey)
+    delete_result = delete_bib_entry(
+        bib_path, citekey, backup_label=citekey if backup else None
+    )
     backup_path = delete_result.get("backup_path")
     if not delete_result["found"]:
         return {

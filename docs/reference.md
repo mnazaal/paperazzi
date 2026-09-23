@@ -109,7 +109,7 @@ the command that made it.
 
 | Backup | Left by | Notes |
 |---|---|---|
-| `<bib>.<citekey>.bak` | `pzi delete`, `pzi library merge` | The path is printed as `backup saved to …`. Repeats become `.bak2`, `.bak3`, … rather than overwriting. |
+| `<bib>.<citekey>.bak` | `pzi delete`, `pzi library merge` | The path is printed as `backup saved to …`. Repeats become `.bak2`, `.bak3`, … rather than overwriting. `--no-backup` skips the copy — for scripted batches against a library already under version control, where one full copy per call is pure cost. |
 | `<bib>.reindex.bak` | `pzi library reindex --rename-citekeys` | Removed again if the run changed nothing. |
 | `<bib>.promote.bak` | `pzi update --promote` | One per **run**, taken by the first write, not one per entry. |
 | `<data-home>/config-backups/config.toml.<UTC-timestamp>` | `pzi init --force` | Mode 0600, timestamped, so repeated `--force` runs keep a history instead of clobbering the first backup. |
@@ -202,11 +202,11 @@ pzi update --promote [--dry-run] [--keep-preprint] [--mark-resolved] [--limit N]
 pzi entries [--offset N] [--limit N] [--sort citekey|title|year|author]
 pzi entries <citekey>                         # show the full record for one entry
 pzi entries --stats                           # library statistics
-pzi delete <citekey>... [--dry-run] [--force] [--keep-pdf]   # PDFs go to papers/.orphans/
+pzi delete <citekey>... [--dry-run] [--force] [--keep-pdf] [--no-backup]   # PDFs go to papers/.orphans/
 pzi library list                              # the configured libraries and which is default
 pzi library clean [--dry-run] [--fix]         # check integrity; --fix relocates orphan PDFs
 pzi library dedupe
-pzi library merge <citekey_a> <citekey_b> [--dry-run] [--keep-pdf]
+pzi library merge <citekey_a> <citekey_b> [--dry-run] [--keep-pdf] [--no-backup]
 pzi library reindex [--rename-citekeys [--dry-run] [--force]]  # audit citekeys; rename only on explicit opt-in
 pzi library reindex --convert-file-paths [--dry-run]           # rewrite file= paths to pdf_file_path_style
 pzi export [--format bibtex|csv|json|ris] [-o <output>] [--force]

@@ -689,6 +689,14 @@ def build_parser() -> argparse.ArgumentParser:
     delete_parser.add_argument("--dry-run", action="store_true", help="preview without deleting")
     delete_parser.add_argument("--force", action="store_true", help="skip confirmation prompt")
     delete_parser.add_argument(
+        "--no-backup",
+        action="store_true",
+        help=(
+            "skip the .bak copy of the library; for scripted batches against a "
+            "library already under version control"
+        ),
+    )
+    delete_parser.add_argument(
         "--keep-pdf",
         action="store_true",
         help="leave the entry's PDF in place (default: move it to papers/.orphans/)",
@@ -873,6 +881,14 @@ def build_parser() -> argparse.ArgumentParser:
     add_config(merge_parser)
     add_single_target(merge_parser)
     merge_parser.add_argument("--dry-run", action="store_true", help="preview without merging")
+    merge_parser.add_argument(
+        "--no-backup",
+        action="store_true",
+        help=(
+            "skip the .bak copy of the library; for scripted batches against a "
+            "library already under version control"
+        ),
+    )
     merge_parser.add_argument(
         "--keep-pdf",
         action="store_true",
