@@ -18,7 +18,9 @@ def _result(*, exact: int = 0, fuzzy: int = 0) -> dict[str, Any]:
         "bib_path": "/tmp/lib.bib",
         "total_entries": 2,
         "exact_duplicates": [{"citekeys": ["a", "b"]}] * exact,
-        "fuzzy_candidates": [{"citekey": "a", "hint": "b"}] * fuzzy,
+        "fuzzy_candidates": [
+            {"citekey": "a", "hint": "b", "title_similarity": 0.9, "shared_authors": 1}
+        ] * fuzzy,
         "total_clusters": exact,
         "errors": [],
     }

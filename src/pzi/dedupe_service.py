@@ -16,7 +16,7 @@ from pzi.bibtex import NormalizedRecord
 from pzi.config import DEFAULT_PDF_FILE_PATH_STYLE
 from pzi.errors import REASON_NOT_FOUND, REASON_USAGE
 from pzi.similarity import (
-    best_fuzzy_matches,
+    best_fuzzy_match_details,
     build_identity_index,
 )
 
@@ -25,8 +25,9 @@ class DedupeResult(TypedDict):
     """Duplicate report — what `pzi.dedupe()` returns.
 
     `exact_duplicates` are clusters that share an identity (a DOI, or matching
-    title/author/year); `fuzzy_candidates` are maybes worth a human look.
-    `pzi.merge()` is what acts on a pair.
+    title/author/year); `fuzzy_candidates` are maybes worth a human look, most
+    similar first, each with its `title_similarity` (token Jaccard, 0-1) and
+    `shared_authors`. `pzi.merge()` is what acts on a pair.
     """
 
     status: str
@@ -151,7 +152,7 @@ def find_duplicates(
     # answers are unchanged (see `best_fuzzy_matches`).
     fuzzy_candidates: list[dict[str, Any]] = []
     seen_pairs: set[frozenset[str]] = set()
-    hints = best_fuzzy_matches(
+    hints = best_fuzzy_match_details(
         records,  # type: ignore[arg-type]
         positions=(i for i in range(len(records)) if i not in seen_positions),
         title_threshold=title_threshold,
@@ -159,7 +160,8 @@ def find_duplicates(
     )
     for i in sorted(hints):
         citekey = records[i].get("citekey", "")
-        hint = hints[i]
+        match = hints[i]
+        hint = match.citekey
         if hint == citekey:
             continue
         # Both members of a pair point at each other; report the pair once.
@@ -170,7 +172,14 @@ def find_duplicates(
         fuzzy_candidates.append({
             "citekey": citekey,
             "hint": hint,
+            "title_similarity": round(match.title_similarity, 2),
+            "shared_authors": match.shared_authors,
         })
+    # Most similar first. In file order the few real duplicates sat anywhere in
+    # a list mostly made of distinct papers sharing title tokens (item 611).
+    fuzzy_candidates.sort(
+        key=lambda c: (-c["title_similarity"], -c["shared_authors"], c["citekey"])
+    )
 
     return {
         "status": "ok",

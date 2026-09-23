@@ -307,3 +307,42 @@ def test_the_applied_report_describes_the_locked_merge_not_the_preview(
     assert "volume" in result["carried_fields"], (
         "the report describes the pre-lock read, not the merge that ran"
     )
+
+
+# === triageable report (item 611) ===
+
+
+def test_a_fuzzy_candidate_carries_what_it_matched_on() -> None:
+    """The fuzzy pass computed a title similarity and an author overlap and
+    threw both away, so 260 unranked nominations on a 23k-entry library could
+    not be triaged without opening every pair (item 611)."""
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "fuzzy.bib")
+        _write_bib(bib, _FUZZY_PAIR)
+
+        candidate = find_duplicates(bib_path=bib)["fuzzy_candidates"][0]
+
+        assert 0.6 <= candidate["title_similarity"] < 1.0
+        assert candidate["shared_authors"] == 2
+
+
+def test_fuzzy_candidates_come_most_similar_first() -> None:
+    weak = (
+        '@article{lee2020lora, title={Low Rank Adaptation of Large Language'
+        ' Models for Code}, author={Lee, Ann}, year={2020}}\n'
+        '@article{kim2021lora, title={Low Rank Adaptation of Large Language'
+        ' Models for Speech Recognition}, author={Lee, Ann}, year={2021}}\n'
+    )
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "ranked.bib")
+        # The weaker pair first in the file, so file order would be wrong.
+        _write_bib(bib, weak + _FUZZY_PAIR)
+
+        candidates = find_duplicates(bib_path=bib)["fuzzy_candidates"]
+
+        similarities = [c["title_similarity"] for c in candidates]
+        assert len(similarities) == 2
+        assert similarities == sorted(similarities, reverse=True)
+        assert {candidates[0]["citekey"], candidates[0]["hint"]} == {
+            "smith2024graph", "smith2024graphnets",
+        }

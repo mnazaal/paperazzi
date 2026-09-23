@@ -271,7 +271,12 @@ def render_dedupe_result(result: Mapping[str, Any]) -> list[str]:
     if fuzzy:
         lines.append(f"fuzzy near-duplicates: {len(fuzzy)}")
         for cand in fuzzy:
-            lines.append(f"  {cand['citekey']} → similar to {cand['hint']}")
+            lines.append(
+                f"  {cand['citekey']} → similar to {cand['hint']}"
+                f" (title {cand['title_similarity']:.2f},"
+                f" {cand['shared_authors']} shared"
+                f" author{'' if cand['shared_authors'] == 1 else 's'})"
+            )
     return lines
 
 

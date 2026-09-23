@@ -537,6 +537,15 @@ def _prepare(records: Sequence[SimilarityCandidate]) -> list[_Prepared]:
     ]
 
 
+class FuzzyMatch(NamedTuple):
+    """A fuzzy pass winner, with what it won on — `score` alone is not readable:
+    it adds a 0-1 title Jaccard to a tenth of an author count."""
+
+    citekey: str
+    title_similarity: float
+    shared_authors: int
+
+
 def best_fuzzy_matches(
     records: Sequence[SimilarityCandidate],
     *,
@@ -544,6 +553,25 @@ def best_fuzzy_matches(
     title_threshold: float = 0.6,
     year_window: int = 2,
 ) -> dict[int, str]:
+    """The best fuzzy match's citekey for each position; see :func:`best_fuzzy_match_details`."""
+    return {
+        position: match.citekey
+        for position, match in best_fuzzy_match_details(
+            records,
+            positions=positions,
+            title_threshold=title_threshold,
+            year_window=year_window,
+        ).items()
+    }
+
+
+def best_fuzzy_match_details(
+    records: Sequence[SimilarityCandidate],
+    *,
+    positions: Iterable[int],
+    title_threshold: float = 0.6,
+    year_window: int = 2,
+) -> dict[int, FuzzyMatch]:
     """The best fuzzy match for each position in *positions*, over every other record.
 
     Same answers as calling :func:`compute_similarity_hint` once per position
@@ -571,7 +599,7 @@ def best_fuzzy_matches(
         for token in item.tokens:
             by_token.setdefault(token, []).append(position)
 
-    matches: dict[int, str] = {}
+    matches: dict[int, FuzzyMatch] = {}
     for position in positions:
         query = prepared[position]
         if not query.tokens:
@@ -582,7 +610,7 @@ def best_fuzzy_matches(
                 if candidate != position:
                     shared[candidate] = shared.get(candidate, 0) + 1
 
-        best_key: str | None = None
+        best: FuzzyMatch | None = None
         best_score = 0.0
         query_size = len(query.tokens)
         # Ascending, so "first to reach the highest score" means the same record
@@ -606,9 +634,9 @@ def best_fuzzy_matches(
             if overlap == 0 and similarity < 0.85:
                 continue
             score = similarity + 0.1 * overlap
-            if score > best_score:
+            if score > best_score and other.citekey is not None:
                 best_score = score
-                best_key = other.citekey
-        if best_key is not None:
-            matches[position] = best_key
+                best = FuzzyMatch(other.citekey, similarity, overlap)
+        if best is not None:
+            matches[position] = best
     return matches
