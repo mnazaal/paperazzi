@@ -68,7 +68,11 @@ def test_requested_pdf_match_tokens_include_citekey_basename_and_doi_tail() -> N
     }
 
 
-def test_candidate_matches_requested_pdf_name_by_strong_tokens_or_domain() -> None:
+def test_candidate_matches_requested_pdf_name_by_strong_tokens_only() -> None:
+    """A filename equal to a hostname part (`nature.pdf` for nature.com) used to
+    match, so any file of that name saved during the watch was attached to the
+    entry (audit D13). Only the citekey, the URL basename and the DOI tail
+    identify a download; a miss is reported, a wrong attach is not."""
     assert candidate_matches_requested_pdf_name(
         filename="Smith2024Deep.pdf",
         url="https://example.org/files/other.pdf",
@@ -78,7 +82,7 @@ def test_candidate_matches_requested_pdf_name_by_strong_tokens_or_domain() -> No
         filename="example.pdf",
         url="https://example.org/files/other.pdf",
         citekey="smith2024deep",
-    ) is True
+    ) is False
     assert candidate_matches_requested_pdf_name(
         filename="unrelated.pdf",
         url="https://example.org/files/other.pdf",

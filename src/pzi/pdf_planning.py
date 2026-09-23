@@ -123,9 +123,10 @@ def candidate_matches_requested_pdf_name(
     """Return True when browser-downloaded filename correlates with request."""
     haystack = filename_match_text(filename)
     tokens = requested_pdf_match_tokens(url=url, citekey=citekey, record=record)
-    if any(token in haystack for token in tokens):
-        return True
-    return haystack in requested_pdf_domain_tokens(url)
+    # No hostname fallback. `nature.pdf` matching nature.com attached any file
+    # of that name saved during the watch (audit D13); a missed download is
+    # reported by the caller, a wrong attach is not.
+    return any(token in haystack for token in tokens)
 
 
 def requested_pdf_match_tokens(
@@ -149,20 +150,6 @@ def requested_pdf_match_tokens(
     return tokens
 
 
-def requested_pdf_domain_tokens(url: str) -> set[str]:
-    """Return weak hostname tokens; only exact filename matches may use these."""
-    tokens: set[str] = set()
-    try:
-        hostname = (urlsplit(url).hostname or "").lower()
-        for part in hostname.split("."):
-            part = part.strip()
-            if part and part not in _GENERIC_HOSTNAME_PARTS and len(part) >= 5:
-                tokens.add(part)
-    except ValueError:
-        pass
-    return tokens
-
-
 def url_basename(url: str) -> str:
     """Return path basename from URL, or empty string when URL is invalid."""
     try:
@@ -178,22 +165,6 @@ def filename_match_text(value: str) -> str:
     if text.endswith(".pdf"):
         text = text[:-4]
     return "".join(ch for ch in text if ch.isalnum())
-
-
-_GENERIC_HOSTNAME_PARTS = {
-    "www",
-    "com",
-    "org",
-    "net",
-    "edu",
-    "gov",
-    "io",
-    "co",
-    "uk",
-    "de",
-    "fr",
-    "jp",
-}
 
 
 # ---------------------------------------------------------------------------
