@@ -152,14 +152,22 @@ def test_the_mirror_reads_are_capped() -> None:
     """Both were a bare `resp.read()`, so a mirror could stream until OOM."""
     import pytest
 
-    from pzi.node_runtime import _read_capped
+    from pzi import node_runtime
+    from pzi.fetch_helpers import read_limited
 
     class _Endless:
+        headers: dict[str, str] = {}
+
         def read(self, n: int) -> bytes:
             return b"x" * n
 
-    with pytest.raises(RuntimeError, match="oversized"):
-        _read_capped(_Endless(), 1024, "https://nodejs.org/dist/index.json")
+    # Every mirror read goes through the shared capped reader, each with a cap.
+    source = Path(node_runtime.__file__).read_text(encoding="utf-8")
+    code = [ln.split("#", 1)[0] for ln in source.splitlines()]
+    assert not any(".read()" in ln for ln in code)
+    assert source.count("read_limited(resp, max_bytes=_MAX_") == 3
+    with pytest.raises(ValueError):
+        read_limited(_Endless(), max_bytes=1024)
 
 
 def test_npm_uses_ci_when_a_lockfile_is_present(tmp_path: Path) -> None:
