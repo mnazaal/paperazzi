@@ -520,6 +520,11 @@ def check_bib(
     counts = {"verified": 0, "could_not_verify": 0, "problematic": 0}
     items: list[CheckItem] = []
     breaker = ProviderBreaker()
+    # Citekeys this run itself verified — kept separately from `ledger_state`
+    # (which stays the run-start snapshot used for the skip-if-fresh filter
+    # above) so the save below can merge them onto a freshly reread state
+    # rather than persisting a snapshot that predates a concurrent run's save.
+    newly_verified: list[str] = []
     for index, record in enumerate(records):
         item = _verify_entry(
             record, providers, strict=strict, now_year=effective_year, breaker=breaker
@@ -527,19 +532,30 @@ def check_bib(
         counts[item["verdict"]] += 1
         items.append(item)
         if item["verdict"] == "verified" and ledger.is_enabled(recheck_after_days):
-            ledger_state = ledger.record_checked(
-                ledger_state, bib_name, str(record.get("citekey")), now=effective_now
-            )
+            newly_verified.append(str(record.get("citekey")))
         if on_item is not None:
             on_item(item, index, total_planned)
 
     if ledger.is_enabled(recheck_after_days):
-        # Saved even when the run was interrupted upstream or every provider was
-        # down: what is in `ledger_state` is what was actually verified, and
-        # discarding it would make a Ctrl-C'd four-hour sweep count for nothing.
+        # Re-read right before writing rather than reusing `ledger_state` as
+        # loaded at the top of the run: a `check` sweep is floored at 0.6s per
+        # entry, so a 22k-library run spans hours — long enough for a second
+        # `check` (or a `promote` sharing this ledger's horizon) to save its
+        # own verdicts to this same file first. Saving this run's stale
+        # snapshot as the new state would silently drop that run's verdicts;
+        # re-reading and merging this run's onto the fresh state keeps both.
+        # Saved even when this run verified nothing new (every provider was
+        # down, or the run was interrupted before any item completed):
+        # pruning expired entries is itself useful, and what this run did
+        # verify must not be lost to a stale save either way.
+        fresh_state = ledger.load(ledger_file)
+        for citekey in newly_verified:
+            fresh_state = ledger.record_checked(
+                fresh_state, bib_name, citekey, now=effective_now
+            )
         ledger.save(
             ledger_file,
-            ledger.prune(ledger_state, now=effective_now, horizon_days=recheck_after_days),
+            ledger.prune(fresh_state, now=effective_now, horizon_days=recheck_after_days),
         )
 
     # Summarize per-source failures once for the run rather than repeating the

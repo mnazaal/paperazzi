@@ -620,6 +620,14 @@ def promote_bib(
     # as true for a preview, while the sidecar is not the library, so a dry run
     # stays read-only against the `.bib`. Pruning here is what bounds the file.
     if recheck_after_days > 0 and checked_negative:
+        # Re-read right before writing rather than reusing `ledger_state` as
+        # loaded at the top of the run: promote's own network phase runs for
+        # tens of minutes to hours over the whole library, long enough for a
+        # concurrent `check`/`promote` run on the same ledger file to save its
+        # own negatives in between. Saving this run's stale snapshot as the new
+        # state would silently drop that run's entries; re-reading and merging
+        # this run's negatives onto the fresh state keeps both.
+        ledger_state = ledger.load(ledger_file)
         for citekey in checked_negative:
             ledger_state = ledger.record_checked(
                 ledger_state, bib["name"], citekey, now=ledger_now

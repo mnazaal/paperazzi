@@ -1,3 +1,4 @@
+from pzi import ledger
 from pzi.add_service import add_record_with_bib
 from pzi.check_service import check_bib
 from pzi.config import BibResolutionFailure, load_bib_target
@@ -852,3 +853,51 @@ def test_check_never_writes_the_library(tmp_path, monkeypatch):
     _ledger_run(tmp_path, config_path, crossref=_confirms, days=30)
 
     assert bib_path.read_bytes() == before
+
+
+def test_a_concurrent_saves_negatives_survive_this_runs_save(tmp_path, monkeypatch):
+    """A `check` sweep is floored at 0.6s/entry, so a real run spans hours — long
+    enough for a second run sharing this ledger to save its own verdict in
+    between this run's load (at start) and save (at end). Reusing the
+    run-start snapshot as the new state would silently discard that other
+    run's verdict; this run must re-read immediately before saving and merge
+    its own verdict onto that fresh state instead.
+    """
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    config_path = _setup(
+        tmp_path, citekey="a", title="Alpha Paper", authors=["Smith, A"], year=2020,
+    )
+
+    resolved = load_bib_target(config_path=str(config_path), home_dir=str(tmp_path), bib_selector=None)
+    assert not isinstance(resolved, BibResolutionFailure)
+    config, _bib = resolved
+    ledger_file = ledger.ledger_path(config["pzi_data_home"], ledger.CHECK_FILENAME)
+
+    def _inject_concurrent_save(_item, _index, _total):
+        # Stands in for a second `check` run finishing its own save while this
+        # run is still mid-sweep: it reads-modifies-writes the ledger file
+        # directly, independent of this run's already-loaded `ledger_state`.
+        concurrent_state = ledger.load(ledger_file)
+        concurrent_state = ledger.record_checked(
+            concurrent_state, "ml", "concurrent-entry", now=ledger.utc_now()
+        )
+        ledger.save(ledger_file, concurrent_state)
+
+    check_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        recheck_after_days=30,
+        fetch_crossref=_confirms,
+        fetch_openalex=_no_source,
+        fetch_dblp=_no_source,
+        fetch_openreview=_no_source,
+        fetch_s2=_no_source,
+        on_item=_inject_concurrent_save,
+    )
+
+    final_state = ledger.load(ledger_file)
+    entries = final_state["bibs"]["ml"]
+    # Both this run's own verdict and the concurrently-saved one survive.
+    assert "a" in entries
+    assert "concurrent-entry" in entries

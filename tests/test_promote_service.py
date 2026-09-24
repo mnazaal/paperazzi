@@ -2560,6 +2560,35 @@ def test_a_corrupt_ledger_does_not_fail_the_run(tmp_path):
     assert ledger.load(ledger_file)["bibs"]["ml"]
 
 
+def test_a_concurrent_saves_negatives_survive_this_runs_save(tmp_path):
+    """Promote's network phase runs for tens of minutes to hours over a whole
+    library, long enough for a second `promote`/`check` run sharing this
+    ledger to save its own negative in between this run's load (at start) and
+    save (at end). Reusing the run-start `ledger_state` as the new state would
+    silently discard that other run's entry; this run must re-read
+    immediately before saving and merge its own negative onto that fresh
+    state instead.
+    """
+    config_path, ledger_file = _ledger_setup(tmp_path)
+
+    def _inject_concurrent_save(_item, _index, _total):
+        # Stands in for a second run finishing its own save while this run is
+        # still mid-sweep: it reads-modifies-writes the ledger file directly,
+        # independent of this run's already-loaded `ledger_state`.
+        concurrent_state = ledger.load(ledger_file)
+        concurrent_state = ledger.record_checked(
+            concurrent_state, "ml", "concurrent-entry", now=ledger.utc_now()
+        )
+        ledger.save(ledger_file, concurrent_state)
+
+    _promote(config_path, tmp_path, on_item=_inject_concurrent_save, **_NOTHING_FOUND)
+
+    entries = ledger.load(ledger_file)["bibs"]["ml"]
+    # Both this run's own negative and the concurrently-saved one survive.
+    assert "smith2024graph" in entries
+    assert "concurrent-entry" in entries
+
+
 # --- Chunked writes (item 570) --------------------------------------------
 
 def _seed_many_preprints(tmp_path, bib_path, config_path, count):
