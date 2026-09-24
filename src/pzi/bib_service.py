@@ -9,11 +9,8 @@ from pzi.bib_repository import (
     delete_bib_entry,
     describe_missing_bib,
     find_entry_index,
-    parse_bib_library,
     read_bib_file_raw,
     read_bib_file_with_failures,
-    read_bib_source,
-    validate_library_parseable,
     with_bib_lock,
 )
 from pzi.config import BibResolutionFailure, load_bib_target, load_config_file
@@ -506,9 +503,13 @@ def delete_entry(
     Preserves comments, ``@string`` macros, ``@preamble`` blocks, and every
     other entry's source via :func:`delete_bib_entry` (block-level removal).
     """
+    # The dry-run preview and not-found message only need the cached lenient
+    # read. A full uncached `parse_bib_library` + `validate_library_parseable`
+    # used to run here too, but `delete_bib_entry` below repeats exactly that
+    # parse and validation under its own exclusive lock before it writes — so
+    # this was a second full parse of a 23k-entry library for every delete,
+    # including dry runs that never reach `delete_bib_entry` at all.
     with with_bib_lock(bib_path, shared=True):
-        source = read_bib_source(bib_path)
-        validate_library_parseable(parse_bib_library(source))
         read_result = read_bib_file_raw(bib_path)
     entries = read_result["entries"]
     records = read_result["records"]

@@ -202,6 +202,39 @@ def test_delete_entry_creates_backup_before_removing_entry(tmp_path: Path, write
     assert "delete2024" not in updated_text
 
 
+def test_delete_entry_dry_run_does_not_reparse_the_whole_library(
+    tmp_path: Path, write_app_config, monkeypatch
+) -> None:
+    """`delete_entry` used to run an uncached `parse_bib_library` +
+    `validate_library_parseable` under a shared lock before even checking
+    `dry_run` — a second full parse of the whole file on top of the cached
+    `read_bib_file_raw` read, paid by every dry run even though dry runs never
+    reach `delete_bib_entry` (which does its own parse+validate under its
+    exclusive lock before writing)."""
+    import pzi.bib_service as bib_service
+
+    write_app_config(tmp_path)
+    bib_path = Path(os.path.join(str(tmp_path), "ml.bib"))
+    bib_path.write_text(
+        "@article{keep2024,\n  title = {Keep Me},\n  year = {2024}\n}\n"
+    )
+
+    def _boom(_source: str):
+        raise AssertionError("parse_bib_library must not run on the dry-run path")
+
+    # `delete_entry` no longer imports `parse_bib_library` at all; setting it
+    # here (raising=False, since the name is absent) is what would catch a
+    # regression that reintroduces the pre-lock `from pzi.bib_repository import
+    # parse_bib_library` + call — `from X import Y` binds a bare name in this
+    # module's globals, which a call inside `delete_entry` resolves through.
+    monkeypatch.setattr(bib_service, "parse_bib_library", _boom, raising=False)
+
+    result = delete_entry(bib_path=str(bib_path), citekey="keep2024", dry_run=True)
+
+    assert result["status"] == "ok"
+    assert result["dry_run"] is True
+
+
 def test_a_titleless_entry_does_not_render_the_string_none(
     tmp_path: Path, write_app_config
 ) -> None:
