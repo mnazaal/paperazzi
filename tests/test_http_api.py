@@ -2,6 +2,7 @@ import http.client
 import json
 import socket
 import threading
+import time
 import urllib.error
 import urllib.request
 from http.server import HTTPServer
@@ -113,6 +114,153 @@ def test_handler_class_sets_per_connection_read_timeout(tmp_path: Path) -> None:
     handler = build_handler_class(config_path=str(tmp_path / "c.toml"), home_dir=str(tmp_path))
     assert handler.timeout == CONNECTION_READ_TIMEOUT_SECONDS
     assert CONNECTION_READ_TIMEOUT_SECONDS > 0
+
+
+def test_read_body_with_deadline_gives_up_on_the_clock_not_the_byte_count(
+    monkeypatch,
+) -> None:
+    """The behavioural regression `CONNECTION_READ_TIMEOUT_SECONDS` alone misses.
+
+    Each `recv()` gets its own fresh per-call timeout, so a client that sends
+    one byte just before it would expire resets that timer forever without
+    ever tripping `TimeoutError` -- it can hold a handler thread/socket open
+    indefinitely for a huge declared `Content-Length`. A fake `rfile` that
+    returns one byte per call, paired with a monotonic clock jumped past the
+    deadline after the first call, reproduces exactly that pacing without a
+    real sleep.
+
+    The fake implements `read1`, not `read`: `_read_body_with_deadline` calls
+    `rfile.read1()` specifically because the real `rfile` is a `BufferedReader`
+    whose `read(n)` blocks internally until it collects all `n` bytes (looping
+    over `recv()` as many times as that takes) rather than returning whatever
+    is currently available. A fake with a `read()` method would pass this test
+    without proving anything about the real slow-trickle case, since the real
+    bug is that the deadline check between chunks never runs while a single
+    `read()` call is still blocked accumulating one chunk.
+
+    `read_calls` staying at 1 (rather than looping toward the 64MB declared
+    length) is the "never allocates the declared length" guarantee: the loop
+    must give up because of the wall clock, not because it ran out of bytes to
+    request, and the size of that one call must itself be far below the
+    declared length.
+    """
+    import pzi.http_api as http_api
+
+    clock = {"now": 0.0}
+    monkeypatch.setattr(http_api.time, "monotonic", lambda: clock["now"])
+
+    read_calls: list[int] = []
+
+    class _OneByteAtATimeRfile:
+        def read1(self, n: int) -> bytes:
+            read_calls.append(n)
+            clock["now"] += 1_000.0  # jump well past the deadline after one call
+            return b"x"
+
+    class _FakeRequest:
+        rfile = _OneByteAtATimeRfile()
+
+    declared_length = 64 * 1024 * 1024
+    result = http_api._read_body_with_deadline(
+        _FakeRequest(), declared_length, deadline_seconds=120
+    )
+
+    assert result is None
+    assert read_calls == [65536], (
+        "expected one bounded chunk read then a clock-based bailout, "
+        f"got {read_calls!r}"
+    )
+    assert read_calls[0] < declared_length
+
+
+def test_read_body_with_deadline_returns_the_body_when_fast_enough() -> None:
+    """Companion to the timeout case above: a body that arrives before the
+    deadline is still returned whole."""
+    import pzi.http_api as http_api
+
+    class _WholeBodyRfile:
+        def __init__(self, data: bytes) -> None:
+            self._data = data
+
+        def read1(self, n: int) -> bytes:
+            chunk, self._data = self._data[:n], self._data[n:]
+            return chunk
+
+    class _FakeRequest:
+        def __init__(self, data: bytes) -> None:
+            self.rfile = _WholeBodyRfile(data)
+
+    body = b"hello world"
+    result = http_api._read_body_with_deadline(_FakeRequest(body), len(body))
+    assert result == body
+
+
+def test_post_slow_trickle_exceeding_body_deadline_answers_408(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """End-to-end version of the deadline, through a real server and socket.
+
+    Bytes are paced *inside* each recv's own timeout window (`handler.timeout`
+    is set well above the pacing interval below), so any 408 here cannot come
+    from the pre-existing per-recv `TimeoutError` path -- only the wall-clock
+    `BODY_READ_DEADLINE_SECONDS` this change adds can produce it. Both are
+    shrunk so the test finishes in well under a second.
+    """
+    import pzi.http_api as http_api
+
+    monkeypatch.setattr(http_api, "BODY_READ_DEADLINE_SECONDS", 0.3)
+    config_path, _ = _seed(tmp_path)
+    security = build_http_security_config()
+    handler = build_handler_class(
+        config_path=str(config_path), home_dir=str(tmp_path), security=security
+    )
+    handler.timeout = 5  # per-recv timeout: much larger than the pacing below
+
+    port = _free_port()
+    server = HTTPServer(("127.0.0.1", port), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    start = time.monotonic()
+    try:
+        sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+        try:
+            sock.sendall(
+                b"POST /capture HTTP/1.1\r\n"
+                b"Host: 127.0.0.1\r\n"
+                b"Content-Type: application/json\r\n"
+                b"Content-Length: 1000000\r\n"
+                b"\r\n"
+            )
+            for _ in range(6):
+                try:
+                    sock.sendall(b"x")
+                except (BrokenPipeError, ConnectionResetError):
+                    break
+                time.sleep(0.1)
+            chunks = []
+            while True:
+                chunk = sock.recv(65536)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+        finally:
+            sock.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+    elapsed = time.monotonic() - start
+
+    raw = b"".join(chunks)
+    assert raw.startswith(b"HTTP/1.0 408 "), raw[:120]
+    # The give-up must come from the 0.3s wall-clock deadline, not the 5s
+    # per-recv timeout: without this, the test would pass even if
+    # `_read_body_with_deadline` regressed to reading with `rfile.read()`
+    # instead of `rfile.read1()`, since a slow trickle inside `read()`'s
+    # internal accumulation loop only ever surfaces once the per-recv timeout
+    # (5s here) elapses with no further bytes -- a much later, and wrong,
+    # 408. 2s is generous slack over the 0.3s deadline while staying far
+    # short of the 5s per-recv timeout it must be distinguished from.
+    assert elapsed < 2.0, f"expected the 0.3s deadline to fire quickly, took {elapsed:.2f}s"
 
 
 def test_get_bibs_returns_bib_list(tmp_path: Path) -> None:

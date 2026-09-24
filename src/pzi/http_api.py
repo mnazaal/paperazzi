@@ -74,6 +74,24 @@ CONNECTION_READ_TIMEOUT_SECONDS = 30
 #: the `accept()` timeout in `run_server`) — they are unrelated despite matching.
 IDLE_POLL_SECONDS = 30
 
+# Wall-clock cap on reading one request's whole body, independent of
+# `CONNECTION_READ_TIMEOUT_SECONDS` above. That timeout bounds a single
+# `recv()` call, not the `rfile.read(length)` call as a whole: `read()` loops
+# over as many `recv()` calls as it takes to collect `length` bytes, and each
+# individual call gets its own fresh 30s allowance. A client that declares a
+# huge `Content-Length` and then sends one byte every ~29s never trips a
+# single `recv()` timeout, so it can hold a handler thread and socket open
+# indefinitely despite the per-connection timeout existing.
+# `_read_body_with_deadline` reads in bounded chunks and checks this
+# wall-clock deadline between chunks, so the *total* time spent reading a
+# body is capped regardless of how slowly the client paces its bytes.
+BODY_READ_DEADLINE_SECONDS = 120
+#: Chunk size for `_read_body_with_deadline`. Bounded so a huge declared
+#: `Content-Length` never causes a single `rfile.read()` call to try to
+#: allocate the whole declared length in one shot before the deadline can be
+#: checked again.
+_BODY_READ_CHUNK_BYTES = 65536
+
 
 def server_exposure_error(host: str, security: HttpSecurityConfig) -> str | None:
     """Return refusal reason for unsafe direct server exposure, if any.
@@ -547,6 +565,63 @@ def _handle_get(
     _respond(request, status, body, security)
 
 
+def _read_body_with_deadline(
+    request: BaseHTTPRequestHandler,
+    length: int,
+    deadline_seconds: float | None = None,
+) -> bytes | None:
+    """Read exactly `length` bytes from `request.rfile`, bounded by wall clock.
+
+    `rfile.read(length)` loops over `recv()` calls until it has `length`
+    bytes, and `CONNECTION_READ_TIMEOUT_SECONDS` only bounds each individual
+    `recv()` — a client pacing bytes just under that per-call timeout (one
+    byte every ~29s) never trips it and can hold the read open indefinitely.
+
+    This reads in bounded chunks (`_BODY_READ_CHUNK_BYTES`) and checks a
+    wall-clock deadline before each chunk. Critically, each chunk is read
+    with `read1()`, not `read()`: `rfile` is a `BufferedReader`, and its
+    `read(n)` blocks internally until it has collected *all* `n` bytes (or
+    hit EOF), looping over as many underlying `recv()` calls as that takes.
+    A slow-trickle client sending one byte every ~29s would then leave a
+    single `read(65536)` call blocked for `65536 * 29s`, since each
+    individual `recv()` inside it keeps succeeding well within the
+    per-connection timeout — the deadline check between chunk reads would
+    never run, because the code is stuck inside one `read()` call. `read1(n)`
+    instead returns after at most one underlying raw read, i.e. as soon as
+    whatever data is currently available arrives (still bounded by
+    `CONNECTION_READ_TIMEOUT_SECONDS` if none ever arrives), so the deadline
+    is actually rechecked after every byte (or batch of bytes) the client
+    sends, regardless of how small each send is.
+
+    Returns the body, or `None` if the deadline was reached before all
+    `length` bytes arrived (the caller answers 408). A peer that closes the
+    connection early gets a short read here, same as `rfile.read(length)`
+    always returned on EOF -- unchanged from before this function existed,
+    and out of scope for the deadline this function adds.
+
+    `deadline_seconds` defaults to the current `BODY_READ_DEADLINE_SECONDS`
+    looked up at call time (not bound as a parameter default), so tests can
+    monkeypatch the module constant and have it take effect without needing
+    to pass it through explicitly.
+    """
+    if deadline_seconds is None:
+        deadline_seconds = BODY_READ_DEADLINE_SECONDS
+    if length <= 0:
+        return b""
+    deadline = time.monotonic() + deadline_seconds
+    remaining = length
+    chunks: list[bytes] = []
+    while remaining > 0:
+        if time.monotonic() >= deadline:
+            return None
+        chunk = request.rfile.read1(min(_BODY_READ_CHUNK_BYTES, remaining))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
 def _handle_post(
     request: BaseHTTPRequestHandler,
     config_path: str,
@@ -574,9 +649,16 @@ def _handle_post(
     # A truncated body leaves this read blocking until the socket times out,
     # and `TimeoutError` then fell through to the generic handler as a 500
     # after 30 seconds. 408 is what a request the client did not finish is.
+    # `_read_body_with_deadline` additionally bounds the *total* time spent
+    # here by `BODY_READ_DEADLINE_SECONDS`, so a client pacing bytes just
+    # under the per-recv `CONNECTION_READ_TIMEOUT_SECONDS` can't hold the
+    # read (and this thread/socket) open indefinitely.
     try:
-        raw = request.rfile.read(length) if length > 0 else b""
+        raw = _read_body_with_deadline(request, length)
     except TimeoutError:
+        _respond(request, 408, {"error": "request body incomplete"}, security)
+        return
+    if raw is None:
         _respond(request, 408, {"error": "request body incomplete"}, security)
         return
     try:
