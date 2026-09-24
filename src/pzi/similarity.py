@@ -466,52 +466,6 @@ def as_int_year(value: object) -> int | None:
     return None
 
 
-def compute_similarity_hint(
-    record: SimilarityCandidate,
-    existing_records: Sequence[SimilarityCandidate],
-    *,
-    title_threshold: float = 0.6,
-    year_window: int = 2,
-) -> str | None:
-    """Return the citekey of the most similar existing record, if any."""
-    record_tokens = title_tokens(record.get("title"))
-    if not record_tokens:
-        return None
-
-    record_authors = normalize_authors(record.get("authors"))
-    record_year = as_int_year(record.get("year"))
-
-    best_key: str | None = None
-    best_score: float = 0.0
-    for existing in existing_records:
-        citekey = existing.get("citekey")
-        if not isinstance(citekey, str) or not citekey.strip():
-            continue
-        existing_tokens = title_tokens(existing.get("title"))
-        similarity = jaccard_similarity(record_tokens, existing_tokens)
-        if similarity < title_threshold:
-            continue
-
-        existing_year = as_int_year(existing.get("year"))
-        if (
-            record_year is not None
-            and existing_year is not None
-            and abs(record_year - existing_year) > year_window
-        ):
-            continue
-
-        overlap = author_overlap(record_authors, list(existing.get("authors") or []))
-        if overlap == 0 and similarity < 0.85:
-            continue
-
-        score = similarity + 0.1 * overlap
-        if score > best_score:
-            best_score = score
-            best_key = citekey
-
-    return best_key
-
-
 class _Prepared(NamedTuple):
     """One record's comparison inputs, derived once instead of once per pair."""
 
@@ -546,25 +500,6 @@ class FuzzyMatch(NamedTuple):
     shared_authors: int
 
 
-def best_fuzzy_matches(
-    records: Sequence[SimilarityCandidate],
-    *,
-    positions: Iterable[int],
-    title_threshold: float = 0.6,
-    year_window: int = 2,
-) -> dict[int, str]:
-    """The best fuzzy match's citekey for each position; see :func:`best_fuzzy_match_details`."""
-    return {
-        position: match.citekey
-        for position, match in best_fuzzy_match_details(
-            records,
-            positions=positions,
-            title_threshold=title_threshold,
-            year_window=year_window,
-        ).items()
-    }
-
-
 def best_fuzzy_match_details(
     records: Sequence[SimilarityCandidate],
     *,
@@ -574,12 +509,17 @@ def best_fuzzy_match_details(
 ) -> dict[int, FuzzyMatch]:
     """The best fuzzy match for each position in *positions*, over every other record.
 
-    Same answers as calling :func:`compute_similarity_hint` once per position
-    against the rest of the corpus — same filters, same score, same
-    first-highest-wins tie-break in corpus order — but without paying for that
-    shape. The naive loop rebuilt an N-element candidate list per record and
-    re-tokenized every title N times, so a 22k-entry library took roughly half an
-    hour of pure recomputation before printing anything.
+    For each query position: the highest-scoring other record whose title
+    Jaccard similarity clears ``title_threshold``, whose year (if both are
+    known) is within ``year_window``, and which either shares an author or
+    clears a similarity of 0.85. Score is ``similarity + 0.1 * shared_authors``;
+    ties go to whichever candidate appears first in *records*.
+
+    Uses an inverted index over title tokens rather than an O(N^2) scan, so a
+    candidate sharing no title token with the query is never visited — Jaccard
+    at or above any positive threshold *requires* a shared token. A 22k-entry
+    library previously took roughly half an hour of pure recomputation before
+    printing anything with the naive per-position rescan.
 
     Three exact changes, none of which can drop a pair:
 

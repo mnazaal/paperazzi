@@ -47,7 +47,7 @@ from pzi.protocols import (
     WebTranslationFetcher,
     accepts_keyword,
 )
-from pzi.similarity import compute_similarity_hint, find_exact_match
+from pzi.similarity import best_fuzzy_match_details, find_exact_match
 
 
 def split_record_overrides(
@@ -414,12 +414,21 @@ def error_result(
     return result
 
 
+def _fuzzy_similarity_hint(
+    record: NormalizedRecord, existing_records: Sequence[NormalizedRecord]
+) -> str | None:
+    """Adapt :func:`~pzi.similarity.best_fuzzy_match_details` (one record against
+    the corpus) to the single-hint shape this module needs."""
+    match = best_fuzzy_match_details([record, *existing_records], positions=[0]).get(0)
+    return match.citekey if match is not None else None
+
+
 def attach_similarity_hint(
     record: NormalizedRecord,
     existing_records: list[NormalizedRecord],
     *,
     exact_match_fn=find_exact_match,
-    similarity_hint_fn=compute_similarity_hint,
+    similarity_hint_fn=_fuzzy_similarity_hint,
     index: dict | None = None,
     force_new: bool = False,
 ) -> NormalizedRecord:
