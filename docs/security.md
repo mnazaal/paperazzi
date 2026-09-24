@@ -72,7 +72,7 @@ explained below.
 
 | Host | Why |
 |---|---|
-| `http://127.0.0.1/*`, `http://localhost/*` | Communicate with local pzi server. Required for every capture/attach call. |
+| `http://127.0.0.1/*`, `http://localhost/*` | Communicate with local pzi server. Required for every capture/attach call. Manifest match patterns cannot carry a port, so this grant necessarily covers every HTTP service listening on 127.0.0.1 or localhost at any port, not just the configured pzi port — the extension itself only ever sends requests to the single loopback endpoint the user configured. |
 | `https://ieeexplore.ieee.org/*` | IEEE Xplore article pages and PDF stamp gateways. IEEE serves PDFs on the same domain; the extension needs to inject content scripts to fetch them with the user's institutional session. |
 | `https://dl.acm.org/*` | ACM Digital Library PDF gateways (`/doi/pdf/`). Same-origin PDF fetch requires content script access. |
 | `https://www.sciencedirect.com/*`, `https://pdf.sciencedirectassets.com/*` | ScienceDirect articles may redirect PDFs to a CDN subdomain; both are needed for authenticated PDF capture. |
@@ -151,6 +151,7 @@ to nowhere else — not to any other publisher, and not to any metadata API.
 | Rate limiting | **None** | Removed. It was keyed on the peer address — so on loopback every local process shared one bucket — and ran *after* the auth gate, so it never metered a failed token. It slowed your own tools down and did not slow an attacker. The API token is the control. |
 | Attach session tokens | Random 32-byte URL-safe token, TTL 10 minutes, one-shot consume | Tokens generated per capture request, validated on raw PDF upload. |
 | Content-Length validation | Bodies over `api_max_body_bytes` rejected before reading | Kept. |
+| Request body read deadline | 120s wall-clock cap (`BODY_READ_DEADLINE_SECONDS`), independent of the 30s per-connection read timeout | A client that declares a large `Content-Length` and paces bytes just under the per-connection timeout (e.g. one byte every ~29s) never trips that per-`recv()` timeout, since each call gets its own fresh allowance; the deadline instead bounds the *total* time spent reading one body, closing the connection with `408 Request Timeout` once exceeded regardless of pacing. |
 | Recursive DNS safety | `safe_public_http_url` resolves hostnames with 250ms budget, rejects private/local IPs | Kept. One scoped exception: a configured `ezproxy_host` (see below). |
 | Local capture paths | `/capture` accepts a local filesystem path only if it resolves inside `capture_source_dirs`; that list is **empty by default**, so local-file capture is refused over HTTP until you opt in | Leave unset unless you script local ingests. Paths are resolved (symlinks and `..` collapsed) before the containment test. |
 | Inbox draining | `POST /inbox/drain` drains only the configured `inbox_path` and refuses any other file; unset closes the route. Client-supplied `delay` is bounded and defaults to the CLI's value | Leave `inbox_path` unset unless you drive the inbox over HTTP. |
@@ -250,7 +251,6 @@ for the allowlist it does not get.
   bytes *or* a PDF `Content-Type` — so it saves a wasted round trip rather than
   standing in for the server check.
 - Attach sessions have TTL (10 min), max byte limit, and allowlisted source URLs.
-- Extension version marker in every capture body for debugging.
 
 ## Recommendations
 
