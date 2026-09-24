@@ -10,9 +10,40 @@ from pzi.pdf_planning import (
     normalized_hostname,
     parse_firefox_default_profile,
     pdf_file_present,
+    plan_pdf_path,
     requested_pdf_match_tokens,
     url_basename,
 )
+
+
+def test_plan_pdf_path_default_branch_sanitizes_an_unsafe_citekey() -> None:
+    """A citekey holding `:` or `/` (BibTeX allows both) must not let
+    `os.path.basename` silently truncate it to whatever follows the last `/`.
+    """
+    path = plan_pdf_path(papers_dir="/tmp/papers", citekey="a:b/x")
+    assert path.startswith("/tmp/papers/")
+    filename = path.removeprefix("/tmp/papers/")
+    assert filename.endswith(".pdf")
+    assert "/" not in filename
+    assert ":" not in filename
+    # The rest of the citekey survives sanitized, rather than being dropped —
+    # the pre-fix behaviour returned bare "x.pdf".
+    assert filename != "x.pdf"
+
+
+def test_plan_pdf_path_default_branch_is_idempotent_on_clean_citekeys() -> None:
+    """The sanitizer must be a no-op on the project's own citekey scheme, or a
+    previously-written PDF's filename would no longer match what `library
+    check`/`reindex --rename-files` computes for the same citekey today.
+    """
+    assert (
+        plan_pdf_path(papers_dir="/tmp/papers", citekey="smith2024graph")
+        == "/tmp/papers/smith2024graph.pdf"
+    )
+    assert (
+        plan_pdf_path(papers_dir="/tmp/papers", citekey="smith-graph-nets-2024")
+        == "/tmp/papers/smith-graph-nets-2024.pdf"
+    )
 
 
 def test_pdf_file_present_checks_existence_and_expands_home(tmp_path, monkeypatch) -> None:

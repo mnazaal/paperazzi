@@ -19,7 +19,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from pzi.format_templates import format_pdf_filename
+from pzi.format_templates import _sanitize_filename_stem, format_pdf_filename
 
 PdfRecord = Mapping[str, object]
 
@@ -65,7 +65,15 @@ def plan_pdf_path(
     if filename_format and record is not None:
         filename = format_pdf_filename(filename_format, {**record, "citekey": citekey})
     else:
-        filename = f"{citekey}.pdf"
+        # Route through the same sanitizer the templated branch uses: a
+        # citekey containing `:` or `/` (BibTeX allows both) otherwise built a
+        # bare `f"{citekey}.pdf"` that `os.path.basename` below then truncated
+        # to whatever followed the last `/`, silently discarding the rest of
+        # the citekey rather than keeping it in a safe form. The sanitizer is
+        # a no-op on the ASCII alnum/hyphen citekeys this project's scheme
+        # produces, so an already-clean citekey's filename is unchanged.
+        stem = _sanitize_filename_stem(citekey) or citekey
+        filename = f"{stem}.pdf"
     # Prevent path traversal: only use the final basename component.
     safe_name = os.path.basename(filename)
     if not safe_name or safe_name in (".", ".."):
