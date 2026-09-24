@@ -19,12 +19,7 @@ from pzi.identifiers import (
 )
 
 TranslationAttachment: TypeAlias = dict[str, Any]
-
-
-
 TranslationResult: TypeAlias = dict[str, Any]
-
-
 
 JsonPost = Callable[[str, object], object]
 TextPost = Callable[[str, str], object]

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-import shlex
 import subprocess
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -11,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from pzi import exit_codes
+from pzi.command_argv import parse_command_argv
 from pzi.config import AppConfig, BibConfig
 from pzi.errors import REASON_CONFIG, REASON_UNAVAILABLE, PziError
 from pzi.pdf_planning import PdfFallbackSettings
@@ -120,7 +119,7 @@ def run_shell_command(command: str, *, config_key: str | None = None) -> str:
     command whose job is to report that misconfiguration.
 
     Shared contract with the sibling launchers (`page_metadata_cmd.py`,
-    another lane's `browser_pdf.py`): a command that **cannot be run at all**
+    `browser_pdf.py`): a command that **cannot be run at all**
     — unparseable, empty, a missing or non-executable binary — is
     ``reason=REASON_CONFIG``. A command that **ran and failed** — a timeout, a
     non-zero exit — is ``reason=REASON_UNAVAILABLE`` instead: unlike
@@ -140,7 +139,7 @@ def run_shell_command(command: str, *, config_key: str | None = None) -> str:
         # `shell=False` means the shell never expands `~` — expand it here, so
         # a `*_cmd` naming `~/bin/hook` behaves the same as it already does for
         # `browser_pdf_cmd` (`browser_pdf.resolve_browser_command`).
-        tokens = [os.path.expanduser(token) for token in shlex.split(command)]
+        tokens = parse_command_argv(command)
     except ValueError as exc:
         raise PziError(
             f"{_secret_command_label(config_key)} could not be parsed: {exc}",
@@ -205,8 +204,8 @@ def _reject_shell_metacharacters(command: str, *, config_key: str | None = None)
     scrollback, logs and bug reports. Every other failure in
     :func:`run_shell_command` already refuses to quote it.
 
-    `page_metadata_cmd.py` and `browser_pdf.py` (another lane) do not screen
-    for this at all, and every one of the three runs ``shell=False`` — so this
+    `page_metadata_cmd.py` and `browser_pdf.py` do not screen for this at
+    all, and every one of the three runs ``shell=False`` — so this
     is not an injection guard (the shell never interprets these characters
     either way) but a deliberate extra check kept only here: a secret command
     is more often copy-pasted from documentation that assumes real shell

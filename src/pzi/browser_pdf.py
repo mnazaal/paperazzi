@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import base64
 import json
-import os
-import re
-import shlex
 import subprocess
 import sys
+
+from pzi.command_argv import parse_command_argv, safe_stderr
 
 #: The module a pzi-owned hook command runs. The interpreter in front of it is
 #: interchangeable *because* the code behind it is ours; see
@@ -28,10 +27,10 @@ def resolve_browser_command(command: str) -> list[str]:
     or a browser ``--profile``) instead of absolute home paths. Tokens without a
     leading ``~`` are unchanged.
     """
-    tokens = shlex.split(command)
+    tokens = parse_command_argv(command)
     if not tokens:
         raise ValueError("empty browser command in config")
-    return [os.path.expanduser(token) for token in tokens]
+    return tokens
 
 
 def healed_tokens(tokens: list[str]) -> list[str] | None:
@@ -112,16 +111,6 @@ def _run_browser_hook(command: str, payload: str) -> subprocess.CompletedProcess
         )
 
 
-# Control characters (U+0000-U+001F) — stripped from subprocess stderr
-# before printing to prevent terminal escape injection.
-_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
-
-
-def _safe_stderr(text: str) -> str:
-    """Strip terminal control characters from subprocess stderr output."""
-    return _CONTROL_RE.sub("", text)
-
-
 def discover_pdf_url_with_browser(
     *,
     command: str,
@@ -155,7 +144,7 @@ def discover_pdf_url_with_browser(
     if result.returncode != 0:
         child_stderr = getattr(result, "stderr", "")
         if child_stderr:
-            print(_safe_stderr(child_stderr), end="", file=sys.stderr)
+            print(safe_stderr(child_stderr), end="", file=sys.stderr)
         return None
     stdout = result.stdout.strip()
     if not stdout:
@@ -256,7 +245,7 @@ def download_pdf_with_browser(
     # stderr, and the six copies were how one of them lost it.
     child_stderr = getattr(result, "stderr", "")
     if child_stderr:
-        print(_safe_stderr(child_stderr), end="", file=sys.stderr)
+        print(safe_stderr(child_stderr), end="", file=sys.stderr)
     return None
 
 

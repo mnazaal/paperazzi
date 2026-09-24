@@ -101,6 +101,12 @@ CORE: frozenset[str] = frozenset(
         # Pure planning helpers with no pzi deps
         "page_metadata_cmd",
         "pdf_acquisition_plan",
+        # Shared argv-splitting/stderr-sanitizing helpers for the three
+        # `*_cmd` subprocess launchers (page_metadata_cmd, browser_pdf,
+        # capture_context). Stdlib only, no pzi imports — CORE is what lets a
+        # BROWSER-tier module (browser_pdf) import it without a cycle, since
+        # CORE->BROWSER is the direction this guard forbids, not the reverse.
+        "command_argv",
     }
 )
 

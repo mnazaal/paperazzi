@@ -28,9 +28,6 @@ FlareSolverrCookies: TypeAlias = dict[str, Any]
 
 
 
-
-
-
 def _target_url_allowed(url: str) -> bool:
     """Whether *url* may be handed to FlareSolverr to fetch.
 

@@ -2,11 +2,14 @@
 
 Contract, shared with the two sibling `*_cmd` launchers
 (``pzi.capture_context.run_shell_command`` for the four secret-resolving
-config keys, and ``pzi.browser_pdf`` for ``browser_pdf_cmd``, another lane's
-file): a command that **cannot be run at all** — unparseable, empty, a
-missing or non-executable binary — is a configuration mistake and raises
+config keys, and ``pzi.browser_pdf`` for ``browser_pdf_cmd``): a command that
+**cannot be run at all** — unparseable, empty, a missing or non-executable
+binary — is a configuration mistake and raises
 :class:`~pzi.errors.PziError` with ``reason=REASON_CONFIG``, naming the config
-key, the offending token, and what to do.
+key, the offending token, and what to do. The argv-splitting and
+control-character-stripping the three share live in `command_argv.py`, the
+one piece that was ever literally identical code rather than a shared
+contract each restates in its own words.
 
 ``browser_pdf_cmd`` is the one deliberate exception to "raise, don't return a
 sentinel": it returns ``None`` on *every* launch failure, including the ones
@@ -31,26 +34,13 @@ screening is the majority position of the three.
 from __future__ import annotations
 
 import json
-import os
-import re
-import shlex
 import subprocess
 import sys
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from pzi.command_argv import parse_command_argv, safe_stderr
 from pzi.errors import REASON_CONFIG, PziError
-
-# Control characters (U+0000-U+001F, excluding tab/CR/LF) stripped from
-# forwarded child stderr before it reaches a terminal. Mirrors
-# `browser_pdf._safe_stderr` (`browser_pdf.py`), duplicated rather than
-# imported: that module belongs to another lane, and two lines are cheaper
-# than a cross-lane import for this phase.
-_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
-
-
-def _safe_stderr(text: str) -> str:
-    return _CONTROL_RE.sub("", text)
 
 
 def run_page_metadata_cmd(
@@ -82,7 +72,7 @@ def run_page_metadata_cmd(
         # `shell=False` means the shell never expands `~` — expand it here, so
         # `page_metadata_cmd = "~/bin/hook"` works the same as it already does
         # for `browser_pdf_cmd` (`browser_pdf.resolve_browser_command`).
-        argv = [os.path.expanduser(token) for token in shlex.split(command)]
+        argv = parse_command_argv(command)
     except ValueError as exc:
         # An unclosed quote in the configured command. `shlex.split` raises, and
         # nothing caught it: a raw traceback on the CLI and a 500 on the HTTP
@@ -124,7 +114,7 @@ def run_page_metadata_cmd(
         # while `browser_pdf.py`'s identical hook contract already forwards it.
         child_stderr = getattr(result, "stderr", "") or ""
         if child_stderr:
-            print(_safe_stderr(child_stderr), end="", file=sys.stderr)
+            print(safe_stderr(child_stderr), end="", file=sys.stderr)
         return {}
     try:
         parsed = json.loads(getattr(result, "stdout", "") or "")
