@@ -318,15 +318,18 @@ def _retitle(session, title):
 def test_batch_write_session_backs_up_the_file_it_replaced(tmp_path):
     bib_path = tmp_path / "ml.bib"
     before = _one_entry_bib(bib_path)
+    # `backup_path_for` derives this exact name from the bib path and the label.
     backup = tmp_path / "ml.bib.promote.bak"
 
-    with batch_write_session(str(bib_path), backup_path=backup) as session:
+    with batch_write_session(str(bib_path), backup_label="promote") as session:
         _retitle(session, "Graph Parsers, Revisited")
 
     # The backup is the content that was replaced, not the content written.
     assert backup.read_text() == before
     assert bib_path.read_text() != before
     assert "Revisited" in bib_path.read_text()
+    # The session exposes the path it chose and wrote to.
+    assert session.backup_path == backup
 
 
 def test_batch_write_session_writes_no_backup_when_nothing_changed(tmp_path):
@@ -335,10 +338,11 @@ def test_batch_write_session_writes_no_backup_when_nothing_changed(tmp_path):
     _one_entry_bib(bib_path)
     backup = tmp_path / "ml.bib.promote.bak"
 
-    with batch_write_session(str(bib_path), backup_path=backup) as session:
+    with batch_write_session(str(bib_path), backup_label="promote") as session:
         _retitle(session, "Graph Parsers")  # the title it already has
 
     assert not backup.exists()
+    assert session.backup_path is None
 
 
 def test_batch_write_session_takes_no_backup_when_not_asked(tmp_path):
@@ -359,9 +363,55 @@ def test_batch_write_session_leaves_no_backup_when_the_batch_raises(tmp_path):
     backup = tmp_path / "ml.bib.promote.bak"
 
     with pytest.raises(RuntimeError):
-        with batch_write_session(str(bib_path), backup_path=backup) as session:
+        with batch_write_session(str(bib_path), backup_label="promote") as session:
             _retitle(session, "Graph Parsers, Revisited")
             raise RuntimeError("caller changed its mind")
 
     assert not backup.exists()
     assert bib_path.read_text() == before
+
+
+def test_batch_write_session_probes_the_backup_name_inside_the_lock(tmp_path, monkeypatch) -> None:
+    """Two sessions given the same label must not choose the same `.bak` name.
+
+    `promote`'s `_RunBackup` used to call `backup_path_for` itself, in the
+    argument list building the `batch_write_session(...)` call — before that
+    call was even entered, so before any lock was held. Two concurrent promote
+    runs (or a run racing another writer that also used the "promote" label)
+    could both find `<bib>.promote.bak` free and both pick it, and the second
+    copy silently overwrote the first. The session must probe fresh, under its
+    own lock, every time it is given a label.
+    """
+    import contextlib
+
+    import pzi.bib_repository as repo
+
+    bib_path = tmp_path / "ml.bib"
+    _one_entry_bib(bib_path)
+
+    real_lock = repo.with_bib_lock
+    real_name = repo.backup_path_for
+    order: list[str] = []
+
+    @contextlib.contextmanager
+    def recording_lock(path):
+        order.append("lock")
+        with real_lock(path):
+            yield
+
+    def recording_name(bib_path_arg, label):
+        order.append("name")
+        return real_name(bib_path_arg, label)
+
+    monkeypatch.setattr(repo, "with_bib_lock", recording_lock)
+    monkeypatch.setattr(repo, "backup_path_for", recording_name)
+
+    with batch_write_session(str(bib_path), backup_label="promote") as session_one:
+        _retitle(session_one, "Graph Parsers, Revisited")
+    with batch_write_session(str(bib_path), backup_label="promote") as session_two:
+        _retitle(session_two, "Graph Parsers, Revisited Again")
+
+    assert order == ["lock", "name", "lock", "name"], order
+    assert session_one.backup_path != session_two.backup_path
+    assert session_one.backup_path is not None and session_one.backup_path.exists()
+    assert session_two.backup_path is not None and session_two.backup_path.exists()

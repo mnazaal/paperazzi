@@ -17,7 +17,6 @@ from pzi.bib_repository import (
     ConcurrentEditError,
     StalePlanError,
     WritePlan,
-    backup_path_for,
     batch_write_session,
     plan_bib_write,
     preview_batch_write,
@@ -324,12 +323,13 @@ def promote_bib(
                                 bib["path"],
                                 file_path_style=file_path_style,
                                 # Only the first session of the run receives a
-                                # path — `take()` yields it once — so the `.bak`
-                                # is the library as it stood before the run,
-                                # which is the state an undo wants. Copied
-                                # inside the session's lock, immediately before
-                                # the write.
-                                backup_path=run_backup.take(),
+                                # label — `label()` yields it once — so the
+                                # `.bak` is the library as it stood before the
+                                # run, which is the state an undo wants. The
+                                # session probes the name and copies the file
+                                # itself, under its own lock, immediately
+                                # before the write.
+                                backup_label=run_backup.label(),
                             )
                         )
                     write.apply(session)
@@ -362,8 +362,10 @@ def promote_bib(
                     resolved_preprints.append(write.preprint_ck)
                 else:
                     written.append(item_index)
-        # Only now: the session writes on exit, so inside the block above the
-        # `.bak` does not exist yet and `run_backup.path` reads as None.
+        # Only now: the session writes on exit, so inside the block above
+        # `session.backup_path` is not set yet.
+        if session is not None:
+            run_backup.record(session)
         backup = run_backup.path
         if backup is not None:
             # Every promoted entry reports the same path — it is the one file
@@ -1166,8 +1168,15 @@ class _RunBackup:
     ``update_bib_entry`` copies the whole bib to the path it is given, so passing
     a fresh path per entry meant a full copy per promotion, and passing the *same*
     path per entry would overwrite the original with an already-promoted state.
-    Handing the path to the first write only gets both right: one copy, of the
-    library as it was before the run.
+    Handing a backup label to the first write's session only gets both right:
+    one copy, of the library as it was before the run.
+
+    The label is handed out here, but the *name* is no longer chosen here:
+    ``batch_write_session`` probes ``backup_path_for`` itself, under its own
+    lock, immediately before it writes. Choosing the name in this class (via a
+    bare ``backup_path_for`` call) ran before any session's lock was taken —
+    two concurrent promote runs could both find ``<bib>.promote.bak`` free and
+    both pick it, so the second run's copy silently overwrote the first's.
     """
 
     def __init__(self, bib_path: str) -> None:
@@ -1175,13 +1184,17 @@ class _RunBackup:
         self._path: Path | None = None
         self._taken = False
 
-    def take(self) -> Path | None:
-        """The backup path for the next write, or None once one has been taken."""
+    def label(self) -> str | None:
+        """The backup label for the next session, or None once one has been taken."""
         if self._taken:
             return None
         self._taken = True
-        self._path = backup_path_for(self._bib_path, "promote")
-        return self._path
+        return "promote"
+
+    def record(self, session: BatchWriteSession) -> None:
+        """Capture the path a session actually wrote a backup to, if any."""
+        if session.backup_path is not None:
+            self._path = session.backup_path
 
     @property
     def path(self) -> Path | None:

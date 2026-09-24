@@ -789,6 +789,11 @@ class BatchWriteSession:
     #: other block is kept verbatim so the batch does not reformat the library
     #: or sever `@string` references in entries it never looked at.
     touched: set[int] = dataclass_field(default_factory=set)
+    #: The `.bak` path `batch_write_session` chose and wrote to, when it was
+    #: given a `backup_label` and the batch actually changed something. `None`
+    #: otherwise — including while the session is still open, since the name is
+    #: only probed and the copy only made right before the write, on exit.
+    backup_path: Path | None = None
 
     def apply_plan(self, plan: WritePlan) -> None:
         """Fold one write plan into the in-memory state, keeping entries,
@@ -923,7 +928,7 @@ def batch_write_session(
     *,
     file_path_style: str = "absolute",
     write: bool = True,
-    backup_path: Path | None = None,
+    backup_label: str | None = None,
 ) -> Iterator[BatchWriteSession]:
     """Open a bib once for many edits, writing a single atomic time on exit.
 
@@ -936,12 +941,15 @@ def batch_write_session(
     and makes the whole batch transactional: if the caller raises, nothing is
     written.  It is the bulk path behind ``import``.
 
-    *backup_path*, when given, is copied from the on-disk file **inside this
-    lock** and only when the batch actually changes something — the same rule
-    and the same helper :func:`update_bib_entry` uses.  A batch that overwrites
-    entries rather than adding them needs an undo, and taking the copy here is
-    what keeps it under the lock: a caller doing it before opening the session
-    would snapshot a file another writer could still change.
+    *backup_label*, when given, names a ``.bak`` probed for with
+    :func:`backup_path_for` **inside this lock**, immediately before the write,
+    and only when the batch actually changes something — the same rule
+    :func:`delete_bib_entry` and :func:`merge_bib_entries` apply. The chosen
+    path is exposed on the yielded session as ``session.backup_path``. A caller
+    that computed the path itself before opening the session (as `promote` used
+    to, via ``backup_path_for`` in its argument list) named it before taking
+    the lock: two concurrent batches probing at once both got the same free
+    name, and the second copy overwrote the first.
     """
     with with_bib_lock(path):
         source, library, session = _open_batch_session(path)
@@ -955,6 +963,10 @@ def batch_write_session(
             library, session, path, source, file_path_style=file_path_style
         )
         if new_source != source:
+            backup_path: Path | None = None
+            if backup_label is not None:
+                backup_path = backup_path_for(path, backup_label)
+                session.backup_path = backup_path
             _write_bib_with_backup(
                 path, new_source, backup_path, expected_source=source
             )
