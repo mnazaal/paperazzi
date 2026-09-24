@@ -20,10 +20,13 @@ import sys
 import tarfile
 import tempfile
 from pathlib import Path
-from typing import TextIO
+from typing import Any, TextIO
 from urllib.error import URLError
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import Request
+
+from pzi.fetch_helpers import read_limited
+from pzi.safe_http import safe_urlopen
 
 _MIN_NODE_MAJOR = 22
 
@@ -60,30 +63,64 @@ def _node_mirror() -> str:
     )
 
 
-#: Caps for the two mirror reads. Both were `resp.read()` with no bound, so a
-#: mirror (or anything that can answer as one) could stream until the process
-#: ran out of memory. The real files are a few KB and a few MB respectively.
+#: Caps for the mirror reads. All three were `resp.read()`/a raw chunked loop
+#: with no bound, so a mirror (or anything that can answer as one) could
+#: stream until the process ran out of memory. The checksums file and version
+#: index are a few KB and a few MB respectively; the tarball cap is generous
+#: for a real Node.js release (tens of MB) while still bounding the worst case.
 _MAX_CHECKSUMS_BYTES = 1 * 1024 * 1024
 _MAX_INDEX_BYTES = 16 * 1024 * 1024
+_MAX_TARBALL_BYTES = 128 * 1024 * 1024
 
 
-def _read_capped(resp: object, limit: int, url: str) -> bytes:
-    """Read at most *limit* bytes, refusing anything longer."""
-    data = resp.read(limit + 1)  # type: ignore[attr-defined]
-    if len(data) > limit:
-        raise RuntimeError(f"refusing oversized response from {url} (over {limit} bytes)")
-    return data
+def _open_mirror_url(url: str, *, timeout: float) -> Any:
+    """Open *url* through the SSRF-hardened opener used everywhere else.
+
+    Raw `urlopen` had none of `safe_http`'s protections: no DNS-rebinding pin,
+    no re-validation of a redirect's target, and no scheme check on wherever a
+    redirect actually landed. Routed through `safe_urlopen` instead, which
+    validates every hop the same way the rest of pzi's outbound fetches do.
+
+    `safe_urlopen`'s own IP-pinning refuses a loopback destination by default
+    (it isn't a "public" address), so a configured loopback dev mirror
+    (`_node_mirror` allows `http://` there) needs `allow_host` to still work —
+    passed only when the *requested* host is loopback, not granted to
+    whatever a redirect might name.
+
+    On top of that, and beyond what `safe_urlopen` itself checks: refuse a
+    final URL (after following any redirects) that isn't https, unless it
+    landed on a loopback host. `safe_http`'s classifier accepts plain http as
+    a "public" scheme, which is correct for a general-purpose fetch but wrong
+    for a mirror whose whole checksum-verification story depends on the
+    tarball and its SHASUMS256.txt coming over a transport an on-path attacker
+    can't rewrite.
+    """
+    host = urlsplit(url).hostname
+    allow_host = host if _is_loopback_host(host) else None
+    response = safe_urlopen(Request(url, method="GET"), timeout=timeout, allow_host=allow_host)
+    final_url = getattr(response, "url", url) or url
+    final = urlsplit(final_url)
+    if final.scheme != "https" and not _is_loopback_host(final.hostname):
+        response.close()
+        raise RuntimeError(
+            f"refusing insecure download from {final_url}: expected https "
+            "(http is allowed only for a loopback host)"
+        )
+    return response
 
 
 def _expected_node_sha256(*, mirror: str, version: str, tarball_name: str) -> str:
     """Return the published sha256 for *tarball_name* from SHASUMS256.txt."""
     url = f"{mirror}/v{version}/SHASUMS256.txt"
     try:
-        with urlopen(Request(url, method="GET"), timeout=30) as resp:
-            text = _read_capped(resp, _MAX_CHECKSUMS_BYTES, url).decode("utf-8")
-    except (URLError, OSError, http.client.IncompleteRead) as exc:
+        with _open_mirror_url(url, timeout=30) as resp:
+            text = read_limited(resp, max_bytes=_MAX_CHECKSUMS_BYTES).decode("utf-8")
+    except (URLError, OSError, ValueError, http.client.IncompleteRead) as exc:
         # `IncompleteRead` is neither `URLError` nor `OSError`, so a truncated
         # response escaped both clauses and reached the caller as a traceback.
+        # `ValueError` is `read_limited`'s own way of reporting an oversized or
+        # truncated body — it used to be `_read_capped`'s `RuntimeError`,
+        # uncaught here, which happened to reach the caller as a traceback too.
         raise RuntimeError(f"failed to fetch Node.js checksums from {url}: {exc}") from exc
     for line in text.splitlines():
         fields = line.split()
@@ -215,10 +252,10 @@ def _latest_node_version() -> str:
     mirror = _node_mirror()
     index_url = f"{mirror}/index.json"
     try:
-        with urlopen(Request(index_url, method="GET"), timeout=15) as resp:
+        with _open_mirror_url(index_url, timeout=15) as resp:
             import json
 
-            data = json.loads(_read_capped(resp, _MAX_INDEX_BYTES, index_url))
+            data = json.loads(read_limited(resp, max_bytes=_MAX_INDEX_BYTES))
     except (URLError, OSError, ValueError, http.client.IncompleteRead) as exc:
         raise RuntimeError(f"failed to fetch Node.js version index: {exc}") from exc
 
@@ -277,21 +314,20 @@ def download_node(
     print(f"downloading Node.js v{version} ({dist_name}) …", file=stdout)
     stdout.flush()
 
-    tmp_path: Path | None = None
     hasher = hashlib.sha256()
     try:
-        with urlopen(Request(url, method="GET"), timeout=300) as resp:
-            with tempfile.NamedTemporaryFile(
-                suffix=".tar.gz", delete=False, dir=node_dir
-            ) as tmp:
-                tmp_path = Path(tmp.name)
-                while True:
-                    chunk = resp.read(65536)
-                    if not chunk:
-                        break
-                    tmp.write(chunk)
-                    hasher.update(chunk)
-    except (URLError, OSError) as exc:
+        with _open_mirror_url(url, timeout=300) as resp:
+            data = read_limited(resp, max_bytes=_MAX_TARBALL_BYTES)
+    except (URLError, OSError, ValueError, http.client.IncompleteRead) as exc:
+        raise RuntimeError(f"failed to download Node.js from {url}: {exc}") from exc
+    hasher.update(data)
+
+    tmp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False, dir=node_dir) as tmp:
+            tmp_path = Path(tmp.name)
+            tmp.write(data)
+    except OSError as exc:
         if tmp_path is not None:
             try:
                 tmp_path.unlink()

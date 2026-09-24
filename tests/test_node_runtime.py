@@ -128,7 +128,7 @@ def test_latest_node_version_returns_major_version() -> None:
         {"version": "v22.14.0"},
     ]
     with patch(
-        "pzi.node_runtime.urlopen",
+        "pzi.node_runtime.safe_urlopen",
         return_value=json_io(json.dumps(data)),
     ):
         ver = node_runtime._latest_node_version()
@@ -138,7 +138,7 @@ def test_latest_node_version_returns_major_version() -> None:
 def test_latest_node_version_no_matching_major_raises() -> None:
     data = [{"version": "v20.0.0"}]
     with patch(
-        "pzi.node_runtime.urlopen",
+        "pzi.node_runtime.safe_urlopen",
         return_value=json_io(json.dumps(data)),
     ):
         try:
@@ -154,7 +154,7 @@ def test_latest_node_version_skips_entries_without_version() -> None:
         {"version": "v22.10.0"},
     ]
     with patch(
-        "pzi.node_runtime.urlopen",
+        "pzi.node_runtime.safe_urlopen",
         return_value=json_io(json.dumps(data)),
     ):
         ver = node_runtime._latest_node_version()
@@ -163,7 +163,7 @@ def test_latest_node_version_skips_entries_without_version() -> None:
 
 def test_latest_node_version_network_error_raises() -> None:
     with patch(
-        "pzi.node_runtime.urlopen",
+        "pzi.node_runtime.safe_urlopen",
         return_value=json_io(json.dumps([])),
     ):
         try:
@@ -345,6 +345,41 @@ def test_node_mirror_rejects_http_non_loopback(monkeypatch: pytest.MonkeyPatch) 
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# _open_mirror_url  (routes through safe_urlopen; refuses a plaintext downgrade)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_open_mirror_url_uses_the_ssrf_hardened_opener() -> None:
+    sentinel = fake_response(b"data", "https://nodejs.org/dist/index.json")
+    with patch("pzi.node_runtime.safe_urlopen", return_value=sentinel) as mock_open:
+        resp = node_runtime._open_mirror_url("https://nodejs.org/dist/index.json", timeout=15)
+    assert resp is sentinel
+    mock_open.assert_called_once()
+    _, kwargs = mock_open.call_args
+    assert kwargs["allow_host"] is None
+
+
+def test_open_mirror_url_allows_a_loopback_dev_mirror() -> None:
+    sentinel = fake_response(b"data", "http://127.0.0.1:8080/dist/index.json")
+    with patch("pzi.node_runtime.safe_urlopen", return_value=sentinel) as mock_open:
+        resp = node_runtime._open_mirror_url("http://127.0.0.1:8080/dist/index.json", timeout=15)
+    assert resp is sentinel
+    _, kwargs = mock_open.call_args
+    assert kwargs["allow_host"] == "127.0.0.1"
+
+
+def test_open_mirror_url_refuses_a_redirect_that_lands_on_plaintext() -> None:
+    """`safe_urlopen` already re-validates each redirect hop for SSRF, but a
+    redirect from https to a public http:// host is not SSRF — it is a
+    transport downgrade that defeats the checksum's whole point, since an
+    on-path attacker can now rewrite both the tarball and SHASUMS256.txt.
+    """
+    sentinel = fake_response(b"data", "http://mirror.example/dist/index.json")
+    with patch("pzi.node_runtime.safe_urlopen", return_value=sentinel):
+        with pytest.raises(RuntimeError, match="expected https"):
+            node_runtime._open_mirror_url("https://nodejs.org/dist/index.json", timeout=15)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # _expected_node_sha256
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -353,7 +388,7 @@ def test_expected_node_sha256_parses_matching_line() -> None:
         "abc123  node-v22.15.0-linux-arm64.tar.gz\n"
         "deadbeef  node-v22.15.0-linux-x64.tar.gz\n"
     )
-    with patch("pzi.node_runtime.urlopen", return_value=json_io(shasums)):
+    with patch("pzi.node_runtime.safe_urlopen", return_value=json_io(shasums)):
         digest = node_runtime._expected_node_sha256(
             mirror="https://nodejs.org/dist",
             version="22.15.0",
@@ -364,7 +399,7 @@ def test_expected_node_sha256_parses_matching_line() -> None:
 
 def test_expected_node_sha256_missing_tarball_raises() -> None:
     shasums = "abc123  node-v22.15.0-linux-arm64.tar.gz\n"
-    with patch("pzi.node_runtime.urlopen", return_value=json_io(shasums)):
+    with patch("pzi.node_runtime.safe_urlopen", return_value=json_io(shasums)):
         with pytest.raises(RuntimeError, match="no checksum"):
             node_runtime._expected_node_sha256(
                 mirror="https://nodejs.org/dist",
@@ -384,7 +419,7 @@ def test_download_node_rejects_checksum_mismatch(tmp_path: Path) -> None:
          patch("pzi.node_runtime._node_dist_name", return_value="linux-x64"), \
          patch("pzi.node_runtime.detect_node", return_value=None), \
          patch(
-             "pzi.node_runtime.urlopen",
+             "pzi.node_runtime.safe_urlopen",
              side_effect=[io.BytesIO(tarball), json_io(shasums)],
          ):
         with pytest.raises(RuntimeError, match="checksum mismatch"):
@@ -403,7 +438,7 @@ def test_download_node_passes_checksum_then_fails_extract(tmp_path: Path) -> Non
          patch("pzi.node_runtime._node_dist_name", return_value="linux-x64"), \
          patch("pzi.node_runtime.detect_node", return_value=None), \
          patch(
-             "pzi.node_runtime.urlopen",
+             "pzi.node_runtime.safe_urlopen",
              side_effect=[io.BytesIO(tarball), json_io(shasums)],
          ):
         # Checksum matches, so it proceeds past verification and only then trips
@@ -432,7 +467,7 @@ def test_a_failed_upgrade_keeps_the_working_cached_node(tmp_path: Path) -> None:
          patch("pzi.node_runtime._node_dist_name", return_value="linux-x64"), \
          patch("pzi.node_runtime._node_binary_runs", return_value=False), \
          patch(
-             "pzi.node_runtime.urlopen",
+             "pzi.node_runtime.safe_urlopen",
              side_effect=[io.BytesIO(tarball), json_io(shasums)],
          ):
         with pytest.raises(RuntimeError, match="extract"):
@@ -466,13 +501,55 @@ def test_a_successful_upgrade_drops_the_superseded_extraction(tmp_path: Path) ->
          patch("pzi.node_runtime._node_binary_runs", return_value=True), \
          patch("pzi.node_runtime.tarfile.open", return_value=tar), \
          patch(
-             "pzi.node_runtime.urlopen",
+             "pzi.node_runtime.safe_urlopen",
              side_effect=[io.BytesIO(tarball), json_io(shasums)],
          ):
         result_path = node_runtime.download_node(tmp_path, stdout=io.StringIO())
 
     assert result_path == str(fresh_bin)
     assert not stale.exists(), "the superseded extraction was left behind"
+
+
+def test_download_node_rejects_an_oversized_tarball(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The old code streamed `resp.read(65536)` into the temp file with no
+    running-total cap — a mirror (or anything answering as one) that never
+    stopped sending could grow the file, and the process's memory while
+    hashing it, without bound. Shrink the cap so the test does not need to
+    allocate 128 MiB to prove it."""
+    monkeypatch.setattr(node_runtime, "_MAX_TARBALL_BYTES", 10)
+    oversized = b"x" * 11
+    with patch("pzi.node_runtime._latest_node_version", return_value="22.15.0"), \
+         patch("pzi.node_runtime._node_dist_name", return_value="linux-x64"), \
+         patch("pzi.node_runtime.detect_node", return_value=None), \
+         patch(
+             "pzi.node_runtime.safe_urlopen",
+             return_value=fake_response(
+                 oversized,
+                 "https://nodejs.org/dist/v22.15.0/node-v22.15.0-linux-x64.tar.gz",
+             ),
+         ):
+        with pytest.raises(RuntimeError, match="failed to download"):
+            node_runtime.download_node(tmp_path, stdout=io.StringIO())
+    node_dir = node_runtime._node_bin_dir(tmp_path)
+    assert not any(node_dir.glob("*.tar.gz"))
+
+
+def test_download_node_refuses_a_downgrade_to_plaintext_off_loopback(tmp_path: Path) -> None:
+    """`download_node` must route through `_open_mirror_url`, not raw `safe_urlopen`
+    directly, so the plaintext-downgrade check in the previous section applies
+    to the tarball fetch too."""
+    tarball = b"not-a-real-tarball"
+    with patch("pzi.node_runtime._latest_node_version", return_value="22.15.0"), \
+         patch("pzi.node_runtime._node_dist_name", return_value="linux-x64"), \
+         patch("pzi.node_runtime.detect_node", return_value=None), \
+         patch(
+             "pzi.node_runtime.safe_urlopen",
+             return_value=fake_response(tarball, "http://mirror-evil.example/node.tar.gz"),
+         ):
+        with pytest.raises(RuntimeError, match="expected https"):
+            node_runtime.download_node(tmp_path, stdout=io.StringIO())
 
 
 def test_download_node_reuses_cached_binary(tmp_path: Path) -> None:
@@ -484,10 +561,10 @@ def test_download_node_reuses_cached_binary(tmp_path: Path) -> None:
     with patch("pzi.node_runtime._latest_node_version", return_value="22.15.0"), \
          patch("pzi.node_runtime._node_dist_name", return_value="linux-x64"), \
          patch("pzi.node_runtime._node_binary_runs", return_value=True), \
-         patch("pzi.node_runtime.urlopen") as mock_urlopen:
+         patch("pzi.node_runtime.safe_urlopen") as mock_safe_urlopen:
         result_path = node_runtime.download_node(tmp_path, stdout=io.StringIO())
     assert result_path == str(cached)
-    mock_urlopen.assert_not_called()
+    mock_safe_urlopen.assert_not_called()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -504,3 +581,13 @@ def result(returncode: int, stdout: str, stderr: str) -> MagicMock:
 
 def json_io(data: str) -> io.BytesIO:
     return io.BytesIO(data.encode("utf-8"))
+
+
+def fake_response(data: bytes, url: str) -> io.BytesIO:
+    """A stand-in for what `safe_urlopen` returns: a readable, closeable,
+    context-manager body plus the `.url` the request actually landed on after
+    any redirects — the attribute `_open_mirror_url` reads to catch a
+    downgrade to plaintext."""
+    resp = io.BytesIO(data)
+    resp.url = url  # type: ignore[attr-defined]
+    return resp
