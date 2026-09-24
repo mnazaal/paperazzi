@@ -7,14 +7,84 @@ import queue
 import socket
 import threading
 from collections.abc import Callable, Iterable
-from typing import Any, TypeAlias
+from typing import Any, Literal, TypeAlias
 from urllib.parse import urlsplit
 
-DEFAULT_DNS_LOOKUP_TIMEOUT_SECONDS = 0.25
+#: 0.25s made a DNS lookup indistinguishable from a real timeout for any
+#: publisher with a slower-than-instant resolver (the doi.org hop routinely
+#: took longer than that under load), so a legitimate public URL was rejected
+#: the same way a private one is. 2.0s gives a real resolver room to answer
+#: while still bounding a single lookup to a small, fixed cost.
+DEFAULT_DNS_LOOKUP_TIMEOUT_SECONDS = 2.0
 PRIVATE_HOST_SUFFIXES = (".localhost", ".local", ".internal", ".lan", ".home")
 LOCAL_HOSTNAMES = {"localhost", "localhost.localdomain"}
 
 ResolvedAddress: TypeAlias = tuple[Any, ...]
+
+UrlClassification: TypeAlias = Literal["public", "non-public", "dns-timeout", "invalid"]
+
+
+class DnsLookupTimedOut(Exception):
+    """Raised by a resolver when a lookup exceeds its time budget.
+
+    Distinct from a resolver returning ``None``/empty, which means the lookup
+    *completed* and found no (or no public) address — that outcome is still
+    fail-closed, but it is a different fact than "we never found out".
+    """
+
+
+def classify_public_http_url(
+    value: str,
+    *,
+    dns_timeout: float = DEFAULT_DNS_LOOKUP_TIMEOUT_SECONDS,
+    resolve_host: Callable[..., list[ResolvedAddress] | None] | None = None,
+    allow_host: str | None = None,
+) -> UrlClassification:
+    """Classify *value* as a destination this process may fetch.
+
+    ``"public"`` is the only classification a caller should treat as safe to
+    fetch. ``"dns-timeout"`` is still fail-closed (never fetched) but is a
+    distinct outcome from ``"non-public"`` (resolved, but private/local, or a
+    malformed/non-http URL) so a caller can report *why* a URL was dropped
+    instead of silently discarding it.  ``allow_host`` names a single
+    explicitly-trusted host (e.g. a configured EZProxy host) whose
+    private/campus IP is permitted.  It still must be an http(s) URL and is
+    never allowed to be a bare localhost name.
+    """
+    try:
+        parts = urlsplit(value.strip())
+    except ValueError:
+        return "invalid"
+    if parts.scheme not in {"http", "https"} or not parts.hostname:
+        return "invalid"
+
+    host = parts.hostname.strip().lower().rstrip(".")
+    if _local_host_name(host):
+        return "non-public"
+    if allow_host and host == allow_host.strip().lower().rstrip("."):
+        return "public"
+
+    try:
+        return "public" if public_ip_address(str(ipaddress.ip_address(host))) else "non-public"
+    except ValueError:
+        if "." not in host:
+            return "invalid"
+        try:
+            port = parts.port or (443 if parts.scheme == "https" else 80)
+        except ValueError:
+            return "invalid"
+        resolver = resolve_host or resolve_host_with_timeout
+        try:
+            resolved = resolver(host, port, timeout=dns_timeout)
+        except DnsLookupTimedOut:
+            return "dns-timeout"
+        if not resolved:
+            return "non-public"
+        return (
+            "public"
+            if all(resolved_address_public(item) for item in resolved)
+            else "non-public"
+        )
 
 
 def safe_public_http_url(
@@ -26,41 +96,21 @@ def safe_public_http_url(
 ) -> bool:
     """Return True for public http(s) URL; reject localhost/private DNS/IPs.
 
-    ``allow_host`` names a single explicitly-trusted host (e.g. a configured
-    EZProxy host) whose private/campus IP is permitted.  It still must be an
-    http(s) URL and is never allowed to be a bare localhost name.
+    Boolean wrapper around :func:`classify_public_http_url` for callers that
+    only need a yes/no answer. ``allow_host`` names a single explicitly-trusted
+    host (e.g. a configured EZProxy host) whose private/campus IP is
+    permitted.  It still must be an http(s) URL and is never allowed to be a
+    bare localhost name.
     """
-    try:
-        parts = urlsplit(value.strip())
-    except ValueError:
-        return False
-    if parts.scheme not in {"http", "https"} or not parts.hostname:
-        return False
-
-    host = parts.hostname.strip().lower().rstrip(".")
-    if _local_host_name(host):
-        return False
-    if allow_host and host == allow_host.strip().lower().rstrip("."):
-        return True
-
-    try:
-        return public_ip_address(str(ipaddress.ip_address(host)))
-    except ValueError:
-        if "." not in host:
-            return False
-        try:
-            port = parts.port or (443 if parts.scheme == "https" else 80)
-        except ValueError:
-            return False
-        resolver = resolve_host or resolve_host_with_timeout
-        resolved = resolver(
-            host,
-            port,
-            timeout=dns_timeout,
+    return (
+        classify_public_http_url(
+            value,
+            dns_timeout=dns_timeout,
+            resolve_host=resolve_host,
+            allow_host=allow_host,
         )
-        if not resolved:
-            return False
-        return all(resolved_address_public(item) for item in resolved)
+        == "public"
+    )
 
 
 def _local_host_name(host: str) -> bool:
@@ -70,7 +120,14 @@ def _local_host_name(host: str) -> bool:
 def resolve_host_with_timeout(
     host: str, port: int, *, timeout: float
 ) -> list[ResolvedAddress] | None:
-    """Resolve host with wall-clock budget; return None on timeout/error."""
+    """Resolve host with wall-clock budget.
+
+    Returns ``None`` when resolution completes but fails (e.g. NXDOMAIN).
+    Raises :class:`DnsLookupTimedOut` when the budget expires before
+    resolution completes — a distinct outcome from a completed failure, so a
+    caller can tell "no such host" apart from "the network was too slow to
+    say" (see :func:`classify_public_http_url`).
+    """
     result_queue: queue.Queue[list[ResolvedAddress] | None] = queue.Queue(maxsize=1)
 
     def resolve() -> None:
@@ -84,7 +141,7 @@ def resolve_host_with_timeout(
     try:
         return result_queue.get(timeout=max(0.001, timeout))
     except queue.Empty:
-        return None
+        raise DnsLookupTimedOut(host) from None
 
 
 def resolved_address_public(item: ResolvedAddress) -> bool:

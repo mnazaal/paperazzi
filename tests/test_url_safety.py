@@ -1,7 +1,10 @@
 import socket
+import time
 
 from pzi import url_safety
 from pzi.url_safety import (
+    DnsLookupTimedOut,
+    classify_public_http_url,
     public_ip_address,
     resolve_host_with_timeout,
     resolved_address_public,
@@ -173,3 +176,55 @@ def test_resolve_host_with_timeout_returns_none_on_error(monkeypatch) -> None:
 
     monkeypatch.setattr(url_safety.socket, "getaddrinfo", _boom)
     assert resolve_host_with_timeout("example.com", 443, timeout=1.0) is None
+
+
+def test_resolve_host_with_timeout_raises_distinct_error_on_timeout(monkeypatch) -> None:
+    # A resolver that never returns in time is a distinct outcome from one that
+    # returns quickly with an error (NXDOMAIN etc) — the caller needs to tell
+    # "no such host" apart from "the network was too slow to say".
+    def _slow(*a, **k):
+        time.sleep(0.2)
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
+
+    monkeypatch.setattr(url_safety.socket, "getaddrinfo", _slow)
+    try:
+        resolve_host_with_timeout("example.com", 443, timeout=0.01)
+        raise AssertionError("expected DnsLookupTimedOut")
+    except DnsLookupTimedOut:
+        pass
+
+
+def test_classify_public_http_url_distinguishes_timeout_from_non_public() -> None:
+    def timed_out(_host, _port, *, timeout):
+        raise DnsLookupTimedOut("example.com")
+
+    assert (
+        classify_public_http_url("https://example.com/x", resolve_host=timed_out)
+        == "dns-timeout"
+    )
+
+    def failed(_host, _port, *, timeout):
+        return None
+
+    assert (
+        classify_public_http_url("https://example.com/x", resolve_host=failed)
+        == "non-public"
+    )
+
+    def resolved_public(_host, port, *, timeout):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
+
+    assert (
+        classify_public_http_url("https://example.com/x", resolve_host=resolved_public)
+        == "public"
+    )
+
+    assert classify_public_http_url("ftp://example.com/x") == "invalid"
+    assert classify_public_http_url("http://localhost/x") == "non-public"
+
+
+def test_safe_public_http_url_is_classify_public_http_url_boolean_wrapper() -> None:
+    def timed_out(_host, _port, *, timeout):
+        raise DnsLookupTimedOut("example.com")
+
+    assert not safe_public_http_url("https://example.com/x", resolve_host=timed_out)

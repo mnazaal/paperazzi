@@ -22,7 +22,7 @@ from urllib.parse import urlsplit, urlunsplit
 from pzi.bibtex import NormalizedRecord
 from pzi.identifiers import detect_preprint_source
 from pzi.protocols import accepts_keyword
-from pzi.url_safety import origin_of, safe_public_http_url
+from pzi.url_safety import classify_public_http_url, origin_of, safe_public_http_url
 
 PdfDiscoveryContext: TypeAlias = dict[str, Any]
 
@@ -172,12 +172,23 @@ def _validated_discovery(
     later is covered without having to remember. The caller's exclusion list is
     applied in the same place and for the same reason: a step that happens to
     rediscover an already-failed URL must not end the chain with it.
+
+    A DNS timeout on the resolve is still dropped (fail-closed), but it is a
+    distinct outcome from "resolved to a non-public address" or "malformed" —
+    a slow resolver reads differently from an attacker-supplied private URL, so
+    it is named in the diagnostics rather than silently discarded like the
+    other reasons.
     """
     pdf_url = record.get("pdf_url")
     if not pdf_url:
         return record
-    if safe_public_http_url(str(pdf_url)) and str(pdf_url) not in excluded_pdf_urls(context):
+    classification = classify_public_http_url(str(pdf_url))
+    if classification == "public" and str(pdf_url) not in excluded_pdf_urls(context):
         return record
+    if classification == "dns-timeout" and isinstance(context, dict):
+        context.setdefault("discovery_diagnostics", []).append(
+            f"dropped {pdf_url}: DNS lookup timed out"
+        )
     cleaned = dict(record)
     cleaned.pop("pdf_url", None)
     cleaned.pop("pdf_source", None)

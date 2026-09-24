@@ -949,6 +949,38 @@ def test_a_provider_that_simply_has_no_pdf_reports_nothing() -> None:
     assert discovery_diagnostics(context) == []
 
 
+# ── A DNS timeout on a discovered pdf_url is named, not silently dropped ──
+#
+# `_validated_discovery` drops any pdf_url that isn't a public http(s) URL.
+# A DNS timeout is still fail-closed (dropped) but is a different fact than
+# "resolved to a private address" or "malformed" — a slow resolver is not an
+# attacker-supplied URL, so it gets its own diagnostic line.
+
+
+def test_a_dns_timeout_on_a_discovered_pdf_url_is_named_in_the_diagnostics(
+    monkeypatch,
+) -> None:
+    import pzi.pdf_discovery as pdf_discovery_module
+
+    def fake_classify(value, **kwargs):
+        return "dns-timeout" if value == "https://slow.example/paper.pdf" else "public"
+
+    monkeypatch.setattr(pdf_discovery_module, "classify_public_http_url", fake_classify)
+
+    record = {"title": "Paper"}
+    context: PdfDiscoveryContext = {}
+
+    def step(r, c):
+        return {**r, "pdf_url": "https://slow.example/paper.pdf", "pdf_source": "test"}
+
+    result = apply_pdf_discovery(record, [step], context)
+
+    assert result.get("pdf_url") is None
+    assert discovery_diagnostics(context) == [
+        "dropped https://slow.example/paper.pdf: DNS lookup timed out"
+    ]
+
+
 # ── B6: doi_pdf_step must reuse the composed metadata fetcher ───────────
 #
 # `add_service.build_metadata_fetch_text` composes a disk-cache + per-host

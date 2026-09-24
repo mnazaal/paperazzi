@@ -103,10 +103,51 @@ def test_redirect_to_non_http_scheme_is_blocked() -> None:
 
 
 def test_redirect_to_public_url_is_allowed(monkeypatch) -> None:
-    monkeypatch.setattr(safe_http, "safe_public_http_url", lambda _url, **_kw: True)
+    monkeypatch.setattr(safe_http, "classify_public_http_url", lambda _url, **_kw: "public")
     handler = safe_http._ValidatingRedirectHandler()
     result = _redirect(handler, "https://example.org/next")
     assert isinstance(result, urllib.request.Request)
+
+
+def test_redirect_names_dns_timeout_distinctly(monkeypatch) -> None:
+    # A DNS timeout on a redirect hop (e.g. a slow doi.org resolver) must not
+    # read the same as "resolved to a non-public address" — the retry loop
+    # and the operator both need to tell the two apart.
+    monkeypatch.setattr(safe_http, "classify_public_http_url", lambda *a, **k: "dns-timeout")
+    handler = safe_http._ValidatingRedirectHandler()
+    with pytest.raises(SsrfBlocked, match="DNS lookup timed out for slow.example"):
+        _redirect(handler, "https://slow.example/next")
+
+
+def test_redirect_drops_api_key_when_host_changes(monkeypatch) -> None:
+    monkeypatch.setattr(safe_http, "classify_public_http_url", lambda *a, **k: "public")
+    handler = safe_http._ValidatingRedirectHandler()
+    req = urllib.request.Request(
+        "https://api.semanticscholar.org/start",
+        headers={"x-api-key": "secret", "User-Agent": "pzi"},
+    )
+    result = handler.redirect_request(
+        req, io.BytesIO(b""), 302, "Found", email.message.Message(),
+        "https://other-host.example/next",
+    )
+    assert result is not None
+    assert "X-api-key" not in result.headers
+    assert result.headers.get("User-agent") == "pzi"
+
+
+def test_redirect_keeps_api_key_on_same_host(monkeypatch) -> None:
+    monkeypatch.setattr(safe_http, "classify_public_http_url", lambda *a, **k: "public")
+    handler = safe_http._ValidatingRedirectHandler()
+    req = urllib.request.Request(
+        "https://api.semanticscholar.org/start",
+        headers={"x-api-key": "secret"},
+    )
+    result = handler.redirect_request(
+        req, io.BytesIO(b""), 302, "Found", email.message.Message(),
+        "https://api.semanticscholar.org/next",
+    )
+    assert result is not None
+    assert result.headers.get("X-api-key") == "secret"
 
 
 # === SsrfBlocked is terminal (no retry) in fetch helpers ===

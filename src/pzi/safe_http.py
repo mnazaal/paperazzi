@@ -25,7 +25,7 @@ import urllib.request
 from collections.abc import Callable, Sequence
 from typing import Any
 
-from pzi.url_safety import public_ip_address, safe_public_http_url
+from pzi.url_safety import classify_public_http_url, public_ip_address
 
 GetAddrInfo = Callable[..., Sequence[tuple[Any, ...]]]
 
@@ -113,6 +113,25 @@ class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
         return self.do_open(self._conn_cls, req, context=self._ssl_ctx)
 
 
+def _drop_cross_host_api_key(
+    req: urllib.request.Request, new_req: urllib.request.Request, newurl: str
+) -> None:
+    """Strip ``x-api-key`` from *new_req* when the redirect leaves the original host.
+
+    ``urllib``'s redirect handling copies every non-``Content-*`` header onto
+    the redirected request, including a caller-supplied API key. The key is
+    scoped to one host (see ``fetch_helpers._API_KEY_HOSTS``), so carrying it
+    across a redirect hands it to whatever host the response named.
+    """
+    original_host = (urllib.parse.urlsplit(req.full_url).hostname or "").lower()
+    target_host = (urllib.parse.urlsplit(newurl).hostname or "").lower()
+    if original_host == target_host:
+        return
+    for key in list(new_req.headers):
+        if key.lower() == "x-api-key":
+            del new_req.headers[key]
+
+
 class _ValidatingRedirectHandler(urllib.request.HTTPRedirectHandler):
     def __init__(self, allow_host: str | None = None) -> None:
         self._allow_host = allow_host
@@ -126,9 +145,16 @@ class _ValidatingRedirectHandler(urllib.request.HTTPRedirectHandler):
         headers: Any,
         newurl: str,
     ) -> urllib.request.Request | None:
-        if not safe_public_http_url(newurl, allow_host=self._allow_host):
+        classification = classify_public_http_url(newurl, allow_host=self._allow_host)
+        if classification == "dns-timeout":
+            host = urllib.parse.urlsplit(newurl).hostname or newurl
+            raise SsrfBlocked(f"DNS lookup timed out for {host}")
+        if classification != "public":
             raise SsrfBlocked(f"blocked redirect to non-public URL: {newurl}")
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+        new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new_req is not None:
+            _drop_cross_host_api_key(req, new_req, newurl)
+        return new_req
 
 
 def _pinned_conn_classes(
