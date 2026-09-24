@@ -425,6 +425,36 @@ def test_browser_pdf_step_reports_dead_server_distinctly(monkeypatch) -> None:
     ]
 
 
+def test_browser_pdf_step_never_invokes_hook_for_non_public_landing_url(monkeypatch) -> None:
+    """The input-side guard `web_attachment_step` has must exist here too.
+
+    `browser_pdf_step` hands the landing URL to a subprocess hook or a server
+    API that fetches it, so an unvalidated `canonical_url` of
+    `http://169.254.169.254/` (cloud metadata) must never reach either.
+    """
+    calls: list[str] = []
+
+    def recording_hook(*, command, page_url, doi=None, errors=None):
+        calls.append(page_url)
+        return None
+
+    import pzi.browser_pdf as browser_pdf_module
+
+    monkeypatch.setattr(browser_pdf_module, "discover_pdf_url_with_browser", recording_hook)
+
+    record = {"title": "Paper", "canonical_url": "http://169.254.169.254/"}
+    context: PdfDiscoveryContext = {
+        "api_url": None,
+        "browser_pdf_cmd": "echo",
+        "raw_value": "",
+    }
+
+    result = browser_pdf_step(record, context)
+
+    assert calls == []
+    assert result == record
+
+
 def test_unpaywall_step_no_doi() -> None:
     record = {"title": "Paper"}
     context: PdfDiscoveryContext = {"unpaywall_email": "test@example.com"}

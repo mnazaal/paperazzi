@@ -466,6 +466,15 @@ def browser_pdf_step(
     doi = record.get("doi") if isinstance(record.get("doi"), str) else None
 
     for url in landing_page_urls(base_record=record, raw_value=context["raw_value"]):
+        # Same defect as `web_attachment_step` above: this URL comes from
+        # provider metadata / captured pages and is handed to the server API
+        # or a browser hook that will fetch it, so an unvalidated
+        # `http://169.254.169.254/…` becomes a proxy into this machine's
+        # network. Validated here before either path is tried; the PDF URL
+        # *returned* below is already checked.
+        if not safe_public_http_url(url):
+            continue
+
         pdf_url: str | None = None
 
         # Prefer server-side persistent browser when available.
