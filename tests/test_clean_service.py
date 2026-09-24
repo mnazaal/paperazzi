@@ -766,3 +766,41 @@ def test_quarantine_pdf_refuses_when_the_bib_is_locked_elsewhere(monkeypatch) ->
             holder.close()
 
         assert os.path.exists(orphan)
+
+
+def test_clean_fix_rechecks_references_under_the_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A writer that commits `file =` between the sweep's read and its lock wins.
+
+    PDF writers store the file before taking the lock that records it, so the
+    sweep's pre-lock read can list a PDF as an orphan that is referenced by the
+    time the sweep holds the lock. The move must be decided on what the bib
+    says under the lock, not on the earlier read.
+    """
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    pdf = papers / "late.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    bib = tmp_path / "main.bib"
+    bib.write_text("", encoding="utf-8")
+
+    real_validate = clean_service.validate_library
+
+    def validate_then_writer_commits(**kwargs):
+        result = real_validate(**kwargs)
+        assert str(pdf) in [os.path.realpath(p) for p in result["orphan_pdfs"]]
+        bib.write_text(
+            "@article{late,\n  title = {Late},\n  file = {" + str(pdf) + "},\n}\n",
+            encoding="utf-8",
+        )
+        return result
+
+    monkeypatch.setattr(clean_service, "validate_library", validate_then_writer_commits)
+
+    result = clean_library(
+        bib_path=str(bib), papers_dir=str(papers), dry_run=False, move_orphans=True,
+    )
+
+    assert pdf.exists()
+    assert not any(a.get("done") for a in result["actions"])

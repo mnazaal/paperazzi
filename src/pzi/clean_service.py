@@ -12,6 +12,7 @@ from typing import Any, NotRequired, TypedDict
 
 from pzi.bib_repository import (
     read_bib_file,
+    read_bib_file_raw_with_failures,
     read_bib_file_with_failures,
     read_bib_notices,
     with_bib_lock,
@@ -367,6 +368,25 @@ def validate_library(
     }
 
 
+def _referenced_under_held_lock(bib_paths: Sequence[str]) -> set[str]:
+    """Resolved PDF paths the given bibs reference, read without taking a lock.
+
+    For a caller that already holds the exclusive lock on every one of
+    *bib_paths*: :func:`referenced_pdf_paths` takes a shared lock per bib, which
+    would block behind this process's own exclusive one.
+    """
+    referenced: set[str] = set()
+    for path in bib_paths:
+        if not Path(path).exists():
+            continue
+        raw, _failures = read_bib_file_raw_with_failures(path)
+        for record in raw["records"]:
+            pdf = record.get("local_pdf_path")
+            if pdf:
+                referenced.add(os.path.realpath(str(Path(str(pdf)).expanduser())))
+    return referenced
+
+
 def referenced_pdf_paths(
     bib_paths: Sequence[str],
     *,
@@ -646,11 +666,20 @@ def clean_library(
             with ExitStack() as locks:
                 for path in lock_targets:
                     locks.enter_context(with_bib_lock(path, shared=False))
-                # The destination name is chosen and the move performed under
-                # the same lock, so a concurrent writer's own lock acquisition
-                # (to update a `file =` field) cannot interleave between the
-                # two: it either finishes first, and this plan sees its new
-                # reference, or it waits until this move is done.
+                # The orphan list above came from a read that released its
+                # lock. A PDF writer stores the file *before* taking the lock
+                # that records it, so one may have committed its `file =` in
+                # that gap. Decide the move on what the bibs say now, under
+                # the lock the writer needs, not on the earlier read.
+                still_referenced = _referenced_under_held_lock(lock_targets)
+                unclaimed = [
+                    p for p in unclaimed
+                    if os.path.realpath(p) not in still_referenced
+                ]
+                redundant = {
+                    p for p in redundant
+                    if os.path.realpath(p) not in still_referenced
+                }
                 actions = plan_orphan_quarantine(
                     orphan_pdfs=unclaimed,
                     orphan_dir=str(orphan_dir),
