@@ -6,8 +6,11 @@ import os
 import tempfile
 from pathlib import Path
 
-from pzi.clean_service import clean_library, validate_library
-from pzi.errors import REASON_USAGE
+import pytest
+
+import pzi.clean_service as clean_service
+from pzi.clean_service import clean_library, quarantine_pdf, validate_library
+from pzi.errors import REASON_USAGE, PziError
 
 
 def _write_bib(path: str, content: str) -> None:
@@ -659,3 +662,107 @@ def test_a_title_carrying_escaped_latex_commands_is_reported() -> None:
         escaped = [i for i in result["issues"] if i["type"] == "escaped_latex_title"]
         assert len(escaped) == 1
         assert "bad2024" in escaped[0]["message"]
+
+
+def _hold_lock_exclusively(bib_path: str):
+    """Take the same lock `with_bib_lock` would, on a separate open-file-description.
+
+    Mirrors `test_with_bib_lock_times_out_instead_of_blocking_forever` in
+    `test_bib_repository.py`: opening the `.lock` file directly and locking it
+    with `portalocker` stands in for another pzi process already holding it,
+    since `flock` is scoped to the open-file-description, not the process.
+    """
+    import portalocker
+
+    holder = open(bib_path + ".lock", "a")
+    portalocker.lock(holder, portalocker.LOCK_EX | portalocker.LOCK_NB)
+    return holder
+
+
+def test_clean_library_fix_refuses_when_the_bib_is_locked_elsewhere(monkeypatch) -> None:
+    """`clean_library(fix=True)` used to hold no lock at all across its
+    read-scan-move, so it could act on a reference set a concurrent PDF writer
+    was mid-way through changing. It must now take the same exclusive lock a
+    writer holds around the move, and refuse (via the existing lock-timeout
+    mechanism) rather than silently proceeding unlocked when that lock is
+    held elsewhere.
+
+    The read (`validate_library` -> `read_bib_file`) takes its own transient
+    *shared* lock first and hits the same exclusive holder, so both the
+    module-level `with_bib_lock` `bib_repository.read_bib_file` calls
+    directly and `clean_service`'s own imported binding need the fast
+    timeout -- otherwise the read half of this test would genuinely wait out
+    the real 300s default before ever reaching the move's lock attempt.
+    """
+    from contextlib import contextmanager
+
+    import pzi.bib_repository as bib_repository
+
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "locked.bib")
+        papers = os.path.join(td, "papers")
+        os.makedirs(papers, exist_ok=True)
+        Path(os.path.join(papers, "stale.pdf")).write_bytes(b"%PDF-1.4\n")
+        _write_bib(
+            bib,
+            '@article{smith2024, title = {Test}, author = {S}, year = {2024}}',
+        )
+
+        real_lock = bib_repository.with_bib_lock
+
+        @contextmanager
+        def fast_timeout_lock(path, shared=False, *, timeout=None):
+            with real_lock(path, shared=shared, timeout=0.05):
+                yield
+
+        monkeypatch.setattr(clean_service, "with_bib_lock", fast_timeout_lock)
+        monkeypatch.setattr(bib_repository, "with_bib_lock", fast_timeout_lock)
+
+        holder = _hold_lock_exclusively(bib)
+        try:
+            with pytest.raises(PziError, match="timed out"):
+                clean_library(
+                    bib_path=bib, papers_dir=papers, dry_run=False, move_orphans=True,
+                )
+        finally:
+            holder.close()
+
+        # Nothing moved: the refusal must happen before any filesystem change.
+        assert os.path.exists(os.path.join(papers, "stale.pdf"))
+        assert not os.path.exists(os.path.join(papers, ".orphans"))
+
+
+def test_quarantine_pdf_refuses_when_the_bib_is_locked_elsewhere(monkeypatch) -> None:
+    """`quarantine_pdf` (the `delete`/`library merge` counterpart to the sweep)
+    must take the same lock, since its move can otherwise interleave with a
+    concurrent `clean_library --fix` reading the same directory.
+    """
+    from contextlib import contextmanager
+
+    import pzi.bib_repository as bib_repository
+
+    with tempfile.TemporaryDirectory() as td:
+        bib = os.path.join(td, "locked.bib")
+        papers = os.path.join(td, "papers")
+        os.makedirs(papers, exist_ok=True)
+        orphan = os.path.join(papers, "orphan.pdf")
+        Path(orphan).write_bytes(b"%PDF-1.4\n")
+        _write_bib(bib, "")
+
+        real_lock = bib_repository.with_bib_lock
+
+        @contextmanager
+        def fast_timeout_lock(path, shared=False, *, timeout=None):
+            with real_lock(path, shared=shared, timeout=0.05):
+                yield
+
+        monkeypatch.setattr(clean_service, "with_bib_lock", fast_timeout_lock)
+
+        holder = _hold_lock_exclusively(bib)
+        try:
+            with pytest.raises(PziError, match="timed out"):
+                quarantine_pdf(pdf_path=orphan, papers_dir=papers, bib_path=bib)
+        finally:
+            holder.close()
+
+        assert os.path.exists(orphan)

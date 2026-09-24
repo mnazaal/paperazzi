@@ -6,6 +6,7 @@ import hashlib
 import os
 import shutil
 from collections.abc import Mapping, Sequence
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict
 
@@ -13,6 +14,7 @@ from pzi.bib_repository import (
     read_bib_file,
     read_bib_file_with_failures,
     read_bib_notices,
+    with_bib_lock,
 )
 from pzi.bib_serialize import (
     failed_block_details,
@@ -461,6 +463,7 @@ def quarantine_pdf(
     *,
     pdf_path: str,
     papers_dir: str,
+    bib_path: str,
     dry_run: bool = False,
 ) -> QuarantineResult:
     """File one orphaned PDF into ``papers_dir/.orphans/``.
@@ -474,19 +477,26 @@ def quarantine_pdf(
 
     Moves, never deletes — the file stays recoverable next to the `.bak` the
     caller wrote, so the two together undo the whole operation.
+
+    *bib_path* names the lock this move takes (see :func:`clean_library` for
+    why): the caller's own bib write is already the commit point and has
+    already released its lock by the time this runs (`delete`/`library merge`
+    move the PDF only after the entry is gone), so without a lock here this
+    move can still interleave with a concurrent `clean_library --fix` sweep
+    reading the same directory.
     """
     source = Path(str(pdf_path)).expanduser()
     if not pdf_file_present(str(source)):
         return {"status": "missing", "source": str(source)}
 
     orphan_dir = Path(papers_dir) / QUARANTINE_DIRNAME
-    planned = plan_orphan_quarantine(
-        orphan_pdfs=[str(source)],
-        orphan_dir=str(orphan_dir),
-        taken_names=_names_in_dir(orphan_dir),
-    )
-    destination = str(planned[0]["destination"])
     if dry_run:
+        planned = plan_orphan_quarantine(
+            orphan_pdfs=[str(source)],
+            orphan_dir=str(orphan_dir),
+            taken_names=_names_in_dir(orphan_dir),
+        )
+        destination = str(planned[0]["destination"])
         # The preview action names itself: `api.delete`/`api.merge` default to
         # previewing and hand the raw dict to the caller, who otherwise cannot
         # tell `"moved"` from "would move" — the CLI's tense lives in a renderer
@@ -498,19 +508,30 @@ def quarantine_pdf(
             "dry_run": True,
         }
 
-    try:
-        # Creating the quarantine directory is part of the move: an unwritable
-        # papers_dir raised out of here as a traceback where the caller expects
-        # a "failed" action it can report and exit 1 on.
-        orphan_dir.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(source), destination)
-    except OSError as exc:
-        return {
-            "status": "failed",
-            "source": str(source),
-            "destination": destination,
-            "error": str(exc),
-        }
+    with with_bib_lock(bib_path, shared=False):
+        # The name is chosen and the move performed under the same lock a
+        # concurrent sweep holds across its own read-scan-move, so the two
+        # can no longer interleave: whichever gets the lock first sees a
+        # consistent directory listing and finishes before the other starts.
+        planned = plan_orphan_quarantine(
+            orphan_pdfs=[str(source)],
+            orphan_dir=str(orphan_dir),
+            taken_names=_names_in_dir(orphan_dir),
+        )
+        destination = str(planned[0]["destination"])
+        try:
+            # Creating the quarantine directory is part of the move: an
+            # unwritable papers_dir raised out of here as a traceback where
+            # the caller expects a "failed" action it can report and exit 1 on.
+            orphan_dir.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(source), destination)
+        except OSError as exc:
+            return {
+                "status": "failed",
+                "source": str(source),
+                "destination": destination,
+                "error": str(exc),
+            }
     return {"status": "moved", "source": str(source), "destination": destination}
 
 
@@ -543,6 +564,18 @@ def clean_library(
 
     Returns the same shape as :func:`validate_library` with an added
     ``actions`` list describing what was (or would be) done.
+
+    In ``--fix`` mode, the move itself — planning a destination and calling
+    `shutil.move` — runs under an exclusive lock on *bib_path* and each of
+    *sibling_bib_paths*, the same lock a PDF writer takes to update a
+    `file =` field. Previously the move took no lock at all, so it could
+    relocate a file a writer was about to reference right as that writer's
+    own lock acquisition was going through, leaving a `file =` field that
+    points at nothing. The read above (`validate_library` / `read_bib_file`)
+    already takes and releases its own *shared* lock per bib internally;
+    this function must not additionally hold an outer lock across that read,
+    since a second, exclusive attempt on the same lock file from the same
+    process would block behind its own shared one and never return.
     """
     validation = validate_library(
         bib_path=bib_path, papers_dir=papers_dir, sibling_bib_paths=sibling_bib_paths
@@ -594,27 +627,50 @@ def clean_library(
         # mixing them is what made sifting 262 files by hand necessary.
         redundant = set(validation.get("duplicate_orphan_pdfs") or [])
         unclaimed = [p for p in validation["orphan_pdfs"] if p not in redundant]
-        actions = plan_orphan_quarantine(
-            orphan_pdfs=unclaimed,
-            orphan_dir=str(orphan_dir),
-            taken_names=_names_in_dir(orphan_dir),
-        )
-        actions += plan_orphan_quarantine(
-            orphan_pdfs=sorted(redundant),
-            orphan_dir=str(duplicate_dir),
-            taken_names=_names_in_dir(duplicate_dir),
-        )
-        if not dry_run:
-            orphan_dir.mkdir(parents=True, exist_ok=True)
-            if redundant:
-                duplicate_dir.mkdir(parents=True, exist_ok=True)
-            for action in actions:
-                try:
-                    shutil.move(action["source"], action["destination"])
-                    action["done"] = True
-                except OSError as exc:
-                    action["done"] = False
-                    action["error"] = str(exc)
+
+        if dry_run:
+            # Nothing moves, so there is nothing an outer lock would protect —
+            # `validate_library`'s own shared lock already covered the read.
+            actions = plan_orphan_quarantine(
+                orphan_pdfs=unclaimed,
+                orphan_dir=str(orphan_dir),
+                taken_names=_names_in_dir(orphan_dir),
+            )
+            actions += plan_orphan_quarantine(
+                orphan_pdfs=sorted(redundant),
+                orphan_dir=str(duplicate_dir),
+                taken_names=_names_in_dir(duplicate_dir),
+            )
+        else:
+            lock_targets = sorted({bib_path, *sibling_bib_paths})
+            with ExitStack() as locks:
+                for path in lock_targets:
+                    locks.enter_context(with_bib_lock(path, shared=False))
+                # The destination name is chosen and the move performed under
+                # the same lock, so a concurrent writer's own lock acquisition
+                # (to update a `file =` field) cannot interleave between the
+                # two: it either finishes first, and this plan sees its new
+                # reference, or it waits until this move is done.
+                actions = plan_orphan_quarantine(
+                    orphan_pdfs=unclaimed,
+                    orphan_dir=str(orphan_dir),
+                    taken_names=_names_in_dir(orphan_dir),
+                )
+                actions += plan_orphan_quarantine(
+                    orphan_pdfs=sorted(redundant),
+                    orphan_dir=str(duplicate_dir),
+                    taken_names=_names_in_dir(duplicate_dir),
+                )
+                orphan_dir.mkdir(parents=True, exist_ok=True)
+                if redundant:
+                    duplicate_dir.mkdir(parents=True, exist_ok=True)
+                for action in actions:
+                    try:
+                        shutil.move(action["source"], action["destination"])
+                        action["done"] = True
+                    except OSError as exc:
+                        action["done"] = False
+                        action["error"] = str(exc)
 
     validation["actions"] = actions
     if not dry_run:
@@ -753,5 +809,10 @@ def plan_pdf_disposal(
         }
 
     return dict(
-        quarantine_pdf(pdf_path=pdf_path, papers_dir=papers_dir, dry_run=dry_run)
+        quarantine_pdf(
+            pdf_path=pdf_path,
+            papers_dir=papers_dir,
+            bib_path=target["path"],
+            dry_run=dry_run,
+        )
     )
