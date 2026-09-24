@@ -73,7 +73,7 @@ def build_server_plan(
     if resolved_host is None or resolved_port is None:
         return {"status": "error", "message": "failed to load config"}
 
-    if _is_wildcard_bind(resolved_host):
+    if is_wildcard_bind(resolved_host):
         return {
             "status": "error",
             "message": (
@@ -164,8 +164,3 @@ def is_wildcard_bind(host: str) -> bool:
         except ValueError:  # pragma: no cover - getaddrinfo returns real addresses
             continue
     return False
-
-
-#: Kept for the module's existing callers; the guard is public now because
-#: `http_api.server_exposure_error` needs the same answer.
-_is_wildcard_bind = is_wildcard_bind
