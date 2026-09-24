@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from pzi import cli_json, exit_codes
-from pzi.cli_render import error_lines, reindex_error_lines, render_reindex_result
+from pzi.cli_render import reindex_error_lines, render_reindex_result
 from pzi.commands.common import (
     emit_usage_error,
     has_read_warnings,
@@ -227,13 +227,7 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
             {**result, "applied": apply}, stdout, command="library reindex",
             items=result.get("changed") or [], bib_name=target["name"],
         )
-        if result["status"] != "ok":
-            return exit_codes.ENVIRONMENT
         return exit_codes.FINDINGS if findings else exit_codes.OK
-
-    if result["status"] != "ok":
-        print_lines(error_lines("reindex failed", result.get("errors", [])), stderr)
-        return exit_codes.ENVIRONMENT
 
     print_read_warnings(result, stderr)
     print_lines(render_reindex_result(result, dry_run=not apply), stdout)

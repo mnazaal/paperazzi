@@ -117,3 +117,20 @@ def test_library_check_with_no_network_route_exits_environment(
         ["library", "check", "--limit", "1", "--config", str(duplicate_config)], tmp_path,
     )
     assert exit_code == exit_codes.ENVIRONMENT
+
+
+# `library reindex` is excluded for a documented reason, not weakened: unlike
+# the other read-only commands here, it must compute a rename plan from the
+# *whole* file, and `reindex_library`/`bib_serialize.py` refuse outright on a
+# duplicate citekey — "malformed BibTeX: this file cannot be rewritten until
+# it is fixed" — raised as a `PziError(code=exit_codes.ENVIRONMENT)` before
+# `run_reindex_command` ever builds a `result` dict. That refusal is caught by
+# `cli.py`'s dispatch loop, never reaching the (now-removed) `result["status"]
+# != "ok"` checks this lane's item-4 change deleted from `commands/reindex.py`
+# as dead code — confirmed by reading `bib_serialize.py` and `cli.py`'s
+# `except PziError` handler, not merely asserted.
+def test_library_reindex_on_a_malformed_bib_refuses_with_environment(
+    duplicate_config: Path, tmp_path: Path,
+) -> None:
+    exit_code = _run(["library", "reindex", "--config", str(duplicate_config)], tmp_path)
+    assert exit_code == exit_codes.ENVIRONMENT
