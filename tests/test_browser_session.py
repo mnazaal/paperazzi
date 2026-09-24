@@ -73,7 +73,7 @@ def test_session_fetch_direct_pdf() -> None:
             return b"%PDF-1.4 direct"
 
     class FakeRequest:
-        def get(self, url):
+        def get(self, url, **kwargs):
             return FakeResponse()
 
     class FakePage:
@@ -88,7 +88,7 @@ def test_session_fetch_direct_pdf() -> None:
 
 def test_session_fetch_direct_exception() -> None:
     class FakeRequest:
-        def get(self, url):
+        def get(self, url, **kwargs):
             raise RuntimeError("network failure")
 
     class FakePage:
@@ -98,6 +98,76 @@ def test_session_fetch_direct_exception() -> None:
     result = s.fetch_direct("https://example.com/paper.pdf")
     assert result.status == -1
     assert not result.is_pdf()
+
+
+def test_session_fetch_direct_never_requests_a_redirect_to_loopback() -> None:
+    """`request.get` following redirects itself only re-checks the final URL.
+
+    A validated public start URL that 302s to a loopback target must have that
+    target refused *before* it is ever requested — not merely excluded from
+    the result once fetched.
+    """
+    requested: list[str] = []
+
+    class FakeResponse:
+        def __init__(self, status, headers):
+            self.status = status
+            self.headers = headers
+
+        def body(self):
+            raise AssertionError("body() must not be called on a refused hop")
+
+    class FakeRequest:
+        def get(self, url, **kwargs):
+            requested.append(url)
+            assert kwargs.get("max_redirects") == 0
+            return FakeResponse(302, {"location": "http://127.0.0.1:8765/admin"})
+
+    class FakePage:
+        request = FakeRequest()
+
+    s = BrowserSession(playwright="pw", browser_ref="br", page=FakePage())
+    result = s.fetch_direct("https://example.com/paper.pdf")
+
+    assert requested == ["https://example.com/paper.pdf"]
+    assert "http://127.0.0.1:8765/admin" not in requested
+    assert result.status == -1
+    assert not result.is_pdf()
+
+
+def test_session_fetch_direct_follows_a_safe_redirect_chain() -> None:
+    """The contrast: a redirect to another public host is still followed."""
+
+    class FakeResponse:
+        def __init__(self, status, headers, body_bytes=b""):
+            self.status = status
+            self.headers = headers
+            self._body = body_bytes
+
+        def body(self):
+            return self._body
+
+    responses = {
+        "https://example.com/paper.pdf": FakeResponse(
+            302, {"location": "https://mirror.example/paper.pdf"}
+        ),
+        "https://mirror.example/paper.pdf": FakeResponse(
+            200, {"content-type": "application/pdf"}, b"%PDF-1.4 mirrored"
+        ),
+    }
+
+    class FakeRequest:
+        def get(self, url, **kwargs):
+            return responses[url]
+
+    class FakePage:
+        request = FakeRequest()
+
+    s = BrowserSession(playwright="pw", browser_ref="br", page=FakePage())
+    result = s.fetch_direct("https://example.com/paper.pdf")
+
+    assert result.status == 200
+    assert result.body == b"%PDF-1.4 mirrored"
 
 
 def test_session_wait_network_idle() -> None:

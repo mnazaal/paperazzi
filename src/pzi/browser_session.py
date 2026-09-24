@@ -23,6 +23,14 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urljoin
+
+#: `fetch_direct` follows redirects manually (see below) rather than letting
+#: Playwright's `request.get` do it, so this bounds how many hops a
+#: pathological or malicious redirect chain gets before it is refused.
+_MAX_FETCH_DIRECT_REDIRECTS = 10
+
+_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 
 #: Prefix for cloned-profile temp dirs, shared by the cleanup sweep below.
 _CLONE_PREFIX = "pzi-chrome-"
@@ -196,24 +204,40 @@ class BrowserSession:
 
         Returns a FetchResult with status, content_type, and body bytes.
         Does NOT navigate the page — uses the browser's HTTP stack directly.
+
+        Follows redirects itself (``max_redirects=0`` on every request) rather
+        than letting Playwright's ``request.get`` follow them internally: that
+        only re-checks the *final* URL, so a validated public URL could 302
+        through a private hop (``127.0.0.1``, cloud metadata) that was never
+        requested through this guard — the hop is real regardless of whether
+        the response body is ever read. Each hop is validated with
+        ``url_allowed`` before it is requested, matching what
+        :func:`install_request_guard` does for page navigation, and bounded at
+        :data:`_MAX_FETCH_DIRECT_REDIRECTS` hops.
         """
         self._check_open()
         if not self.url_allowed(url):
             return FetchResult(status=-1, content_type=None, body=b"")
         try:
-            response = self.page.request.get(url)
-            final_url = getattr(response, "url", url) or url
-            if not self.url_allowed(final_url):
-                # Redirected somewhere private. `page.request` does not go
-                # through the page's route handler, so this is its guard.
-                return FetchResult(status=-1, content_type=None, body=b"")
-            ct = response.headers.get("content-type", "")
-            body = response.body() if response.status == 200 else b""
-            return FetchResult(
-                status=response.status,
-                content_type=ct,
-                body=body,
-            )
+            current = url
+            for _ in range(_MAX_FETCH_DIRECT_REDIRECTS + 1):
+                response = self.page.request.get(current, max_redirects=0)
+                if response.status not in _REDIRECT_STATUSES:
+                    ct = response.headers.get("content-type", "")
+                    body = response.body() if response.status == 200 else b""
+                    return FetchResult(status=response.status, content_type=ct, body=body)
+                location = response.headers.get("location")
+                if not location:
+                    return FetchResult(status=-1, content_type=None, body=b"")
+                next_url = urljoin(current, location)
+                if not self.url_allowed(next_url):
+                    # Refused before the hop is ever requested — the point of
+                    # following redirects manually instead of letting
+                    # `request.get` do it.
+                    return FetchResult(status=-1, content_type=None, body=b"")
+                current = next_url
+            # Exhausted the hop budget without a non-redirect response.
+            return FetchResult(status=-1, content_type=None, body=b"")
         except Exception:
             return FetchResult(status=-1, content_type=None, body=b"")
 
