@@ -202,6 +202,53 @@ def test_tag_list_unknown_citekey_is_not_found(tmp_path: Path) -> None:
     assert exit_code == exit_codes.NOT_FOUND
 
 
+def test_run_tag_command_list_exits_findings_on_read_warnings(tmp_path: Path) -> None:
+    """`tag list` must route read warnings through the same rule as `entries`,
+    `library dedupe`/`clean`/`reindex`/`check`: a lenient parse is reported, not
+    silently exit 0."""
+    def fake_list_tags(**_kwargs):
+        return {
+            "status": "ok",
+            "tags": ["ml"],
+            "errors": [],
+            "warnings": ["duplicate citekey 'a': keeping first occurrence"],
+        }
+
+    exit_code = run_tag_command(
+        Namespace(tag_command="list", citekey=None, json=False),
+        home_dir=str(tmp_path),
+        config_path=str(tmp_path / "config.toml"),
+        stdout=StringIO(),
+        stderr=StringIO(),
+        bib_selector=None,
+        list_tags_fn=fake_list_tags,
+    )
+
+    assert exit_code == exit_codes.FINDINGS
+
+
+def test_run_tag_command_list_json_exits_findings_on_read_warnings(tmp_path: Path) -> None:
+    def fake_list_tags(**_kwargs):
+        return {
+            "status": "ok",
+            "tags": ["ml"],
+            "errors": [],
+            "warnings": ["duplicate citekey 'a': keeping first occurrence"],
+        }
+
+    exit_code = run_tag_command(
+        Namespace(tag_command="list", citekey=None, json=True),
+        home_dir=str(tmp_path),
+        config_path=str(tmp_path / "config.toml"),
+        stdout=StringIO(),
+        stderr=StringIO(),
+        bib_selector=None,
+        list_tags_fn=fake_list_tags,
+    )
+
+    assert exit_code == exit_codes.FINDINGS
+
+
 def test_tag_list_bad_target_is_environment(tmp_path: Path) -> None:
     """A bad --target is a config problem, so it stays ENVIRONMENT, not 3."""
     def fake_list_tags(**_kwargs):

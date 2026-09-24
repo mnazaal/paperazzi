@@ -7,7 +7,7 @@ from typing import Any, TextIO
 
 from pzi import cli_json, exit_codes
 from pzi.cli_render import error_lines, render_tag_mutation_success
-from pzi.commands.common import print_lines, print_read_warnings
+from pzi.commands.common import has_read_warnings, print_lines, print_read_warnings
 from pzi.errors import exit_code_for_error
 from pzi.tag_service import add_tags, list_tags, parse_tag_csv, remove_tags
 
@@ -39,13 +39,13 @@ def run_tag_command(
         if getattr(args, "json", False):
             cli_json.emit_result(result, stdout, command="tag list", items=result.get("tags"))
             if result["status"] == "ok":
-                return exit_codes.OK
+                return exit_codes.FINDINGS if has_read_warnings(result) else exit_codes.OK
             return exit_code_for_error(result)
         if result["status"] == "ok":
             print_read_warnings(result, stderr)
             for tag in result["tags"]:
                 print(tag, file=stdout)
-            return exit_codes.OK
+            return exit_codes.FINDINGS if has_read_warnings(result) else exit_codes.OK
         print_lines(error_lines("failed to list tags", result["errors"]), stderr)
         return exit_code_for_error(result)
 
