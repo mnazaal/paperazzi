@@ -308,3 +308,21 @@ def test_widening_the_arxiv_pattern_does_not_swallow_dois() -> None:
     for doi in ("10.1145/3372297", "10.1038/s41586-021-03819-2", "10.1000/xyz123"):
         assert normalize_arxiv_id(doi) is None, doi
         assert classify_input(doi)["normalized"] == doi.lower()
+
+
+def test_classify_input_does_not_fabricate_a_doi_from_an_arbitrary_local_path() -> None:
+    """`_ARXIV_ID`'s old-style alternative was `[a-z\\-]+/\\d{7}` — unrestricted, so
+    ANY lowercase-and-hyphen segment before a 7-digit number looked like an old
+    arXiv archive name, not just a real one. `papers/1234567` and
+    `notes/2023001` are plausible local paths, not identifiers, and used to
+    classify as `doi` with a fabricated `10.48550/arxiv...` normalized form —
+    item 631. Restricted to arXiv's actual pre-2007 archive list, both are
+    correctly unrecognized.
+    """
+    from pzi.identifiers import classify_input, normalize_arxiv_id
+
+    for value in ("papers/1234567", "notes/2023001"):
+        assert normalize_arxiv_id(value) is None, value
+        result = classify_input(value)
+        assert result["kind"] == "unknown", value
+        assert result["normalized"] is None, value

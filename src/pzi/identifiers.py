@@ -33,15 +33,32 @@ DOI_PATTERN = re.compile(
 # Without it those URLs yielded no DOI at all. Kept to a lowercase word rather
 # than `[^/]+/`, which would start swallowing arbitrary junk.
 DOI_IN_PATH_PATTERN = re.compile(r"(?i)/doi/(?:[a-z]+/)?(10\.\d{4,9}/[^\s?#]+)")
+# The complete list of arXiv's old-style (pre-2007) archive and subject-class
+# names — https://arxiv.org/archive/ — not `[a-z\-]+` unrestricted: that
+# admitted any lowercase-and-hyphen segment before a 7-digit number, so a path
+# like `papers/1234567` (no archive at all, just a directory name and a serial
+# number) classified as an arXiv ID and fabricated a `10.48550/arxiv...` DOI
+# for something that was never one — item 631.
+_ARXIV_OLD_STYLE_ARCHIVES = (
+    "astro-ph", "cond-mat", "gr-qc", "hep-ex", "hep-lat", "hep-ph", "hep-th",
+    "math-ph", "nlin", "nucl-ex", "nucl-th", "physics", "quant-ph", "math",
+    "cs", "q-bio", "q-fin", "stat", "eess", "econ",
+)
+_ARXIV_OLD_STYLE_ARCHIVE_PATTERN = "|".join(
+    re.escape(archive) for archive in _ARXIV_OLD_STYLE_ARCHIVES
+)
 # `(?:\.[a-z\-]+)?` admits the dotted subject class in old-style arXiv IDs;
 # `[a-z\-]+` alone excluded the dot, so those fell through to being classified
 # as a plain URL and lost their DOI mapping. The subclass was `[a-z]{2}` until
 # it was measured against real IDs: that admits `math.GT` and `astro-ph.CO` but
 # not `cond-mat.mes-hall/0402594` or `physics.flu-dyn/0601001`, whose subclasses
 # are hyphenated words rather than two-letter codes. Nothing here can swallow a
-# DOI: both alternatives require either letters before the `/` or the modern
-# `NNNN.NNNNN` shape, and every use of this pattern is anchored.
-_ARXIV_ID = r"[a-z\-]+(?:\.[a-z\-]+)?/\d{7}|\d{4}\.\d{4,5}"
+# DOI: both alternatives require either one of the real archive names above
+# before the `/` or the modern `NNNN.NNNNN` shape, and every use of this
+# pattern is anchored.
+_ARXIV_ID = (
+    rf"(?:{_ARXIV_OLD_STYLE_ARCHIVE_PATTERN})(?:\.[a-z\-]+)?/\d{{7}}|\d{{4}}\.\d{{4,5}}"
+)
 ARXIV_ABS_PATTERN = re.compile(rf"(?i)^/abs/({_ARXIV_ID})(v\d+)?/?$")
 ARXIV_PDF_PATTERN = re.compile(rf"(?i)^/pdf/({_ARXIV_ID})(v\d+)?(?:\.pdf)?/?$")
 # A bare arXiv ID, however it was handed to us: Zotero's `archiveID` carries an
