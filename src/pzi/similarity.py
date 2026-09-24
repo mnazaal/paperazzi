@@ -5,7 +5,7 @@ from __future__ import annotations
 import html
 import re
 import unicodedata
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Literal, NamedTuple, TypeAlias
 
 from pzi.bibtex import NormalizedRecord, normalize_authors
@@ -15,7 +15,11 @@ from pzi.identifiers import normalize_arxiv_id, normalize_doi, normalize_url
 # Type aliases
 # ---------------------------------------------------------------------------
 
-SimilarityCandidate: TypeAlias = dict[str, Any]
+#: Read-only: every caller passes either a plain dict or a NormalizedRecord
+#: TypedDict, and pyright treats a TypedDict as incompatible with dict[str,
+#: Any] (which implies mutation methods it doesn't safely support) but not
+#: with Mapping[str, Any], which is all `_prepare` actually needs.
+SimilarityCandidate: TypeAlias = Mapping[str, Any]
 
 IdentityKind = Literal["doi", "arxiv", "url"]
 
