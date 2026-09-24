@@ -18,8 +18,6 @@
 [Unit]
 Description=paperazzi capture server
 Documentation=https://github.com/mnazaal/paperazzi
-After=network-online.target
-Wants=network-online.target
 
 [Service]
 Type=simple
