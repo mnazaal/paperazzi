@@ -318,7 +318,11 @@ def _validate_bib_list(
 
 
 def _normalize_app_config(
-    raw: Mapping[str, object], validated_bibs: list[BibConfig], *, home_dir: str
+    raw: Mapping[str, object],
+    validated_bibs: list[BibConfig],
+    *,
+    home_dir: str,
+    base_dir: str | None = None,
 ) -> AppConfig:
     """Build a normalized AppConfig from already-validated fields.
 
@@ -340,7 +344,7 @@ def _normalize_app_config(
     normalized_capture_source_dirs: tuple[str, ...] = ()
     if isinstance(raw_capture_source_dirs, list):
         normalized_capture_source_dirs = tuple(
-            os.path.expanduser(d.strip())
+            _normalize_path(d.strip(), home_dir=home_dir, base_dir=base_dir)
             for d in raw_capture_source_dirs
             if isinstance(d, str) and d.strip()
         )
@@ -382,6 +386,13 @@ def _normalize_app_config(
     if not api_url:
         api_url = f"http://{api_listen_host}:{api_listen_port}"
 
+    raw_inbox_path = _opt_str_from_raw(raw, "inbox_path")
+    normalized_inbox_path = (
+        _normalize_path(raw_inbox_path, home_dir=home_dir, base_dir=base_dir)
+        if raw_inbox_path is not None
+        else None
+    )
+
     return {
         "translation_server_url": str(raw_translation_server_url),
         "bibs": validated_bibs,
@@ -391,7 +402,7 @@ def _normalize_app_config(
         "api_auth_token_cmd": opt("api_auth_token_cmd"),
         "api_allowed_origins": normalized_api_allowed_origins,
         "capture_source_dirs": normalized_capture_source_dirs,
-        "inbox_path": _expanded_opt(raw, "inbox_path"),
+        "inbox_path": normalized_inbox_path,
         "api_max_body_bytes": _safe_int(raw_api_max_body_bytes, DEFAULT_MAX_BODY_BYTES),
         "contact_email": opt("contact_email"),
         "contact_email_cmd": opt("contact_email_cmd"),
@@ -425,9 +436,9 @@ def _normalize_app_config(
         "pzi_data_home": (
             default_data_home(home_dir)
             if raw_pzi_data_home is None
-            else os.path.expanduser(str(raw_pzi_data_home))
+            else _normalize_path(str(raw_pzi_data_home), home_dir=home_dir, base_dir=base_dir)
         ),
-        "node_path": opt("node_path"),
+        "node_path": _expanded_opt(raw, "node_path"),
         "api_url": api_url,
         "browser_profile_path": opt("browser_profile_path"),
         "browser_engine": str(raw_browser_engine).strip() or DEFAULT_BROWSER_ENGINE,
@@ -649,7 +660,7 @@ def validate_app_config(
     if errors:
         return None, errors
     assert validated_bibs is not None  # no errors means the bib list validated
-    return _normalize_app_config(raw, validated_bibs, home_dir=home_dir), []
+    return _normalize_app_config(raw, validated_bibs, home_dir=home_dir, base_dir=base_dir), []
 
 
 def derive_papers_dir(bib_path: str) -> str:

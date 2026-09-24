@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -392,6 +393,92 @@ def test_app_config_explicit_data_home_overrides_xdg(monkeypatch) -> None:
     )
     assert errors == []
     assert config["pzi_data_home"] == "/explicit/dir"
+
+
+def test_app_config_expands_tilde_in_node_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`node_path` used to reach `subprocess` with a literal `~`, which no
+    shell expands for it — item 631.
+
+    `_expanded_opt` expands via `os.path.expanduser`, which reads the real
+    `$HOME` env var rather than the `home_dir` parameter (unlike
+    `_normalize_path`, used for `inbox_path`/`capture_source_dirs`/
+    `pzi_data_home` below) — an existing quirk of that helper, not something
+    this task changes, so `$HOME` is pinned here rather than asserting
+    against the unrelated `home_dir=HOME` argument.
+    """
+    monkeypatch.setenv("HOME", HOME)
+    config, errors = validate_app_config(
+        {
+            "node_path": "~/bin/node",
+            "bibs": [{"name": "ml", "path": "~/bib/ml.bib"}],
+        },
+        home_dir=HOME,
+    )
+    assert errors == []
+    assert config is not None
+    assert config["node_path"] == f"{HOME}/bin/node"
+    assert os.path.isabs(config["node_path"])
+
+
+def test_app_config_resolves_relative_inbox_path_against_config_dir(
+    tmp_path: Path,
+) -> None:
+    """A relative `inbox_path` used to resolve against the process CWD, so it
+    pointed at a different file depending on where `pzi` was invoked from —
+    the same bug `path` (the bib path) was fixed for. It should resolve
+    against the config file's own directory instead — item 631."""
+    config_dir = tmp_path / "sub"
+    config_dir.mkdir()
+    config, errors = validate_app_config(
+        {
+            "inbox_path": "inbox.txt",
+            "bibs": [{"name": "ml", "path": "~/bib/ml.bib"}],
+        },
+        home_dir=HOME,
+        base_dir=str(config_dir),
+    )
+    assert errors == []
+    assert config is not None
+    assert config["inbox_path"] == str(config_dir / "inbox.txt")
+
+
+def test_app_config_resolves_relative_capture_source_dirs_against_config_dir(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / "sub"
+    config_dir.mkdir()
+    config, errors = validate_app_config(
+        {
+            "capture_source_dirs": ["downloads", "~/other"],
+            "bibs": [{"name": "ml", "path": "~/bib/ml.bib"}],
+        },
+        home_dir=HOME,
+        base_dir=str(config_dir),
+    )
+    assert errors == []
+    assert config is not None
+    assert config["capture_source_dirs"] == (
+        str(config_dir / "downloads"),
+        f"{HOME}/other",
+    )
+
+
+def test_app_config_resolves_relative_pzi_data_home_against_config_dir(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / "sub"
+    config_dir.mkdir()
+    config, errors = validate_app_config(
+        {
+            "pzi_data_home": "state",
+            "bibs": [{"name": "ml", "path": "~/bib/ml.bib"}],
+        },
+        home_dir=HOME,
+        base_dir=str(config_dir),
+    )
+    assert errors == []
+    assert config is not None
+    assert config["pzi_data_home"] == str(config_dir / "state")
 
 
 def test_validate_app_config_rejects_an_unparseable_pdf_filename_format() -> None:
