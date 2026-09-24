@@ -102,11 +102,9 @@ def run_update_command(
             args, "--best-of only applies with --promote",
             command_path=("update",), stdout=stdout, stderr=stderr,
         )
-    if best_of < 1:
-        return emit_usage_error(
-            args, "--best-of must be at least 1",
-            command_path=("update",), stdout=stdout, stderr=stderr,
-        )
+    # `< 1` is no longer checked here either: `--best-of` is `_positive_int`
+    # at the parser now too, so a value that reaches this point is already
+    # `>= 1` and this guard could never fire.
 
     as_json = getattr(args, "json", False)
     ok = True

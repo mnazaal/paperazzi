@@ -592,7 +592,12 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     update_parser.add_argument(
-        "--best-of", type=int, default=1, metavar="N",
+        # `_positive_int`, matching `--limit` above: this was `type=int` with
+        # the `< 1` check done at runner-level (`commands/update.py`), so a
+        # value like 0 or -1 slipped past the parser and reached
+        # `commands/update.py`'s own check instead of failing at the usual
+        # argparse boundary — the same inconsistency `--limit` had.
+        "--best-of", type=_positive_int, default=1, metavar="N",
         help=(
             "with --promote, stop searching once N candidates good enough to promote "
             "have been found (default 1; 5 asks every provider every time)"
