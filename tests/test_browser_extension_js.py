@@ -35,11 +35,37 @@ BACKGROUND_DIR = PROJECT_ROOT / "browser-extension" / "background"
 POPUP_JS = PROJECT_ROOT / "browser-extension" / "popup.js"
 ONBOARDING_JS = PROJECT_ROOT / "browser-extension" / "onboarding.js"
 
+# Every test below copies one or more of these on-disk .js files into its own
+# tmp_path so Node can import a fresh, isolated module per test. The sources
+# don't change during a run, so re-reading them from disk ~95 times (plus the
+# background/ directory listing) is pure repeated I/O; this caches each file's
+# text once per test module and the helpers below pull from the cache. Each
+# test still gets its own tmp_path and its own `node` subprocess — only the
+# disk read is shared, not the module instance.
+_SOURCE_CACHE: dict[Path, str] = {}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _prime_extension_source_cache() -> None:
+    paths = [BACKGROUND_JS, POPUP_JS, POPUP_FORMAT_JS, ONBOARDING_JS]
+    if BACKGROUND_DIR.is_dir():
+        paths.extend(f for f in BACKGROUND_DIR.iterdir() if f.suffix == ".js")
+    for path in paths:
+        _SOURCE_CACHE.setdefault(path, path.read_text())
+
+
+def _source(path: Path) -> str:
+    cached = _SOURCE_CACHE.get(path)
+    if cached is None:
+        cached = path.read_text()
+        _SOURCE_CACHE[path] = cached
+    return cached
+
 
 def _run_background_module(script: str, tmp_path: Path) -> dict:
     module_path = tmp_path / "background.mjs"
     # Copy background.js to .mjs, rewriting its imports of split modules.
-    module_path.write_text(_rewrite_local_imports(BACKGROUND_JS.read_text()))
+    module_path.write_text(_rewrite_local_imports(_source(BACKGROUND_JS)))
     # Copy background/ subdirectory (split modules) to .mjs files, rewriting
     # their inter-module imports too.
     if BACKGROUND_DIR.is_dir():
@@ -48,7 +74,7 @@ def _run_background_module(script: str, tmp_path: Path) -> dict:
         for f in BACKGROUND_DIR.iterdir():
             if f.suffix == ".js":
                 (dest_dir / f"{f.stem}.mjs").write_text(
-                    _rewrite_local_imports(f.read_text())
+                    _rewrite_local_imports(_source(f))
                 )
     runner_path = tmp_path / "runner.mjs"
     runner_path.write_text(script.replace("./background.js", "./background.mjs"))
@@ -873,7 +899,7 @@ POPUP_FORMAT_JS = PROJECT_ROOT / "browser-extension" / "popup_format.js"
 def _run_popup_format_module(script: str, tmp_path: Path) -> dict:
     """Import popup_format.js in Node, run script, return JSON stdout."""
     module_path = tmp_path / "popup_format.mjs"
-    module_path.write_text(POPUP_FORMAT_JS.read_text())
+    module_path.write_text(_source(POPUP_FORMAT_JS))
     runner_path = tmp_path / "runner.mjs"
     runner_path.write_text(script.replace("./popup_format.js", "./popup_format.mjs"))
     result = subprocess.run(
@@ -1079,7 +1105,7 @@ def _write_ui_module_mocks(tmp_path: Path) -> None:
     destination = tmp_path / "background"
     destination.mkdir(exist_ok=True)
     (destination / "config_real.mjs").write_text(
-        _rewrite_local_imports((BACKGROUND_DIR / "config.js").read_text())
+        _rewrite_local_imports(_source(BACKGROUND_DIR / "config.js"))
     )
     (destination / "config.mjs").write_text(_MOCK_CONFIG_MODULE)
     # `search.js` imports `config.js` and `utils.js`; both are copied in beside
@@ -1088,11 +1114,11 @@ def _write_ui_module_mocks(tmp_path: Path) -> None:
     # mock only carries what the *UI* imports, so a real module reaching it
     # would fail on the first constant the UI happens not to use.
     (destination / "search_real.mjs").write_text(
-        _rewrite_local_imports((BACKGROUND_DIR / "search.js").read_text())
+        _rewrite_local_imports(_source(BACKGROUND_DIR / "search.js"))
         .replace('from "./config.mjs"', 'from "./config_real.mjs"')
     )
     (destination / "utils.mjs").write_text(
-        _rewrite_local_imports((BACKGROUND_DIR / "utils.js").read_text())
+        _rewrite_local_imports(_source(BACKGROUND_DIR / "utils.js"))
         .replace('from "./config.mjs"', 'from "./config_real.mjs"')
     )
     (destination / "search.mjs").write_text(_MOCK_SEARCH_MODULE)
@@ -1139,7 +1165,7 @@ _MOCK_PERMISSIONS_MODULE = (
 def _run_onboarding_module(script: str, tmp_path: Path) -> dict:
     """Run a test script that imports onboarding.js, the first-run settings page."""
     (tmp_path / "onboarding_test.mjs").write_text(
-        _rewrite_local_imports(ONBOARDING_JS.read_text())
+        _rewrite_local_imports(_source(ONBOARDING_JS))
     )
     _write_ui_module_mocks(tmp_path)
     runner_path = tmp_path / "runner.mjs"
@@ -1159,10 +1185,10 @@ def _run_onboarding_module(script: str, tmp_path: Path) -> dict:
 def _run_popup_js_test(script: str, tmp_path: Path) -> dict:
     """Run a test script that imports popup.js functions."""
     module_path = tmp_path / "popup_test.mjs"
-    module_path.write_text(_rewrite_local_imports(POPUP_JS.read_text()))
+    module_path.write_text(_rewrite_local_imports(_source(POPUP_JS)))
     # `.mjs`, because `_rewrite_local_imports` now rewrites popup.js's import
     # of it along with everything else.
-    (tmp_path / "popup_format.mjs").write_text(_rewrite_local_imports(POPUP_FORMAT_JS.read_text()))
+    (tmp_path / "popup_format.mjs").write_text(_rewrite_local_imports(_source(POPUP_FORMAT_JS)))
     # popup.js imports from background.js — mock the imports
     _write_ui_module_mocks(tmp_path)
     runner_path = tmp_path / "runner.mjs"
