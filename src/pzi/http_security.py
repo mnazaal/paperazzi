@@ -152,17 +152,6 @@ def origin_allowed(origin: str | None, allowed_origins: tuple[str, ...]) -> bool
             continue
         if value == normalized_allowed:
             return True
-        try:
-            allowed_parts = urlsplit(normalized_allowed)
-            value_parts = urlsplit(value)
-        except ValueError:
-            continue
-        if (
-            allowed_parts.scheme in {"chrome-extension", "moz-extension"}
-            and value_parts.scheme == allowed_parts.scheme
-            and value_parts.netloc == allowed_parts.netloc
-        ):
-            return True
     return False
 
 
