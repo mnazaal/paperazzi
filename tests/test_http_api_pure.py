@@ -893,7 +893,7 @@ def test_the_auth_header_is_read_in_any_case_too() -> None:
 
 def test_origin_allowed_accepts_extension_prefixes() -> None:
     assert origin_allowed("chrome-extension://abc123", ("chrome-extension://",))
-    assert origin_allowed("moz-extension://abc123", ("moz-extension:",))
+    assert origin_allowed("moz-extension://abc123", ("moz-extension://",))
     assert not origin_allowed("http://evil.example", ("http://localhost",))
 
 

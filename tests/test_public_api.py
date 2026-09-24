@@ -120,7 +120,7 @@ def test_the_public_api_matches_its_snapshot() -> None:
 
     If this failed because of a change you meant to make, it is a change to a
     **frozen public API**: after 1.0 that is a major version bump, not a patch.
-    Say so in the commit subject (`CHANGELOG.md` is closed — `git log` is the
+    Say so in the commit subject (there is no changelog — `git log` is the
     record), then regenerate:
 
         PZI_UPDATE_PUBLIC_API=1 pytest tests/test_public_api.py

@@ -152,7 +152,7 @@ to nowhere else — not to any other publisher, and not to any metadata API.
 | Attach session tokens | Random 32-byte URL-safe token, TTL 10 minutes, one-shot consume | Tokens generated per capture request, validated on raw PDF upload. |
 | Content-Length validation | Bodies over `api_max_body_bytes` rejected before reading | Kept. |
 | Request body read deadline | 120s wall-clock cap (`BODY_READ_DEADLINE_SECONDS`), independent of the 30s per-connection read timeout | A client that declares a large `Content-Length` and paces bytes just under the per-connection timeout (e.g. one byte every ~29s) never trips that per-`recv()` timeout, since each call gets its own fresh allowance; the deadline instead bounds the *total* time spent reading one body, closing the connection with `408 Request Timeout` once exceeded regardless of pacing. |
-| Recursive DNS safety | `safe_public_http_url` resolves hostnames with 250ms budget, rejects private/local IPs | Kept. One scoped exception: a configured `ezproxy_host` (see below). |
+| Recursive DNS safety | `safe_public_http_url` resolves hostnames with a 2 s budget and rejects private/local IPs. A lookup that exceeds the budget is refused too, but is classified `dns-timeout` rather than `non-public`, so the error message and discovery diagnostics say which it was | Kept. One scoped exception: a configured `ezproxy_host` (see below). |
 | Local capture paths | `/capture` accepts a local filesystem path only if it resolves inside `capture_source_dirs`; that list is **empty by default**, so local-file capture is refused over HTTP until you opt in | Leave unset unless you script local ingests. Paths are resolved (symlinks and `..` collapsed) before the containment test. |
 | Inbox draining | `POST /inbox/drain` drains only the configured `inbox_path` and refuses any other file; unset closes the route. Client-supplied `delay` is bounded and defaults to the CLI's value | Leave `inbox_path` unset unless you drive the inbox over HTTP. |
 
@@ -274,7 +274,9 @@ for the allowlist it does not get.
 
 - Metadata APIs (Crossref, OpenAlex, S2) see your IP address. If you use a
   VPN, those services see the VPN exit IP.
-- The Semantic Scholar API key is sent **only** to `api.semanticscholar.org`.
+- The Semantic Scholar API key is sent **only** to `api.semanticscholar.org`,
+  and the safe opener strips `x-api-key` from any redirect whose target host
+  differs from the original request's host.
   (Before 0.1.0b5 the shared metadata fetcher attached it to every provider, so
   Crossref, OpenAlex, DBLP and OpenReview also received it.)
 - FlareSolverr (optional, opt-in) routes publisher page requests through a
@@ -298,3 +300,11 @@ for the allowlist it does not get.
   networks. This is the only place the guard is relaxed, it is opt-in, and it
   applies solely to the explicitly-configured proxy host — every other URL and
   redirect target keeps full private-IP rejection.
+- The same per-hop rule covers the persistent browser's direct fetch
+  (`/browser/download`): it follows redirects itself, at most 10 hops, and
+  validates every hop before requesting it, not only the landing URL. Both
+  PDF-discovery entry points (`web_attachment_step` and `browser_pdf_step`)
+  validate a provider-supplied landing URL before handing it to any fetcher.
+- The Node.js runtime download (tarball, checksum file, version index) goes
+  through the same opener, capped at 128 MiB, and refuses a plaintext `http`
+  landing URL unless the mirror host is loopback.

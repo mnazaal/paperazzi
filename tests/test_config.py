@@ -534,7 +534,7 @@ def test_validate_app_config_rejects_wrong_types_for_optional_string_keys() -> N
     """A wrong type used to read as "unset" and vanish.
 
     `_opt_str_from_raw` returns None for any non-string, so `node_path = 22`
-    took exactly the silent fallback the template, README and CHANGELOG all
+    took exactly the silent fallback the template and README both
     disclaim ("a set-but-broken value is a hard error, not a silent fallback").
     """
     for key in (

@@ -142,12 +142,10 @@ def origin_allowed(origin: str | None, allowed_origins: tuple[str, ...]) -> bool
         normalized_allowed = allowed.strip().rstrip("/")
         if not normalized_allowed:
             continue
+        # `rstrip("/")` above turns the documented `chrome-extension://` into
+        # `chrome-extension:`, so this is the branch the default set reaches.
         if normalized_allowed in {"chrome-extension:", "moz-extension:"}:
             if value.startswith(normalized_allowed + "//"):
-                return True
-            continue
-        if normalized_allowed in {"chrome-extension://", "moz-extension://"}:
-            if value.startswith(normalized_allowed):
                 return True
             continue
         if value == normalized_allowed:

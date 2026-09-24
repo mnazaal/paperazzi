@@ -149,7 +149,7 @@ def find_duplicates(
     # Scored in one pass rather than one scan per record. Rebuilding an
     # N-element candidate list and re-tokenizing every title N times cost about
     # half an hour on a 22k-entry library, printing nothing while it ran; the
-    # answers are unchanged (see `best_fuzzy_matches`).
+    # answers are unchanged (see `best_fuzzy_match_details`).
     fuzzy_candidates: list[dict[str, Any]] = []
     seen_pairs: set[frozenset[str]] = set()
     hints = best_fuzzy_match_details(
