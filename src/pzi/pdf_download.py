@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 from pzi import exit_codes
 from pzi.errors import PziError
 from pzi.fetch_helpers import fetch_binary as _fetch_binary
-from pzi.fileio import write_all
+from pzi.fileio import fsync_parent_dir, write_all
 from pzi.pdf_planning import (
     is_pdf_bytes,
     is_pdf_content_type,
@@ -212,11 +212,17 @@ def write_pdf_bytes(
         try:
             try:
                 os.fchmod(temp_fd, 0o600)
-                _write_all(temp_fd, data)
+                write_all(temp_fd, data)
+                # Mirror the bib writer (bib_repository._write_bib_with_backup):
+                # flush content to disk before the link/replace makes it visible,
+                # so a crash right after can't leave a zero-byte or truncated PDF
+                # at a name entries already reference.
+                os.fsync(temp_fd)
             finally:
                 os.close(temp_fd)
             try:
                 _link_or_replace(temp_path, destination)
+                fsync_parent_dir(destination)
                 return str(destination)
             except FileExistsError:
                 try:
@@ -277,9 +283,5 @@ def _link_or_replace(temp_path: Path, destination: Path) -> None:
     if destination.exists():
         raise FileExistsError(errno.EEXIST, "File exists", str(destination))
     os.replace(temp_path, destination)
-
-
-#: The shared writer — see `fileio.write_all`.
-_write_all = write_all
 
 

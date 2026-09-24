@@ -401,10 +401,6 @@ def _existing_file_mode(file_path: Path) -> int | None:
         return None
 
 
-#: The shared writer — see `fileio.write_all`.
-_write_all = write_all
-
-
 def _assert_unchanged_since_read(path: str, expected_source: str) -> None:
     """Refuse to commit over a write pzi never read.
 
@@ -455,7 +451,7 @@ def _write_bib_text_atomic(path: str, text: str, *, expected_source: str) -> Non
     fd, tmp = tempfile.mkstemp(dir=str(file_path.parent), prefix=".bib-", suffix=".tmp")
     try:
         try:
-            _write_all(fd, content)
+            write_all(fd, content)
             os.fsync(fd)  # flush to disk before rename so a crash can't leave an empty bib
         finally:
             os.close(fd)

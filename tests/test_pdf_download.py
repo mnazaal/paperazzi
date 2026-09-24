@@ -1,10 +1,11 @@
 import http.client
+import os
 from pathlib import Path
 
 import pytest
 
 import pzi.pdf_download as pdf_download
-from pzi.pdf_download import fetch_and_store_pdf
+from pzi.pdf_download import fetch_and_store_pdf, write_pdf_bytes
 
 
 def test_fetch_and_store_pdf_uses_injected_downloader_and_writer(tmp_path: Path) -> None:
@@ -111,7 +112,7 @@ def test_a_failed_write_leaves_no_temp_file_behind(tmp_path, monkeypatch) -> Non
     def _boom(_fd, _data):
         raise OSError(28, "No space left on device")
 
-    monkeypatch.setattr(pdf_download, "_write_all", _boom)
+    monkeypatch.setattr(pdf_download, "write_all", _boom)
 
     with pytest.raises(OSError):
         pdf_download.write_pdf_bytes(
@@ -146,3 +147,42 @@ def test_a_filesystem_without_hardlinks_still_stores_the_pdf(tmp_path, monkeypat
 
     assert Path(stored).read_bytes() == b"%PDF-1.4\nx\n"
     assert list(tmp_path.glob(".pdf-*.tmp")) == []
+
+
+def test_write_pdf_bytes_fsyncs_the_temp_file_before_linking(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Mirror the bib writer (bib_repository._write_bib_with_backup): flush the
+    temp file's content to disk before it is made visible at the destination
+    name, so a crash right after can't leave a truncated PDF at a path an
+    entry's `file =` field already points to.
+    """
+    calls: list[int] = []
+    real_fsync = os.fsync
+
+    def recording_fsync(fd: int) -> None:
+        calls.append(fd)
+        real_fsync(fd)
+
+    monkeypatch.setattr(pdf_download.os, "fsync", recording_fsync)
+
+    real_link = pdf_download.os.link
+    link_seen_calls: list[int] = []
+
+    def recording_link(src, dst):
+        # The fd fsync'd above is already closed by the time link runs (the
+        # `finally: os.close(temp_fd)` closes it before `_link_or_replace`),
+        # so what matters is *order*: fsync must have already run.
+        link_seen_calls.append(len(calls))
+        return real_link(src, dst)
+
+    monkeypatch.setattr(pdf_download.os, "link", recording_link)
+
+    stored = write_pdf_bytes(data=b"%PDF-1.4\nbytes\n", papers_dir=str(tmp_path), citekey="k1")
+
+    assert Path(stored).read_bytes() == b"%PDF-1.4\nbytes\n"
+    # One fsync of the temp file's content before the link, and one more of the
+    # parent directory afterward (fileio.fsync_parent_dir) — both go through
+    # this same patched `os.fsync` since it's one process-wide `os` module.
+    assert len(calls) == 2, "expected the temp-file fsync plus the parent-dir fsync"
+    assert link_seen_calls == [1], "fsync must run before the temp file is linked into place"
