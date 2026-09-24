@@ -447,16 +447,3 @@ def _configured_status(*, cmd: object, value: object) -> str:
         return "plaintext"
     return "not configured"
 
-
-def _probe_translation_server(url: str, *, timeout: float = 2.0) -> bool:
-    """Whether translation-server — not merely *something* — answers at ``url``.
-
-    Delegates to the one probe in `ts_backend`, so `doctor`, `is_ts_reachable`
-    and the startup wait cannot disagree about what "reachable" means. They
-    used to: each sent a bare `GET /` and counted any HTTP response as success,
-    including an error response, so a 404 from an unrelated application holding
-    the port passed all three while every capture failed.
-    """
-    from pzi.ts_backend import probe_translation_server
-
-    return probe_translation_server(url, timeout=timeout).ok

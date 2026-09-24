@@ -1,10 +1,9 @@
-"""Edge tests for doctor_service.py uncovered lines (line 80: _probe_translation_server)."""
+"""Edge tests for doctor_service.py uncovered lines."""
 
 import os
 import stat
 
 from pzi.doctor_service import (
-    _probe_translation_server,
     _resolve_cmd_argv0,
     check_cmd_resolutions,
     check_dev_tools,
@@ -34,64 +33,6 @@ def test_config_permissions_warning_clean_for_owner_only(tmp_path) -> None:
 
 def test_config_permissions_warning_none_for_missing_file(tmp_path) -> None:
     assert config_permissions_warning(str(tmp_path / "nope.toml")) is None
-
-
-def _fake_signature_error():
-    """The real server's probe answer: 400 with its own message."""
-    import io
-    from urllib.error import HTTPError
-
-    return HTTPError(
-        "http://localhost:1969/search",
-        400,
-        "Bad Request",
-        {},
-        io.BytesIO(b"POST data not provided\n"),
-    )
-
-
-def test_probe_translation_server_recognises_the_server(monkeypatch) -> None:
-    def fake_urlopen(request, *, timeout):
-        raise _fake_signature_error()
-
-    monkeypatch.setattr("pzi.ts_backend.urlopen", fake_urlopen)
-    assert _probe_translation_server("http://localhost:1969") is True
-
-
-def test_probe_translation_server_rejects_an_unrelated_responder(monkeypatch) -> None:
-    """A 500 from something else on the port is not a reachable backend.
-
-    Asserted the opposite until 2026-09-07 ("HTTPError still returns True —
-    server is reachable"), which is how `doctor` came to pass while every
-    capture failed.
-    """
-    from urllib.error import HTTPError
-
-    class FakeErrorResponse:
-        def read(self, *_a):
-            return b"Internal Server Error"
-
-        def close(self) -> None:
-            pass
-
-    def fake_urlopen(request, *, timeout):
-        raise HTTPError(
-            "http://localhost:1969", 500, "Error", {}, FakeErrorResponse()
-        )
-
-    monkeypatch.setattr("pzi.ts_backend.urlopen", fake_urlopen)
-    assert _probe_translation_server("http://localhost:1969") is False
-
-
-def test_probe_translation_server_urlerror(monkeypatch) -> None:
-    """URLError → False."""
-    from urllib.error import URLError
-
-    def fake_urlopen(request, *, timeout):
-        raise URLError("connection refused")
-
-    monkeypatch.setattr("pzi.ts_backend.urlopen", fake_urlopen)
-    assert _probe_translation_server("http://localhost:1969") is False
 
 
 def test_doctor_check_with_probe_error(tmp_path, monkeypatch) -> None:
