@@ -12,7 +12,6 @@ an existing one — cannot quietly skip it the way `tag list` did.
 
 from __future__ import annotations
 
-import os
 from io import StringIO
 from pathlib import Path
 
