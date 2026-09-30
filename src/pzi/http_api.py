@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import socketserver
 import time
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
@@ -747,13 +748,30 @@ def _respond(
         return
 
 
+class PziHTTPServer(ThreadingHTTPServer):
+    """`ThreadingHTTPServer` without the reverse DNS lookup in `server_bind`.
+
+    `HTTPServer.server_bind` sets `server_name` from `socket.getfqdn(host)`, a
+    reverse lookup made after `bind()` and before `listen()`. On the macos-15
+    CI runner it blocked for over 30s, so `pzi server` held its port without
+    accepting a connection. Nothing in pzi reads `server_name`; the bind host
+    is as good a name as any.
+    """
+
+    def server_bind(self) -> None:
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = str(host)
+        self.server_port = port
+
+
 def run_server(
     *,
     config_path: str,
     home_dir: str,
     host: str,
     port: int,
-    server_class: type[HTTPServer] = ThreadingHTTPServer,
+    server_class: type[HTTPServer] = PziHTTPServer,
     security: HttpSecurityConfig | None = None,
     idle_minutes: int | None = None,
     browser_profile_path: str | None = None,

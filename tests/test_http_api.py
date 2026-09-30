@@ -196,6 +196,30 @@ def test_read_body_with_deadline_returns_the_body_when_fast_enough() -> None:
     assert result == body
 
 
+def test_server_bind_makes_no_reverse_dns_lookup(monkeypatch) -> None:
+    """`HTTPServer.server_bind` names the server with `socket.getfqdn(host)`,
+    a reverse lookup made after `bind()` and before `listen()`. On the
+    macos-15 CI runner it blocked `pzi server` for over 30s, holding its port
+    without accepting a connection. `run_server`'s server must not make it.
+    """
+    import inspect
+    from http.server import BaseHTTPRequestHandler
+
+    import pzi.http_api as http_api
+
+    def _no_reverse_dns(*_args, **_kwargs):
+        raise AssertionError("server bind made a reverse DNS lookup")
+
+    monkeypatch.setattr(socket, "gethostbyaddr", _no_reverse_dns)
+    server_class = inspect.signature(http_api.run_server).parameters["server_class"].default
+    server = server_class(("127.0.0.1", 0), BaseHTTPRequestHandler)
+    try:
+        assert server.server_name == "127.0.0.1"
+        assert server.server_port == server.server_address[1]
+    finally:
+        server.server_close()
+
+
 def test_post_slow_trickle_exceeding_body_deadline_answers_408(
     tmp_path: Path, monkeypatch
 ) -> None:
