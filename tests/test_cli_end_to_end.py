@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -151,8 +152,12 @@ def test_pzi_server_binds_serves_and_enforces_auth(tmp_path: Path) -> None:
     )
 
     proc = subprocess.Popen(
+        # SIGUSR1 dumps every thread's stack: if the port never opens, the
+        # failure then says where the server was stuck instead of only that it
+        # was (macos-15 CI hit this with nothing else to go on).
         [sys.executable, "-c",
-         "import sys; from pzi.cli import run_cli; sys.exit(run_cli(sys.argv[1:]))",
+         "import faulthandler, signal, sys; faulthandler.register(signal.SIGUSR1); "
+         "from pzi.cli import run_cli; sys.exit(run_cli(sys.argv[1:]))",
          "server", "--port", str(port), "--config", str(config_path)],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         env={**os.environ, "HOME": str(tmp_path), "PZI_SKIP_AUTO_START": "1"},
@@ -168,7 +173,14 @@ def test_pzi_server_binds_serves_and_enforces_auth(tmp_path: Path) -> None:
             except OSError:
                 time.sleep(0.2)
         else:
-            pytest.fail("server never bound its port")
+            proc.send_signal(signal.SIGUSR1)
+            time.sleep(1)
+            proc.terminate()
+            out, err = proc.communicate(timeout=15)
+            pytest.fail(
+                f"server never bound its port in 30s\n"
+                f"--- stdout ---\n{out}\n--- stderr (stacks) ---\n{err}"
+            )
 
         def get(path: str, *, with_token: bool) -> tuple[int, str]:
             request = urllib.request.Request(f"http://127.0.0.1:{port}{path}")
