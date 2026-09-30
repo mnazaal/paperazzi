@@ -1,5 +1,6 @@
 import http.client
 import json
+import select
 import socket
 import threading
 import time
@@ -231,24 +232,35 @@ def test_post_slow_trickle_exceeding_body_deadline_answers_408(
                 b"Content-Length: 1000000\r\n"
                 b"\r\n"
             )
-            for _ in range(6):
-                try:
-                    sock.sendall(b"x")
-                except (BrokenPipeError, ConnectionResetError):
+            # Pace with `select` rather than `sleep`, and stop sending the moment
+            # the 408 is readable. A byte sent after the server has closed draws
+            # a RST, and macOS then discards the 408 already sitting in the
+            # receive buffer (`recv` raises ECONNRESET); Linux delivers it first.
+            # The server only rechecks its deadline when a read returns, so a
+            # byte must land past 0.3s. From the first byte that can, wait a
+            # full second for the reply before sending again, so a runner slow
+            # to answer is not handed a byte after it has already closed.
+            first_byte = time.monotonic()
+            for _ in range(8):
+                sock.sendall(b"x")
+                wait = 0.1 if time.monotonic() - first_byte < 0.25 else 1.0
+                readable, _, _ = select.select([sock], [], [], wait)
+                if readable:
                     break
-                time.sleep(0.1)
             chunks = []
             while True:
                 chunk = sock.recv(65536)
                 if not chunk:
                     break
                 chunks.append(chunk)
+            # Taken before `server.shutdown()`, which waits up to one 0.5s
+            # `serve_forever` poll and is not what this test times.
+            elapsed = time.monotonic() - start
         finally:
             sock.close()
     finally:
         server.shutdown()
         server.server_close()
-    elapsed = time.monotonic() - start
 
     raw = b"".join(chunks)
     assert raw.startswith(b"HTTP/1.0 408 "), raw[:120]
@@ -258,9 +270,10 @@ def test_post_slow_trickle_exceeding_body_deadline_answers_408(
     # instead of `rfile.read1()`, since a slow trickle inside `read()`'s
     # internal accumulation loop only ever surfaces once the per-recv timeout
     # (5s here) elapses with no further bytes -- a much later, and wrong,
-    # 408. 2s is generous slack over the 0.3s deadline while staying far
-    # short of the 5s per-recv timeout it must be distinguished from.
-    assert elapsed < 2.0, f"expected the 0.3s deadline to fire quickly, took {elapsed:.2f}s"
+    # 408. 3s is generous slack over the 0.3s deadline (the slowest honest
+    # path, a server that started its clock late, answers at ~1.4s) while
+    # staying short of the 5s per-recv timeout it must be distinguished from.
+    assert elapsed < 3.0, f"expected the 0.3s deadline to fire quickly, took {elapsed:.2f}s"
 
 
 def test_get_bibs_returns_bib_list(tmp_path: Path) -> None:
