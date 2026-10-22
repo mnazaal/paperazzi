@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from pzi import exit_codes
+from pzi.add_planning import batch_status
 from pzi.commands.inbox import run_inbox_command
 
 # ---------------------------------------------------------------------------
@@ -47,7 +48,10 @@ def _drain_ok(
                       "status": "failed", "citekey": None,
                       "errors": ["capture failed"]})
     return {
-        "status": "ok",
+        # Derived exactly as `drain_inbox` derives it. A hardcoded "ok" here
+        # let an all-failed fake describe a result the real service never
+        # returns, which is how a silent all-failed drain stayed green.
+        "status": batch_status(succeeded=added + exists, failed=failed),
         "inbox_file": inbox_file,
         "dry_run": dry_run,
         "total": added + exists + failed,
@@ -359,3 +363,52 @@ def test_inbox_backend_not_ready_is_environment(tmp_path: Path, monkeypatch) -> 
 
     assert code == exit_codes.ENVIRONMENT
     assert "translation server is not running" in stderr.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# All lines failed: the real result is status "error" with empty top-level
+# errors, and the per-item reasons live only in items[]
+# ---------------------------------------------------------------------------
+
+
+def test_inbox_all_failed_reports_every_failure_on_text_path(tmp_path: Path) -> None:
+    """It used to print nothing at all and exit 5: the early-error branch
+    printed only the empty top-level `errors`."""
+    inbox = _inbox_with_lines(tmp_path, n=2)
+    result = _drain_ok(added=0, failed=2)
+    assert result["status"] == "error" and result["errors"] == []
+
+    stdout, stderr = StringIO(), StringIO()
+    code = run_inbox_command(
+        _args(inbox), home_dir=str(tmp_path), config_path=str(tmp_path / "c.toml"),
+        stdout=stdout, stderr=stderr, drain_inbox_fn=lambda **_: result,
+    )
+
+    assert code == exit_codes.ENVIRONMENT
+    err = stderr.getvalue()
+    assert "https://arxiv.org/abs/fail0" in err
+    assert "https://arxiv.org/abs/fail1" in err
+    assert "capture failed" in err
+    assert "2 failed" in stdout.getvalue()
+
+
+def test_inbox_all_failed_lifts_item_failures_into_json_errors(tmp_path: Path) -> None:
+    """`--json` used to carry the placeholder "command failed" instead."""
+    import json
+
+    inbox = _inbox_with_lines(tmp_path, n=2)
+    args = _args(inbox)
+    args.json = True
+    stdout, stderr = StringIO(), StringIO()
+    code = run_inbox_command(
+        args, home_dir=str(tmp_path), config_path=str(tmp_path / "c.toml"),
+        stdout=stdout, stderr=stderr,
+        drain_inbox_fn=lambda **_: _drain_ok(added=0, failed=2),
+    )
+
+    assert code == exit_codes.ENVIRONMENT
+    envelope = json.loads(stdout.getvalue())
+    assert envelope["status"] == "error"
+    assert "command failed" not in envelope["errors"]
+    assert any("fail0" in e for e in envelope["errors"])
+    assert any("fail1" in e for e in envelope["errors"])

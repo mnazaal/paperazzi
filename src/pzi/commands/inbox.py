@@ -121,7 +121,12 @@ def run_inbox_command(
             extra_tags=extra_tags or None,
             delay=delay,
         )
-        if result["status"] == "error":
+        # Only a drain that processed nothing takes this branch (an unreadable
+        # inbox, say), and it carries its reason in top-level `errors`. A drain
+        # in which every line failed is also `status: "error"` (`batch_status`),
+        # but its reasons live in `items[]` and `errors` is empty: sending it
+        # here printed nothing at all and exited 5. It renders like any batch.
+        if result["status"] == "error" and not result["items"]:
             if as_json:
                 cli_json.emit_result(result, stdout, command="inbox")
             else:

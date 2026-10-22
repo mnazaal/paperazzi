@@ -642,7 +642,9 @@ def test_an_all_failed_inbox_drain_exits_environment() -> None:
 
     def _drain(**_kwargs):
         return {
-            "status": "ok",
+            # The shape the real `drain_inbox` returns for this outcome
+            # (`batch_status`); a hardcoded "ok" here hid a silent text path.
+            "status": "error",
             "inbox_file": "/tmp/inbox.txt",
             "dry_run": False,
             "total": 2,
@@ -659,16 +661,18 @@ def test_an_all_failed_inbox_drain_exits_environment() -> None:
         inbox.write_text("10.1000/one\n10.1000/two\n")
         args = _Args()
         args.file = str(inbox)  # type: ignore[attr-defined]
+        stderr = io.StringIO()
         code = run_inbox_command(
             args,
             home_dir=td,
             config_path=str(Path(td) / "c.toml"),
             stdout=io.StringIO(),
-            stderr=io.StringIO(),
+            stderr=stderr,
             drain_inbox_fn=_drain,
         )
 
     assert code == exit_codes.ENVIRONMENT
+    assert "nope-1" in stderr.getvalue() and "nope-2" in stderr.getvalue()
 
 
 def test_an_all_failed_import_exits_environment() -> None:
