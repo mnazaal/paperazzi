@@ -204,7 +204,7 @@ pzi entries <citekey>                         # show the full record for one ent
 pzi entries --stats                           # library statistics
 pzi delete <citekey>... [--dry-run] [--force] [--keep-pdf] [--no-backup]   # PDFs go to papers/.orphans/
 pzi library list                              # the configured libraries and which is default
-pzi library clean [--dry-run] [--fix]         # check integrity; --fix relocates orphan PDFs
+pzi library clean [--fix [--dry-run]]         # check integrity; --fix relocates orphan PDFs
 pzi library dedupe                            # fuzzy candidates most similar first, with title_similarity and shared_authors
 pzi library merge <citekey_a> <citekey_b> [--dry-run] [--keep-pdf] [--no-backup]
 pzi library reindex [--rename-citekeys [--dry-run] [--force]]  # audit citekeys; rename only on explicit opt-in

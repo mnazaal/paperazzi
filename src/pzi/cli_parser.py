@@ -867,7 +867,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_config(clean_parser)
     add_single_target(clean_parser)
-    clean_parser.add_argument("--dry-run", action="store_true", help="report issues without fixing")
+    clean_parser.add_argument(
+        "--dry-run", action="store_true",
+        # Refused without --fix (`commands/clean.py`): a run without --fix is
+        # already read-only, so the help used to promise something it did not do.
+        help="with --fix, preview the moves without applying them",
+    )
     clean_parser.add_argument(
         "--fix", action="store_true", help="apply fixes (move orphan PDFs)"
     )

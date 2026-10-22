@@ -97,3 +97,16 @@ def test_a_healthy_library_still_exits_zero(tmp_path: Path) -> None:
     config, _ = _library(tmp_path, "@article{a2020,\n  title = {A},\n}\n")
     code, _out, _err = _run(config, tmp_path)
     assert code == exit_codes.OK
+
+
+def test_clean_dry_run_help_says_it_needs_fix(capsys) -> None:
+    """`--dry-run` is refused without `--fix`, but the help said "report issues
+    without fixing", which is what a plain run already does."""
+    import pytest
+
+    from pzi.cli_parser import build_parser
+
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["library", "clean", "--help"])
+    help_text = " ".join(capsys.readouterr().out.split())
+    assert "with --fix, preview" in help_text
