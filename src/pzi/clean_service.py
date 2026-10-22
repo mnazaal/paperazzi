@@ -18,6 +18,7 @@ from pzi.bib_repository import (
     with_bib_lock,
 )
 from pzi.bib_serialize import (
+    describe_unrepresentable_values,
     failed_block_details,
     parse_bib_library_resolving_macros,
     validate_bibtex_roundtrip,
@@ -183,6 +184,7 @@ def validate_library(
     #     than alongside numbers that invite acting on them.
     duplicate_citekeys: list[str] = []
     parse_failures: list[str] = []
+    library = None
     if Path(bib_path).exists():
         library = parse_bib_library_resolving_macros(read_text_utf8(bib_path))
         for key, message in failed_block_details(library):
@@ -242,6 +244,16 @@ def validate_library(
                     f"{entry.get('citekey') or '<no citekey>'}: reads back but "
                     f"cannot be written — {exc.message}"
                 ),
+            })
+    # The round-trip above runs on values already read, so it cannot see one the
+    # serializer would alter on the way out (`{a} # {b}`, a stray quoted brace):
+    # it compares the sanitized text with itself. Those are read off the parse.
+    if library is not None:
+        for _key, message in describe_unrepresentable_values(library):
+            issues.append({
+                "severity": "error",
+                "type": "unwritable_entry",
+                "message": message,
             })
 
     duplicate_citekeys = sorted(set(duplicate_citekeys))

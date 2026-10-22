@@ -463,6 +463,7 @@ def describe_failed_blocks(library: Library) -> list[str]:
         + describe_mangled_field_keys(library)
         + describe_empty_citekeys(library)
         + describe_case_colliding_field_keys(library)
+        + [message for _key, message in describe_unrepresentable_values(library)]
     )
 
 
@@ -551,6 +552,122 @@ def describe_mangled_field_keys(library: Library) -> list[str]:
     return messages
 
 
+def _is_truncated_tail(text: str) -> bool:
+    """Is *text*, found right after an entry, the rest of that entry?
+
+    When a stray ``}`` closes an entry early, the text after it still carries
+    the entry's *own* closing brace, so it holds more unescaped ``}`` than
+    ``{``; and it holds at least one field assignment. Free text between
+    entries (``Author = me``), an entry commented out by deleting its ``@``, and
+    a trailing ``,`` after a closing brace are all balanced, so none of them
+    match — which matters, because a match refuses every write to the library.
+    Keying on balance rather than on how the text starts also catches a stray
+    ``}`` alone on a line inside an entry, whose tail begins ``file = …``.
+    """
+    if "=" not in text:
+        return False
+    surplus = 0
+    for ch, escaped in zip(text, _escaped_positions(text)):
+        if escaped:
+            continue
+        if ch == "}":
+            surplus += 1
+        elif ch == "{":
+            surplus -= 1
+    return surplus > 0
+
+
+def describe_truncated_entries(library: Library) -> list[tuple[str, str]]:
+    """``(citekey, message)`` for each entry the parser closed at a stray ``}``.
+
+    In ``title = {x}},`` the extra ``}`` ends the entry, as it does for BibTeX
+    itself, and every later field lands in an ``ImplicitComment`` — which is not
+    a failed block, so nothing reported it. The fields after the brace are
+    invisible to every reader, and a ``file =`` among them makes its PDF look
+    orphaned to `library clean`. That reached a real library through an
+    ordinary pzi write, so it is a refusal, like a failed block.
+    """
+    details: list[tuple[str, str]] = []
+    previous: Block | None = None
+    for block in library.blocks:
+        if (
+            isinstance(block, ImplicitComment)
+            and isinstance(previous, BibtexEntryV2)
+            and _is_truncated_tail(block.comment)
+        ):
+            line = getattr(previous, "start_line", None)
+            where = f" at line {line + 1}" if isinstance(line, int) else ""
+            details.append((
+                previous.key,
+                f"entry {previous.key!r}{where} ends early at an unmatched '}}': "
+                "the fields after it are outside the entry and invisible to pzi — "
+                "remove the extra '}'",
+            ))
+        previous = block
+    return details
+
+
+_PLAIN_ENTRY_TYPE = re.compile(r"[A-Za-z]+")
+
+
+def _has_top_level_hash(value: str) -> bool:
+    """A ``#`` outside every brace group, i.e. a BibTeX concatenation operator."""
+    depth = 0
+    for ch in value:
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+        elif ch == "#" and depth <= 0:
+            return True
+    return False
+
+
+def describe_unrepresentable_values(library: Library) -> list[tuple[str, str]]:
+    """``(citekey, message)`` for each value the serializer would silently alter.
+
+    The serializer's sanitizers (:func:`_safe_field_value`, ``_UNSAFE_ENTRY_TYPE``)
+    exist for untrusted *provider* metadata, where repairing a stray brace is
+    right. Applied to a value read from disk they change the user's data on the
+    next write of that entry, with no notice — and :func:`validate_bibtex_roundtrip`
+    cannot see it, because it compares sanitized output with itself. So such a
+    value is reported on reads and refused on writes, as a mangled field key is.
+
+    The cases: ``{a} # {b}`` (bibtexparser does not evaluate ``#``, so it reads
+    as ``a} # {b`` and was written back as ``{a # b}``); an unmatched brace in a
+    quoted value; a control character; an entry type that is not ASCII letters
+    (``@artícle`` was written back as ``@artcle``).
+    """
+    details: list[tuple[str, str]] = []
+    for entry in library.entries:
+        line = getattr(entry, "start_line", None)
+        where = f" at line {line + 1}" if isinstance(line, int) else ""
+        if not _PLAIN_ENTRY_TYPE.fullmatch(entry.entry_type or ""):
+            details.append((
+                entry.key,
+                f"entry {entry.key!r}{where} has entry type {entry.entry_type!r}: "
+                "only ASCII letters can be written back unchanged — rename the type",
+            ))
+        for field in entry.fields:
+            value = field.value if isinstance(field.value, str) else str(field.value)
+            if _balance_braces(value) != value:
+                problem = (
+                    "uses '#' concatenation, which pzi cannot represent — write "
+                    "the value out as one string"
+                    if _has_top_level_hash(value)
+                    else "has an unmatched brace — balance or escape it (\\{, \\})"
+                )
+            elif _CONTROL_CHARS.search(value):
+                problem = "contains a control character — remove it"
+            else:
+                continue
+            details.append((
+                entry.key,
+                f"entry {entry.key!r}{where}: field {field.key!r} {problem}",
+            ))
+    return details
+
+
 def failed_block_details(library: Library) -> list[tuple[str | None, str]]:
     """``(duplicate citekey or None, message)`` for each block the parser dropped.
 
@@ -572,6 +689,10 @@ def failed_block_details(library: Library) -> list[tuple[str | None, str]]:
             continue
         suffix = _user_facing_parse_error(getattr(block, "error", ""))
         details.append((None, f"unparseable BibTeX block{where}{suffix}"))
+    # A truncated entry is a block the parser dropped in all but name: its tail
+    # never reaches an entry. `None` in the key slot, because a key there means
+    # "duplicate citekey" to `clean_service`, which treats that as readable.
+    details.extend((None, message) for _key, message in describe_truncated_entries(library))
     return details
 
 
@@ -611,8 +732,17 @@ def parse_bibtex_for_import(text: str) -> tuple[list[BibtexEntry], list[str]]:
     """
     library = parse_bib_library_resolving_macros(text)
     problems = [message for _key, message in failed_block_details(library)]
+    # A truncated entry is already reported above; an unrepresentable one is
+    # reported here. Neither is imported half-read.
+    skipped = {key for key, _message in describe_truncated_entries(library)}
+    for key, message in describe_unrepresentable_values(library):
+        if key not in skipped:
+            skipped.add(key)
+            problems.append(message)
     entries: list[BibtexEntry] = []
     for block in library.entries:
+        if block.key in skipped:
+            continue
         entry = library_entry_to_bibtex_entry(block)
         refusal = unwritable_field_key(entry)
         if refusal is None:
@@ -662,6 +792,13 @@ def validate_library_parseable(library: Library) -> None:
     case_collisions = describe_case_colliding_field_keys(library)
     if case_collisions:
         raise _malformed_bib_refusal(case_collisions[0])
+    # Neither is a failed block, and both would otherwise be committed by a
+    # write: a truncated entry's tail stays detached, and an unrepresentable
+    # value is rewritten by the sanitizers.
+    for _key, message in (
+        *describe_truncated_entries(library), *describe_unrepresentable_values(library),
+    ):
+        raise _malformed_bib_refusal(message)
     if not library.failed_blocks:
         return
     # `describe_failed_blocks` names the citekey for a duplicate and adds the

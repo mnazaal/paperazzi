@@ -49,7 +49,11 @@ from pzi.config import default_cache_home
 
 #: Schema version. A file this code does not recognise is discarded, not
 #: migrated: it is regenerable from the `.bib` in one parse.
-CACHE_VERSION = 1
+#:
+#: 2: reads report truncated entries and unrepresentable values. The key is the
+#: file's bytes, so without this an unchanged damaged library kept serving its
+#: old, warning-free result.
+CACHE_VERSION = 2
 
 #: Below this source size the cache is not written at all.
 #:
