@@ -102,9 +102,6 @@ def doctor_health_problems(result: DoctorResult) -> list[str]:
     problems: list[str] = []
     if not result.get("config_ok"):
         problems.extend(result.get("config_errors") or ["config could not be loaded"])
-    for bib in result.get("bibs") or []:
-        if not bib.get("path_exists"):
-            problems.append(f"bib file not found: {bib.get('path')}")
     if result.get("translation_server_url") and not result.get(
         "translation_server_reachable"
     ):
@@ -150,7 +147,15 @@ def doctor_advisory_problems(result: Mapping[str, Any]) -> list[str]:
                 f"{tool} is not installed (needed to install the translation server)"
             )
     for bib in result.get("bibs") or []:
-        if bib.get("path_exists") and not bib.get("papers_dir_exists"):
+        # Not fatal: `init --setup` configures a bib it does not create, and the
+        # first write creates it and its directory. Fatal here made `doctor`
+        # exit 5 straight after a successful setup.
+        if not bib.get("path_exists"):
+            problems.append(
+                f"bib file not found: {bib.get('path')} "
+                "(it is created by the first pzi add)"
+            )
+        elif not bib.get("papers_dir_exists"):
             problems.append(
                 f"papers_dir not found: {bib.get('papers_dir')} (bib {bib.get('name')})"
             )

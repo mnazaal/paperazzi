@@ -637,3 +637,17 @@ def test_doctor_check_reports_argv0_and_papers_dir_and_dev_tools(tmp_path, monke
     assert "git" in result["dev_tools"]
     assert result["findings"], "the broken browser_pdf_cmd should be a FINDINGS-tier item"
     assert doctor_health_problems(result) == []
+
+
+def test_a_missing_bib_is_advisory_because_the_first_write_creates_it() -> None:
+    """`pzi init --setup` configures a bib it does not create, and the first
+    write creates it (and its directory). `doctor` called that fatal, so it
+    exited 5 straight after a successful setup."""
+    result = {"config_ok": True, "bibs": [
+        {"name": "main", "path": "/x/main.bib", "path_exists": False,
+         "papers_dir": "/x/papers", "papers_dir_exists": False, "default": True},
+    ]}
+
+    assert not any("main.bib" in p for p in doctor_health_problems(result))
+    advisory = doctor_advisory_problems(result)
+    assert any("main.bib" in p and "first" in p for p in advisory)
