@@ -1490,3 +1490,26 @@ def test_retry_still_refuses_when_nothing_can_be_derived(monkeypatch) -> None:
     assert result["status"] == "error"
     assert result["message"] == "no PDF URL on entry"
     assert result["reason"] == REASON_NOT_FOUND
+
+
+def test_reading_a_pdf_prints_no_raw_pypdf_log_lines() -> None:
+    """pypdf logs recoverable oddities at WARNING; with no handler configured,
+    Python's `lastResort` printed them bare on every `pzi add file.pdf`,
+    `--json` included. A subprocess, because pytest's own log capture would
+    hide the leak in-process."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parent.parent / "src"
+    fixture = Path(__file__).resolve().parent / "fixtures" / "paper.pdf"
+    code = (
+        f"import sys; sys.path.insert(0, {str(src)!r})\n"
+        "from pzi.pdf_service import extract_pdf_metadata\n"
+        f"extract_pdf_metadata({str(fixture)!r})\n"
+    )
+    run = subprocess.run(
+        [sys.executable, "-I", "-c", code], capture_output=True, text=True, check=True,
+    )
+
+    assert run.stderr == ""

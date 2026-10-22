@@ -29,6 +29,11 @@ from typing import TYPE_CHECKING
 # `library.failed_blocks` and reported in our own words by
 # `bib_serialize.describe_failed_blocks`.
 logging.getLogger("bibtexparser").addHandler(logging.NullHandler())
+# pypdf, for the same reason: it logs recoverable oddities ("incorrect startxref
+# pointer", "parsing for Object Streams") at WARNING, and `lastResort` printed
+# them bare on every `pzi add file.pdf`, `--json` included. Whether a PDF is
+# usable is decided from `PdfReader`'s exceptions, not from these lines.
+logging.getLogger("pypdf").addHandler(logging.NullHandler())
 
 
 def package_version(
