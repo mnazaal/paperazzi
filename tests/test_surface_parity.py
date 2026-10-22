@@ -159,17 +159,20 @@ _MATRIX: tuple[Capability, ...] = (
         "import a .bib",
         cli="import",
         note=(
-            "CLI-only: reads an *arbitrary* local path. The one HTTP route that "
-            "takes a path, /inbox/drain, confines it to the configured "
-            "inbox_path and is disabled without one; a .bib to import has no "
-            "such pre-declared location"
+            "CLI-only: reads an *arbitrary* local path, and HTTP routes that "
+            "name a local path are either confined to configured directories "
+            "(/capture's capture_source_dirs) or were removed (/inbox/drain); a "
+            ".bib to import has no such pre-declared location"
         ),
     ),
     Capability(
         "drain an inbox file",
         cli="inbox",
-        http=("/inbox/drain",),
-        note="no Python function: a batch capture loop a script would write itself",
+        note=(
+            "CLI-only: no Python function, since it is a batch capture loop a "
+            "script would write itself; POST /inbox/drain was removed (no "
+            "client, and a route that rewrites a local file in place)"
+        ),
     ),
     Capability(
         "attach a PDF",

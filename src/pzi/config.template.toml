@@ -111,10 +111,6 @@ api_listen_port = 8765
 # sends http(s) URLs, so leave this unset unless you script local ingests.
 # capture_source_dirs = ["~/Downloads/papers"]
 
-# The only file `POST /inbox/drain` may read and rewrite. Unset (the default)
-# closes that route. Draining rewrites the file in place.
-# inbox_path = "~/pzi-inbox.txt"
-
 [[bibs]]
 name = "main"
 path = "~/bibs/main.bib"

@@ -2,7 +2,6 @@ from pzi.http_payloads import (
     capture_payload,
     detail_payload,
     entries_payload,
-    inbox_drain_payload,
     promote_payload,
     search_payload,
     tag_change_payload,
@@ -370,16 +369,6 @@ def test_promote_payload_carries_summary_and_flags() -> None:
     )
     assert out["summary"] == {"promoted": 1}
     assert out["keep_preprint"] is False
-
-
-def test_inbox_drain_payload_shapes_counts_and_items() -> None:
-    out = inbox_drain_payload(
-        {"status": "ok", "inbox_file": "/x/inbox.txt", "dry_run": False,
-         "total": 2, "counts": {"added": 1, "failed": 1}, "items": [{"v": 1}]}
-    )
-    assert out["inbox_file"] == "/x/inbox.txt"
-    assert out["counts"] == {"added": 1, "failed": 1}
-    assert out["total"] == 2
 
 
 def test_items_payload_passes_non_dict_items_through() -> None:

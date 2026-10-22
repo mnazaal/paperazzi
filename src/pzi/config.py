@@ -65,9 +65,6 @@ class AppConfig(TypedDict):
     #: ever sends http(s) URLs, so a local path is accepted only where the user
     #: has deliberately opted in.
     capture_source_dirs: tuple[str, ...]
-    #: The only file `POST /inbox/drain` may read and rewrite. Unset closes the
-    #: route, since draining rewrites the target in place.
-    inbox_path: str | None
     api_max_body_bytes: int
     contact_email: str | None
     contact_email_cmd: str | None
@@ -178,7 +175,6 @@ OPTIONAL_STRING_KEYS = (
     "contact_email",
     "contact_email_cmd",
     "flaresolverr_url",
-    "inbox_path",
     "node_path",
     "page_metadata_cmd",
     "semantic_scholar_api_key",
@@ -214,7 +210,7 @@ def _expanded_opt(raw: Mapping[str, object], key: str) -> str | None:
     """Like :func:`_opt_str_from_raw` but expands a leading ``~``.
 
     Path-valued keys are compared against resolved paths at use time, so they
-    have to be expanded here or a configured ``~/inbox.txt`` never matches.
+    have to be expanded here or a configured ``~/papers`` never matches.
     """
     value = _opt_str_from_raw(raw, key)
     return os.path.expanduser(value) if value is not None else None
@@ -386,13 +382,6 @@ def _normalize_app_config(
     if not api_url:
         api_url = f"http://{api_listen_host}:{api_listen_port}"
 
-    raw_inbox_path = _opt_str_from_raw(raw, "inbox_path")
-    normalized_inbox_path = (
-        _normalize_path(raw_inbox_path, home_dir=home_dir, base_dir=base_dir)
-        if raw_inbox_path is not None
-        else None
-    )
-
     return {
         "translation_server_url": str(raw_translation_server_url),
         "bibs": validated_bibs,
@@ -402,7 +391,6 @@ def _normalize_app_config(
         "api_auth_token_cmd": opt("api_auth_token_cmd"),
         "api_allowed_origins": normalized_api_allowed_origins,
         "capture_source_dirs": normalized_capture_source_dirs,
-        "inbox_path": normalized_inbox_path,
         "api_max_body_bytes": _safe_int(raw_api_max_body_bytes, DEFAULT_MAX_BODY_BYTES),
         "contact_email": opt("contact_email"),
         "contact_email_cmd": opt("contact_email_cmd"),
@@ -909,6 +897,11 @@ RETIRED_CONFIG_KEYS: dict[str, str] = {
         "local process shared one bucket on loopback, and it ran after the auth "
         "gate, so it never metered a failed token. The API token is the control."
     ),
+    "inbox_path": (
+        "config key 'inbox_path' is retired and ignored: it only enabled the "
+        "HTTP route POST /inbox/drain, which had no client and was removed. "
+        "`pzi inbox FILE` never read it; name the file on the command line."
+    ),
 }
 
 
@@ -917,7 +910,7 @@ def unknown_config_keys(raw: Mapping[str, object]) -> list[str]:
 
     A *warning*, not an error, so a config written for a newer pzi still loads.
     Silently ignoring them meant a typo in `capture_source_dirs`,
-    `inbox_path`, `promote_confidence_threshold` or `pdf_file_path_style` left
+    `promote_confidence_threshold` or `pdf_file_path_style` left
     the default in place with no diagnostic — the setting simply did nothing.
     """
     known = set(AppConfig.__annotations__) | {"bibs"}

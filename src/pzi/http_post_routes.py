@@ -32,7 +32,6 @@ from pzi.config import (
 from pzi.http_binary_routes import path_confined_to
 from pzi.http_payloads import (
     capture_payload,
-    inbox_drain_payload,
     promote_payload,
     tag_change_payload,
     update_payload,
@@ -61,12 +60,6 @@ from pzi.url_safety import safe_public_http_url
 # ---------------------------------------------------------------------------
 
 MAX_PDF_URL_CANDIDATES = 20
-#: Politeness delay between inbox items, matching the CLI's `--delay` default
-#: (`cli_parser.py`). The HTTP route used to default to 0.
-_DEFAULT_INBOX_DELAY_SECONDS = 1.0
-#: Ceiling on a client-supplied delay: the drain occupies a server thread for
-#: its whole run, so an unbounded value is a self-inflicted denial of service.
-_MAX_INBOX_DELAY_SECONDS = 60.0
 ATTACH_SESSION_TTL_SECONDS = 600
 MAX_BROWSER_PDF_BYTES = DEFAULT_MAX_BODY_BYTES
 
@@ -461,10 +454,6 @@ def _route_delete(body: Any, context: PostContext) -> JsonResponse:
     return _handle_delete_post(body, context.config_path, context.home_dir)
 
 
-def _route_inbox_drain(body: Any, context: PostContext) -> JsonResponse:
-    return _handle_inbox_drain_post(body, context.config_path, context.home_dir)
-
-
 POST_ROUTES: tuple[PostRoute, ...] = (
     PostRoute("/capture", _route_capture),
     PostRoute("/attach-pdf-bytes", _route_attach_pdf_bytes),
@@ -476,7 +465,6 @@ POST_ROUTES: tuple[PostRoute, ...] = (
     PostRoute("/browser/discover", _route_browser_discover),
     PostRoute("/browser/download", _route_browser_download),
     PostRoute("/delete", _route_delete),
-    PostRoute("/inbox/drain", _route_inbox_drain),
 )
 
 
@@ -1032,62 +1020,6 @@ def _handle_promote_post(
     return status, promote_payload(
         result, include_diagnostics=body_flag(body, "verbose", default=False)
     )
-
-
-def _handle_inbox_drain_post(
-    body: Any, config_path: str, home_dir: str,
-) -> tuple[int, dict[str, Any]]:
-    if (error := require_object(body)) is not None:
-        return error
-    inbox_path = body.get("file")
-    if not isinstance(inbox_path, str) or not inbox_path.strip():
-        return 400, {"error": "inbox body must include a 'file' path string"}
-    # Draining *rewrites* the named file in place — it also creates a `.lock`
-    # beside it and any missing parent directories — so an unvalidated `file`
-    # let any loopback-reachable client truncate a file the user can write.
-    # Only the configured inbox may be drained; with none configured the route
-    # is closed, which is the safe reading of "not set up".
-    cfg = load_config_file(config_path, home_dir=home_dir)
-    config = cfg.get("config")
-    configured_inbox = config.get("inbox_path") if config else None
-    if not configured_inbox:
-        return 400, {
-            "error": "inbox draining is not enabled over HTTP; set inbox_path in config"
-        }
-    confined_inbox = path_confined_to(inbox_path.strip(), [configured_inbox])
-    if confined_inbox is None:
-        return 400, {"error": "file must be the configured inbox_path"}
-
-    raw_delay = body.get("delay")
-    # `bool` is an `int` subclass, so `{"delay": true}` would otherwise become
-    # 1.0. Bad input used to coerce silently to 0.0, and the HTTP default was
-    # 0.0 while the CLI default is 1.0 — so this route hammered metadata
-    # providers with no politeness delay. Match the CLI and cap it, since an
-    # unbounded sleep pins a server thread.
-    if raw_delay is None:
-        delay = _DEFAULT_INBOX_DELAY_SECONDS
-    elif isinstance(raw_delay, bool) or not isinstance(raw_delay, (int, float)):
-        return 400, {"error": "delay must be a number"}
-    elif raw_delay < 0:
-        return 400, {"error": "delay must not be negative"}
-    else:
-        delay = min(float(raw_delay), _MAX_INBOX_DELAY_SECONDS)
-
-    from pzi.inbox_service import drain_inbox
-    raw_tags = body.get("tags")
-    extra_tags = [t for t in raw_tags if isinstance(t, str)] if isinstance(raw_tags, list) else None
-    result = drain_inbox(
-        config_path=config_path,
-        home_dir=home_dir,
-        # The resolved path, not the caller's spelling of it — see
-        # `_confined_local_capture_path`.
-        inbox_path=str(confined_inbox),
-        dry_run=body_flag(body, "dry_run", default=False),
-        extra_tags=extra_tags,
-        delay=delay,
-    )
-    status = status_for_service_result(result)
-    return status, inbox_drain_payload(result)
 
 
 # ---------------------------------------------------------------------------

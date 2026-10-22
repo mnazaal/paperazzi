@@ -68,7 +68,7 @@ def _dump_app_config(config: AppConfig) -> str:
     that sets any of the keys below and re-reading the result silently drops
     them:
 
-    ``capture_source_dirs``, ``inbox_path``, ``pdf_file_path_style``,
+    ``capture_source_dirs``, ``pdf_file_path_style``,
     ``page_metadata_cmd``, ``page_metadata_timeout_seconds``,
     ``metadata_confidence_min_score``, ``promote_confidence_threshold``,
     ``metadata_cache_ttl``, ``browser_hook``, ``pzi_data_home``, ``node_path``,

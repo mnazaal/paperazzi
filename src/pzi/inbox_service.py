@@ -218,8 +218,8 @@ def drain_inbox(
     except OSError as exc:
         # A dependency the caller needs (readable access to the inbox file) is
         # not there right now — `REASON_UNAVAILABLE`, not an unclassified
-        # error, so the HTTP route answers 503 and the CLI exits the same code
-        # it always has instead of both falling back to a generic 400/error.
+        # error, so the CLI exits the same code as its other
+        # unavailable-dependency failures.
         return {
             "status": "error",
             "inbox_file": inbox_file,

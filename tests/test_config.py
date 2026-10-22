@@ -146,7 +146,6 @@ def test_validate_app_config_applies_defaults() -> None:
         "api_auth_token_cmd": None,
         "api_allowed_origins": None,
         "capture_source_dirs": (),
-        "inbox_path": None,
         "api_max_body_bytes": 67108864,
         "contact_email": None,
         "contact_email_cmd": None,
@@ -401,7 +400,7 @@ def test_app_config_expands_tilde_in_node_path(monkeypatch: pytest.MonkeyPatch) 
 
     `_expanded_opt` expands via `os.path.expanduser`, which reads the real
     `$HOME` env var rather than the `home_dir` parameter (unlike
-    `_normalize_path`, used for `inbox_path`/`capture_source_dirs`/
+    `_normalize_path`, used for `capture_source_dirs`/
     `pzi_data_home` below) — an existing quirk of that helper, not something
     this task changes, so `$HOME` is pinned here rather than asserting
     against the unrelated `home_dir=HOME` argument.
@@ -418,28 +417,6 @@ def test_app_config_expands_tilde_in_node_path(monkeypatch: pytest.MonkeyPatch) 
     assert config is not None
     assert config["node_path"] == f"{HOME}/bin/node"
     assert os.path.isabs(config["node_path"])
-
-
-def test_app_config_resolves_relative_inbox_path_against_config_dir(
-    tmp_path: Path,
-) -> None:
-    """A relative `inbox_path` used to resolve against the process CWD, so it
-    pointed at a different file depending on where `pzi` was invoked from —
-    the same bug `path` (the bib path) was fixed for. It should resolve
-    against the config file's own directory instead — item 631."""
-    config_dir = tmp_path / "sub"
-    config_dir.mkdir()
-    config, errors = validate_app_config(
-        {
-            "inbox_path": "inbox.txt",
-            "bibs": [{"name": "ml", "path": "~/bib/ml.bib"}],
-        },
-        home_dir=HOME,
-        base_dir=str(config_dir),
-    )
-    assert errors == []
-    assert config is not None
-    assert config["inbox_path"] == str(config_dir / "inbox.txt")
 
 
 def test_app_config_resolves_relative_capture_source_dirs_against_config_dir(
@@ -733,12 +710,18 @@ def test_an_absolute_or_home_relative_bib_path_is_unaffected(tmp_path, monkeypat
     assert bibs[1]["path"] == str(tmp_path / "h.bib")
 
 
-def test_a_retired_config_key_still_loads_and_says_why(tmp_path) -> None:
-    """`rate_limit_rpm` no longer exists, and an existing config must not break.
+@pytest.mark.parametrize(
+    ("key", "toml_value"),
+    [("rate_limit_rpm", "120"), ("inbox_path", '"~/pzi-inbox.txt"')],
+)
+def test_a_retired_config_key_still_loads_and_says_why(
+    tmp_path, key: str, toml_value: str
+) -> None:
+    """A retired key no longer exists, and an existing config must not break.
 
     It falls through the unknown-key path, which is a *warning* — so the config
     loads — but "unknown config key" reads as a typo when the real answer is
-    that the inbound rate limiter was removed.
+    that the feature was removed (the inbound rate limiter; `POST /inbox/drain`).
     """
     from pzi.config import load_config_file
 
@@ -746,7 +729,7 @@ def test_a_retired_config_key_still_loads_and_says_why(tmp_path) -> None:
     bib.write_text("", encoding="utf-8")
     config_path = tmp_path / "config.toml"
     config_path.write_text(
-        f'rate_limit_rpm = 120\n\n[[bibs]]\nname = "ml"\npath = "{bib}"\ndefault = true\n',
+        f'{key} = {toml_value}\n\n[[bibs]]\nname = "ml"\npath = "{bib}"\ndefault = true\n',
         encoding="utf-8",
     )
 
@@ -755,7 +738,7 @@ def test_a_retired_config_key_still_loads_and_says_why(tmp_path) -> None:
     assert result["config"] is not None, result["errors"]
     assert not result["errors"]
     warning = "\n".join(result.get("warnings") or [])
-    assert "rate_limit_rpm" in warning
+    assert key in warning
     assert "retired" in warning
     assert "unknown config key" not in warning
 
@@ -861,7 +844,6 @@ _BAD_VALUES: list[tuple[str, object, str]] = [
     ),
     ("ezproxy_host", "https://proxy.example.edu", "ezproxy_host must be a bare hostname"),
     ("flaresolverr_url", "ftp://example.com", "flaresolverr_url must be an http or https URL"),
-    ("inbox_path", 7, "inbox_path must be a string when provided"),
     ("metadata_cache_ttl", -1, "metadata_cache_ttl must be a non-negative integer"),
     (
         "metadata_confidence_min_score",

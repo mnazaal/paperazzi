@@ -201,9 +201,10 @@ def test_the_firefox_minimum_matches_what_the_manifest_needs() -> None:
 # --- config, packaging and CI ------------------------------------------------
 
 
-def test_the_template_scopes_both_keys_at_the_top_level() -> None:
-    """They sat after `[[bibs]]`, so uncommenting them where the template shows
-    them parses them as *per-bib* keys — no error, no warning, both ignored."""
+def test_the_template_scopes_capture_source_dirs_at_the_top_level() -> None:
+    """It sat after `[[bibs]]`, so uncommenting it where the template shows it
+    parsed it as a *per-bib* key — no error, no warning, ignored. (`inbox_path`
+    was the second key this guarded; it has since been retired.)"""
     import re as _re
     import tomllib
 
@@ -215,9 +216,7 @@ def test_the_template_scopes_both_keys_at_the_top_level() -> None:
     parsed = tomllib.loads(uncommented)
 
     assert "capture_source_dirs" in parsed
-    assert "inbox_path" in parsed
     assert "capture_source_dirs" not in parsed["bibs"][0]
-    assert "inbox_path" not in parsed["bibs"][0]
 
 
 def test_a_browser_command_with_a_backslash_still_parses(tmp_path: Path) -> None:

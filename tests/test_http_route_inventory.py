@@ -60,11 +60,10 @@ EXPECTED_ROUTES = {
         "/browser/discover",
         "/browser/download",
         "/delete",
-        "/inbox/drain",
     ),
 }
 
-DOCUMENTED_TOTAL = 21
+DOCUMENTED_TOTAL = 20
 
 
 def test_the_route_tables_match_the_expected_inventory() -> None:

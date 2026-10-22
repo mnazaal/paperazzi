@@ -14,7 +14,6 @@ needed for a browser-extension-assisted paper capture workflow.
         |  POST /attach-pdf-raw       (binary)     |
         |  POST /tags/add, /tags/remove            |
         |  POST /update, /promote, /delete         |
-        |  POST /inbox/drain                       |
         |  POST /browser/discover, /browser/download
         |  GET  /health, /bibs, /search, /entries, /tags, /export
         |  GET  /pdf/<citekey>, /export/raw        |
@@ -25,11 +24,11 @@ needed for a browser-extension-assisted paper capture workflow.
               (internal, no external exposure)
 ```
 
-**Twenty-one routes, not three.** An earlier version of this diagram showed
+**Twenty routes, not three.** An earlier version of this diagram showed
 only the three capture routes, which understated what a caller holding the API
 token can do. The count is six exact JSON `GET`s, two prefix `GET`s
 (`/detail/<citekey>` and `/tags/<citekey>`), two binary `GET`s (`/pdf/<citekey>`
-and `/export/raw`), and eleven `POST`s. Two deserve naming explicitly:
+and `/export/raw`), and ten `POST`s. Two deserve naming explicitly:
 
 - `POST /browser/download` is a "fetch this URL through a headless browser
   carrying my real profile" primitive. It is SSRF-guarded (`url_safety`), but a
@@ -154,7 +153,6 @@ to nowhere else — not to any other publisher, and not to any metadata API.
 | Request body read deadline | 120s wall-clock cap (`BODY_READ_DEADLINE_SECONDS`), independent of the 30s per-connection read timeout | A client that declares a large `Content-Length` and paces bytes just under the per-connection timeout (e.g. one byte every ~29s) never trips that per-`recv()` timeout, since each call gets its own fresh allowance; the deadline instead bounds the *total* time spent reading one body, closing the connection with `408 Request Timeout` once exceeded regardless of pacing. |
 | Recursive DNS safety | `safe_public_http_url` resolves hostnames with a 2 s budget and rejects private/local IPs. A lookup that exceeds the budget is refused too, but is classified `dns-timeout` rather than `non-public`, so the error message and discovery diagnostics say which it was | Kept. One scoped exception: a configured `ezproxy_host` (see below). |
 | Local capture paths | `/capture` accepts a local filesystem path only if it resolves inside `capture_source_dirs`; that list is **empty by default**, so local-file capture is refused over HTTP until you opt in | Leave unset unless you script local ingests. Paths are resolved (symlinks and `..` collapsed) before the containment test. |
-| Inbox draining | `POST /inbox/drain` drains only the configured `inbox_path` and refuses any other file; unset closes the route. Client-supplied `delay` is bounded and defaults to the CLI's value | Leave `inbox_path` unset unless you drive the inbox over HTTP. |
 
 ### API token considerations
 
@@ -190,8 +188,9 @@ readable PDF into `papers_dir` (from where `GET /pdf/<citekey>` serves it), and
 `/inbox/drain` would rewrite any writable file in place. Those turn a
 loopback-reachable request — including one originating from a web page through
 the extension — into arbitrary local file access, which is a different boundary
-from "the user at a shell". Both are now confined to explicitly configured
-directories and are closed by default.
+from "the user at a shell". `/capture` is now confined to explicitly configured
+directories and is closed by default; `/inbox/drain` was removed, so draining an
+inbox is a CLI-only operation (`pzi inbox FILE`).
 
 ## Browser extension security
 

@@ -354,10 +354,10 @@ entirely and re-audits everything.
 
 ### HTTP API
 
-`pzi server` exposes twenty-one local routes, pinned by `tests/test_http_route_inventory.py` and frozen at 1.0:
+`pzi server` exposes twenty local routes, pinned by `tests/test_http_route_inventory.py` and frozen at 1.0:
 
 - `GET` — `/health`, `/bibs`, `/search`, `/entries`, `/tags`, `/export`, `/detail/<citekey>`, `/tags/<citekey>`, and two binary responses, `/pdf/<citekey>` and `/export/raw`
-- `POST` — `/capture`, `/attach-pdf-bytes`, `/attach-pdf-raw`, `/tags/add`, `/tags/remove`, `/update`, `/promote`, `/browser/discover`, `/browser/download`, `/delete`, `/inbox/drain`
+- `POST` — `/capture`, `/attach-pdf-bytes`, `/attach-pdf-raw`, `/tags/add`, `/tags/remove`, `/update`, `/promote`, `/browser/discover`, `/browser/download`, `/delete`
 
 Main extension endpoint: `POST /capture`; health check: `GET /health`. Every one of them is behind the same authentication gate — there is no per-route exemption, `/health` included.
 
@@ -510,7 +510,7 @@ mechanism is named so you can check the claim rather than take it:
 | Exit codes | `tests/test_exit_code_table.py` — against the table above, in both directions |
 | `--json` envelope keys, per command | `tests/fixtures/json_envelopes.txt` |
 | Config keys | `tests/test_config_key_inventory.py` — the template and the loader must describe the same set |
-| HTTP routes | `tests/test_http_route_inventory.py` — all twenty-one |
+| HTTP routes | `tests/test_http_route_inventory.py` — all twenty |
 | `pzi.__all__`, its signatures and its return types | `tests/fixtures/public_api.txt` |
 | Which of the three front ends offers what | `tests/test_surface_parity.py` |
 

@@ -311,9 +311,9 @@ def test_drain_inbox_read_error_returns_error(tmp_path: Path) -> None:
     assert result["status"] == "error"
     assert any("cannot read inbox file" in e for e in result["errors"])
     # A dependency the caller needs (a readable inbox file) is not there right
-    # now, not an unclassified error — so the HTTP `/inbox/drain` route answers
-    # 503 instead of falling back to a generic 400, and any future consumer
-    # branching on `reason` sees the same classification the CLI already used.
+    # now, not an unclassified error — so the CLI exits the code its other
+    # unavailable-dependency failures exit, and any consumer branching on
+    # `reason` sees that classification.
     assert result["reason"] == REASON_UNAVAILABLE
 
 

@@ -130,7 +130,6 @@ def test_post_route_table_covers_declared_json_routes() -> None:
         "/browser/discover",
         "/browser/download",
         "/delete",
-        "/inbox/drain",
     }
 
 
@@ -1372,67 +1371,24 @@ def test_capture_refuses_a_symlink_pointing_out_of_an_allowed_dir(
     assert list(papers.iterdir()) == []
 
 
-# === /inbox/drain confinement ==========================================
+# === /inbox/drain was removed ==========================================
 
 
-def _inbox_config(tmp_path: Path, *, inbox_line: str = "") -> Path:
-    bib_path = tmp_path / "ml.bib"
-    bib_path.write_text("")
-    cpath = tmp_path / "config.toml"
-    cpath.write_text(
-        f"{inbox_line}\n"
-        f'[[bibs]]\nname="ml"\npath="{bib_path}"\ndefault=true\n'
-    )
-    return cpath
-
-
-def test_inbox_drain_is_closed_when_no_inbox_path_configured(tmp_path: Path) -> None:
-    """Draining rewrites the named file in place, so an unvalidated path let any
-    loopback-reachable client truncate a file the user can write."""
+def test_inbox_drain_route_is_gone(tmp_path: Path) -> None:
+    """The route had no client and was retired with `inbox_path`; draining an
+    inbox is CLI-only (`pzi inbox FILE`). It must answer like any unknown
+    route and touch nothing on disk."""
     victim = tmp_path / "notes.txt"
     victim.write_text("important\nlines\n")
-    cpath = _inbox_config(tmp_path)
 
     status, body = http_post_routes.process_post_request(
-        "/inbox/drain", {"file": str(victim)}, str(cpath), str(tmp_path),
+        "/inbox/drain", {"file": str(victim)}, str(tmp_path / "c.toml"), str(tmp_path),
     )
 
-    assert status == 400
-    assert "inbox_path" in body["error"]
+    assert status == 404
+    assert "not found" in body["error"]
     assert victim.read_text() == "important\nlines\n"
     assert not (tmp_path / "notes.txt.lock").exists()
-
-
-def test_inbox_drain_refuses_a_file_that_is_not_the_configured_one(
-    tmp_path: Path,
-) -> None:
-    inbox = tmp_path / "inbox.txt"
-    inbox.write_text("")
-    victim = tmp_path / "notes.txt"
-    victim.write_text("important\nlines\n")
-    cpath = _inbox_config(tmp_path, inbox_line=f'inbox_path = "{inbox}"')
-
-    status, body = http_post_routes.process_post_request(
-        "/inbox/drain", {"file": str(victim)}, str(cpath), str(tmp_path),
-    )
-
-    assert status == 400
-    assert "configured inbox_path" in body["error"]
-    assert victim.read_text() == "important\nlines\n"
-
-
-def test_inbox_drain_rejects_a_non_numeric_delay(tmp_path: Path) -> None:
-    """It used to coerce silently to 0.0 — including `true`, since bool is an int."""
-    inbox = tmp_path / "inbox.txt"
-    inbox.write_text("")
-    cpath = _inbox_config(tmp_path, inbox_line=f'inbox_path = "{inbox}"')
-
-    for bad in ("soon", True, -1):
-        status, body = http_post_routes.process_post_request(
-            "/inbox/drain", {"file": str(inbox), "delay": bad}, str(cpath), str(tmp_path),
-        )
-        assert status == 400, bad
-        assert "delay" in body["error"], bad
 
 
 def test_process_get_detail_reports_the_entry_type(tmp_path: Path) -> None:
