@@ -10,7 +10,7 @@ import pytest
 
 from pzi import pdf_service
 from pzi.config import BibResolutionFailure
-from pzi.errors import REASON_NOT_FOUND, REASON_UNAVAILABLE
+from pzi.errors import REASON_NOT_FOUND, REASON_UNAVAILABLE, REASON_USAGE
 
 # ---------------------------------------------------------------------------
 # retry_pdf: successful bib resolution + citekey found + PDF URL present
@@ -92,9 +92,10 @@ def test_retry_pdf_no_pdf_url(monkeypatch) -> None:
     assert result["status"] == "error"
     assert result["message"] == "no PDF URL on entry"
     assert result["bib_name"] == "ml"
-    # G3: the resource retry_pdf needs is absent from the record, same class
-    # as "citekey not found" above.
-    assert result["reason"] == REASON_NOT_FOUND
+    # Not REASON_NOT_FOUND: exit 3 is documented as "unknown citekey", and this
+    # entry exists. The user's next step is a flag, so it is a usage refusal.
+    assert result["reason"] == REASON_USAGE
+    assert any("--discover" in e for e in result["errors"])
 
 
 def test_retry_pdf_fetch_failed(monkeypatch) -> None:
@@ -1479,7 +1480,8 @@ def test_retry_derives_an_arxiv_pdf_url_instead_of_refusing(monkeypatch) -> None
 
 
 def test_retry_still_refuses_when_nothing_can_be_derived(monkeypatch) -> None:
-    """No identifiers at all is still the documented NOT_FOUND refusal."""
+    """No identifiers at all is still a refusal, as a usage error naming
+    `--discover` (exit 3 is reserved for an unknown citekey)."""
     captured: dict = {}
     _retry_env(monkeypatch, {"citekey": "smith2024", "title": "T"}, captured=captured)
 
@@ -1489,7 +1491,7 @@ def test_retry_still_refuses_when_nothing_can_be_derived(monkeypatch) -> None:
 
     assert result["status"] == "error"
     assert result["message"] == "no PDF URL on entry"
-    assert result["reason"] == REASON_NOT_FOUND
+    assert result["reason"] == REASON_USAGE
 
 
 def test_reading_a_pdf_prints_no_raw_pypdf_log_lines() -> None:

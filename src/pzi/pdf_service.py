@@ -227,12 +227,15 @@ def retry_pdf(
             "citekey": citekey,
             "local_pdf_path": None,
             "message": "no PDF URL on entry",
-            # Same shape as "citekey not found" a few lines up in this
-            # function: the thing retry_pdf needs (a URL to retry) is absent
-            # from the record, not merely unreachable.
-            "reason": REASON_NOT_FOUND,
+            # Not REASON_NOT_FOUND: exit 3 is documented as "unknown citekey",
+            # and this entry exists. What the user does next is pass a flag or
+            # use another command, so it is a usage refusal (exit 2).
+            "reason": REASON_USAGE,
             "warnings": [],
-            "errors": ["no PDF URL found on entry"],
+            "errors": [
+                "no PDF URL found on entry — pass --discover to search for one, "
+                "or attach a file with `pzi pdf attach`"
+            ],
         }
 
     # Both arguments passed unconditionally: pdf_planning already handles a
