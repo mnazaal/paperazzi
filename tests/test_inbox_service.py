@@ -432,3 +432,30 @@ def test_drain_inbox_reports_nothing_when_the_file_was_only_appended_to(
     text = inbox.read_text(encoding="utf-8")
     assert "appended-mid-drain" in text
     assert "first" not in text
+
+
+def test_drain_inbox_rewrite_notice_does_not_claim_captures_when_none_succeeded(
+    tmp_path: Path,
+) -> None:
+    """The mid-drain-rewrite notice said "the entries just added were left in
+    it" even when every line had failed, telling the user to remove entries
+    that were never captured."""
+    inbox = tmp_path / "inbox.txt"
+    inbox.write_text("10.1000/one\n10.1000/two\n", encoding="utf-8")
+    calls: list[str] = []
+
+    def _fail_then_rewrite(**kwargs: Any) -> dict[str, Any]:
+        calls.append(kwargs.get("user_input", ""))
+        if len(calls) == 1:
+            inbox.write_text("10.1000/one #edited\n10.1000/two\n", encoding="utf-8")
+        return {"status": "error", "action": None, "citekey": None,
+                "message": "boom", "warnings": [], "errors": ["boom"]}
+
+    result = drain_inbox(config_path=_CFG, home_dir=_HOME, inbox_path=str(inbox),
+                         delay=0, add_fn=_fail_then_rewrite)
+
+    assert result["counts"]["failed"] == 2
+    notice = " ".join(result["errors"])
+    assert "modified while draining" in notice
+    assert "just added" not in notice
+    assert "#edited" in inbox.read_text(encoding="utf-8")

@@ -1,6 +1,7 @@
 """The HTTP surface, pinned — item 424.
 
-`docs/security.md` opens with "Twenty-one routes, not three", written after an
+`docs/security.md` opens with "Twenty routes, not three" (twenty-one until
+`POST /inbox/drain` was retired), written after an
 earlier version of that diagram showed only the three capture routes and
 understated what a caller holding the API token can do. Nothing checked the
 number, and while planning this file I counted the route tables, got 19, and was
@@ -89,7 +90,7 @@ _DOCS_CLAIMING_THE_COUNT = ("docs/security.md", "README.md", "docs/reference.md"
 
 
 def test_the_documented_route_count_is_the_real_one() -> None:
-    """`docs/security.md` says twenty-one; this is what makes that stay true."""
+    """`docs/security.md` says twenty; this is what makes that stay true."""
     total = sum(len(paths) for paths in EXPECTED_ROUTES.values())
     assert total == DOCUMENTED_TOTAL, (
         f"pzi now serves {total} routes, but docs/security.md documents "

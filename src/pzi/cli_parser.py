@@ -170,7 +170,7 @@ def _non_negative_float(value: str) -> float:
 _COMMAND_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
     ("Capture", (
         ("add", "Capture a paper by DOI, URL, or PDF"),
-        ("inbox", "Drain a configured inbox file into your library"),
+        ("inbox", "Drain an inbox file of DOIs/URLs into your library"),
         ("pdf", "Retry or attach a PDF for an entry"),
     )),
     ("Browse & search", (

@@ -322,11 +322,21 @@ def drain_inbox(
                 # destroy their edit. Leaving the drained lines in place costs a
                 # re-drain, which `add` answers with `exists`; clobbering an edit
                 # costs the edit.
-                errors.append(
-                    f"{inbox_file} was modified while draining, so the entries "
-                    "just added were left in it — remove them by hand or re-run "
-                    "the drain"
-                )
+                if counts["added"] + counts["exists"]:
+                    errors.append(
+                        f"{inbox_file} was modified while draining, so the entries "
+                        "just added were left in it — remove them by hand or re-run "
+                        "the drain"
+                    )
+                else:
+                    # Nothing was captured, so there is nothing to remove; the
+                    # old wording told the user to delete entries that were
+                    # never added.
+                    errors.append(
+                        f"{inbox_file} was modified while draining and was left "
+                        "as edited; no line was captured, so every line is still "
+                        "queued"
+                    )
             else:
                 _write_inbox_atomically(path, remaining + appended)
 
