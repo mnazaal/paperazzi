@@ -814,10 +814,38 @@ def _title_token(title: str | None) -> str:
     return meaningful_words[0]
 
 
+#: Letters NFKD cannot decompose, because they have no combining form — a
+#: stroke or a ligature is part of the letter. `encode("ascii", "ignore")`
+#: therefore *deletes* them, which is how `Weiß` became `Wei`, `Søndergaard`
+#: became `Sndergaard` and `Łukasz` became `ukasz`: a name silently missing a
+#: letter, in the key and in the filename.
+#:
+#: Deliberately *not* `similarity._TRANSLITERATIONS`, which maps `ü`→`ue` for
+#: author matching. Better BibTeX folds `ü` to `u`, and reproducing a BBT key is
+#: the whole point of this dialect — sharing that table would have swapped one
+#: parity break for another. The two tables differ because the two jobs do.
+_CITEKEY_TRANSLITERATIONS = {
+    ord("ß"): "ss", ord("æ"): "ae", ord("Æ"): "Ae", ord("œ"): "oe",
+    ord("Œ"): "Oe", ord("ø"): "o", ord("Ø"): "O", ord("ł"): "l",
+    ord("Ł"): "L", ord("đ"): "d", ord("Đ"): "D", ord("ð"): "d",
+    ord("Ð"): "D", ord("þ"): "th", ord("Þ"): "Th", ord("ħ"): "h",
+    ord("Ħ"): "H", ord("ı"): "i", ord("İ"): "I",
+}
+
+
+def ascii_fold(value: str) -> str:
+    """Fold to ASCII the way Better BibTeX does, rather than deleting.
+
+    Shared by the default citekey scheme (:func:`_slug_token`) and the
+    ``citekey_format`` / filename templates in :mod:`pzi.format_templates`: the
+    default scheme used to delete these letters while the templates folded them.
+    """
+    folded = value.translate(_CITEKEY_TRANSLITERATIONS)
+    return unicodedata.normalize("NFKD", folded).encode("ascii", "ignore").decode("ascii")
+
+
 def _slug_token(value: str) -> str:
-    ascii_value = (
-        unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
-    )
+    ascii_value = ascii_fold(value)
     lowered = ascii_value.lower().strip()
     collapsed = _NON_ALNUM_CITEKEY.sub("", lowered)
     return collapsed

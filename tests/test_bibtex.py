@@ -636,3 +636,17 @@ def test_a_projection_fills_a_missing_detail_field_but_never_clobbers_one() -> N
     assert merged["fields"]["pages"] == "107--113", "must not overwrite"
     assert merged["fields"]["publisher"] == "ACM", "must not delete"
     assert merged["fields"]["volume"] == "51", "must fill a gap"
+
+
+def test_default_citekey_transliterates_letters_instead_of_deleting_them() -> None:
+    """`_slug_token` used `encode("ascii", "ignore")`, so `Weiß` lost its `ß`
+    and `Øresund` its `Ø` (`wei2020resund`): the same deletion the template
+    path fixed with Better BibTeX's transliteration table."""
+    from pzi.bibtex import generate_citekey_base
+
+    assert generate_citekey_base(
+        {"authors": ["Weiß, Anna"], "title": "Øresund bridges", "year": 2020}
+    ) == "weiss2020oresund"
+    assert generate_citekey_base(
+        {"authors": ["Łukasz, K"], "title": "Straße", "year": 2021}
+    ) == "lukasz2021strasse"

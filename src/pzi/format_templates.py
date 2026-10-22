@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import re
 import shlex
-import unicodedata
 from collections.abc import Mapping
 from typing import Any
 
 from pylatexenc.latex2text import LatexNodes2Text
 
-from pzi.bibtex import generate_citekey_base, normalize_authors, resolve_citekey_collision
+from pzi.bibtex import (
+    ascii_fold,
+    generate_citekey_base,
+    normalize_authors,
+    resolve_citekey_collision,
+)
 from pzi.similarity import split_family_given
 
 _TEMPLATE_RE = re.compile(r"{{\s*:?\s*([A-Za-z][A-Za-z0-9_]*)\s*([^{}]*)}}")
@@ -116,7 +120,7 @@ def _sanitize_citekey_keeping_separators(value: str) -> str:
     with nothing to join, so runs are collapsed and the ends trimmed: the key
     is `tsiotras-algorithmic`, never `tsiotras-algorithmic-`.
     """
-    cleaned = _NON_CITEKEY_KEEPING_SEPARATORS.sub("", _ascii(value))
+    cleaned = _NON_CITEKEY_KEEPING_SEPARATORS.sub("", ascii_fold(value))
     cleaned = _SEPARATOR_RUN.sub(lambda m: m.group(0)[0], cleaned)
     return cleaned.strip("-_:.")
 
@@ -448,7 +452,7 @@ def _render_bbt_part(part: str, record: Mapping[str, Any]) -> str:
         # Anything outside [alnum] + the four safe separators is dropped, since
         # it would either break BibTeX or reintroduce the punctuation the
         # sanitizer exists to remove.
-        return _NON_CITEKEY_KEEPING_SEPARATORS.sub("", _ascii(part[1:-1]))
+        return _NON_CITEKEY_KEEPING_SEPARATORS.sub("", ascii_fold(part[1:-1]))
 
     lower = part.lower()
     filters = lower.split(".")
@@ -477,7 +481,7 @@ def _render_bbt_part(part: str, record: Mapping[str, Any]) -> str:
     # name, and BBT keeps it. Every other variable is stripped to alphanumerics,
     # so a title still cannot smuggle a separator in.
     pattern = _ALPHANUMERIC_OR_INNER_HYPHEN if head == "auth" else _ALPHANUMERIC_ONLY
-    value = pattern.sub("", _ascii(value)).strip("-")
+    value = pattern.sub("", ascii_fold(value)).strip("-")
 
     for flt in filters[1:]:
         if flt == "lower":
@@ -485,7 +489,7 @@ def _render_bbt_part(part: str, record: Mapping[str, Any]) -> str:
         elif flt == "upper":
             value = value.upper()
         elif flt == "fold":
-            value = _ascii(value)
+            value = ascii_fold(value)
         elif flt == "clean":
             value = _sanitize_citekey(value)
     return value
@@ -583,7 +587,7 @@ def _citekey_input(record: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _sanitize_citekey(value: str) -> str:
-    return _NON_CITEKEY.sub("", _ascii(value).lower())
+    return _NON_CITEKEY.sub("", ascii_fold(value).lower())
 
 
 #: A `%` opens a LaTeX comment, so the decoder drops the rest of the line.
@@ -646,11 +650,11 @@ def _lost_braced_content(source: str, decoded: str) -> bool:
     empty string and took the paper's name with it, while ``$\\mathcal{H}$``
     became ``ℋ``, which still *is* the H once folded to ASCII.
     """
-    folded = _ascii(decoded)
+    folded = ascii_fold(decoded)
     for _macro_start, arg_start, arg_end in _macro_arguments(source):
         # Inner braces are Better BibTeX's case protection, not content.
         content = source[arg_start:arg_end].replace("{", "").replace("}", "")
-        stripped = _ascii(content).strip()
+        stripped = ascii_fold(content).strip()
         if stripped and stripped not in folded:
             return True
     return False
@@ -688,7 +692,7 @@ def _latex_to_text(value: str) -> str:
 
 
 def _sanitize_filename_stem(value: str) -> str:
-    cleaned = _ascii(_latex_to_text(value))
+    cleaned = ascii_fold(_latex_to_text(value))
     cleaned = _FILENAME_FORBIDDEN.sub(" ", cleaned)
     cleaned = _WHITESPACE.sub(" ", cleaned).strip().strip(".")
     # Truncate by encoded byte length to avoid exceeding filesystem limits
@@ -699,26 +703,3 @@ def _sanitize_filename_stem(value: str) -> str:
     return cleaned
 
 
-#: Letters NFKD cannot decompose, because they have no combining form — a
-#: stroke or a ligature is part of the letter. `encode("ascii", "ignore")`
-#: therefore *deletes* them, which is how `Weiß` became `Wei`, `Søndergaard`
-#: became `Sndergaard` and `Łukasz` became `ukasz`: a name silently missing a
-#: letter, in the key and in the filename.
-#:
-#: Deliberately *not* `similarity._TRANSLITERATIONS`, which maps `ü`→`ue` for
-#: author matching. Better BibTeX folds `ü` to `u`, and reproducing a BBT key is
-#: the whole point of this dialect — sharing that table would have swapped one
-#: parity break for another. The two tables differ because the two jobs do.
-_CITEKEY_TRANSLITERATIONS = {
-    ord("ß"): "ss", ord("æ"): "ae", ord("Æ"): "Ae", ord("œ"): "oe",
-    ord("Œ"): "Oe", ord("ø"): "o", ord("Ø"): "O", ord("ł"): "l",
-    ord("Ł"): "L", ord("đ"): "d", ord("Đ"): "D", ord("ð"): "d",
-    ord("Ð"): "D", ord("þ"): "th", ord("Þ"): "Th", ord("ħ"): "h",
-    ord("Ħ"): "H", ord("ı"): "i", ord("İ"): "I",
-}
-
-
-def _ascii(value: str) -> str:
-    """Fold to ASCII the way Better BibTeX does, rather than deleting."""
-    folded = value.translate(_CITEKEY_TRANSLITERATIONS)
-    return unicodedata.normalize("NFKD", folded).encode("ascii", "ignore").decode("ascii")
