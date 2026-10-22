@@ -1038,3 +1038,21 @@ def test_convert_file_paths_leaves_entries_without_a_file_field_alone() -> None:
         assert result["to_convert"] == 0
         assert result["converted"] == []
         assert result["left_alone"] == []
+
+
+def test_a_key_from_the_pre_transliteration_default_scheme_is_not_a_rename() -> None:
+    """The default scheme once deleted `ß` (`Weiß` gave `wei2020deep`). After it
+    learned to transliterate, reindex must not list every such stored key as a
+    pending rename: citekeys are never mass-renamed."""
+    from pzi.reindex_service import plan_reindex
+
+    entry = {"citekey": "wei2020deep", "entry_type": "article",
+             "fields": {"author": "Weiß, Hans", "title": "Deep learning", "year": "2020"}}
+    record = {"citekey": "wei2020deep", "authors": ["Weiß, Hans"],
+              "title": "Deep learning", "year": 2020}
+
+    assert plan_reindex(entries=[entry], records=[record], papers_dir="/p") == []
+    # A key matching neither scheme is still reported.
+    stale = {**entry, "citekey": "smith1999old"}
+    assert plan_reindex(entries=[stale], records=[{**record, "citekey": "smith1999old"}],
+                        papers_dir="/p")[0]["new_citekey"] == "weiss2020deep"

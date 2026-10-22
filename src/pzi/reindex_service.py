@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict, cast
 
@@ -19,7 +20,13 @@ from pzi.bib_repository import (
     with_bib_lock,
 )
 from pzi.bib_serialize import plan_file_field_fold, resolved_bib_dir
-from pzi.bibtex import BibtexEntry, NormalizedRecord, parse_file_field
+from pzi.bibtex import (
+    BibtexEntry,
+    NormalizedRecord,
+    legacy_default_citekey_base,
+    normalize_authors,
+    parse_file_field,
+)
 from pzi.config import DEFAULT_PDF_FILE_PATH_STYLE
 from pzi.fileio import directory_folds_case
 from pzi.format_templates import format_citekey, format_pdf_filename
@@ -121,6 +128,21 @@ class ReindexResult(TypedDict):
     skipped_cosmetic: NotRequired[int]
 
 
+def _is_legacy_default_key(citekey: str, record: Mapping[str, Any]) -> bool:
+    """Was *citekey* produced by the default scheme before letters like ``ß``
+    were transliterated (``wei2020deep`` for ``Weiß``)? Such a key is the policy
+    key as it stood when the entry was added, so it is not a pending rename."""
+    base = legacy_default_citekey_base({
+        "authors": normalize_authors(record.get("authors")),
+        "title": record.get("title"),
+        "year": record.get("year"),
+    })
+    if citekey == base:
+        return True
+    prefix, _, suffix = citekey.rpartition("-")
+    return prefix == base and suffix.isdigit()
+
+
 def _entries_with_planned_citekeys(
     entries: list[BibtexEntry], changes: list[CitekeyChange]
 ) -> list[BibtexEntry]:
@@ -160,6 +182,8 @@ def plan_reindex(
 
         new_citekey = format_citekey(citekey_format, record, existing_keys - {old_citekey})
         if new_citekey == old_citekey:
+            continue
+        if not citekey_format and _is_legacy_default_key(old_citekey, record):
             continue
 
         # Reserve the vacated key for the rest of the run rather than freeing

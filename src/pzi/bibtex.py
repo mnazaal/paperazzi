@@ -740,6 +740,23 @@ def generate_citekey_base(data: CitekeyInput) -> str:
     return f"{author_part}{year_part}{title_part}"
 
 
+def legacy_default_citekey_base(data: CitekeyInput) -> str:
+    """The default-scheme key as pzi generated it before :func:`ascii_fold`.
+
+    That version *deleted* the letters in ``_CITEKEY_TRANSLITERATIONS`` (``Weiß``
+    gave ``wei``); deleting them from the inputs reproduces it exactly, since
+    every other letter folds the same way in both. `library reindex` accepts a
+    stored key matching this, so the fix does not turn every such existing key
+    into a pending rename — citekeys are never mass-renamed.
+    """
+    strip = dict.fromkeys(_CITEKEY_TRANSLITERATIONS)
+    return generate_citekey_base({
+        "authors": [author.translate(strip) for author in data["authors"]],
+        "title": data["title"].translate(strip) if data["title"] else data["title"],
+        "year": data["year"],
+    })
+
+
 def resolve_citekey_collision(base: str, existing_keys: set[str]) -> str:
     """Return the first available citekey using a numeric suffix when needed.
 
