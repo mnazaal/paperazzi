@@ -34,6 +34,9 @@ class DoctorBibStatus(TypedDict):
     name: str
     path: str
     path_exists: bool
+    #: Missing, but the first write can create it: nothing occupies the path
+    #: and its nearest existing ancestor is a writable directory.
+    path_creatable: bool
     papers_dir: str
     papers_dir_exists: bool
     default: bool
@@ -102,6 +105,12 @@ def doctor_health_problems(result: DoctorResult) -> list[str]:
     problems: list[str] = []
     if not result.get("config_ok"):
         problems.extend(result.get("config_errors") or ["config could not be loaded"])
+    for bib in result.get("bibs") or []:
+        if not bib.get("path_exists") and not bib.get("path_creatable"):
+            problems.append(
+                f"bib file not found and cannot be created: {bib.get('path')} "
+                "(the path is taken by something else, or no writable directory leads to it)"
+            )
     if result.get("translation_server_url") and not result.get(
         "translation_server_reachable"
     ):
@@ -126,7 +135,8 @@ def doctor_advisory_problems(result: Mapping[str, Any]) -> list[str]:
     (ENVIRONMENT, exit 5) tier; this is the advisory (FINDINGS, exit 1) tier —
     a `*_cmd` whose `argv[0]` does not resolve, a broken `node_path`/`PZI_NODE`
     override, a missing `git`/`npm`, a missing `papers_dir`, or a
-    `semantic_scholar_api_key` the API rejected. Every one of these leaves
+    `semantic_scholar_api_key` the API rejected, or a bib that does not exist
+    yet but that the first write will create. Every one of these leaves
     every core operation working, which is what keeps it out of the other
     tier. Kept as its own list rather than folded into `doctor_health_problems`
     so `doctor --json` can carry the two tiers as distinct fields instead of
@@ -151,10 +161,11 @@ def doctor_advisory_problems(result: Mapping[str, Any]) -> list[str]:
         # first write creates it and its directory. Fatal here made `doctor`
         # exit 5 straight after a successful setup.
         if not bib.get("path_exists"):
-            problems.append(
-                f"bib file not found: {bib.get('path')} "
-                "(it is created by the first pzi add)"
-            )
+            if bib.get("path_creatable"):
+                problems.append(
+                    f"bib file not found: {bib.get('path')} "
+                    "(it is created by the first pzi add)"
+                )
         elif not bib.get("papers_dir_exists"):
             problems.append(
                 f"papers_dir not found: {bib.get('papers_dir')} (bib {bib.get('name')})"
@@ -164,6 +175,18 @@ def doctor_advisory_problems(result: Mapping[str, Any]) -> list[str]:
             "semantic_scholar_api_key is configured but the API rejected it"
         )
     return problems
+
+
+def _creatable(path: Path) -> bool:
+    """Can the first write create *path*: nothing there, and the nearest existing
+    ancestor a directory this process may write into (writes create missing
+    parents)."""
+    if path.exists() or path.is_symlink():
+        return False
+    for ancestor in path.parents:
+        if ancestor.exists():
+            return ancestor.is_dir() and os.access(ancestor, os.W_OK | os.X_OK)
+    return False
 
 
 def _resolve_cmd_argv0(command: str) -> tuple[str | None, str | None]:
@@ -319,7 +342,8 @@ def doctor_check(
             {
                 "name": bib["name"],
                 "path": bib["path"],
-                "path_exists": Path(bib["path"]).exists(),
+                "path_exists": Path(bib["path"]).is_file(),
+                "path_creatable": _creatable(Path(bib["path"])),
                 "papers_dir": bib["papers_dir"],
                 "papers_dir_exists": Path(bib["papers_dir"]).exists(),
                 "default": bib["default"],

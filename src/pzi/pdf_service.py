@@ -230,11 +230,16 @@ def retry_pdf(
             # Not REASON_NOT_FOUND: exit 3 is documented as "unknown citekey",
             # and this entry exists. What the user does next is pass a flag or
             # use another command, so it is a usage refusal (exit 2).
-            "reason": REASON_USAGE,
+            # With --discover already passed there is no flag left to suggest
+            # and nothing the user did wrong: the search came up empty.
+            "reason": REASON_NOT_FOUND if deep else REASON_USAGE,
             "warnings": [],
             "errors": [
-                "no PDF URL found on entry — pass --discover to search for one, "
-                "or attach a file with `pzi pdf attach`"
+                "no PDF URL found on entry, even with --discover — attach a file "
+                "with `pzi pdf attach`"
+                if deep
+                else "no PDF URL found on entry — pass --discover to search for "
+                "one, or attach a file with `pzi pdf attach`"
             ],
         }
 

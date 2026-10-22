@@ -644,10 +644,40 @@ def test_a_missing_bib_is_advisory_because_the_first_write_creates_it() -> None:
     write creates it (and its directory). `doctor` called that fatal, so it
     exited 5 straight after a successful setup."""
     result = {"config_ok": True, "bibs": [
-        {"name": "main", "path": "/x/main.bib", "path_exists": False,
+        {"name": "main", "path": "/x/main.bib", "path_exists": False, "path_creatable": True,
          "papers_dir": "/x/papers", "papers_dir_exists": False, "default": True},
     ]}
 
     assert not any("main.bib" in p for p in doctor_health_problems(result))
     advisory = doctor_advisory_problems(result)
     assert any("main.bib" in p and "first" in p for p in advisory)
+
+
+def test_a_bib_that_cannot_be_created_stays_fatal(tmp_path) -> None:
+    """Advisory only when the first write really can create it: a read-only
+    parent, a missing mount, or a directory sitting at the path stay fatal."""
+    import os
+    from pathlib import Path
+
+    from pzi.doctor_service import _creatable
+
+    readonly = tmp_path / "ro"
+    readonly.mkdir()
+    taken = tmp_path / "isdir.bib"
+    taken.mkdir()
+    assert _creatable(tmp_path / "new" / "deeper" / "main.bib")
+    assert not _creatable(taken)
+    assert not _creatable(Path("/nonexistent_mount_xyz/lib.bib"))
+    readonly.chmod(0o555)
+    try:
+        if not os.access(readonly, os.W_OK):  # root can write anyway
+            assert not _creatable(readonly / "main.bib")
+    finally:
+        readonly.chmod(0o755)
+
+    result = {"config_ok": True, "bibs": [
+        {"name": "main", "path": str(taken), "path_exists": False, "path_creatable": False,
+         "papers_dir": "/x/papers", "papers_dir_exists": True, "default": True},
+    ]}
+    assert any("cannot be created" in p for p in doctor_health_problems(result))
+    assert not any(str(taken) in p for p in doctor_advisory_problems(result))

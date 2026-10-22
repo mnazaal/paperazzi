@@ -1515,3 +1515,16 @@ def test_reading_a_pdf_prints_no_raw_pypdf_log_lines() -> None:
     )
 
     assert run.stderr == ""
+
+
+def test_retry_with_discover_that_finds_nothing_does_not_suggest_discover(monkeypatch) -> None:
+    captured: dict = {}
+    _retry_env(monkeypatch, {"citekey": "smith2024", "title": "T"}, captured=captured)
+
+    result = pdf_service.retry_pdf(
+        config_path="/f", home_dir="/h", bib_selector=None, citekey="smith2024", deep=True,
+    )
+
+    assert result["reason"] == REASON_NOT_FOUND
+    assert "pass --discover" not in " ".join(result["errors"])
+    assert "pzi pdf attach" in " ".join(result["errors"])
