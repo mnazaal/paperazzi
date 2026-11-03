@@ -30,6 +30,9 @@ NEVER_PUBLIC = [
     "::ffff:192.0.0.254",  # IPv4-mapped
     "64:ff9b::c000:fe",  # NAT64 of 192.0.0.254
     "2001:0:4136:e378:8000:63bf:f7f7:f7f7",  # Teredo, whatever client it carries
+    "::ffff:0:127.0.0.1",  # IPv4-translated
+    "::ffff:0:169.254.169.254",
+    "::ffff:0:8.8.8.8",
 ]
 PUBLIC_NEIGHBOURS = ["192.0.1.1", "8.8.8.8", "2001:200::1", "2001:4860:4860::8888", "4000::1", "2606:4700::1"]
 

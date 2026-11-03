@@ -168,9 +168,10 @@ def _embedded_ipv4(ip: ipaddress.IPv6Address) -> ipaddress.IPv4Address | None:
 
     ``ipaddress`` calls ``64:ff9b::7f00:1`` (NAT64 of loopback), ``::127.0.0.1``
     (IPv4-compatible) and ``fec0::1`` (site-local) global, although each can
-    reach private space. Covers IPv4-mapped, NAT64, 6to4 and Teredo (client
-    address, where the obfuscation is undone). Returns ``_DEPRECATED_V6`` for a
-    range that is refused outright rather than judged by its embedded address.
+    reach private space. Covers IPv4-mapped, NAT64 and 6to4. Teredo needs no
+    case here, since :data:`_NEVER_PUBLIC` refuses all of it. Returns
+    ``_DEPRECATED_V6`` for a range that is refused outright rather than judged
+    by its embedded address.
     """
     if ip.ipv4_mapped is not None:
         return ip.ipv4_mapped
@@ -180,8 +181,6 @@ def _embedded_ipv4(ip: ipaddress.IPv6Address) -> ipaddress.IPv4Address | None:
         return ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
     if ip.sixtofour is not None:
         return ip.sixtofour
-    if ip.teredo is not None:
-        return ip.teredo[1]
     return None
 
 
@@ -197,6 +196,7 @@ _NEVER_PUBLIC = tuple(
         "64:ff9b:1::/48",
         "3fff::/20",
         "5f00::/16",
+        "::ffff:0:0:0/96",  # IPv4-translated, which carries any IPv4 address
     )
 )
 
