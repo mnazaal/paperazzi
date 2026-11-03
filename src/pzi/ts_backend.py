@@ -29,6 +29,7 @@ import portalocker
 
 from pzi.node_runtime import ensure_node
 from pzi.pdf_planning import env_flag
+from pzi.ts_egress_guard import proxy_env, shared_guard
 
 # ---------------------------------------------------------------------------
 # Pinned repository references.
@@ -633,7 +634,9 @@ def start_ts(
     proc = subprocess.Popen(
         [node_bin, str(ts_dir / "src" / "server.js")],
         cwd=str(ts_dir),
-        env={**os.environ, **ts_child_env(port)},
+        # Every outbound fetch the child makes goes through the egress guard,
+        # which refuses non-public destinations on each redirect/refresh hop.
+        env={**os.environ, **proxy_env(shared_guard()), **ts_child_env(port)},
         stdout=subprocess.DEVNULL,
         stderr=stderr_dest,
         start_new_session=True,

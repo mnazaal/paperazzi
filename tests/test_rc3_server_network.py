@@ -5,13 +5,16 @@ import select
 import socket
 import threading
 import time
-from http.server import ThreadingHTTPServer
+import urllib.error
+import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
 import portalocker
+import pytest
 
-from pzi import http_api, ts_backend
+from pzi import http_api, ts_backend, ts_egress_guard
 from pzi.http_security import build_http_security_config
 
 
@@ -172,3 +175,187 @@ def test_normal_request_unaffected_and_timer_cancelled(tmp_path: Path, monkeypat
     finally:
         server.shutdown()
         server.server_close()
+
+
+# ---------------------------------------------------------------------------
+# Translation-server redirect / meta-refresh egress (real pinned backend)
+# ---------------------------------------------------------------------------
+_PUBLIC_IP = "93.184.216.34"  # a public address; the fake dial maps it to a local listener
+_TS_DIR = Path.home() / ".local/share/pzi/ts"
+
+
+def _installed_backend() -> tuple[str, Path] | None:
+    """Node + translation-server checkout, only if the checkout is the pinned commit."""
+    node = next(iter((Path.home() / ".local/share/pzi/node").glob("node-*/bin/node")), None)
+    sentinel = _TS_DIR / ".pzi-installed"
+    if node is None or not sentinel.is_file():
+        return None
+    pinned = next(r["ref"] for r in ts_backend._TS_REPOS if "translation-server" in r["url"])
+    if f"translation-server_ref = {pinned}" not in sentinel.read_text():
+        return None
+    return str(node), _TS_DIR
+
+
+# Resolved at import: an autouse fixture re-points HOME for each test.
+_BACKEND = _installed_backend()
+
+
+class _Recorder(BaseHTTPRequestHandler):
+    hits: list[str]
+
+    def log_message(self, *a) -> None:
+        pass
+
+
+def _listener(handler):
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
+@pytest.mark.skipif(_BACKEND is None, reason="pinned translation-server not installed")
+def test_pinned_backend_does_not_follow_redirect_or_meta_refresh_to_private(tmp_path: Path) -> None:
+    assert _BACKEND is not None
+    node, ts_dir = _BACKEND
+    private_hits: list[str] = []
+
+    class Private(_Recorder):
+        def do_GET(self) -> None:
+            private_hits.append(self.path)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(b"<html><title>secret</title></html>")
+
+    public_hits: list[str] = []
+    private = _listener(Private)
+    pport = private.server_address[1]
+
+    class Public(_Recorder):
+        def do_GET(self) -> None:
+            public_hits.append(self.path)
+            if self.path == "/redir":
+                self.send_response(302)
+                self.send_header("Location", f"http://127.0.0.1:{pport}/via-redirect")
+                self.end_headers()
+                return
+            body = (
+                '<html><head><title>pub</title><meta http-equiv="refresh" '
+                f'content="0;url=http://127.0.0.1:{pport}/via-meta"></head></html>'
+            ).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(body)
+
+    public = _listener(Public)
+    aport = public.server_address[1]
+
+    def fake_getaddrinfo(host, port, *a, **k):
+        if host == "pub.test":
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (_PUBLIC_IP, port))]
+        return socket.getaddrinfo(host, port, *a, **k)
+
+    def fake_dial(ip, port):
+        return socket.create_connection(("127.0.0.1", aport if ip == _PUBLIC_IP else port), timeout=5)
+
+    ts_egress_guard.reset_shared_guard(
+        ts_egress_guard.EgressGuard(getaddrinfo=fake_getaddrinfo, dial=fake_dial)
+    )
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    tport = s.getsockname()[1]
+    s.close()
+    proc = ts_backend.start_ts(node, ts_dir, port=tport, stderr_log=tmp_path / "ts.err")
+    try:
+        for _ in range(150):
+            try:
+                socket.create_connection(("127.0.0.1", tport), timeout=0.2).close()
+                break
+            except OSError:
+                time.sleep(0.2)
+        statuses = {}
+        for path in ("/redir", "/meta"):
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{tport}/web",
+                data=f"http://pub.test:{aport}{path}".encode(),
+                headers={"Content-Type": "text/plain"},
+            )
+            try:
+                statuses[path] = urllib.request.urlopen(req, timeout=30).status
+            except urllib.error.HTTPError as exc:
+                statuses[path] = exc.code
+        # Sanity: the public hop itself works through the guard (meta page is
+        # reached; only the refresh target is refused), so a zero count is not
+        # just "the backend never fetched anything".
+        assert statuses["/meta"] in (200, 300, 400, 500, 501), statuses
+        # The public hop was fetched (through the guard) for both pages, so an
+        # empty private list means the second hop was refused, not never tried.
+        assert sorted(public_hits) == ["/meta", "/redir"], public_hits
+        assert private_hits == [], private_hits
+    finally:
+        ts_backend.terminate_ts(proc)
+        ts_egress_guard.reset_shared_guard(None)
+        private.shutdown()
+        public.shutdown()
+
+
+def test_guard_refuses_private_and_dials_validated_ip_only() -> None:
+    dialed: list[tuple[str, int]] = []
+
+    def dial(ip, port):
+        dialed.append((ip, port))
+        raise OSError("no network in test")
+
+    guard = ts_egress_guard.EgressGuard(dial=dial)
+    try:
+        host, port = guard.url[len("http://"):].split(":")
+
+        def ask(first_line: str) -> bytes:
+            c = socket.create_connection((host, int(port)), timeout=5)
+            c.sendall(f"{first_line}\r\nHost: x\r\n\r\n".encode())
+            data = b""
+            while chunk := c.recv(4096):
+                data += chunk
+            c.close()
+            return data
+
+        for line in (
+            "GET http://127.0.0.1:9/x HTTP/1.1",
+            "GET http://169.254.169.254/latest HTTP/1.1",
+            "GET http://[::1]:9/x HTTP/1.1",
+            "CONNECT 10.0.0.5:443 HTTP/1.1",
+            "CONNECT localhost:443 HTTP/1.1",
+        ):
+            assert ask(line).startswith(b"HTTP/1.1 403 "), line
+        assert dialed == []
+    finally:
+        guard.close()
+
+
+def test_guard_tunnels_connect_to_a_public_address() -> None:
+    echo = socket.socket()
+    echo.bind(("127.0.0.1", 0))
+    echo.listen(1)
+
+    def serve() -> None:
+        conn, _ = echo.accept()
+        conn.sendall(conn.recv(100).upper())
+        conn.close()
+
+    threading.Thread(target=serve, daemon=True).start()
+    guard = ts_egress_guard.EgressGuard(
+        getaddrinfo=lambda host, port, **k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (_PUBLIC_IP, port))],
+        dial=lambda ip, port: socket.create_connection(echo.getsockname(), timeout=5),
+    )
+    try:
+        host, port = guard.url[len("http://"):].split(":")
+        c = socket.create_connection((host, int(port)), timeout=5)
+        c.sendall(b"CONNECT pub.test:443 HTTP/1.1\r\nHost: pub.test:443\r\n\r\n")
+        assert c.recv(4096).startswith(b"HTTP/1.1 200 ")
+        c.sendall(b"hello")
+        assert c.recv(100) == b"HELLO"
+        c.close()
+    finally:
+        guard.close()
+        echo.close()
