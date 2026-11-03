@@ -391,3 +391,248 @@ def test_a_writer_never_accepts_a_name_another_writer_filled_with_other_bytes(
     stored = pdf_download.write_pdf_bytes(data=b"%PDF-B", papers_dir=str(papers), citekey="k")
     assert Path(stored).read_bytes() == b"%PDF-B"
     assert sorted(p.read_bytes() for p in papers.iterdir()) == [b"%PDF-A", b"%PDF-B"]
+
+
+# -- the reported citekey is the one committed ---------------------------------
+
+
+@pytest.mark.parametrize(
+    "name,rec_a,rec_b,kw",
+    [
+        ("no-ids",
+         {"citekey": "k2020", "title": "First paper", "authors": ["A, B"], "year": 2020},
+         {"citekey": "k2020", "title": "Second different paper", "authors": ["A, B"], "year": 2020},
+         {}),
+        ("force-new",
+         {"citekey": "k2020", "title": "Same", "doi": "10.1/x", "authors": ["A, B"], "year": 2020},
+         {"citekey": "k2020", "title": "Same", "doi": "10.1/x", "authors": ["A, B"], "year": 2020},
+         {"force_new": True}),
+    ],
+)
+def test_add_reports_the_citekey_the_rebased_insert_committed(
+    tmp_path, monkeypatch, name, rec_a, rec_b, kw
+):
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    bib = {"name": "t", "path": str(tmp_path / "lib.bib"), "papers_dir": str(papers)}
+    real = add_service.execute_write_plan
+    ran: list[int] = []
+
+    def racing(path, plan, **k):
+        if not ran:
+            ran.append(1)
+            add_service.add_record_with_bib(bib=bib, record=rec_a, dry_run=False, **kw)
+        return real(path, plan, **k)
+
+    monkeypatch.setattr(add_service, "execute_write_plan", racing)
+    result = add_service.add_record_with_bib(bib=bib, record=rec_b, dry_run=False, **kw)
+    keys = [r["citekey"] for r in read_bib_file(bib["path"])["records"]]
+    assert keys == ["k2020", "k2020-2"], keys
+    assert result["citekey"] == "k2020-2", (name, result["action"], result["citekey"])
+
+
+def test_promote_removes_its_download_when_the_session_commit_fails(tmp_path, monkeypatch):
+    import pzi.bib_repository as br
+
+    lib = _Library(tmp_path)
+    _promotable_library(lib)
+
+    def boom(self):
+        raise RuntimeError("synthetic commit failure")
+
+    monkeypatch.setattr(br.BatchWriteSession, "check_consistency", boom)
+    with pytest.raises(RuntimeError):
+        promote_service.promote_bib(
+            **_common(lib), keep_preprint=False, dry_run=False,
+            fetch_search=_published_search, fetch_binary=_fetch,
+        )
+    assert "file =" not in lib.bib.read_text()
+    assert list(lib.papers.glob("*.pdf")) == []
+
+
+# -- low findings -------------------------------------------------------------
+
+
+def test_rebased_insert_with_other_bytes_leaves_no_unreferenced_pdf(tmp_path):
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    bib = {"name": "t", "path": str(tmp_path / "lib.bib"), "papers_dir": str(papers)}
+    rec = {"citekey": "s2024", "title": "Same", "doi": "10.1000/s", "authors": ["A, B"],
+           "pdf_url": "http://example.com/x.pdf"}
+    done: list[int] = []
+
+    def fetch_b(_url):
+        if not done:
+            done.append(1)
+            add_service.add_record_with_bib(
+                bib=bib, record=rec, dry_run=False, pdf_filename_format="{{ title }}",
+                fetch_binary=lambda u: (b"%PDF-A", "application/pdf"),
+            )
+        return b"%PDF-B", "application/pdf"
+
+    add_service.add_record_with_bib(
+        bib=bib, record=rec, dry_run=False, fetch_binary=fetch_b,
+        pdf_filename_format="{{ title }}",
+    )
+    records = read_bib_file(bib["path"])["records"]
+    referenced = {Path(r["local_pdf_path"]).name for r in records if r.get("local_pdf_path")}
+    assert {p.name for p in papers.glob("*.pdf")} == referenced, sorted(p.name for p in papers.iterdir())
+
+
+def _stub_store(monkeypatch):
+    from pzi.pdf import PdfSourceOutcome
+    from pzi.pdf_download import write_pdf_bytes
+
+    def store(**kwargs):
+        path = write_pdf_bytes(
+            data=b"%PDF-1.4 shared bytes", papers_dir=kwargs["papers_dir"],
+            citekey=kwargs["citekey"], record=kwargs["record"],
+            filename_format=kwargs["filename_format"],
+        )
+        return PdfSourceOutcome(
+            local_pdf_path=path, warning=None, record=kwargs["record"], errors=[]
+        )
+
+    monkeypatch.setattr(pdf_service, "fetch_and_store_pdf_trying_sources", store)
+
+
+def test_a_zero_byte_pdf_is_not_a_present_attachment(tmp_path, monkeypatch):
+    _stub_store(monkeypatch)
+    lib = _Library(tmp_path)
+    placeholder = lib.papers / "t.pdf"
+    placeholder.write_bytes(b"")
+    lib.bib.write_text(
+        "@article{target2024,\n  title = {T},\n  year = {2024},\n"
+        f"  file = {{{placeholder}}},\n  pzi-pdf-url = {{https://oa.example.org/paper.pdf}},\n}}\n"
+    )
+    result = pdf_service.retry_failed_pdfs(**_common(lib))
+    assert result["total"] == 1 and result["succeeded"] == 1, result
+
+
+def test_pdf_identity_folds_case_where_the_directory_does(tmp_path, monkeypatch):
+    from pzi import pdf
+
+    stored = tmp_path / "Foo.pdf"
+    stored.write_bytes(b"%PDF-1")
+    mine = tmp_path / "foo.pdf"
+    mine.write_bytes(b"%PDF-1")  # on a folding filesystem this IS Foo.pdf
+    monkeypatch.setattr(pdf, "directory_folds_case", lambda _d: True)
+    keep = pdf.stored_pdf_paths([{"local_pdf_path": str(stored)}])
+    assert pdf.pdf_is_stored(str(mine), keep)
+    pdf.remove_new_pdf(str(mine), {stored.resolve()}, keep=())
+    assert mine.exists(), "snapshot compare must fold case too"
+    monkeypatch.setattr(pdf, "directory_folds_case", lambda _d: False)
+    keep = pdf.stored_pdf_paths([{"local_pdf_path": str(stored)}])
+    assert not pdf.pdf_is_stored(str(mine), keep)
+
+
+# -- mutants the review found surviving ---------------------------------------
+
+
+def test_citekey_pass_never_replaces_a_file_that_appears_after_the_guard(tmp_path, monkeypatch):
+    from pzi import reindex_service
+
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    old = papers / "oldkey.pdf"
+    old.write_bytes(b"%PDF-mine")
+    bib = tmp_path / "t.bib"
+    bib.write_text(
+        "@article{oldkey,\n  title = {New Test},\n  author = {Doe, John},\n  year = {2025},\n"
+        f"  file = {{{old}}},\n}}\n"
+    )
+    real_guard = reindex_service._blocks_rename
+    planted: list[Path] = []
+
+    def guard_then_race(destination, source):
+        blocked = real_guard(destination, source)
+        if not planted and Path(destination).parent == papers:
+            planted.append(Path(destination))
+            Path(destination).write_bytes(b"%PDF-someone-elses")
+        return blocked
+
+    monkeypatch.setattr(reindex_service, "_blocks_rename", guard_then_race)
+    reindex_service.reindex_library(bib_path=str(bib), papers_dir=str(papers), dry_run=False)
+    assert planted, "the guard was never consulted"
+    assert planted[0].read_bytes() == b"%PDF-someone-elses"
+
+
+def test_no_hardlink_fallback_removes_its_placeholder_when_the_replace_fails(tmp_path, monkeypatch):
+    import errno
+    import os
+
+    from pzi import pdf_download
+
+    def no_link(*_a, **_k):
+        raise OSError(errno.EPERM, "no hardlinks")
+
+    def failing_replace(*_a, **_k):
+        raise OSError(errno.EIO, "disk")
+
+    monkeypatch.setattr(os, "link", no_link)
+    monkeypatch.setattr(os, "replace", failing_replace)
+    temp = tmp_path / "t.tmp"
+    temp.write_bytes(b"%PDF-1")
+    destination = tmp_path / "k.pdf"
+    with pytest.raises(OSError):
+        pdf_download._link_or_replace(temp, destination)
+    assert not destination.exists()
+
+
+def test_batch_retry_keeps_a_file_an_earlier_item_committed(tmp_path, monkeypatch):
+    _stub_store(monkeypatch)
+    lib = _Library(tmp_path)
+    lib.config.write_text(
+        'pdf_filename_format = "{{ title }}"\n'
+        f'[[bibs]]\nname = "ml"\npath = "{lib.bib}"\npapers_dir = "{lib.papers}"\ndefault = true\n'
+    )
+    lib.bib.write_text(
+        "".join(
+            f"@article{{k{n}2024,\n  title = {{Shared}},\n  year = {{2024}},\n"
+            f"  doi = {{10.1000/k{n}}},\n  pzi-pdf-url = {{https://oa.example.org/{n}.pdf}},\n}}\n\n"
+            for n in (1, 2)
+        )
+    )
+    real = pdf_service.update_bib_entry
+    calls: list[str] = []
+
+    def second_fails(path, citekey, updater, **kw):
+        calls.append(citekey)
+        if len(calls) == 2:
+            raise OSError("synthetic")
+        return real(path, citekey, updater, **kw)
+
+    monkeypatch.setattr(pdf_service, "update_bib_entry", second_fails)
+    with pytest.raises(OSError):
+        pdf_service.retry_failed_pdfs(**_common(lib))
+    committed = [r["local_pdf_path"] for r in read_bib_file(str(lib.bib))["records"]
+                 if r.get("local_pdf_path")]
+    assert len(committed) == 1 and Path(committed[0]).exists(), committed
+
+
+def test_remove_new_pdf_spares_a_file_stored_under_a_home_relative_path(tmp_path, monkeypatch):
+    from pzi import pdf
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "papers").mkdir()
+    shared = tmp_path / "papers" / "x.pdf"
+    shared.write_bytes(b"%PDF-1")
+    pdf.remove_new_pdf(str(shared), set(), keep=pdf.stored_pdf_paths(
+        [{"local_pdf_path": "~/papers/x.pdf"}]
+    ))
+    assert shared.exists()
+
+
+def test_preview_reports_the_action_the_rebase_will_apply(tmp_path):
+    from pzi.bib_repository import preview_write_plan
+
+    bib = tmp_path / "t.bib"
+    bib.write_text("")
+    plan = plan_bib_write(
+        {"citekey": "a2020", "title": "Paper A", "doi": "10.1000/aaa",
+         "authors": ["Smith, Jane"], "year": 2020},
+        [],
+    )
+    assert plan["action"] == "insert"
+    bib.write_text(_entry(A, doi="10.1000/aaa").replace("key2020", "a2020"))
+    assert preview_write_plan(str(bib), plan)["action"] == "update"

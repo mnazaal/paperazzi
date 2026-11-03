@@ -16,6 +16,7 @@ from urllib.parse import quote, urlsplit
 
 from pzi.bibtex import NormalizedRecord
 from pzi.fetch_helpers import fetch_text as _fetch_text
+from pzi.fileio import directory_folds_case
 from pzi.pdf_download import fetch_and_store_pdf, write_pdf_bytes
 from pzi.pdf_planning import (
     PdfFallbackSettings,
@@ -615,11 +616,17 @@ def _canonical_paths(paths: Iterable[str]) -> set[str]:
     attachment is left as spelled.
     """
     real_directories: dict[str, str] = {}
+    folds: dict[str, bool] = {}
     canonical: set[str] = set()
     for path in paths:
         directory, name = os.path.split(os.path.abspath(os.path.expanduser(path)))
         if directory not in real_directories:
             real_directories[directory] = os.path.realpath(directory)
+            # Where the directory folds case, `foo.pdf` and `Foo.pdf` are one
+            # file; keys that differ only in case would call them two.
+            folds[directory] = directory_folds_case(directory)
+        if folds[directory]:
+            name = name.casefold()
         canonical.add(os.path.join(real_directories[directory], name))
     return canonical
 
@@ -640,6 +647,14 @@ def stored_pdf_paths(records: Iterable[Mapping[str, object]]) -> set[str]:
 def pdf_is_stored(path: str, stored: Collection[str]) -> bool:
     """Whether *path* is one of *stored*, however the two are spelled."""
     return not _canonical_paths([path]).isdisjoint(stored)
+
+
+def _in_snapshot_folding_case(resolved: Path, existing_paths: set[Path]) -> bool:
+    """Whether *resolved* is a snapshot file under a case-folding spelling."""
+    if not directory_folds_case(resolved.parent):
+        return False
+    folded = str(resolved).casefold()
+    return any(str(path).casefold() == folded for path in existing_paths)
 
 
 def remove_new_pdf(
@@ -672,7 +687,7 @@ def remove_new_pdf(
         resolved = candidate.resolve()
     except OSError:
         return
-    if resolved in existing_paths:
+    if resolved in existing_paths or _in_snapshot_folding_case(resolved, existing_paths):
         return
     # `keep` as spelled by the caller may differ from `path` (a stored
     # `~`-relative or symlinked form), so compare the normalised spellings.

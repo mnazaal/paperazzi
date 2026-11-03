@@ -312,55 +312,71 @@ def promote_bib(
         #: Item indices whose write landed, so their backup path can be filled in
         #: once the session has actually written it.
         written: list[int] = []
-        with ExitStack() as chunk_writes:
-            session: BatchWriteSession | None = None
-            for item_index, write in queue:
-                try:
-                    if session is None:
-                        # Opened inside the try, so a library that cannot be
-                        # rewritten at all — a malformed block anywhere in the
-                        # file — is reported as these promotions failing rather
-                        # than raised through the whole run.
-                        session = chunk_writes.enter_context(
-                            batch_write_session(
-                                bib["path"],
-                                file_path_style=file_path_style,
-                                # Only the first session of the run receives a
-                                # label — `label()` yields it once — so the
-                                # `.bak` is the library as it stood before the
-                                # run, which is the state an undo wants. The
-                                # session probes the name and copies the file
-                                # itself, under its own lock, immediately
-                                # before the write.
-                                backup_label=run_backup.label(),
+        #: Writes applied to the session; they are committed only when it exits.
+        applied_writes: list[_PendingWrite] = []
+        try:
+            with ExitStack() as chunk_writes:
+                session: BatchWriteSession | None = None
+                for item_index, write in queue:
+                    try:
+                        if session is None:
+                            # Opened inside the try, so a library that cannot be
+                            # rewritten at all — a malformed block anywhere in the
+                            # file — is reported as these promotions failing rather
+                            # than raised through the whole run.
+                            session = chunk_writes.enter_context(
+                                batch_write_session(
+                                    bib["path"],
+                                    file_path_style=file_path_style,
+                                    # Only the first session of the run receives a
+                                    # label — `label()` yields it once — so the
+                                    # `.bak` is the library as it stood before the
+                                    # run, which is the state an undo wants. The
+                                    # session probes the name and copies the file
+                                    # itself, under its own lock, immediately
+                                    # before the write.
+                                    backup_label=run_backup.label(),
+                                )
                             )
+                        write.apply(session)
+                        applied_writes.append(write)
+                    except (StalePlanError, ConcurrentEditError):
+                        raise  # see the carve-out in phase 1
+                    except _PreprintVanished as exc:
+                        # Nothing was written and nothing was lost; the target is
+                        # simply gone. Reported as that rather than as a failure.
+                        _rollback_write_pdf(write, session, bib["path"])
+                        items[item_index] = _promote_item(
+                            write.preprint_ck, write.preprint_ck, "error", note=str(exc)
                         )
-                    write.apply(session)
-                except (StalePlanError, ConcurrentEditError):
-                    raise  # see the carve-out in phase 1
-                except _PreprintVanished as exc:
-                    # Nothing was written and nothing was lost; the target is
-                    # simply gone. Reported as that rather than as a failure.
-                    _rollback_write_pdf(write, session, bib["path"])
-                    items[item_index] = _promote_item(
-                        write.preprint_ck, write.preprint_ck, "error", note=str(exc)
-                    )
-                    continue
-                except Exception as exc:  # one failing write must not abort the run
-                    _rollback_write_pdf(write, session, bib["path"])
-                    summary["skipped_failed"] += 1
-                    items[item_index] = _skip_item(
-                        write.preprint_ck, f"promotion failed: {exc}", failed=True
-                    )
-                    continue
-                summary[write.counter] += 1
-                # Keep mode leaves the preprint in place, so tag it for a later
-                # `--mark-resolved` run. Replace mode rewrote the entry into the
-                # published version, which is no longer a preprint at all.
-                if keep_preprint:
-                    resolved_preprints.append(write.preprint_ck)
-                else:
-                    written.append(item_index)
+                        continue
+                    except Exception as exc:  # one failing write must not abort the run
+                        _rollback_write_pdf(write, session, bib["path"])
+                        summary["skipped_failed"] += 1
+                        items[item_index] = _skip_item(
+                            write.preprint_ck, f"promotion failed: {exc}", failed=True
+                        )
+                        continue
+                    summary[write.counter] += 1
+                    # Keep mode leaves the preprint in place, so tag it for a later
+                    # `--mark-resolved` run. Replace mode rewrote the entry into the
+                    # published version, which is no longer a preprint at all.
+                    if keep_preprint:
+                        resolved_preprints.append(write.preprint_ck)
+                    else:
+                        written.append(item_index)
+        except BaseException:
+            # The session writes on exit, so a commit that fails there leaves the
+            # PDFs downloaded for these promotions with no entry referring to
+            # them. Nothing holds the lock now: the rollback re-reads the library
+            # and spares any file an entry still points at.
+            for applied_write in applied_writes:
+                rollback_new_pdfs(
+                    [_local_pdf_path(applied_write.record)],
+                    applied_write.existing_pdf_paths,
+                    bib_path=bib["path"],
+                )
+            raise
         # Only now: the session writes on exit, so inside the block above
         # `session.backup_path` is not set yet.
         if session is not None:

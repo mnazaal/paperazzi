@@ -816,6 +816,12 @@ def _execute_plan_with_retry(
             applied = execute_write_plan(
                 bib["path"], plan, file_path_style=file_path_style
             )
+            if plan.get("action") == "insert" and applied.action == "update":
+                # The rebase found another writer's entry for this paper and
+                # updated it, so the file this attempt stored is not what that
+                # entry points at (different bytes, a `-1` name). The rollback
+                # spares it when the entry does reference it.
+                _cleanup_new_pdf(record_with_hint, existing_pdf_paths, bib["path"])
             return record_with_hint, plan_with_applied_record(
                 plan, record_with_hint, applied
             )

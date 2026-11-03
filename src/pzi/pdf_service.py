@@ -112,6 +112,19 @@ def _update_entry_keeping_pdf_consistent(
         raise
 
 
+def _is_empty_file(path: object) -> bool:
+    """A zero-byte file at a PDF name is a crashed writer's placeholder, not a PDF.
+
+    The no-hardlink fallback claims a name with an empty file before moving the
+    finished PDF over it, so a crash in between leaves one behind. An entry
+    naming it has no PDF, and counting it as present hid the entry from retry.
+    """
+    try:
+        return os.path.getsize(os.path.expanduser(str(path))) == 0
+    except OSError:
+        return False
+
+
 def _superseded_pdf_warning(
     record: Mapping[str, Any] | None, new_path: str | None
 ) -> str | None:
@@ -433,7 +446,7 @@ def retry_failed_pdfs(
         # Check if entry already has a local PDF
         record = records[i] if i < len(records) else {}
         local_pdf = record.get("local_pdf_path") if isinstance(record, dict) else None
-        if pdf_file_present(local_pdf):
+        if pdf_file_present(local_pdf) and not _is_empty_file(local_pdf):
             skipped_already_has_pdf += 1
             continue
 
