@@ -83,6 +83,8 @@ class PinningProxy:
         self._getaddrinfo = getaddrinfo
         self._connect = connect
         self._max_response_bytes = max_response_bytes
+        self._cut_lock = threading.Lock()
+        self._cut_responses = 0
         proxy = self
 
         class _Handler(socketserver.BaseRequestHandler):
@@ -104,6 +106,26 @@ class PinningProxy:
     @property
     def url(self) -> str:
         return f"http://127.0.0.1:{self.port}"
+
+    @property
+    def cut_responses(self) -> int:
+        """How many connections this proxy has seen a response cut on, or could have.
+
+        Counts a body stopped at the byte limit and an upstream that failed, which
+        includes one resetting an idle tunnel: the proxy cannot see into a tunnel
+        to tell. The reset these end in does not reach every reader as a failure:
+        Playwright's `page.request` runs in Node, and libuv reports data and a
+        reset queued at one poll as a clean end of stream. A reader that must not
+        keep a short body compares this count across its request, because a body
+        with no framing of its own looks complete to it. The count goes up before
+        the reset is sent, so it is current by the time the reader sees the end.
+        """
+        with self._cut_lock:
+            return self._cut_responses
+
+    def _note_cut(self) -> None:
+        with self._cut_lock:
+            self._cut_responses += 1
 
     def close(self) -> None:
         with contextlib.suppress(Exception):
@@ -225,9 +247,8 @@ class PinningProxy:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
         sock.close()
 
-    @classmethod
     def _relay(
-        cls,
+        self,
         client: socket.socket,
         upstream: socket.socket,
         limit: int,
@@ -238,12 +259,12 @@ class PinningProxy:
         ``upload_budget`` is how many more client bytes may be forwarded: the
         unread rest of a plain-HTTP request's declared body. Once spent, the
         client is no longer read. ``None`` (a CONNECT tunnel) is unbounded.
+
+        Every abnormal end is a reset, because a FIN reads as a complete
+        close-delimited body. That holds inside a tunnel too: Node accepts a FIN
+        with no TLS ``close_notify`` as a clean end.
         """
         sent_down = 0
-        # A plain-HTTP response that ends abnormally must not end in a FIN, which
-        # reads as a complete close-delimited body. A tunnel's TLS layer reports
-        # a missing close_notify itself.
-        plain = upload_budget is not None
         sel = selectors.DefaultSelector()
         sel.register(client, selectors.EVENT_READ, upstream)
         sel.register(upstream, selectors.EVENT_READ, client)
@@ -252,15 +273,15 @@ class PinningProxy:
             while True:
                 events = sel.select(timeout=_PROXY_IDLE_SECONDS)
                 if not events:
-                    if plain:
-                        cls._reset(client)
+                    self._reset(client)
                     return
                 for key, _ in events:
                     try:
                         data = key.fileobj.recv(65536)  # type: ignore[union-attr]
                     except OSError:
-                        if plain and key.fileobj is upstream:
-                            cls._reset(client)
+                        if key.fileobj is upstream:
+                            self._note_cut()
+                            self._reset(client)
                         return
                     if not data:
                         if spent and key.fileobj is client:
@@ -278,7 +299,8 @@ class PinningProxy:
                             # clean close).
                             with contextlib.suppress(OSError):
                                 client.sendall(data[: max(room, 0)])
-                            cls._reset(client)
+                            self._note_cut()
+                            self._reset(client)
                             return
                         sent_down += len(data)
                     elif spent:
@@ -287,16 +309,23 @@ class PinningProxy:
                         # another request, which is never forwarded. Ending it
                         # now lets the browser open a fresh one instead of
                         # waiting on a reply that cannot come.
-                        cls._reset(client)
+                        self._reset(client)
                         return
                     elif upload_budget is not None:
                         data = data[:upload_budget]
                         upload_budget -= len(data)
                         spent = upload_budget == 0
-                    key.data.sendall(data)
+                    try:
+                        key.data.sendall(data)
+                    except OSError:
+                        # A client hanging up is routine, and says nothing about
+                        # a body: browsers cancel requests all the time.
+                        if key.data is upstream:
+                            self._note_cut()
+                        self._reset(client)
+                        return
         except OSError:
-            if plain:
-                cls._reset(client)
+            self._reset(client)
             return
         finally:
             sel.close()

@@ -149,6 +149,18 @@ def default_url_allowed(url: str) -> bool:
 FETCH_DIRECT_TIMEOUT_SECONDS = 60.0
 
 
+def _is_close_delimited(headers: dict[str, str]) -> bool:
+    """True when only the connection closing marks where the body ends.
+
+    `chunked` frames a body only as the last coding: Node reads `chunked, identity`
+    to the close. Playwright joins a repeated header with ", ".
+    """
+    if "content-length" in headers:
+        return False
+    codings = headers.get("transfer-encoding", "").lower().split(",")
+    return codings[-1].strip() != "chunked"
+
+
 @dataclass
 class BrowserSession:
     """Unified browser session wrapping Playwright lifecycle.
@@ -256,12 +268,23 @@ class BrowserSession:
                 remaining_ms = (deadline - time.monotonic()) * 1000
                 if remaining_ms <= 0:
                     return FetchResult(status=-1, content_type=None, body=b"")
+                cuts_before = self._cut_responses()
                 response = self.page.request.get(
                     current, max_redirects=0, timeout=remaining_ms
                 )
                 if response.status not in _REDIRECT_STATUSES:
                     ct = response.headers.get("content-type", "")
                     body = response.body() if response.status == 200 else b""
+                    # The driver can report a cut body as a clean end, and with no
+                    # framing that looks complete (`PinningProxy.cut_responses`).
+                    # The count covers every connection, so another one's cut can
+                    # fail this fetch too. That is why framed responses, which the
+                    # driver rejects by itself, do not consult it.
+                    if (
+                        _is_close_delimited(response.headers)
+                        and self._cut_responses() != cuts_before
+                    ):
+                        return FetchResult(status=-1, content_type=None, body=b"")
                     return FetchResult(status=response.status, content_type=ct, body=body)
                 location = response.headers.get("location")
                 if not location:
@@ -277,6 +300,9 @@ class BrowserSession:
             return FetchResult(status=-1, content_type=None, body=b"")
         except Exception:
             return FetchResult(status=-1, content_type=None, body=b"")
+
+    def _cut_responses(self) -> int:
+        return self._proxy.cut_responses if self._proxy is not None else 0
 
     # ------------------------------------------------------------------
     # Wait helpers
