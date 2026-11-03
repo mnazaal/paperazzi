@@ -648,3 +648,35 @@ def test_real_backend_reports_a_guard_refusal_not_an_unsupported_format(tmp_path
     assert hits == []
     assert code != 400  # the old guard reply surfaced as 400 "not in a supported format"
     assert b"supported format" not in body
+
+
+# ---------------------------------------------------------------------------
+# Install-lock wait: a live holder is not "stuck", and the lock is never deleted
+# ---------------------------------------------------------------------------
+
+
+def test_install_wait_covers_the_holders_own_budget() -> None:
+    steps = len(ts_backend._TS_REPOS) * 3 * ts_backend._GIT_TIMEOUT_SECONDS
+    assert ts_backend._INSTALL_LOCK_WAIT_SECONDS >= steps + ts_backend._NPM_TIMEOUT_SECONDS
+    assert ts_backend._INSTALL_LOCK_WAIT_SECONDS < 4 * 3600  # bounded
+
+
+def test_install_wait_timeout_message_does_not_call_a_live_install_stuck(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import portalocker
+
+    monkeypatch.setattr(ts_backend, "_INSTALL_LOCK_WAIT_SECONDS", 0.3)
+    holder = open(tmp_path / "ts.install.lock", "a")
+    portalocker.lock(holder, portalocker.LOCK_EX | portalocker.LOCK_NB)
+    err = io.StringIO()
+    try:
+        with patch.object(ts_backend.shutil, "which", return_value="/usr/bin/git"):
+            assert ts_backend.ensure_translation_server(
+                tmp_path, "node", stdout=io.StringIO(), stderr=err
+            ) is None
+    finally:
+        holder.close()
+    text = err.getvalue().lower()
+    assert "still installing" in text and "wait" in text and "stop that process" in text
+    assert "delete" not in text and "stuck" not in text

@@ -257,9 +257,13 @@ def _find_endpoint_anchor(content: str) -> re.Match[str] | None:
 _GIT_TIMEOUT_SECONDS = 300
 #: `npm install --production` on a cold cache is slow but not unbounded.
 _NPM_TIMEOUT_SECONDS = 900
-#: How long a second process waits for another's install: the holder's own
-#: clone + npm budgets plus slack. Past that the holder is wedged, not busy.
-_INSTALL_LOCK_WAIT_SECONDS = _GIT_TIMEOUT_SECONDS * 2 + _NPM_TIMEOUT_SECONDS + 60
+#: How long a second process waits for another's install. The holder's own
+#: budget without clone retries: three git steps per repo (clone, fetch,
+#: checkout) at `_GIT_TIMEOUT_SECONDS` each, plus npm, plus slack. With
+#: `_clone_repo`'s retries a holder that fails everywhere could take about 14400s,
+#: which is too long to wait in the foreground; a waiter that gives up then has
+#: not seen a stuck holder, only a slow one, and its message says so.
+_INSTALL_LOCK_WAIT_SECONDS = len(_TS_REPOS) * 3 * _GIT_TIMEOUT_SECONDS + _NPM_TIMEOUT_SECONDS + 60
 _INSTALL_LOCK_POLL_SECONDS = 0.25
 
 
@@ -447,11 +451,10 @@ def _install_lock(data_home: Path, *, stderr: TextIO) -> Iterator[None]:
                 except portalocker.exceptions.BaseLockException:
                     if time.monotonic() >= deadline:
                         raise _InstallLockTimeout(
-                            "gave up waiting for another pzi process to finish "
-                            f"installing the translation-server ({lock_path} "
-                            f"still held after {_INSTALL_LOCK_WAIT_SECONDS:g}s). "
-                            "If no other `pzi` is running, stop the stuck process "
-                            "(or delete that lock file) and retry."
+                            "another pzi process is still installing the "
+                            f"translation-server ({lock_path} is still held after "
+                            f"{_INSTALL_LOCK_WAIT_SECONDS:g}s). Wait for it to "
+                            "finish, or stop that process, then retry."
                         ) from None
         try:
             yield
