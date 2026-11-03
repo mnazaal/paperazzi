@@ -54,10 +54,15 @@ export function normalizeMetadataUrl(raw, pageUrl) {
   switch (typeof raw) {
     case "string": {
       if (!raw) return null;
+      // null when it will not parse, never the raw string: the server rejects
+      // the whole capture for a malformed URL (`http://[`), and every caller
+      // already has a valid tab URL to fall back to. A parseable URL that is
+      // not http(s) (`javascript:`, `data:`) is as unusable as a page URL.
       try {
-        return new URL(raw, pageUrl).href;
+        const parsed = new URL(raw, pageUrl);
+        return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.href : null;
       } catch (_) {
-        return raw;
+        return null;
       }
     }
     case "object": {

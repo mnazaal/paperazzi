@@ -82,8 +82,11 @@ export async function captureCurrentTab({ tags = [], bib = null, dryRun = false,
   // unfiltered — and the server rejects the *whole* capture for either, losing
   // the metadata along with the PDF.
   const pdfUrlCandidates = await extractPdfUrlCandidates(tab.id, tab.url);
-  if (typeof pageMetadata.embedded_pdf_url === "string" && pageMetadata.embedded_pdf_url.trim()) {
-    addPdfUrlCandidate(pdfUrlCandidates, normalizeMetadataUrl(pageMetadata.embedded_pdf_url, tab.url));
+  // Normalised in place: the raw value is also sent as `embedded_pdf_url`, and a
+  // malformed one there fails the whole capture just as a bad canonical does.
+  pageMetadata.embedded_pdf_url = normalizeMetadataUrl(pageMetadata.embedded_pdf_url, tab.url);
+  if (pageMetadata.embedded_pdf_url) {
+    addPdfUrlCandidate(pdfUrlCandidates, pageMetadata.embedded_pdf_url);
   }
 
   // Tier 3: click-based PDF discovery — try clicking "PDF" / "Download PDF" buttons.

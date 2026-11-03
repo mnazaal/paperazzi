@@ -4625,3 +4625,98 @@ console.log(JSON.stringify({
     assert "0.1.0b6" in warning and "0.1.0b7" in warning
     # And it says capture still works — this is a warning, not a refusal.
     assert "still works" in warning
+
+
+# ---------------------------------------------------------------------------
+# rc3 extension lane: page metadata that cannot be parsed
+# ---------------------------------------------------------------------------
+
+
+def _capture_with_page_metadata(tmp_path: Path, metadata: dict, observed: list[str]) -> dict:
+    """Run one capture whose page reports *metadata*; return the /capture body."""
+    return _run_background_module(
+        r'''
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} } },
+  storage: {
+    local: { get: async () => ({ endpoint: "http://127.0.0.1:8765/capture" }) },
+    session: { get: async () => ({}), set: async () => ({}) },
+  },
+  tabs: { query: async () => [{ id: 7, url: "https://paper.test/article" }] },
+  webRequest: {
+    onHeadersReceived: {
+      addListener: (fn) => { globalThis.__observerFn = fn; },
+      removeListener: () => {},
+    },
+  },
+  permissions: { contains: async () => true, request: async () => true, remove: async () => true },
+  scripting: {
+    executeScript: async ({ args }) => {
+      globalThis.__injections = (globalThis.__injections || 0) + 1;
+      if (globalThis.__injections === 1) return [{ result: METADATA }];
+      return [{ result: [] }];
+    },
+  },
+};
+globalThis.sent = null;
+globalThis.fetch = async (url, options = {}) => {
+  if (url.endsWith("/capture")) {
+    globalThis.sent = JSON.parse(options.body);
+    return { ok: true, status: 200, headers: { get: () => "application/json" }, json: async () => ({ status: "ok" }) };
+  }
+  return { ok: false, status: 404, headers: { get: () => null }, json: async () => ({}) };
+};
+const mod = await import("./background.js");
+const realStart = mod.startPdfObserver;
+// The capture arms its own observer; feed it once armed.
+const origAdd = globalThis.chrome.webRequest.onHeadersReceived.addListener;
+globalThis.chrome.webRequest.onHeadersReceived.addListener = (fn, ...rest) => {
+  origAdd(fn, ...rest);
+  for (const u of OBSERVED) {
+    fn({ tabId: 7, url: u, responseHeaders: [{ name: "content-type", value: "application/pdf" }] });
+  }
+};
+await mod.captureCurrentTab({ dryRun: false });
+console.log(JSON.stringify({ sent: globalThis.sent }));
+'''.replace("METADATA", json.dumps(metadata)).replace("OBSERVED", json.dumps(observed)),
+        tmp_path,
+    )
+
+
+def test_an_unparseable_canonical_url_falls_back_to_the_public_tab_url(tmp_path: Path) -> None:
+    """`normalizeMetadataUrl` returned the raw string when `new URL` threw.
+
+    A page with `<link rel="canonical" href="http://[">` therefore posted
+    `canonical_url: "http://["`, which the server rejects, losing the capture.
+    The tab URL is public and valid; it must win, and the unsafe PDF candidates
+    the observer saw must still be filtered.
+    """
+    result = _capture_with_page_metadata(
+        tmp_path,
+        {
+            "pageTitle": "Paper",
+            "canonicalUrl": "http://[",
+            "sourceUrl": "http://[",
+            "abstractUrl": "http://[",
+            "embedded_pdf_url": "http://[",
+        },
+        observed=["http://127.0.0.1:9999/secret.pdf", "https://paper.test/real.pdf"],
+    )
+    sent = result["sent"]
+    assert sent["canonical_url"] == "https://paper.test/article", sent
+    assert sent["source_url"] == "https://paper.test/article", sent
+    assert sent["abstract_url"] == "https://paper.test/article", sent
+    # Every sibling that carries a page URL: none may travel unparseable.
+    assert sent["embedded_pdf_url"] is None, sent
+    assert "https://paper.test/real.pdf" in sent["pdf_url_candidates"], sent
+    assert not any("127.0.0.1" in u for u in sent["pdf_url_candidates"]), sent
+
+
+def test_a_metadata_url_that_is_not_http_is_not_sent_as_a_page_url(tmp_path: Path) -> None:
+    """A parseable `javascript:` canonical is as unusable to the server as `http://[`."""
+    result = _capture_with_page_metadata(
+        tmp_path,
+        {"pageTitle": "Paper", "canonicalUrl": "javascript:alert(1)", "sourceUrl": "https://paper.test/article"},
+        observed=[],
+    )
+    assert result["sent"]["canonical_url"] == "https://paper.test/article", result["sent"]
