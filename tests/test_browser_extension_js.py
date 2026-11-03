@@ -2667,8 +2667,7 @@ console.log(JSON.stringify({ patterns: SEARCH_URL_PATTERNS }));
 def test_no_ui_page_loads_the_service_worker(tmp_path: Path) -> None:
     """Importing `background.js` registers its listeners in the importing realm.
 
-    `contextMenus.onClicked` and the always-on `webRequest` observer are
-    registered at module level, and `contextMenus.onClicked` is delivered to
+    `contextMenus.onClicked` is registered at module level and is delivered to
     every extension page that has a listener — so with the onboarding tab open,
     one right-click issued two `POST /capture`. The popup and the onboarding
     page must therefore reach their dependencies without loading that module.
@@ -2687,7 +2686,6 @@ def test_no_ui_page_loads_the_service_worker(tmp_path: Path) -> None:
     # registrations, so this test keeps meaning what it says.
     service_worker = (PROJECT_ROOT / "browser-extension" / "background.js").read_text()
     assert "chrome.contextMenus.onClicked.addListener" in service_worker
-    assert "_registerAlwaysOnPdfObserver" in service_worker
 
 
 def test_the_capture_pipeline_is_reachable_without_the_service_worker(
@@ -4720,3 +4718,365 @@ def test_a_metadata_url_that_is_not_http_is_not_sent_as_a_page_url(tmp_path: Pat
         observed=[],
     )
     assert result["sent"]["canonical_url"] == "https://paper.test/article", result["sent"]
+
+
+# ---------------------------------------------------------------------------
+# rc3 extension lane: permission budget, bounded bodies, private-network guard
+# ---------------------------------------------------------------------------
+
+# A response whose body is a real ReadableStream, so the reader the production
+# code uses is the one under test. `chunks()` yields forever when `endless`.
+_STREAMING_PRELUDE = r'''
+globalThis.btoa = (v) => Buffer.from(v, "binary").toString("base64");
+globalThis.makeStreamResponse = ({ chunkBytes = 1024 * 1024, endless = false, stall = false, count = 3, url, contentType = "application/pdf" }) => {
+  const state = { pulled: 0, cancelled: false };
+  const stream = new ReadableStream({
+    pull(controller) {
+      if (stall && state.pulled >= 1) return new Promise(() => {});
+      if (!endless && state.pulled >= count) { controller.close(); return; }
+      const chunk = new Uint8Array(chunkBytes);
+      if (state.pulled === 0) chunk.set([37, 80, 68, 70, 45]);
+      state.pulled += 1;
+      controller.enqueue(chunk);
+    },
+    cancel() { state.cancelled = true; },
+  }, { highWaterMark: 0 });
+  const response = {
+    ok: true, status: 200, url,
+    headers: { get: (n) => (n.toLowerCase() === "content-type" ? contentType : null) },
+    body: stream,
+    // What a pre-bound caller would use. It gives up rather than drain an
+    // endless stream or wait on a stalled one, so a regression fails the
+    // assertions instead of exhausting memory or hanging the run.
+    arrayBuffer: async () => {
+      const reader = stream.getReader();
+      for (let i = 0; i < 200; i += 1) {
+        const next = await Promise.race([reader.read(), new Promise((r) => setTimeout(() => r("hung"), 1500))]);
+        if (next === "hung") throw new Error("read never finished");
+        if (next.done) return new ArrayBuffer(0);
+      }
+      throw new Error("drained 200 chunks without a limit");
+    },
+  };
+  return { response, state };
+};
+'''
+
+
+def test_an_endless_chunked_body_stops_at_the_byte_budget_and_cancels(tmp_path: Path) -> None:
+    result = _run_background_module(
+        _STREAMING_PRELUDE
+        + r'''
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} } },
+  storage: { local: { get: async () => ({}) } },
+  permissions: { contains: async () => true, request: async () => true, remove: async () => true },
+};
+const { response, state } = makeStreamResponse({ endless: true, url: "https://pub.test/big.pdf" });
+globalThis.fetch = async (url) => (url.endsWith("big.pdf") ? response : { ok: true, status: 200, headers: { get: () => null }, json: async () => ({}) });
+const { maybeStreamPdfBytes } = await import("./background/pdf_fetch.mjs");
+const outcome = await maybeStreamPdfBytes({
+  endpoint: "http://127.0.0.1:8765/capture", citekey: "k", bib: null,
+  pdfUrlCandidates: [{ url: "https://pub.test/big.pdf" }], pageUrl: "https://pub.test/article",
+});
+console.log(JSON.stringify({ outcome, pulled: state.pulled, cancelled: state.cancelled }));
+''',
+        tmp_path,
+    )
+    statuses = [a["status"] for a in result["outcome"]["pdf_attach_attempts"]]
+    assert "too_large" in statuses, result
+    # 47 MiB budget at 1 MiB a chunk: the 48th chunk crosses it, and nothing
+    # beyond a pull or two of read-ahead is buffered.
+    assert result["pulled"] <= 50, result["pulled"]
+    assert result["cancelled"] is True, "the transfer must be cancelled, not abandoned"
+
+
+def test_a_stalled_body_ends_and_the_borrowed_permission_goes_back(tmp_path: Path) -> None:
+    result = _run_background_module(
+        _STREAMING_PRELUDE
+        + r'''
+// Compress the 30 s / 5 min budgets so the test measures the logic, not the wall clock.
+const realSetTimeout = globalThis.setTimeout;
+globalThis.setTimeout = (fn, ms, ...rest) => realSetTimeout(fn, ms >= 1000 ? 30 : ms, ...rest);
+globalThis.events = [];
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} } },
+  storage: { local: { get: async () => ({}) } },
+  permissions: {
+    contains: async () => false,
+    request: async (r) => { globalThis.events.push(["request", r.origins[0]]); return true; },
+    remove: async (r) => { globalThis.events.push(["remove", r.origins[0]]); return true; },
+  },
+};
+const { response, state } = makeStreamResponse({ stall: true, url: "https://pub.test/slow.pdf" });
+globalThis.fetch = async () => response;
+const { maybeStreamPdfBytes } = await import("./background/pdf_fetch.mjs");
+const started = Date.now();
+const outcome = await maybeStreamPdfBytes({
+  endpoint: "http://127.0.0.1:8765/capture", citekey: "k", bib: null,
+  pdfUrlCandidates: [{ url: "https://other.test/slow.pdf" }], pageUrl: "https://pub.test/article",
+});
+console.log(JSON.stringify({ outcome, events: globalThis.events, cancelled: state.cancelled, elapsed: Date.now() - started }));
+''',
+        tmp_path,
+    )
+    assert result["outcome"]["status"] == "error", result
+    assert any(a["status"] == "fetch_error" for a in result["outcome"]["pdf_attach_attempts"]), result
+    assert result["elapsed"] < 5000, result["elapsed"]
+    assert result["cancelled"] is True
+    requested = [o for kind, o in result["events"] if kind == "request"]
+    released = [o for kind, o in result["events"] if kind == "remove"]
+    assert requested and sorted(released) == sorted(requested), result["events"]
+
+
+def _budget_script(*, fetch_throws: bool) -> str:
+    return r'''
+globalThis.events = [];
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} } },
+  storage: {
+    local: { get: async () => ({ endpoint: "http://127.0.0.1:8765/capture" }) },
+    session: { get: async () => ({}), set: async () => ({}) },
+  },
+  tabs: { query: async () => [{ id: 7, url: "https://paper.test/article" }] },
+  webRequest: { onHeadersReceived: { addListener: () => {}, removeListener: () => {} } },
+  permissions: {
+    contains: async () => false,
+    request: async (r) => { globalThis.events.push(["request", r.origins[0]]); return true; },
+    remove: async (r) => { globalThis.events.push(["remove", r.origins[0]]); return true; },
+  },
+  scripting: {
+    executeScript: async ({ args }) => {
+      globalThis.__n = (globalThis.__n || 0) + 1;
+      if (globalThis.__n === 1) return [{ result: { pageTitle: "Paper", sourceUrl: args[0] } }];
+      // Two cross-origin candidates from the page: the initial budget (2).
+      return [{ result: ["https://a.example/a.pdf", "https://b.example/b.pdf"] }];
+    },
+  },
+};
+globalThis.btoa = (v) => Buffer.from(v, "binary").toString("base64");
+globalThis.fetch = async (url, options = {}) => {
+  if (url.endsWith("/capture")) {
+    return { ok: true, status: 200, headers: { get: () => "application/json" }, json: async () => ({
+      status: "ok", citekey: "k",
+      // Four more origins, discovered by the server after the first prompts.
+      pdf_request: { candidates: [
+        "https://c.example/c.pdf", "https://d.example/d.pdf",
+        "https://e.example/e.pdf", "https://f.example/f.pdf",
+        "https://a.example/a.pdf", "https://b.example/b.pdf",
+      ] },
+    }) };
+  }
+  FETCH_BEHAVIOUR
+};
+const mod = await import("./background.js");
+let thrown = null;
+try { await mod.captureCurrentTab({ dryRun: false }); } catch (e) { thrown = String(e); }
+console.log(JSON.stringify({ events: globalThis.events, thrown }));
+'''.replace(
+        "FETCH_BEHAVIOUR",
+        'throw new Error("network down");' if fetch_throws else
+        'return { ok: false, status: 404, headers: { get: () => null }, json: async () => ({}) };',
+    )
+
+
+@pytest.mark.parametrize("fetch_throws", [False, True], ids=["http-404", "network-error"])
+def test_later_cross_origin_candidates_cannot_raise_more_than_the_capture_cap(
+    tmp_path: Path, fetch_throws: bool
+) -> None:
+    """Two prompts per capture in total, however many origins the server names later."""
+    result = _run_background_module(_budget_script(fetch_throws=fetch_throws), tmp_path)
+    requested = [o for kind, o in result["events"] if kind == "request"]
+    released = [o for kind, o in result["events"] if kind == "remove"]
+    assert len(requested) == 2, result["events"]
+    # Every grant that was made is handed back, whichever way the fetch ended.
+    assert sorted(released) == sorted(requested), result["events"]
+
+
+def _guard_script(body: str) -> str:
+    return r'''
+globalThis.log = [];
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} }, getURL: (p) => "chrome-extension://abcdef" + p },
+  storage: { local: { get: async () => ({}) } },
+  declarativeNetRequest: {
+    updateSessionRules: async (change) => {
+      globalThis.log.push(["rules", change]);
+      if (globalThis.failRules) throw new Error("rules rejected");
+    },
+  },
+  permissions: { contains: async () => true, request: async () => true, remove: async () => true },
+};
+globalThis.btoa = (v) => Buffer.from(v, "binary").toString("base64");
+''' + body
+
+
+def test_the_private_network_guard_is_in_place_for_every_fetch_and_removed_after(
+    tmp_path: Path,
+) -> None:
+    result = _run_background_module(
+        _guard_script(r'''
+globalThis.fetch = async (url) => {
+  globalThis.log.push(["fetch", url]);
+  throw new Error("network down");
+};
+const { maybeStreamPdfBytes } = await import("./background/pdf_fetch.mjs");
+await maybeStreamPdfBytes({
+  endpoint: "http://127.0.0.1:8765/capture", citekey: "k", bib: null,
+  pdfUrlCandidates: [{ url: "https://pub.test/a.pdf" }], pageUrl: "https://pub.test/article",
+});
+console.log(JSON.stringify({ log: globalThis.log }));
+'''),
+        tmp_path,
+    )
+    kinds = [entry[0] for entry in result["log"]]
+    assert kinds[0] == "rules" and kinds[-1] == "rules", kinds
+    assert "fetch" in kinds[1:-1], kinds
+    install, removal = result["log"][0][1], result["log"][-1][1]
+    block = [r for r in install["addRules"] if r["action"]["type"] == "block"]
+    allow = [r for r in install["addRules"] if r["action"]["type"] == "allow"]
+    assert block and len(allow) == 1, install
+    # The pzi endpoint is the one loopback destination the extension needs.
+    assert allow[0]["condition"]["urlFilter"] == "|http://127.0.0.1:8765/", allow
+    assert all(allow[0]["priority"] > r["priority"] for r in block)
+    # Scoped to this extension's own requests, not to the user's browsing.
+    assert all(r["condition"]["initiatorDomains"] == ["abcdef"] for r in block), block
+    assert len({r["id"] for r in install["addRules"]}) == len(install["addRules"])
+    assert install["removeRuleIds"] and removal["removeRuleIds"] == install["removeRuleIds"], removal
+    assert "addRules" not in removal
+
+
+def test_a_guard_that_cannot_be_installed_means_no_fetch_at_all(tmp_path: Path) -> None:
+    result = _run_background_module(
+        _guard_script(r'''
+globalThis.failRules = true;
+globalThis.fetch = async (url) => { globalThis.log.push(["fetch", url]); throw new Error("must not run"); };
+const { maybeStreamPdfBytes } = await import("./background/pdf_fetch.mjs");
+const outcome = await maybeStreamPdfBytes({
+  endpoint: "http://127.0.0.1:8765/capture", citekey: "k", bib: null,
+  pdfUrlCandidates: [{ url: "https://pub.test/a.pdf" }], pageUrl: "https://pub.test/article",
+});
+console.log(JSON.stringify({ outcome, fetches: globalThis.log.filter((e) => e[0] === "fetch") }));
+'''),
+        tmp_path,
+    )
+    assert result["fetches"] == [], result
+    assert result["outcome"]["status"] == "error", result
+
+
+def test_the_guard_pattern_agrees_with_the_extensions_own_public_url_check(
+    tmp_path: Path,
+) -> None:
+    """Two statements of "private" must not drift: the rule and `isSafePublicHttpUrl`."""
+    hosts = [
+        "127.0.0.1", "127.1.2.3", "10.0.0.5", "192.168.1.1", "172.16.0.1", "172.31.255.1",
+        "169.254.169.254", "0.0.0.0", "224.0.0.1", "255.255.255.255", "localhost",
+        "localhost.localdomain", "foo.localhost", "printer.local", "db.internal",
+        "router.lan", "nas.home", "intranet", "[::1]", "[fe80::1]", "[2001:db8::1]",
+        "172.15.0.1", "172.32.0.1", "11.0.0.1", "8.8.8.8", "example.com",
+        "www.nature.com", "dl.acm.org", "localhost.example.com", "internal.example.com",
+    ]
+    result = _run_background_module(
+        r'''
+const { PRIVATE_DESTINATION_PATTERNS } = await import("./background/permissions.mjs");
+const { isSafePublicHttpUrl } = await import("./background/utils.mjs");
+const patterns = PRIVATE_DESTINATION_PATTERNS.map((p) => new RegExp(p, "i"));
+const blockedByRule = (url) => patterns.some((re) => re.test(url));
+const rows = [];
+for (const host of HOSTS) {
+  for (const url of ["http://" + host + "/x.pdf", "https://" + host + ":8443/x.pdf", "http://user@" + host + "/x"]) {
+    rows.push({ url, blocked: blockedByRule(url), safe: isSafePublicHttpUrl(url) });
+  }
+}
+console.log(JSON.stringify({ rows }));
+'''.replace("HOSTS", json.dumps(hosts)),
+        tmp_path,
+    )
+    for row in result["rows"]:
+        if "@" in row["url"]:
+            # Userinfo is refused outright by the rule; the public check does
+            # not look at it. The rule may be stricter, never looser.
+            assert row["blocked"], row
+            continue
+        assert row["blocked"] == (not row["safe"]), row
+
+
+def test_a_response_that_ended_at_a_private_url_is_dropped_and_never_attached(
+    tmp_path: Path,
+) -> None:
+    """Second layer: if a request got through, its bytes still do not leave."""
+    result = _run_background_module(
+        _STREAMING_PRELUDE
+        + r'''
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} } },
+  storage: { local: { get: async () => ({}) } },
+  permissions: { contains: async () => true, request: async () => true, remove: async () => true },
+};
+globalThis.posts = [];
+globalThis.fetch = async (url, options = {}) => {
+  if (options.method === "POST") { globalThis.posts.push(url); return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({ status: "ok" }) }; }
+  return makeStreamResponse({ count: 1, url: "http://127.0.0.1:9/secret.pdf" }).response;
+};
+const { maybeStreamPdfBytes } = await import("./background/pdf_fetch.mjs");
+const outcome = await maybeStreamPdfBytes({
+  endpoint: "http://127.0.0.1:8765/capture", citekey: "k", bib: null,
+  pdfUrlCandidates: [{ url: "https://pub.test/a.pdf" }], pageUrl: "https://pub.test/article",
+});
+console.log(JSON.stringify({ outcome, posts: globalThis.posts }));
+''',
+        tmp_path,
+    )
+    assert result["posts"] == [], result
+    assert any(a["status"] == "unsafe_redirect" for a in result["outcome"]["pdf_attach_attempts"]), result
+
+
+def test_a_pdf_that_followed_a_public_redirect_reports_where_it_ended(tmp_path: Path) -> None:
+    result = _run_background_module(
+        _STREAMING_PRELUDE
+        + r'''
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} } },
+  storage: { local: { get: async () => ({}) } },
+  permissions: { contains: async () => true, request: async () => true, remove: async () => true },
+};
+globalThis.bodies = [];
+globalThis.fetch = async (url, options = {}) => {
+  if (options.method === "POST") { globalThis.bodies.push(JSON.parse(options.body)); return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({ status: "ok" }) }; }
+  return makeStreamResponse({ count: 1, url: "https://cdn.example/real.pdf" }).response;
+};
+const { maybeStreamPdfBytes } = await import("./background/pdf_fetch.mjs");
+await maybeStreamPdfBytes({
+  endpoint: "http://127.0.0.1:8765/capture", citekey: "k", bib: null,
+  pdfUrlCandidates: [{ url: "https://pub.test/a.pdf" }], pageUrl: "https://pub.test/article",
+});
+console.log(JSON.stringify({ bodies: globalThis.bodies }));
+''',
+        tmp_path,
+    )
+    body = result["bodies"][0]
+    assert body["source_url"] == "https://cdn.example/real.pdf", body
+    assert body["origin_candidate"] == "https://pub.test/a.pdf", body
+
+
+def test_the_service_worker_keeps_no_always_on_pdf_cache(tmp_path: Path) -> None:
+    """The popup runs captures in its own realm, so a worker-side cache feeds no one.
+
+    Loading the worker must register no `webRequest` listener of its own; the
+    per-capture observer is armed by a capture and removed when it ends.
+    """
+    result = _run_background_module(
+        r'''
+globalThis.listeners = 0;
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} } },
+  webRequest: { onHeadersReceived: { addListener: () => { globalThis.listeners += 1; }, removeListener: () => {} } },
+};
+const mod = await import("./background.js");
+const observer = await import("./background/observer.mjs");
+console.log(JSON.stringify({ listeners: globalThis.listeners, cacheApi: Object.keys(observer).filter((k) => /Cache|Entry|ForDomain|recent/i.test(k)) }));
+''',
+        tmp_path,
+    )
+    assert result["listeners"] == 0, result
+    assert result["cacheApi"] == [], result

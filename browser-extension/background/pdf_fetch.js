@@ -6,6 +6,7 @@
 
 import {
   MAX_ATTACH_PDF_BYTES,
+  PDF_BODY_IDLE_TIMEOUT_MS,
   PDF_FETCH_TIMEOUT_MS,
   _captureTabId,
   endpointFor,
@@ -19,17 +20,22 @@ import {
   isSafePublicHttpUrl,
   jsonOrNull,
   looksLikePdfBytes,
+  originOf,
   sameOrigin,
   sleep,
 } from "./utils.js";
 import {
+  BodyLimitError,
   cookieHeaderForUrl,
   fetchWithTimeout,
   groupCandidatesByOrigin,
   groupPdfCandidates,
+  installPrivateNetworkGuard,
   permissionForCandidate,
+  readBodyBounded,
   removeTemporaryOriginPermission,
   requestTemporaryOriginPermission,
+  takeOriginPrompt,
 } from "./permissions.js";
 import {
   collectObservedPdfUrls,
@@ -189,7 +195,34 @@ async function botBypassViaVisibleTab(candidateUrl, { timeoutMs }) {
   }
 }
 
-export async function maybeStreamPdfBytes({ endpoint, citekey, bib, pdfUrlCandidates, pageUrl, originPermissions = null, pdfRequest = null }) {
+export async function maybeStreamPdfBytes(args) {
+  // Every fetch below is the extension's own, and the browser follows a
+  // redirect from a granted publisher to wherever it points. The guard makes
+  // private destinations unreachable for the whole acquisition, and is handed
+  // back on every path out.
+  let releaseGuard = null;
+  try {
+    releaseGuard = await installPrivateNetworkGuard(args.endpoint);
+  } catch (_error) {
+    return {
+      status: "error",
+      message: "browser PDF fetch skipped — could not block private-network redirects",
+      pdf_attach_attempts: [],
+    };
+  }
+  try {
+    return await streamPdfBytes(args);
+  } finally {
+    if (releaseGuard) await releaseGuard();
+  }
+}
+
+async function streamPdfBytes({ endpoint, citekey, bib, pdfUrlCandidates, pageUrl, originPermissions = null, pdfRequest = null }) {
+  // Shared with `requestPdfOriginPermissions`: one prompt budget per capture,
+  // keyed by this map, so origins the server names later cannot add to it.
+  const permissionBook = originPermissions && typeof originPermissions.get === "function"
+    ? originPermissions
+    : new Map();
   const attempts = [];
   const grouped = groupPdfCandidates(pdfUrlCandidates || [], pageUrl);
   let lastPermission = null;
@@ -199,8 +232,17 @@ export async function maybeStreamPdfBytes({ endpoint, citekey, bib, pdfUrlCandid
     ...groupCandidatesByOrigin(grouped.crossOrigin).map((candidates) => ({ candidates, allowWithoutPermissionApi: false })),
   ];
   for (const { candidates, allowWithoutPermissionApi } of originGroups) {
-    const permission = permissionForCandidate(originPermissions, candidates[0])
-      || await requestTemporaryOriginPermission(candidates[0]);
+    let permission = permissionForCandidate(permissionBook, candidates[0]);
+    if (!permission) {
+      const origin = originOf(candidateUrl(candidates[0]));
+      if (!allowWithoutPermissionApi && !takeOriginPrompt(permissionBook)) {
+        permission = { status: "not_requested", origin, removed: false };
+      } else {
+        permission = await requestTemporaryOriginPermission(candidates[0]);
+      }
+      // Recorded so the capture-level release also covers it.
+      if (origin) permissionBook.set(origin, permission);
+    }
     lastPermission = permission;
     if (permission.status !== "granted" && !(allowWithoutPermissionApi && permission.status === "unavailable")) {
       // Allow same-origin candidates even when permission is "denied" —
@@ -294,7 +336,7 @@ async function tryPdfCandidates({ endpoint, citekey, bib, candidates, permission
         referrer,
       }, "browser_fetch", attempts);
       if (lightFetched) {
-        const attachResult = await attachPdfToServer({ endpoint, citekey, bib, sourceUrl: url, bytes: lightFetched.bytes, pdfRequest });
+        const attachResult = await attachPdfToServer({ endpoint, citekey, bib, sourceUrl: lightFetched.sourceUrl || url, bytes: lightFetched.bytes, pdfRequest, originCandidate: url });
         if (attachResult && attachResult.status === "ok") {
           markLastAttemptSaved(attempts, url);
           if (permission) attachResult.pdf_attach_permission = permission;
@@ -405,7 +447,7 @@ async function fetchPdfViaNavigateMonitor({ candidate, endpoint, citekey, bib, p
   // `originCandidate`: the observed URL is wherever the publisher redirected
   // to — routinely another host, and never named by the plan. The planned
   // candidate authorises; the observed URL is the provenance.
-  const attachResult = await attachPdfToServer({ endpoint, citekey, bib, sourceUrl: observedUrl, bytes: fetched.bytes, pdfRequest, originCandidate: url });
+  const attachResult = await attachPdfToServer({ endpoint, citekey, bib, sourceUrl: fetched.sourceUrl || observedUrl, bytes: fetched.bytes, pdfRequest, originCandidate: url });
   if (attachResult && attachResult.status === "ok") {
     markLastAttemptSaved(attempts, observedUrl);
     return attachResult;
@@ -482,7 +524,7 @@ async function fetchPdfViaDiscoverFromPage({ candidate, endpoint, citekey, bib, 
       referrer: candidate.referrer || pageUrl || undefined,
     }, "discover_from_page_fetch", attempts);
     if (!fetched) continue;
-    const attachResult = await attachPdfToServer({ endpoint, citekey, bib, sourceUrl: observedUrl, bytes: fetched.bytes, pdfRequest, originCandidate: url });
+    const attachResult = await attachPdfToServer({ endpoint, citekey, bib, sourceUrl: fetched.sourceUrl || observedUrl, bytes: fetched.bytes, pdfRequest, originCandidate: url });
     if (attachResult && attachResult.status === "ok") {
       markLastAttemptSaved(attempts, observedUrl);
       return attachResult;
@@ -638,18 +680,40 @@ async function fetchPdfViaPageContext(tabId, url, _endpoint, citekey, bib, attem
     const results = await chrome.scripting.executeScript({
       target: { tabId },
       world: "MAIN",
-      func: async (pdfUrl) => {
+      // Limits arrive as arguments: this runs in the page, where the module's
+      // constants do not exist. The body is read as a stream so a page-origin
+      // response that never ends cannot grow the tab without bound; an abort
+      // fires on a silence of `idleMs` or on the first byte past `maxBytes`.
+      func: async (pdfUrl, maxBytes, idleMs) => {
+        const controller = new AbortController();
+        let timer = setTimeout(() => controller.abort(), idleMs);
         try {
-          const response = await fetch(pdfUrl, { credentials: "include" });
+          const response = await fetch(pdfUrl, { credentials: "include", signal: controller.signal });
           if (!response.ok) return { error: `fetch HTTP ${response.status}` };
           const contentType = response.headers.get("content-type") || "";
           if (!contentType.toLowerCase().includes("pdf")) {
             return { error: "not_pdf", contentType };
           }
-          const buf = await response.arrayBuffer();
-          if (buf.byteLength === 0) return { error: "empty" };
+          const reader = response.body.getReader();
+          const chunks = [];
+          let received = 0;
+          for (;;) {
+            clearTimeout(timer);
+            timer = setTimeout(() => controller.abort(), idleMs);
+            const { done, value } = await reader.read();
+            if (done) break;
+            received += value.byteLength;
+            if (received > maxBytes) {
+              controller.abort();
+              return { error: "too_large" };
+            }
+            chunks.push(value);
+          }
+          if (received === 0) return { error: "empty" };
           // Return as base64 to background for secure API attach.
-          const bytes = new Uint8Array(buf);
+          const bytes = new Uint8Array(received);
+          let at = 0;
+          for (const chunk of chunks) { bytes.set(chunk, at); at += chunk.byteLength; }
           let binary = "";
           for (let i = 0; i < bytes.byteLength; i++) {
             binary += String.fromCharCode(bytes[i]);
@@ -657,9 +721,11 @@ async function fetchPdfViaPageContext(tabId, url, _endpoint, citekey, bib, attem
           return { base64: btoa(binary) };
         } catch (e) {
           return { error: e.message };
+        } finally {
+          clearTimeout(timer);
         }
       },
-      args: [url],
+      args: [url, MAX_ATTACH_PDF_BYTES, PDF_BODY_IDLE_TIMEOUT_MS],
     });
     result = results?.[0]?.result;
   } catch (_e) {
@@ -767,17 +833,33 @@ async function fetchCandidateBytes(candidate, options, mode, attempts) {
     return null;
   }
   const contentType = response.headers.get("content-type") || "";
+  // Where the redirects ended up. The network guard stops the *request* to a
+  // private destination; this is the second layer, and the provenance that the
+  // attach call reports (the candidate stays the authorisation).
+  const finalUrl = redirectedUrl(response, url);
+  if (finalUrl !== url && !isSafePublicHttpUrl(finalUrl)) {
+    cancelBody(response);
+    attempts.push({ url, mode, status: "unsafe_redirect", http_status: response.status || null, final_url: finalUrl, byte_count: 0 });
+    return null;
+  }
   if (!response.ok) {
     attempts.push({ url, mode, status: "http_error", http_status: response.status || null, content_type: contentType, byte_count: 0 });
     return null;
   }
   if (contentLengthExceedsAttachLimit(response.headers)) {
+    cancelBody(response);
     attempts.push({ url, mode, status: "too_large", http_status: response.status || null, content_type: contentType, byte_count: Number.parseInt(response.headers.get("content-length") || "0", 10) || 0 });
     return null;
   }
-  const bytes = await response.arrayBuffer();
-  if (bytes.byteLength > MAX_ATTACH_PDF_BYTES) {
-    attempts.push({ url, mode, status: "too_large", http_status: response.status || null, content_type: contentType, byte_count: bytes.byteLength });
+  let bytes;
+  try {
+    bytes = await readBodyBounded(response, { maxBytes: MAX_ATTACH_PDF_BYTES });
+  } catch (error) {
+    if (error instanceof BodyLimitError && error.reason === "too_large") {
+      attempts.push({ url, mode, status: "too_large", http_status: response.status || null, content_type: contentType, byte_count: error.byteCount });
+    } else {
+      attempts.push({ url, mode, status: "fetch_error", error: error?.message || String(error), byte_count: error?.byteCount || 0 });
+    }
     return null;
   }
   if (!looksLikePdfBytes(bytes) && !contentType.toLowerCase().includes("pdf")) {
@@ -807,7 +889,19 @@ async function fetchCandidateBytes(candidate, options, mode, attempts) {
   // The URL these bytes came from, which is not always the candidate the
   // caller passed: the meta-refresh and bot-bypass paths fetch elsewhere and
   // used to attribute the result to the planned URL.
-  return { bytes, sourceUrl: url };
+  return { bytes, sourceUrl: finalUrl };
+}
+
+function redirectedUrl(response, requested) {
+  return typeof response.url === "string" && response.url ? response.url : requested;
+}
+
+function cancelBody(response) {
+  try {
+    response.body?.cancel?.().catch?.(() => {});
+  } catch (_error) {
+    /* nothing to cancel */
+  }
 }
 
 /**
@@ -818,13 +912,18 @@ async function fetchCandidateBytes(candidate, options, mode, attempts) {
  *   <meta http-equiv="refresh" content="0;URL=https://example.com/paper.pdf">
  *   <meta http-equiv="Refresh" content="0; url=https://example.com/paper.pdf">
  */
+const META_REFRESH_SCAN_BYTES = 256 * 1024;
+
 async function extractMetaRedirectUrl(candidate, options) {
   try {
     const url = typeof candidate === "string" ? candidate : candidate?.url;
     if (!url) return null;
     const response = await fetchWithTimeout(url, options, PDF_FETCH_TIMEOUT_MS);
     if (!response.ok) return null;
-    const text = await response.text();
+    // The refresh tag sits in the page head, so a prefix is enough and a page
+    // that streams forever cannot hold the capture.
+    const prefix = await readBodyBounded(response, { maxBytes: META_REFRESH_SCAN_BYTES, truncate: true });
+    const text = new TextDecoder().decode(prefix);
     // Match meta refresh patterns with flexible spacing/case/quoting
     // `([^"'>\s]+)`, not `(\S+?)`. The old capture was non-greedy and followed
     // by `[^>]*`, so the engine satisfied it with a single character: every

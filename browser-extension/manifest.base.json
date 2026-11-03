@@ -7,7 +7,7 @@
     "48": "icon48.png",
     "128": "icon128.png"
   },
-  "permissions": ["activeTab", "storage", "scripting", "cookies", "contextMenus", "webRequest"],
+  "permissions": ["activeTab", "storage", "scripting", "cookies", "contextMenus", "webRequest", "declarativeNetRequest"],
   "optional_permissions": [],
   "host_permissions": [
     "http://127.0.0.1/*",

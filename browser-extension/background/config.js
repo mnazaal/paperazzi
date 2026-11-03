@@ -6,6 +6,12 @@
 export const DEFAULT_HOST = "http://127.0.0.1:8765";
 export const DEFAULT_ENDPOINT = `${DEFAULT_HOST}/capture`;
 export const PDF_FETCH_TIMEOUT_MS = 30000;
+// The body is bounded separately from the headers: a server can answer
+// promptly and then trickle or stall, and the header timer is cleared by then.
+// Idle is the longest silence tolerated between chunks; total is the ceiling on
+// one download however steadily it arrives (47 MiB in 5 min is ~160 KiB/s).
+export const PDF_BODY_IDLE_TIMEOUT_MS = 30000;
+export const PDF_BODY_TOTAL_TIMEOUT_MS = 5 * 60 * 1000;
 // Derived from the server's `api_max_body_bytes` (default 64 MiB,
 // `pzi/http_security.py:DEFAULT_MAX_BODY_BYTES`): the JSON attach path
 // base64-encodes the bytes, which costs 4/3, so 47 MiB is the largest
