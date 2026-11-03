@@ -46,6 +46,21 @@ class CitekeyChange(TypedDict):
     new_pdf: NotRequired[str]
     #: A stored PDF outside ``papers_dir``, left exactly where it is.
     kept_external_pdf: NotRequired[str]
+    #: The entry holds several attachments. The `file` field is rewritten as one
+    #: path, which would drop the rest, so the PDF is left where it is.
+    kept_multi_attachment: NotRequired[str]
+
+
+def _has_several_attachments(entry: BibtexEntry) -> bool:
+    """Whether the entry's ``file`` field lists more than one attachment."""
+    return len(parse_file_field(entry.get("fields", {}).get("file"))) > 1
+
+
+def _multi_attachment_error(citekey: str, path: str) -> str:
+    return (
+        f"kept PDF for {citekey} at {path}: its file field lists several "
+        "attachments, and a rename would rewrite it as one"
+    )
 
 
 def _blocks_rename(destination: str, source: str) -> bool:
@@ -231,7 +246,9 @@ def plan_reindex(
                     record=record,
                     filename_format=pdf_filename_format,
                 )
-                if old_pdf != new_pdf:
+                if old_pdf != new_pdf and _has_several_attachments(entry):
+                    change["kept_multi_attachment"] = old_pdf
+                elif old_pdf != new_pdf:
                     change["old_pdf"] = old_pdf
                     change["new_pdf"] = new_pdf
             else:
@@ -364,7 +381,11 @@ def reindex_library(
             citekey_format=citekey_format,
             pdf_filename_format=pdf_filename_format,
         )
-        errors: list[str] = []
+        errors: list[str] = [
+            _multi_attachment_error(change["old_citekey"], change["kept_multi_attachment"])
+            for change in changes
+            if "kept_multi_attachment" in change
+        ]
         backup_path: Path | None = None
 
         if dry_run:
@@ -531,6 +552,9 @@ def rename_files_to_policy(
                 if not include_all:
                     continue
 
+            if _has_several_attachments(entry):
+                errors.append(_multi_attachment_error(citekey, current))
+                continue
             destination = str(Path(papers_dir) / wanted)
             # The same two refusals the citekey pass makes, for the same
             # reasons: never overwrite an existing file, and never rename a
