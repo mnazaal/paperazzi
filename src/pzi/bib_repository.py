@@ -20,7 +20,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from pathlib import Path
-from typing import Any, TypeAlias, TypedDict, cast
+from typing import Any, NamedTuple, TypeAlias, TypedDict, cast
 
 import portalocker
 from bibtexparser.library import Library
@@ -721,23 +721,16 @@ def _prepare_write(
         yield source, new_source, updated_entries, plan
 
 
-class AppliedEntries(list):  # type: ignore[type-arg]
+class AppliedWrite(NamedTuple):
     """The entries a write committed, plus what the write *actually* did.
 
     The rebase under the lock can turn an insert into an update (a second writer
     committed the same DOI first), so the planned action is not the applied one.
-    A list subclass keeps every existing ``execute_write_plan`` caller working.
     """
 
+    entries: list[BibtexEntry]
     action: str
     changed_fields: list[str]
-
-    def __init__(
-        self, entries: list[BibtexEntry], *, action: str, changed_fields: list[str]
-    ) -> None:
-        super().__init__(entries)
-        self.action = action
-        self.changed_fields = list(changed_fields)
 
 
 def execute_write_plan(
@@ -745,7 +738,7 @@ def execute_write_plan(
     plan: WritePlan,
     *,
     file_path_style: str = "absolute",
-) -> list[BibtexEntry]:
+) -> AppliedWrite:
     """Read, apply a plan, and write a BibTeX file under an exclusive lock.
 
     Validates that the resulting BibTeX round-trips through
@@ -763,11 +756,7 @@ def execute_write_plan(
     ) as (source, new_source, updated_entries, applied):
         if new_source != source:
             _write_bib_text_atomic(path, new_source, expected_source=source)
-        return AppliedEntries(
-            updated_entries,
-            action=applied["action"],
-            changed_fields=applied["changed_fields"],
-        )
+        return AppliedWrite(updated_entries, applied["action"], list(applied["changed_fields"]))
 
 
 def _invariant(condition: bool, message: str) -> None:

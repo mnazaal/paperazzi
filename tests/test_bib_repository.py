@@ -198,7 +198,7 @@ def test_execute_write_plan_updates_file_contents(tmp_path: Path) -> None:
             },
             "changed_fields": ["title"],
         },
-    )
+    ).entries
 
     assert updated == [
         {
@@ -437,7 +437,7 @@ def test_execute_write_plan_succeeds_without_external_edit(tmp_path: Path) -> No
         "changed_fields": ["title"],
     }
 
-    updated = execute_write_plan(str(path), plan)
+    updated = execute_write_plan(str(path), plan).entries
     assert updated[0]["fields"]["title"] == "Updated"
     assert "Updated" in path.read_text()
 
@@ -458,7 +458,7 @@ def test_execute_write_plan_skips_check_for_new_file(tmp_path: Path) -> None:
         "changed_fields": ["title"],
     }
 
-    updated = execute_write_plan(str(path), plan)
+    updated = execute_write_plan(str(path), plan).entries
     assert updated[0]["fields"]["title"] == "New"
     assert "New" in path.read_text()
 
@@ -721,7 +721,7 @@ def test_execute_write_plan_rebase_keeps_on_disk_entry_type_and_fields(
     assert plan["action"] == "insert"
     assert plan["entry"]["entry_type"] == "article"
 
-    updated = execute_write_plan(str(path), plan)
+    updated = execute_write_plan(str(path), plan).entries
 
     assert len(updated) == 1
     entry = updated[0]

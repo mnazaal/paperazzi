@@ -78,14 +78,14 @@ def test_two_writers_same_doi_agree_on_count_action_and_changed_fields(
     plan2 = plan_bib_write(record, empty["records"], existing_entries=empty["entries"])  # type: ignore[arg-type]
     assert plan1["action"] == plan2["action"] == "insert"
 
-    entries1 = execute_write_plan(str(bib), plan1)
-    assert plan_with_applied_record(plan1, record, entries1)["action"] == "insert"  # type: ignore[arg-type]
+    write1 = execute_write_plan(str(bib), plan1)
+    assert plan_with_applied_record(plan1, record, write1)["action"] == "insert"  # type: ignore[arg-type]
 
-    entries2 = execute_write_plan(str(bib), plan2)  # rebased into an update
-    applied = plan_with_applied_record(plan2, record, entries2)  # type: ignore[arg-type]
+    write2 = execute_write_plan(str(bib), plan2)  # rebased into an update
+    applied = plan_with_applied_record(plan2, record, write2)  # type: ignore[arg-type]
 
     assert len(read_bib_file(str(bib))["entries"]) == 1
-    assert len(entries2) == 1
+    assert len(write2.entries) == 1
     assert applied["action"] == "update"
     assert applied["changed_fields"] == []  # nothing new: "already captured"
 

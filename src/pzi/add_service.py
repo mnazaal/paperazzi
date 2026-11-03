@@ -813,11 +813,11 @@ def _execute_plan_with_retry(
     records = initial_records
     for attempt in range(2):
         try:
-            updated_entries = execute_write_plan(
+            applied = execute_write_plan(
                 bib["path"], plan, file_path_style=file_path_style
             )
             return record_with_hint, plan_with_applied_record(
-                plan, record_with_hint, updated_entries
+                plan, record_with_hint, applied
             )
         except StalePlanError:
             if attempt == 1:

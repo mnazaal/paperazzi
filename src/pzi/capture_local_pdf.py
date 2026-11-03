@@ -14,8 +14,8 @@ from pzi.add_planning import (
     merge_fetched_record_with_overrides,
     select_best_metadata_result,
 )
-from pzi.bib_repository import WritePlan, read_bib_file
-from pzi.bibtex import BibtexEntry, NormalizedRecord, bibtex_entry_to_record
+from pzi.bib_repository import AppliedWrite, WritePlan, read_bib_file
+from pzi.bibtex import NormalizedRecord, bibtex_entry_to_record
 from pzi.config import DEFAULT_PDF_FILE_PATH_STYLE, BibConfig
 from pzi.identifiers import normalize_doi
 from pzi.pdf import (
@@ -472,8 +472,9 @@ def attach_pdf_if_available(
 def plan_with_applied_record(
     plan: WritePlan,
     intended_record: NormalizedRecord,
-    updated_entries: list[BibtexEntry],
+    applied: AppliedWrite,
 ) -> WritePlan:
+    updated_entries = applied.entries
     updated_records = [bibtex_entry_to_record(entry) for entry in updated_entries]
 
     # When force_new was used, both the old and new entries share the same DOI,
@@ -508,12 +509,8 @@ def plan_with_applied_record(
     updated_plan["entry"] = updated_entries[match_index]
     # What the write did, not what it planned: the rebase under the lock turns an
     # insert into an update when a concurrent writer committed the same paper.
-    applied_action = getattr(updated_entries, "action", None)
-    if applied_action in ("insert", "update"):
-        updated_plan["action"] = applied_action
-        updated_plan["changed_fields"] = list(
-            getattr(updated_entries, "changed_fields", plan["changed_fields"])
-        )
+    updated_plan["action"] = applied.action
+    updated_plan["changed_fields"] = applied.changed_fields
     return cast(WritePlan, updated_plan)
 
 

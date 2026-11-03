@@ -12,7 +12,7 @@ from pzi.add_service import (
     reuse_existing_pdf_fields_for_exact_match,
     reuse_orphan_pdf_for_planned_path,
 )
-from pzi.bib_repository import StalePlanError, plan_bib_write
+from pzi.bib_repository import AppliedWrite, StalePlanError, plan_bib_write
 from pzi.bibtex import record_to_bibtex_entry
 from pzi.capture_local_pdf import build_add_record_result, plan_with_applied_record
 from pzi.errors import REASON_USAGE, exit_code_for_error
@@ -1449,7 +1449,7 @@ def test_plan_with_applied_record_rebases_citekey() -> None:
     result = plan_with_applied_record(
         plan,
         {"doi": "10.1234/a"},  # type: ignore[arg-type]
-        [updated_entry],
+        AppliedWrite([updated_entry], "insert", []),
     )
 
     assert result["record"]["citekey"] == "new"
@@ -1480,7 +1480,7 @@ def test_plan_with_applied_record_keeps_the_force_new_citekey() -> None:
     result = plan_with_applied_record(
         plan,
         {"doi": "10.1234/a"},  # type: ignore[arg-type]
-        [pre_existing, forced],
+        AppliedWrite([pre_existing, forced], "insert", []),
     )
 
     assert result["record"]["citekey"] == "smith2024a"
@@ -1514,7 +1514,7 @@ def test_plan_with_applied_record_reports_what_the_write_committed() -> None:
     result = plan_with_applied_record(
         plan,
         {"doi": "10.1234/a"},  # type: ignore[arg-type]
-        [committed],
+        AppliedWrite([committed], "insert", []),
     )
 
     assert result["record"]["venue"] == "NeurIPS"
@@ -1546,7 +1546,7 @@ def test_plan_with_applied_record_keeps_keys_the_entry_cannot_carry() -> None:
     result = plan_with_applied_record(
         plan,
         {"doi": "10.1234/a"},  # type: ignore[arg-type]
-        [committed],
+        AppliedWrite([committed], "insert", []),
     )
 
     assert result["record"]["citekey"] == "new"
