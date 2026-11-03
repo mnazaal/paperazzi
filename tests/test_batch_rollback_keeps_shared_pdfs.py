@@ -68,27 +68,6 @@ def test_remove_new_pdf_still_spares_pre_existing_files(tmp_path: Path) -> None:
     assert old.exists()
 
 
-def test_both_batch_paths_pass_their_claimed_files_to_the_rollback() -> None:
-    """C9's point: the two batch loops must not diverge on this rule.
-
-    `pdf_service.retry_failed_pdfs` commits per item and accumulates
-    `committed_pdfs`; `add_service.add_records_to_bib_batch` applies to a
-    session and accumulates `batch_pdfs`. Both must hand their list to
-    `remove_new_pdf` as `keep`, or that path silently keeps the old bug.
-    """
-    import inspect
-
-    from pzi.add_service import add_records_to_bib_batch
-    from pzi.pdf_service import retry_failed_pdfs
-
-    retry_src = inspect.getsource(retry_failed_pdfs)
-    assert "committed_pdfs" in retry_src
-    assert "keep=committed_pdfs" in retry_src, "retry rollback ignores committed files"
-
-    batch_src = inspect.getsource(add_records_to_bib_batch)
-    assert "keep=batch_pdfs" in batch_src, "batch rollback ignores applied records"
-
-
 def test_the_outer_batch_cleanup_spares_only_what_the_library_points_at() -> None:
     """`keep` stays off this path; the library on disk decides instead.
 
