@@ -76,13 +76,45 @@ class MergeDecision(TypedDict):
 _USER_OWNED_ENTRY_FIELDS = ("note", "keywords", "file")
 
 
+def _split_keywords(value: str | None) -> list[str]:
+    return [part.strip() for part in (value or "").split(",") if part.strip()]
+
+
+def _same_file_value(left: str | None, right: str | None) -> bool:
+    """Two ``file`` values naming one path, whichever style each is written in."""
+    if left is None or right is None or left == right:
+        return left == right
+    # This module is pure and cannot ask for the home directory, so a `~/x`
+    # spelling matches an absolute path ending in `/x`.
+    return (left.startswith("~/") and right.endswith(left[1:])) or (
+        right.startswith("~/") and left.endswith(right[1:])
+    )
+
+
+def _merge_keywords(base: str | None, planned: str | None, current: str | None) -> str | None:
+    """Three-way set merge of two writers' tags against their common base.
+
+    What this writer removed from the base is removed; what it added is added;
+    anything the other writer added stays. Ordering follows the current entry,
+    then this writer's additions, so the result does not depend on set order.
+    """
+    base_tags, planned_tags, current_tags = (
+        _split_keywords(base), _split_keywords(planned), _split_keywords(current),
+    )
+    removed = set(base_tags) - set(planned_tags)
+    added = [tag for tag in planned_tags if tag not in base_tags]
+    merged = [tag for tag in current_tags if tag not in removed]
+    merged += [tag for tag in added if tag not in merged]
+    return ", ".join(merged) or None
+
+
 def _apply_untouched_fields_from_current(
     rebased: BibtexEntry,
     *,
     base: BibtexEntry,
     planned: BibtexEntry,
     current: BibtexEntry,
-) -> None:
+) -> list[str]:
     """Three-way merge: the current entry wins every field the plan left alone.
 
     *base* is the entry the plan merged onto when it was built. A field whose
@@ -91,22 +123,54 @@ def _apply_untouched_fields_from_current(
     survive. A field the plan did change wins, which is what makes a deliberate
     edit (and promote's deliberate *deletions*) still apply.
 
+    The exception is a user-owned field both writers changed. ``keywords`` is a
+    set, so the two sets are merged against the base. ``note`` and ``file`` are
+    one value each and cannot be merged: the names of the ones set differently
+    by both writers are returned, and the caller refuses the plan rather than
+    pick a winner and drop the other's content.
+
     Field order is taken from the current entry first, so the result does not
     depend on set-iteration order: `PYTHONHASHSEED` varying between runs would
     otherwise reorder fields and break byte-identical rewrites.
     """
+    conflicts: list[str] = []
     for field in dict.fromkeys([*current["fields"], *planned["fields"], *base["fields"]]):
         planned_value = planned["fields"].get(field)
         base_value = base["fields"].get(field)
-        if planned_value != base_value:
-            continue  # this writer decided this field — it wins
         current_value = current["fields"].get(field)
+        if planned_value != base_value:
+            # This writer decided this field — it wins, unless the other writer
+            # decided a user-owned one differently too.
+            if field not in _USER_OWNED_ENTRY_FIELDS or current_value is None:
+                continue
+            if field == "keywords":
+                if current_value != base_value and current_value != planned_value:
+                    merged = _merge_keywords(base_value, planned_value, current_value)
+                    if merged is None:
+                        rebased["fields"].pop(field, None)
+                    else:
+                        rebased["fields"][field] = merged
+                continue
+            same = (
+                _same_file_value(current_value, base_value)
+                if field == "file"
+                else current_value == base_value
+            )
+            agrees = (
+                _same_file_value(current_value, planned_value)
+                if field == "file"
+                else current_value == planned_value
+            )
+            if not same and not agrees:
+                conflicts.append(field)
+            continue
         if current_value == base_value:
             continue  # nobody else touched it either
         if current_value is None:
             rebased["fields"].pop(field, None)  # the other writer deleted it
         else:
             rebased["fields"][field] = current_value
+    return conflicts
 
 
 def _carry_unmodelled_fields(

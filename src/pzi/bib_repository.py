@@ -1319,9 +1319,17 @@ def _rebase_update_plan_against_current(
     # decided. Where a base is available, hand every other field back.
     base_entry = plan.get("base_entry")
     if isinstance(base_entry, dict):
-        _apply_untouched_fields_from_current(
+        conflicts = _apply_untouched_fields_from_current(
             rebased, base=base_entry, planned=planned_entry, current=current_entry
         )
+        if conflicts:
+            # Both writers set the same single-valued field of the user's to
+            # different content: either choice would drop the other's. A retry
+            # re-reads and plans against what is there now.
+            raise _stale_plan(
+                f"another writer set {', '.join(conflicts)} on the same entry "
+                "while this one was prepared"
+            )
         if planned_entry["entry_type"] == base_entry["entry_type"]:
             rebased["entry_type"] = current_entry["entry_type"]
 

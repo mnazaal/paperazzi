@@ -301,3 +301,59 @@ def test_update_bib_entry_requires_a_stated_identity_precondition(tmp_path):
     assert update_bib_entry(
         str(bib), "key2020", lambda e, r: e, expected_paper=ANY_PAPER
     )["found"]
+
+
+# -- both writers set a user-owned field: merge it, or refuse, never pick one --
+
+
+def _concurrent(tmp_path, base_extra, current_extra, incoming):
+    def e(**f):
+        body = "".join(f"  {k} = {{{v}}},\n" for k, v in f.items())
+        return (
+            "@article{key2020,\n  author = {Smith, Jane},\n  title = {Paper A},\n"
+            f"  year = {{2020}},\n  doi = {{10.1000/aaa}},\n{body}}}\n"
+        )
+
+    bib = tmp_path / "t.bib"
+    bib.write_text(e(**base_extra))
+    snap = read_bib_file(str(bib))
+    record = {"citekey": "key2020", "title": "Paper A", "authors": ["Smith, Jane"],
+              "year": 2020, "doi": "10.1000/aaa", **incoming}
+    plan = plan_bib_write(record, snap["records"], existing_entries=snap["entries"])
+    bib.write_text(e(**current_extra))
+    try:
+        execute_write_plan(str(bib), plan)
+    except StalePlanError:
+        return "refused", read_bib_file(str(bib))["records"][0]
+    return "wrote", read_bib_file(str(bib))["records"][0]
+
+
+def test_tags_added_by_both_writers_are_both_kept(tmp_path):
+    outcome, rec = _concurrent(tmp_path, {}, {"keywords": "other"}, {"tags": ["mine"]})
+    assert outcome == "wrote" and sorted(rec["tags"]) == ["mine", "other"]
+
+
+def test_tags_merge_against_the_base_set(tmp_path):
+    outcome, rec = _concurrent(
+        tmp_path, {"keywords": "t0, t1"}, {"keywords": "t0, t1, other"}, {"tags": ["mine"]}
+    )
+    assert outcome == "wrote" and sorted(rec["tags"]) == ["mine", "other", "t0", "t1"]
+
+
+@pytest.mark.parametrize(
+    "current,incoming",
+    [({"note": "other note"}, {"note": "plan note"}),
+     ({"file": "/x/other.pdf"}, {"local_pdf_path": "/x/mine.pdf"})],
+    ids=["note", "file"],
+)
+def test_a_user_owned_field_both_writers_set_differently_is_refused(tmp_path, current, incoming):
+    outcome, rec = _concurrent(tmp_path, {}, current, incoming)
+    assert outcome == "refused"
+    for key, value in (("note", "other note"), ("local_pdf_path", "/x/other.pdf")):
+        if key in rec and rec[key]:
+            assert rec[key] == value
+
+
+def test_a_user_owned_field_only_the_plan_changed_still_applies(tmp_path):
+    outcome, rec = _concurrent(tmp_path, {}, {"abstract": "x"}, {"tags": ["mine"]})
+    assert outcome == "wrote" and rec["tags"] == ["mine"]
