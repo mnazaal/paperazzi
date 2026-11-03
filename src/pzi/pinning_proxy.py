@@ -240,19 +240,34 @@ class PinningProxy:
         client is no longer read. ``None`` (a CONNECT tunnel) is unbounded.
         """
         sent_down = 0
+        # A plain-HTTP response that ends abnormally must not end in a FIN, which
+        # reads as a complete close-delimited body. A tunnel's TLS layer reports
+        # a missing close_notify itself.
+        plain = upload_budget is not None
         sel = selectors.DefaultSelector()
         sel.register(client, selectors.EVENT_READ, upstream)
         sel.register(upstream, selectors.EVENT_READ, client)
-        if upload_budget == 0:
-            sel.unregister(client)
+        spent = upload_budget == 0
         try:
             while True:
                 events = sel.select(timeout=_PROXY_IDLE_SECONDS)
                 if not events:
+                    if plain:
+                        cls._reset(client)
                     return
                 for key, _ in events:
-                    data = key.fileobj.recv(65536)  # type: ignore[union-attr]
+                    try:
+                        data = key.fileobj.recv(65536)  # type: ignore[union-attr]
+                    except OSError:
+                        if plain and key.fileobj is upstream:
+                            cls._reset(client)
+                        return
                     if not data:
+                        if spent and key.fileobj is client:
+                            # A half-close after the request: the reply is
+                            # still owed to it, so keep relaying downstream.
+                            sel.unregister(client)
+                            continue
                         return
                     if key.fileobj is upstream:
                         room = limit - sent_down
@@ -266,13 +281,22 @@ class PinningProxy:
                             cls._reset(client)
                             return
                         sent_down += len(data)
+                    elif spent:
+                        # The request and its declared body are done and the
+                        # client sent more, so it is reusing the connection for
+                        # another request, which is never forwarded. Ending it
+                        # now lets the browser open a fresh one instead of
+                        # waiting on a reply that cannot come.
+                        cls._reset(client)
+                        return
                     elif upload_budget is not None:
                         data = data[:upload_budget]
                         upload_budget -= len(data)
-                        if upload_budget == 0:
-                            sel.unregister(client)
+                        spent = upload_budget == 0
                     key.data.sendall(data)
         except OSError:
+            if plain:
+                cls._reset(client)
             return
         finally:
             sel.close()
