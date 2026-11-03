@@ -596,7 +596,14 @@ def rename_files_to_policy(
                 for index, entry in enumerate(entries):
                     record = records[index] if index < len(records) else {}
                     for change in applied:
-                        if record.get("local_pdf_path") == change["old_pdf"]:
+                        # `old_pdf` is the expanded path, the record keeps the
+                        # field as written (`~/...` by default): compare both
+                        # expanded, or a home-relative entry is never repointed.
+                        recorded = record.get("local_pdf_path")
+                        if (
+                            isinstance(recorded, str)
+                            and str(Path(recorded).expanduser()) == change["old_pdf"]
+                        ):
                             entry.setdefault("fields", {})["file"] = change["new_pdf"]
                 rewrite_entries_in_order_locked(
                     bib_path, entries, file_path_style=file_path_style
