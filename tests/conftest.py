@@ -242,6 +242,16 @@ def _block_non_loopback_sockets(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _fresh_shared_rate_limiter(monkeypatch):
+    """Give each test its own process-wide limiter.
+
+    Otherwise one test's last request to a host makes the next test to reach
+    that host wait out the interval, so timing would depend on test order.
+    """
+    monkeypatch.setattr("pzi.rate_limit._SHARED", None)
+
+
+@pytest.fixture(autouse=True)
 def _clear_xdg_env(request, monkeypatch):
     """Unset XDG base-dir vars for the unit suite so default path resolution
     falls back to the injected home_dir / ``$HOME`` and stays hermetic.
