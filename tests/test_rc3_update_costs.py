@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 
 from pzi import bib_repository, update_service
-from pzi.bib_repository import delete_bib_entry, update_bib_entry
+from pzi.bib_repository import ANY_PAPER, delete_bib_entry, update_bib_entry
 from pzi.bibtex import apply_record_to_entry
 from pzi.update_service import update_bib
 
@@ -135,6 +135,7 @@ def test_batched_write_is_byte_identical_to_sequential_updates(
             lambda entry, record: apply_record_to_entry(
                 entry, {**record, "venue": "ICML", "year": 2021}
             ),
+            expected_paper=ANY_PAPER,
         )
     assert bib.read_text() == reference.read_text()
 

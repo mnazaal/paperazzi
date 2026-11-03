@@ -266,9 +266,9 @@ def test_update_does_not_write_a_looked_up_record_onto_a_paper_that_took_the_key
             "attachments": [],
         }]
 
-    with pytest.raises(StalePlanError):
-        update_service.update_bib(**_common(lib), dry_run=False, fetch_search=search)
+    result = update_service.update_bib(**_common(lib), dry_run=False, fetch_search=search)
     assert lib.bib.read_text() == b_text
+    assert [i.get("failed") for i in result["items"]] == [True], result
 
 
 def test_pdf_retry_does_not_attach_a_pdf_to_a_paper_that_took_the_key(tmp_path):
@@ -636,3 +636,43 @@ def test_preview_reports_the_action_the_rebase_will_apply(tmp_path):
     assert plan["action"] == "insert"
     bib.write_text(_entry(A, doi="10.1000/aaa").replace("key2020", "a2020"))
     assert preview_write_plan(str(bib), plan)["action"] == "update"
+
+
+def test_chunked_update_skips_only_the_replaced_entry(tmp_path):
+    lib = _Library(tmp_path)
+
+    def e(key, title, author):
+        return f"@article{{{key},\n  title = {{{title}}},\n  year = {{2024}},\n  author = {{{author}}},\n}}\n\n"
+
+    lib.bib.write_text(e("a2024", "Graph Parsers", "Smith, Jane") + e("b2024", "Tree Parsers", "Lee, Kim"))
+    calls: list[str] = []
+
+    def search(query, *, server_url):
+        title = "Graph Parsers" if "Graph" in query else "Tree Parsers"
+        calls.append(title)
+        return [{"item_type": "journalArticle",
+                 "record": {"title": title, "venue": "Journal of Parsing", "year": 2024,
+                            "doi": "10.9/" + title[:2].lower(), "authors": ["Smith, Jane" if "Graph" in title else "Lee, Kim"]},
+                 "attachments": []}]
+
+    real = update_service.batch_write_session
+
+    def replace_a_then_open(path, **kw):
+        text = Path(path).read_text().replace(
+            "title = {Graph Parsers}", "title = {Unrelated Paper B}"
+        ).replace("Smith, Jane", "Jones, Bob")
+        Path(path).write_text(text)
+        return real(path, **kw)
+
+    import pytest as _p
+    mp = _p.MonkeyPatch()
+    mp.setattr(update_service, "batch_write_session", replace_a_then_open)
+    try:
+        result = update_service.update_bib(**_common(lib), dry_run=False, fetch_search=search)
+    finally:
+        mp.undo()
+    text = lib.bib.read_text()
+    assert "Unrelated Paper B" in text and "10.9/gr" not in text
+    assert "10.9/tr" in text, text
+    notes = {i["citekey"]: i for i in result["items"]}
+    assert notes["a2024"].get("failed") and not notes["b2024"].get("failed")
