@@ -680,3 +680,172 @@ def test_install_wait_timeout_message_does_not_call_a_live_install_stuck(
     text = err.getvalue().lower()
     assert "still installing" in text and "wait" in text and "stop that process" in text
     assert "delete" not in text and "stuck" not in text
+
+
+# ---------------------------------------------------------------------------
+# launch_browser installs the request guard on every branch (no browser needed)
+# ---------------------------------------------------------------------------
+
+import pzi.browser_session as bs  # noqa: E402
+from pzi.safe_http import SsrfBlocked  # noqa: E402
+
+
+class _FakePage:
+    def __init__(self, route_error: Exception | None = None):
+        self.handlers: list = []
+        self.route_error = route_error
+
+    def route(self, pattern, handler):
+        if self.route_error:
+            raise self.route_error
+        self.handlers.append((pattern, handler))
+
+
+class _FakeContext:
+    def __init__(self, page):
+        self.page = page
+
+    def new_page(self):
+        return self.page
+
+    def new_context(self):
+        return self
+
+    def close(self):
+        pass
+
+
+class _FakeEngine:
+    def __init__(self, page):
+        self.page = page
+
+    def launch_persistent_context(self, **kwargs):
+        return _FakeContext(self.page)
+
+    def launch(self, **kwargs):
+        return _FakeContext(self.page)
+
+
+class _FakePlaywright:
+    def __init__(self, page):
+        self.chromium = self.firefox = _FakeEngine(page)
+        self.stopped = False
+
+    def start(self):
+        return self
+
+    def stop(self):
+        self.stopped = True
+
+
+def _launch(monkeypatch, tmp_path: Path, browser: str, profile: bool, page: _FakePage):
+    fake = _FakePlaywright(page)
+    import playwright.sync_api as sync_api
+
+    monkeypatch.setattr(sync_api, "sync_playwright", lambda: fake)
+    monkeypatch.setattr(bs, "_clone_chrome_profile", lambda path: tmp_path / "clone")
+    (tmp_path / "clone").mkdir(exist_ok=True)
+    return fake, bs.launch_browser(browser, str(tmp_path / "profile") if profile else None)
+
+
+@pytest.mark.parametrize("browser", ["chromium", "chrome", "firefox"])
+@pytest.mark.parametrize("profile", [True, False], ids=["persistent-profile", "no-profile"])
+def test_every_launch_branch_installs_a_request_guard_that_refuses_private_urls(
+    monkeypatch, tmp_path: Path, browser: str, profile: bool
+) -> None:
+    page = _FakePage()
+    _, session = _launch(monkeypatch, tmp_path, browser, profile, page)
+    try:
+        assert [pattern for pattern, _ in page.handlers] == ["**/*"]
+        handler = page.handlers[0][1]
+        verdicts: list[str] = []
+        for url in ("http://127.0.0.1:8765/secret", "http://localhost/x"):
+            route = MagicMock()
+            handler(route, MagicMock(url=url))
+            verdicts.append("abort" if route.abort.called and not route.continue_.called else "go")
+        assert verdicts == ["abort", "abort"]
+    finally:
+        session.close()
+
+
+@pytest.mark.parametrize("browser", ["chromium", "chrome", "firefox"])
+@pytest.mark.parametrize("profile", [True, False], ids=["persistent-profile", "no-profile"])
+def test_a_failed_guard_install_abandons_the_launch_on_every_branch(
+    monkeypatch, tmp_path: Path, browser: str, profile: bool
+) -> None:
+    fake_page = _FakePage(route_error=RuntimeError("route unavailable"))
+    with pytest.raises(SsrfBlocked):
+        _launch(monkeypatch, tmp_path, browser, profile, fake_page)
+    # The driver process the launch had started is stopped, not leaked.
+    import playwright.sync_api as sync_api
+
+    assert sync_api.sync_playwright().stopped is True
+
+
+# ---------------------------------------------------------------------------
+# https:// from a real browser through the proxy's CONNECT tunnel
+# ---------------------------------------------------------------------------
+
+import ssl  # noqa: E402
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer  # noqa: E402
+
+
+@pytest.mark.browser
+@pytest.mark.skipif(shutil.which("openssl") is None, reason="openssl not available")
+def test_real_browser_reaches_https_through_the_connect_tunnel(tmp_path: Path) -> None:
+    from tests.browser_probe import require_browser
+
+    require_browser()
+    cert, key = tmp_path / "cert.pem", tmp_path / "key.pem"
+    subprocess.run(
+        ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+         "-subj", "/CN=pub.test", "-keyout", str(key), "-out", str(cert)],
+        check=True, capture_output=True,
+    )
+    hits: list[str] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            hits.append(self.path)
+            body = b"<html><body>tls ok</body></html>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    tls = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(cert, key)
+    tls.socket = context.wrap_socket(tls.socket, server_side=True)
+    threading.Thread(target=tls.serve_forever, daemon=True).start()
+    dialed: list[tuple[str, int]] = []
+
+    def connect(address, timeout=None):
+        dialed.append(address)
+        return socket.create_connection(("127.0.0.1", tls.server_address[1]), timeout=timeout)
+
+    try:
+        with bs.open_browser_session(
+            "chromium", getaddrinfo=lambda host, port, *a, **k: (
+                _answers("127.0.0.1" if host == "rebind.test" else PUBLIC_IP)(host, port)
+            ),
+            connect=connect,
+        ) as session:
+            browser, _ = session.browser_ref
+            # `ignore_https_errors` is for the self-signed certificate only; the
+            # proxy and its public-address rule are the production ones.
+            page = browser.new_context(ignore_https_errors=True).new_page()
+            response = page.goto("https://pub.test/doc", timeout=30000)
+            assert response is not None and response.status == 200
+            assert "tls ok" in page.content()
+            assert set(dialed) == {(PUBLIC_IP, 443)} and "/doc" in hits
+            # A name that resolves private is refused at CONNECT; nothing is dialed.
+            with pytest.raises(Exception):
+                page.goto("https://rebind.test/secret", timeout=15000)
+            assert set(dialed) == {(PUBLIC_IP, 443)} and "/secret" not in hits
+    finally:
+        tls.shutdown()
