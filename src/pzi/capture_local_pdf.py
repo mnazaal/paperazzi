@@ -481,7 +481,7 @@ def plan_with_applied_record(
     # entry it duplicates matches first. Either way the rebase may have re-keyed
     # an insert (`k2020` taken meanwhile, `k2020-2` written), and the caller
     # would report the key it planned.
-    match_index = applied.index
+    match_index = applied.committed_index
     applied_record = updated_records[match_index]
     # Unconditionally, not just when the citekey moved. `execute_write_plan`
     # rebases a *local* copy of the plan onto the library it reads under the

@@ -736,7 +736,7 @@ class AppliedWrite(NamedTuple):
     #: Position in ``entries`` of the entry this write committed. The rebase can
     #: re-key an insert or turn it into an update of another entry, so the
     #: caller cannot find it again from the plan it submitted.
-    index: int
+    committed_index: int
 
 
 def execute_write_plan(
