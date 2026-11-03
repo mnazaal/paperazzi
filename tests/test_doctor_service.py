@@ -694,3 +694,27 @@ def test_a_bib_that_cannot_be_created_stays_fatal(tmp_path, monkeypatch) -> None
     ]}
     assert any("cannot be created" in p for p in doctor_health_problems(result))
     assert not any(str(taken) in p for p in doctor_advisory_problems(result))
+
+
+def test_doctor_notes_that_a_reachable_translation_server_has_an_unconfirmed_guard(
+    tmp_path,
+) -> None:
+    bib_path = tmp_path / "a.bib"
+    bib_path.write_text("")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        'translation_server_url = "http://localhost:1969"\n\n'
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\ndefault = true\n'
+    )
+
+    def run(probe):
+        return doctor_check(
+            config_path=str(config_path), home_dir=str(tmp_path),
+            translation_probe=probe, s2_probe=lambda **_kw: False,
+        )
+
+    reachable = run(lambda _url: True)
+    notes = [w for w in reachable["config_warnings"] if "cannot confirm its redirect guard" in w]
+    assert len(notes) == 1 and "http://localhost:1969" in notes[0]
+    # An unreachable server has nothing to confirm: the failure already says so.
+    assert not any("redirect guard" in w for w in run(lambda _url: False)["config_warnings"])

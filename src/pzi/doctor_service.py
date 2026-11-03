@@ -420,7 +420,10 @@ def doctor_check(
         "config_errors": [],
         #: Keys pzi does not recognize. Non-fatal, but a typo'd key silently
         #: reverts to the default — reporting them is what `doctor` is for.
-        "config_warnings": list(config_result.get("warnings") or []),
+        "config_warnings": [
+            *(config_result.get("warnings") or []),
+            *_unguarded_server_note(translation_server_url, reachable),
+        ],
         "bibs": bibs,
         "translation_server_url": translation_server_url,
         "translation_server_reachable": reachable,
@@ -452,6 +455,25 @@ def doctor_check(
     result["status"] = "ok" if not result["errors"] else "error"
     result["findings"] = doctor_advisory_problems(result)
     return result
+
+
+def _unguarded_server_note(url: str | None, reachable: bool) -> list[str]:
+    """Say that a reachable translation-server's redirect guard cannot be confirmed.
+
+    pzi guards only the server it starts itself (`ts_egress_guard`). `doctor` is
+    a separate process and cannot tell from outside whether the process behind
+    the port was started by pzi, by a user (Docker, a manual `node`), or left by
+    an older pzi. It reports the limit instead of guessing. Carried as a
+    warning, which `render_doctor_result` already prints under the config line.
+    """
+    if not url or not reachable:
+        return []
+    return [
+        f"translation-server at {url} is reachable, but pzi cannot confirm its redirect "
+        "guard: only a server pzi starts itself is made to refuse redirects to private "
+        "addresses, and one it did not start (Docker, a manual node, an older pzi's "
+        "leftover) may follow them"
+    ]
 
 
 def _credential_status(config: dict[str, Any]) -> dict[str, str]:
