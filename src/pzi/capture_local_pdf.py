@@ -34,7 +34,6 @@ from pzi.protocols import (
     WebTranslationFetcher,
 )
 from pzi.resolution_match import score_match
-from pzi.similarity import find_exact_match
 from pzi.translation_server import fetch_web_translations
 
 #: The capture result shape, defined once in `add_planning` beside the other
@@ -477,19 +476,12 @@ def plan_with_applied_record(
     updated_entries = applied.entries
     updated_records = [bibtex_entry_to_record(entry) for entry in updated_entries]
 
-    # When force_new was used, both the old and new entries share the same DOI,
-    # so the find_exact_match rebind below would return the *old* entry by
-    # identity and throw away the force-generated citekey. The plan is already
-    # correct in this case: plan_bib_write(force_new=True) sets the record to
-    # the incoming one, whose citekey is already the suffixed key that gets
-    # written. (The rebind-by-citekey loop that used to live here could not
-    # change anything — it compared plan["record"]["citekey"] against itself.)
-    if plan.get("force_new"):
-        return plan
-
-    match_index = find_exact_match(intended_record, updated_records)
-    if match_index is None:
-        return plan
+    # The entry the write committed, not one found again by identity: with no
+    # identifiers there is nothing to find it by, and with `force_new` the
+    # entry it duplicates matches first. Either way the rebase may have re-keyed
+    # an insert (`k2020` taken meanwhile, `k2020-2` written), and the caller
+    # would report the key it planned.
+    match_index = applied.index
     applied_record = updated_records[match_index]
     # Unconditionally, not just when the citekey moved. `execute_write_plan`
     # rebases a *local* copy of the plan onto the library it reads under the

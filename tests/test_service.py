@@ -1449,7 +1449,7 @@ def test_plan_with_applied_record_rebases_citekey() -> None:
     result = plan_with_applied_record(
         plan,
         {"doi": "10.1234/a"},  # type: ignore[arg-type]
-        AppliedWrite([updated_entry], "insert", []),
+        AppliedWrite([updated_entry], "insert", [], 0),
     )
 
     assert result["record"]["citekey"] == "new"
@@ -1480,7 +1480,7 @@ def test_plan_with_applied_record_keeps_the_force_new_citekey() -> None:
     result = plan_with_applied_record(
         plan,
         {"doi": "10.1234/a"},  # type: ignore[arg-type]
-        AppliedWrite([pre_existing, forced], "insert", []),
+        AppliedWrite([pre_existing, forced], "insert", [], 1),
     )
 
     assert result["record"]["citekey"] == "smith2024a"
@@ -1514,7 +1514,7 @@ def test_plan_with_applied_record_reports_what_the_write_committed() -> None:
     result = plan_with_applied_record(
         plan,
         {"doi": "10.1234/a"},  # type: ignore[arg-type]
-        AppliedWrite([committed], "insert", []),
+        AppliedWrite([committed], "insert", [], 0),
     )
 
     assert result["record"]["venue"] == "NeurIPS"
@@ -1546,7 +1546,7 @@ def test_plan_with_applied_record_keeps_keys_the_entry_cannot_carry() -> None:
     result = plan_with_applied_record(
         plan,
         {"doi": "10.1234/a"},  # type: ignore[arg-type]
-        AppliedWrite([committed], "insert", []),
+        AppliedWrite([committed], "insert", [], 0),
     )
 
     assert result["record"]["citekey"] == "new"

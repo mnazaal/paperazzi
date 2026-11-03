@@ -733,6 +733,10 @@ class AppliedWrite(NamedTuple):
     entries: list[BibtexEntry]
     action: str
     changed_fields: list[str]
+    #: Position in ``entries`` of the entry this write committed. The rebase can
+    #: re-key an insert or turn it into an update of another entry, so the
+    #: caller cannot find it again from the plan it submitted.
+    index: int
 
 
 def execute_write_plan(
@@ -758,7 +762,17 @@ def execute_write_plan(
     ) as (source, new_source, updated_entries, applied):
         if new_source != source:
             _write_bib_text_atomic(path, new_source, expected_source=source)
-        return AppliedWrite(updated_entries, applied["action"], list(applied["changed_fields"]))
+        committed_index = (
+            len(updated_entries) - 1
+            if applied["action"] == "insert"
+            else cast(int, applied["index"])
+        )
+        return AppliedWrite(
+            updated_entries,
+            applied["action"],
+            list(applied["changed_fields"]),
+            committed_index,
+        )
 
 
 def _invariant(condition: bool, message: str) -> None:
