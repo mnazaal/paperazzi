@@ -63,7 +63,8 @@ explained below.
 | `scripting` | Inject content scripts to extract embedded metadata (JSON-LD, OpenGraph, highwire tags) and to execute page-context PDF fetches that carry the real browser session. | HTML source, page variables. |
 | `cookies` | Forward cookies from the active tab domain to the translation-server so it can resolve authenticated metadata (e.g., paywalled publisher pages that your institution provides). Used for metadata lookup, not for arbitrary sites. | Cookie header for the active tab's domain only. |
 | `contextMenus` | Register "Save to paperazzi" right-click menu on links so users can capture a paper URL without navigating to it. | Target link URL (no page access). |
-| `webRequest` | Observe network responses to detect PDF files as they load (the PDF observer cache) so the extension can capture PDF candidates that appear via JavaScript redirects or dynamic loads. | Response headers (Content-Type only) and URL. |
+| `webRequest` | During a capture only, observe network responses to detect PDF files as they load, so the extension can capture PDF candidates that appear via JavaScript redirects or dynamic loads. | Response headers (Content-Type only) and URL. |
+| `declarativeNetRequest` | During a PDF fetch, block private-network destinations for the extension's own requests, including redirect hops. The rules are removed when the fetch ends. | Request URLs matched against the block list. Nothing is read or stored. |
 
 ### Host permissions explained
 
@@ -271,6 +272,28 @@ for the allowlist it does not get.
 
 ## Known limitations
 
+- **The browser extension blocks private destinations by URL text only:**
+  loopback, RFC 1918, CGNAT, link-local, reserved and documentation ranges,
+  `.local`/`.internal`-style suffixes, single-label names, trailing-dot forms,
+  and all IPv6 literals. It has no resolver, so a public-looking name whose DNS
+  record points at a private address (for example `localtest.me`) is not blocked
+  by the extension. For canonical and sibling metadata URLs the server's DNS
+  check refuses such names. For redirects followed during a PDF download the
+  extension's own final-URL check also sees only the name, so a publisher you
+  have granted could still redirect a download to such a name.
+- **Translation-server egress guard.** pzi sends every outbound request of a
+  translation-server it starts itself through a loopback proxy that refuses
+  private addresses on every redirect. It cannot confirm this for a server it
+  did not start (Docker, a manual node, an older pzi's leftover). That server is
+  used as is, and `pzi doctor` says so.
+- **The egress proxies do not chain to a corporate proxy.** The translation
+  server's guard and the Playwright browser's pinning proxy both replace
+  `HTTP(S)_PROXY`, so behind a network that requires a proxy those paths fail.
+  When starting the translation server, pzi prints a note naming the variables,
+  never their values.
+- **Playwright bodies are bounded in transit, not in the driver.** The pinning
+  proxy cuts a connection after 80 MiB and `fetch_direct` has a time budget, but
+  gzip expansion inside Playwright's Node driver is not bounded.
 - Metadata APIs (Crossref, OpenAlex, S2) see your IP address. If you use a
   VPN, those services see the VPN exit IP.
 - The Semantic Scholar API key is sent **only** to `api.semanticscholar.org`,

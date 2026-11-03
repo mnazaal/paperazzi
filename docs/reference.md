@@ -190,7 +190,7 @@ pzi init [--force] [--rotate-token] [--setup --bib PATH] [--papers-dir PATH] [--
 pzi add <doi|url|pdf> [--tags t1,t2] [--dry-run] [--citekey KEY] [--force-new] [--verbose] [--strict-metadata]
 pzi add --from-file <file|-> [--tags t1,t2] [--delay S] [--failures-out PATH]  # bulk
 pzi inbox <file> [--dry-run] [--tags t1,t2] [--delay S] [--json]  # drain a file of DOIs/URLs
-pzi pdf retry [<citekey>] [--failed-only]     # --failed-only retries every PDF-less entry; not combinable with a citekey
+pzi pdf retry [<citekey>] [--failed-only] [--discover]  # --failed-only retries every PDF-less entry and takes no citekey; --discover looks for a new PDF URL
 pzi pdf attach <citekey> <url-or-path>
 pzi tag add|remove <citekey> <tag...> [--dry-run]
 pzi tag list [citekey] [--json]
@@ -209,6 +209,7 @@ pzi library dedupe                            # fuzzy candidates most similar fi
 pzi library merge <citekey_a> <citekey_b> [--dry-run] [--keep-pdf] [--no-backup]
 pzi library reindex [--rename-citekeys [--dry-run] [--force]]  # audit citekeys; rename only on explicit opt-in
 pzi library reindex --convert-file-paths [--dry-run]           # rewrite file= paths to pdf_file_path_style
+pzi library reindex --rename-files [--all] [--dry-run]         # rename PDFs under papers_dir to the filename policy; --all includes cosmetic differences; attachments outside papers_dir stay put
 pzi export [--format bibtex|csv|json|ris] [-o <output>] [--force]
 pzi import <source.bib> [--dry-run] [--force-new]
 pzi doctor [--config-only] [--reinstall-server]  # health check; --reinstall-server reinstalls the translation-server
@@ -389,7 +390,7 @@ pzi.dedupe()
 pzi.add("10.1038/nature12373", tags=["ml"])       # network
 pzi.add_tags("smith2020", ["ml"])
 pzi.remove_tags("smith2020", ["ml"])
-pzi.delete("smith2020")                 # previews; backs the library up first
+pzi.delete("smith2020")                 # previews; dry_run=False deletes, after a numbered .bak copy
 pzi.merge("dup2020", "smith2020")       # previews by default
 pzi.update(dry_run=True)                # fill gaps; previews by default; network
 pzi.promote(dry_run=True)               # replace preprints; previews by default; network

@@ -922,7 +922,7 @@ def delete(
 ) -> DeleteEntryReport:
     """Delete one entry by citekey. **Previews by default.**
 
-    Pass ``dry_run=False`` to actually delete. A timestamped copy of the
+    Pass ``dry_run=False`` to actually delete. A numbered ``.bak`` copy of the
     pre-delete library is made first, and its path is in the returned
     ``backup_path``. The entry's PDF is moved to ``papers_dir/.orphans/`` and
     the move reported as ``pdf_action``; pass ``keep_pdf=True`` to leave it

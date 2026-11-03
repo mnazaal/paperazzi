@@ -46,11 +46,13 @@ last tag reads as a release summary before you tag.
 Edit the `version` field under `[project]`:
 
 ```sh
-# e.g., 0.1.0 → 0.2.0
+# Set both to real versions first. The command fails to change anything if OLD is wrong.
+OLD=<current-version>
+NEW=<new-version>
 # Linux:
-sed -i 's/^version = "0.1.0"/version = "0.2.0"/' pyproject.toml
+sed -i "s/^version = \"$OLD\"/version = \"$NEW\"/" pyproject.toml
 # macOS (BSD sed needs the empty backup suffix):
-sed -i '' 's/^version = "0.1.0"/version = "0.2.0"/' pyproject.toml
+sed -i '' "s/^version = \"$OLD\"/version = \"$NEW\"/" pyproject.toml
 ```
 
 ### 3. Verify locally
@@ -75,10 +77,10 @@ Commit the refreshed `uv.lock` alongside `pyproject.toml`.
 
 ```sh
 git add pyproject.toml uv.lock
-git commit -m "release: v0.2.0"
-git tag v0.2.0
+git commit -m "release: v$NEW"
+git tag "v$NEW"
 git push origin main
-git push origin v0.2.0
+git push origin "v$NEW"
 ```
 
 ### 5. CI handles the rest
@@ -110,7 +112,7 @@ Pushing the tag triggers `.github/workflows/release.yml`:
 - Smoke-test the install:
 
 ```sh
-uv tool install 'pzi @ git+https://github.com/mnazaal/paperazzi.git@v0.2.0'
+uv tool install "pzi @ git+https://github.com/mnazaal/paperazzi.git@v$NEW"
 pzi --version
 ```
 

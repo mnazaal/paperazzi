@@ -52,7 +52,7 @@ dependencies = [
 [project.optional-dependencies]
 # Playwright powers the optional browser-profile PDF fallback
 # (config key `browser_pdf_cmd`). The base install is lighter without it;
-# install with `pipx install 'pzi[playwright]'` to enable the fallback.
+# install the `playwright` extra from the GitHub distribution (see README).
 playwright = ["playwright>=1.40"]
 dev = [
     "build>=1",

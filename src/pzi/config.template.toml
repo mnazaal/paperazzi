@@ -58,7 +58,7 @@ api_listen_port = 8765
 # PDF download options. The chain is: direct → persistent server browser →
 # browser_pdf_cmd → FlareSolverr → desktop browser + Downloads watcher.
 # Browser hook uses your browser profile for authenticated institutional access.
-# pzi init --setup writes the full command; change the path (or --browser) here.
+# pzi init --setup does not write this: uncomment it and set your profile and browser.
 # Firefox: ~/.mozilla/firefox/xxx.default-release
 # Chrome:  ~/.config/google-chrome/Default
 # Chromium: ~/.config/chromium

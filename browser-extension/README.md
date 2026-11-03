@@ -96,8 +96,8 @@ Quick summary:
 
 Nothing requested on demand is kept: a capture borrows the host permissions it
 needs and returns them, so the set the browser lists for paperazzi does not grow
-as you use it. Earlier versions kept the active-tab grant permanently, which
-also widened what the always-on `webRequest` observer could see.
+as you use it. If a popup closes mid-capture, its leftover grants and rules are
+swept at the next popup open or worker start, not immediately.
 
 **What leaves your machine.** PDF bytes and page HTML do not: they go to the
 local pzi server over loopback and stop there. Two things do leave, both to the

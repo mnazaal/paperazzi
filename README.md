@@ -63,6 +63,10 @@ Native Windows is unsupported — WSL2 works. `docs/reference.md` sets out
 - `git` if you want paperazzi to auto-install the Zotero translation-server
 - Node.js 22+ (auto-downloaded if missing)
 
+The first capture downloads what it needs from the network: Node.js if it is
+missing and the translation-server with its npm dependencies. Together those
+took about 400 MB on one Linux machine, under `~/.local/share/pzi`.
+
 ### 1. Install
 
 paperazzi is not published on PyPI yet. Install from GitHub — the project is
