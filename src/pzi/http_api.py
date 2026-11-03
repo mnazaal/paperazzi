@@ -272,18 +272,25 @@ def _handle_one_request_with_header_deadline(request: BaseHTTPRequestHandler) ->
     per connection, cancelled as soon as the headers are parsed.
     """
     done = threading.Event()
+    guard = threading.Lock()
 
     def _expire() -> None:
-        if done.is_set():
-            return
-        try:
-            request.connection.shutdown(socket.SHUT_RDWR)
-        except OSError:
-            pass
+        with guard:
+            if done.is_set():
+                return
+            # Marked before the shutdown, under the lock `parse_request` takes
+            # to finish, so the parser can tell this EOF from a client's.
+            request._header_expired = True  # type: ignore[attr-defined]
+            try:
+                request.connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
 
     timer = threading.Timer(HEADER_READ_DEADLINE_SECONDS, _expire)
     timer.daemon = True
     request._header_done = done  # type: ignore[attr-defined]
+    request._header_guard = guard  # type: ignore[attr-defined]
+    request._header_expired = False  # type: ignore[attr-defined]
     request._header_timer = timer  # type: ignore[attr-defined]
     timer.start()
     try:
@@ -294,13 +301,28 @@ def _handle_one_request_with_header_deadline(request: BaseHTTPRequestHandler) ->
 
 
 def _parse_request_ending_header_deadline(request: BaseHTTPRequestHandler) -> bool:
+    """`parse_request`, refusing to treat the deadline's forced EOF as complete headers.
+
+    `parse_headers` reads until a blank line *or EOF*, so the socket shutdown
+    that ends a slow read looked like a finished request: the auth gate and the
+    handler ran on truncated headers and the reply write raised.
+    """
+    expired = getattr(request, "_header_expired", False)
+    parsed = False
     try:
-        return BaseHTTPRequestHandler.parse_request(request)
+        if not expired:
+            parsed = BaseHTTPRequestHandler.parse_request(request)
     finally:
         done = getattr(request, "_header_done", None)
         if done is not None:
-            done.set()
+            with request._header_guard:  # type: ignore[attr-defined]
+                done.set()
+                expired = request._header_expired  # type: ignore[attr-defined]
             request._header_timer.cancel()  # type: ignore[attr-defined]
+    if expired:
+        request.close_connection = True
+        return False
+    return parsed
 
 
 def _send_error_as_json(

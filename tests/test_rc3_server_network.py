@@ -143,24 +143,85 @@ def test_slow_request_line_is_closed(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_timer_threads_and_handler_threads_are_reclaimed(tmp_path: Path, monkeypatch) -> None:
+    """Measured while the client sockets are still open.
+
+    Closing the clients first lets the handler threads end on their own EOF, so
+    a deadline that never fires still passes. Here the per-read timeout is far
+    longer than the test, so only the deadline can end these threads.
+    """
     monkeypatch.setattr(http_api, "HEADER_READ_DEADLINE_SECONDS", 0.3)
-    server = _serve(tmp_path, per_read_timeout=5)
+    server = _serve(tmp_path, per_read_timeout=30)
+    socks: list[socket.socket] = []
     try:
         before = threading.active_count()
         port = server.server_address[1]
         socks = [socket.create_connection(("127.0.0.1", port)) for _ in range(8)]
         for s in socks:
             s.sendall(b"GET / HTTP/1.1\r\nX: ")
-        time.sleep(1.2)
-        for s in socks:
-            s.close()
-        deadline = time.monotonic() + 3
+        time.sleep(0.2)
+        assert threading.active_count() > before  # handler + timer threads exist
+        deadline = time.monotonic() + 4
         while threading.active_count() > before and time.monotonic() < deadline:
             time.sleep(0.05)
         assert threading.active_count() <= before
     finally:
+        for s in socks:
+            s.close()
         server.shutdown()
         server.server_close()
+
+
+def test_expired_header_deadline_does_not_dispatch_the_request(
+    tmp_path: Path, monkeypatch, capfd
+) -> None:
+    """EOF forced by the deadline is not end-of-headers: no gate, no handler, no traceback."""
+    monkeypatch.setattr(http_api, "HEADER_READ_DEADLINE_SECONDS", 0.3)
+    gate_calls: list[str] = []
+    real_gate = http_api._request_gate
+    monkeypatch.setattr(
+        http_api, "_request_gate",
+        lambda request, *a, **k: (gate_calls.append("gate"), real_gate(request, *a, **k))[1],
+    )
+    server = _serve(tmp_path, per_read_timeout=30)
+    try:
+        port = server.server_address[1]
+        socks = []
+        for _ in range(3):
+            c = socket.create_connection(("127.0.0.1", port))
+            c.sendall(b"GET /status HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Slow: ")
+            socks.append(c)
+        time.sleep(1.2)
+        for c in socks:
+            c.close()
+        time.sleep(0.3)
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert gate_calls == []
+    assert "Traceback" not in capfd.readouterr().err
+
+
+def test_handler_running_past_the_deadline_still_answers(tmp_path: Path, monkeypatch) -> None:
+    """The deadline covers reading headers only; a slow handler is not cut off."""
+    monkeypatch.setattr(http_api, "HEADER_READ_DEADLINE_SECONDS", 0.3)
+
+    def slow_get(request, *a, **k):
+        time.sleep(1.0)
+        http_api._respond(request, 200, {"ok": True}, build_http_security_config())
+
+    monkeypatch.setattr(http_api, "_handle_get", slow_get)
+    server = _serve(tmp_path, per_read_timeout=30)
+    try:
+        sock = socket.create_connection(("127.0.0.1", server.server_address[1]), timeout=5)
+        sock.sendall(b"GET /status HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+        data = b""
+        while chunk := sock.recv(65536):
+            data += chunk
+        sock.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert data.startswith(b"HTTP/1.0 200") and b'"ok": true' in data
 
 
 def test_normal_request_unaffected_and_timer_cancelled(tmp_path: Path, monkeypatch) -> None:
