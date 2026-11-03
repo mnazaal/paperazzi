@@ -12,6 +12,7 @@ an existing one — cannot quietly skip it the way `tag list` did.
 
 from __future__ import annotations
 
+import json
 from io import StringIO
 from pathlib import Path
 
@@ -78,24 +79,40 @@ def test_read_only_commands_exit_findings_on_read_warnings(
     )
 
 
-# `search` is excluded, not weakened: `run_search_command`
-# (src/pzi/commands/search.py) computes its exit code as
-# `OK if found_any else FINDINGS`, entirely independent of
-# `has_read_warnings` — a search that finds a match on a library the parser
-# could only partly read still exits 0. That is the same defect class as the
-# one this file exists to catch, but `search.py` is not an owned file in this
-# lane (LANES.md, lane B: tags.py/config.py/reindex.py/cli_parser.py/
-# update.py/identifiers.py only), so it is reported to the parent instead of
-# fixed here.
-def test_search_finding_a_match_does_not_yet_report_read_warnings(
+def test_search_with_a_match_reports_read_warnings_as_findings(
     duplicate_config: Path, tmp_path: Path,
 ) -> None:
-    """Characterizes the current (buggy) behaviour so a real fix shows up as a
-    change to this test, not a silent regression."""
-    exit_code = _run(
-        ["search", "--query", "x", "--config", str(duplicate_config)], tmp_path,
-    )
-    assert exit_code == exit_codes.OK
+    """A match on a partly-read library is FINDINGS, as for `entries`; the
+    warning stays on stderr in text mode and in the JSON document."""
+    out, err = StringIO(), StringIO()
+    argv = ["search", "--query", "x", "--config", str(duplicate_config)]
+    assert run_cli(argv, home_dir=str(tmp_path), stdout=out, stderr=err) == exit_codes.FINDINGS
+    assert "duplicate" in err.getvalue().lower()
+
+    out, err = StringIO(), StringIO()
+    code = run_cli([*argv, "--json"], home_dir=str(tmp_path), stdout=out, stderr=err)
+    assert code == exit_codes.FINDINGS
+    assert json.loads(out.getvalue())["warnings"]
+
+
+def test_search_with_no_match_is_findings_independently(
+    duplicate_config: Path, tmp_path: Path,
+) -> None:
+    out, err = StringIO(), StringIO()
+    argv = ["search", "--query", "zzzznomatch", "--config", str(duplicate_config)]
+    assert run_cli(argv, home_dir=str(tmp_path), stdout=out, stderr=err) == exit_codes.FINDINGS
+    assert "no matches" in err.getvalue()
+
+
+def test_search_with_a_match_on_a_clean_library_exits_ok(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PZI_SKIP_AUTO_START", "1")
+    bib_path = tmp_path / "clean.bib"
+    bib_path.write_text("@article{a,\n  title={x},\n  year={2020}\n}\n", encoding="utf-8")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(MINIMAL_CONFIG.format(bib_path=bib_path), encoding="utf-8")
+    assert _run(["search", "--query", "x", "--config", str(config_path)], tmp_path) == exit_codes.OK
 
 
 # `library check` is excluded for a documented reason, not weakened: with

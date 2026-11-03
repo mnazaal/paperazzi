@@ -9,6 +9,7 @@ from pzi import cli_json, exit_codes
 from pzi.cli_render import error_lines, render_search_matches
 from pzi.commands.common import (
     emit_usage_error,
+    has_read_warnings,
     print_lines,
     print_read_warnings,
     target_list,
@@ -42,6 +43,7 @@ def run_search_command(
     as_json = getattr(args, "json", False)
     ok = True
     found_any = False
+    read_warned = False
     #: The first failure's exit code, from the shared `reason` mapper. Returning
     #: a hardcoded ENVIRONMENT meant a tag that normalizes to nothing — which
     #: `search_service` classifies as REASON_USAGE — exited 5 while the emitted
@@ -70,6 +72,8 @@ def run_search_command(
                 failure_code = exit_code_for_error(result)
         if result.get("matches"):
             found_any = True
+        if result["status"] == "ok" and has_read_warnings(result):
+            read_warned = True
         collected.append((target or "default", dict(result)))
         if as_json:
             continue
@@ -104,4 +108,5 @@ def run_search_command(
     if not ok:
         return failure_code if failure_code is not None else exit_codes.ENVIRONMENT
     # grep's convention: nothing matched is a reportable outcome, not an error.
-    return exit_codes.OK if found_any else exit_codes.FINDINGS
+    # A partial read is a finding even when something matched (as for `entries`).
+    return exit_codes.OK if found_any and not read_warned else exit_codes.FINDINGS
