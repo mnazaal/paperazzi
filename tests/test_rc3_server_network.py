@@ -2,7 +2,10 @@
 
 import io
 import select
+import shutil
 import socket
+import ssl
+import subprocess
 import threading
 import time
 import urllib.error
@@ -14,7 +17,7 @@ from unittest.mock import patch
 import portalocker
 import pytest
 
-from pzi import http_api, ts_backend, ts_egress_guard
+from pzi import http_api, pinning_proxy, ts_backend, ts_egress_guard
 from pzi.http_security import build_http_security_config
 
 
@@ -256,11 +259,12 @@ def test_pinned_backend_does_not_follow_redirect_or_meta_refresh_to_private(tmp_
             return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (_PUBLIC_IP, port))]
         return socket.getaddrinfo(host, port, *a, **k)
 
-    def fake_dial(ip, port):
+    def fake_connect(address, timeout=None):
+        ip, port = address
         return socket.create_connection(("127.0.0.1", aport if ip == _PUBLIC_IP else port), timeout=5)
 
     ts_egress_guard.reset_shared_guard(
-        ts_egress_guard.EgressGuard(getaddrinfo=fake_getaddrinfo, dial=fake_dial)
+        pinning_proxy.PinningProxy(getaddrinfo=fake_getaddrinfo, connect=fake_connect)
     )
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
@@ -303,11 +307,11 @@ def test_pinned_backend_does_not_follow_redirect_or_meta_refresh_to_private(tmp_
 def test_guard_refuses_private_and_dials_validated_ip_only() -> None:
     dialed: list[tuple[str, int]] = []
 
-    def dial(ip, port):
-        dialed.append((ip, port))
+    def connect(address, timeout=None):
+        dialed.append(address)
         raise OSError("no network in test")
 
-    guard = ts_egress_guard.EgressGuard(dial=dial)
+    guard = pinning_proxy.PinningProxy(connect=connect)
     try:
         host, port = guard.url[len("http://"):].split(":")
 
@@ -344,9 +348,9 @@ def test_guard_tunnels_connect_to_a_public_address() -> None:
         conn.close()
 
     threading.Thread(target=serve, daemon=True).start()
-    guard = ts_egress_guard.EgressGuard(
+    guard = pinning_proxy.PinningProxy(
         getaddrinfo=lambda host, port, **k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (_PUBLIC_IP, port))],
-        dial=lambda ip, port: socket.create_connection(echo.getsockname(), timeout=5),
+        connect=lambda address, timeout=None: socket.create_connection(echo.getsockname(), timeout=5),
     )
     try:
         host, port = guard.url[len("http://"):].split(":")
@@ -359,3 +363,99 @@ def test_guard_tunnels_connect_to_a_public_address() -> None:
     finally:
         guard.close()
         echo.close()
+
+
+@pytest.mark.skipif(_BACKEND is None, reason="pinned translation-server not installed")
+@pytest.mark.skipif(shutil.which("openssl") is None, reason="openssl not available")
+def test_pinned_backend_reaches_https_through_the_guard_and_stays_public(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Real captures are HTTPS: the CONNECT tunnel has to work with the real client.
+
+    A guard that refused or broke CONNECT would stop every capture while the
+    HTTP-only tests above stayed green. The certificate is self-signed, so the
+    child is told to accept it; that setting is scoped to this test's child.
+    """
+    assert _BACKEND is not None
+    node, ts_dir = _BACKEND
+    cert, key = tmp_path / "cert.pem", tmp_path / "key.pem"
+    subprocess.run(
+        ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+         "-subj", "/CN=pub.test", "-keyout", str(key), "-out", str(cert)],
+        check=True, capture_output=True,
+    )
+    private_hits: list[str] = []
+
+    class Private(_Recorder):
+        def do_GET(self) -> None:
+            private_hits.append(self.path)
+            self.send_response(200)
+            self.end_headers()
+
+    private = _listener(Private)
+    pport = private.server_address[1]
+    public_hits: list[str] = []
+
+    class Public(_Recorder):
+        def do_GET(self) -> None:
+            public_hits.append(self.path)
+            if self.path == "/to-private":
+                self.send_response(302)
+                self.send_header("Location", f"http://127.0.0.1:{pport}/via-https-redirect")
+                self.end_headers()
+                return
+            body = b"<html><head><title>tls page</title></head><body>ok</body></html>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    public = _listener(Public)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(cert, key)
+    public.socket = context.wrap_socket(public.socket, server_side=True)
+    aport = public.server_address[1]
+
+    def fake_getaddrinfo(host, port, *a, **k):
+        if host == "pub.test":
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (_PUBLIC_IP, port))]
+        return socket.getaddrinfo(host, port, *a, **k)
+
+    def fake_connect(address, timeout=None):
+        ip, port = address
+        return socket.create_connection(("127.0.0.1", aport if ip == _PUBLIC_IP else port), timeout=5)
+
+    monkeypatch.setenv("NODE_TLS_REJECT_UNAUTHORIZED", "0")
+    ts_egress_guard.reset_shared_guard(
+        pinning_proxy.PinningProxy(getaddrinfo=fake_getaddrinfo, connect=fake_connect)
+    )
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    tport = s.getsockname()[1]
+    s.close()
+    proc = ts_backend.start_ts(node, ts_dir, port=tport, stderr_log=tmp_path / "ts.err")
+    try:
+        for _ in range(150):
+            try:
+                socket.create_connection(("127.0.0.1", tport), timeout=0.2).close()
+                break
+            except OSError:
+                time.sleep(0.2)
+        for path in ("/page", "/to-private"):
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{tport}/web",
+                data=f"https://pub.test:{aport}{path}".encode(),
+                headers={"Content-Type": "text/plain"},
+            )
+            try:
+                urllib.request.urlopen(req, timeout=30)
+            except urllib.error.HTTPError:
+                pass  # no translator matches; the hit lists below are the evidence
+        assert sorted(public_hits) == ["/page", "/to-private"], public_hits
+        assert private_hits == [], private_hits
+    finally:
+        ts_backend.terminate_ts(proc)
+        ts_egress_guard.reset_shared_guard(None)
+        private.shutdown()
+        public.shutdown()

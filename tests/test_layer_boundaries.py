@@ -69,6 +69,8 @@ CORE: frozenset[str] = frozenset(
         "metadata_cache",
         "rate_limit",
         "safe_http",
+        "pinning_proxy",
+        "ts_egress_guard",
         "flaresolverr",
         "translation_server",
         # Metadata / HTML utilities
