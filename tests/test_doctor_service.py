@@ -653,27 +653,40 @@ def test_a_missing_bib_is_advisory_because_the_first_write_creates_it() -> None:
     assert any("main.bib" in p and "first" in p for p in advisory)
 
 
-def test_a_bib_that_cannot_be_created_stays_fatal(tmp_path) -> None:
+def test_a_bib_that_cannot_be_created_stays_fatal(tmp_path, monkeypatch) -> None:
     """Advisory only when the first write really can create it: a read-only
-    parent, a missing mount, or a directory sitting at the path stay fatal."""
+    parent, a non-directory ancestor, or a directory sitting at the path stay
+    fatal. Every unwritable case is built in `tmp_path` (never a hard-coded
+    top-level path, which a root-owned sandbox can create) and the permission
+    check is stubbed so the test holds for root as well."""
     import os
-    from pathlib import Path
 
+    from pzi import doctor_service
     from pzi.doctor_service import _creatable
 
-    readonly = tmp_path / "ro"
-    readonly.mkdir()
     taken = tmp_path / "isdir.bib"
     taken.mkdir()
+    blocker = tmp_path / "afile"
+    blocker.write_text("not a directory")
+    readonly = tmp_path / "ro"
+    readonly.mkdir()
+
     assert _creatable(tmp_path / "new" / "deeper" / "main.bib")
     assert not _creatable(taken)
-    assert not _creatable(Path("/nonexistent_mount_xyz/lib.bib"))
-    readonly.chmod(0o555)
-    try:
-        if not os.access(readonly, os.W_OK):  # root can write anyway
-            assert not _creatable(readonly / "main.bib")
-    finally:
-        readonly.chmod(0o755)
+    # The nearest existing ancestor is a regular file: nothing can be created.
+    assert not _creatable(blocker / "sub" / "lib.bib")
+
+    real_access = os.access
+    monkeypatch.setattr(
+        doctor_service.os,
+        "access",
+        lambda p, mode, *a, **k: False
+        if os.fspath(p) == os.fspath(readonly)
+        else real_access(p, mode, *a, **k),
+    )
+    assert not _creatable(readonly / "main.bib")
+    assert not _creatable(readonly / "new" / "deeper" / "main.bib")
+    assert _creatable(tmp_path / "other.bib")
 
     result = {"config_ok": True, "bibs": [
         {"name": "main", "path": str(taken), "path_exists": False, "path_creatable": False,
