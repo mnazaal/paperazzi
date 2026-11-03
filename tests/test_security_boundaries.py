@@ -303,7 +303,7 @@ def test_the_s2_api_key_goes_only_to_semantic_scholar(monkeypatch) -> None:
 
     seen: list[tuple[str, dict]] = []
 
-    def _capture(url, *, headers, timeout, max_retries, allow_host=None, extract):
+    def _capture(url, *, headers, timeout, max_retries, allow_host=None, extract, before_attempt=None):
         seen.append((url, dict(headers)))
         return ""
 
