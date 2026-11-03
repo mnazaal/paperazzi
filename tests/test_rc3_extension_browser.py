@@ -263,6 +263,31 @@ def test_a_public_pdf_redirecting_to_loopback_never_reaches_the_private_listener
     assert pzi.posts == [], "no bytes may be attached for a refused redirect"
 
 
+@pytest.mark.parametrize("host", ["localhost.", "127.0.0.1.", "LOCALHOST."])
+def test_a_redirect_to_a_trailing_dot_loopback_name_never_reaches_the_private_listener(
+    rig: Rig, host: str
+) -> None:
+    """`localhost.` is the same machine; the rule table once matched only the bare name."""
+    private = rig.listener(lambda h, o: _pdf(h, b"%PDF-1.4 private"))
+    public = rig.listener(_redirect_to(f"http://{host}:{private.port}/secret.pdf"))
+    pzi = rig.listener(lambda h, o: None)
+
+    page = rig.extension_page()
+    result = page.evaluate(
+        _RUN_CAPTURE,
+        {
+            "endpoint": f"http://127.0.0.1:{pzi.port}/capture",
+            "candidate": rig.public_url(public, "/paper.pdf"),
+            "pageUrl": rig.public_url(public, "/article"),
+            "shrinkTimers": False,
+        },
+    )
+
+    assert public.hits, "the public candidate must actually have been fetched"
+    assert private.hits == [], f"private listener was contacted via {host}: {private.hits}"
+    assert pzi.posts == [], result
+
+
 def test_a_public_redirect_to_a_public_pdf_still_downloads(rig: Rig) -> None:
     """The guard is for private destinations; ordinary publisher redirects must work."""
     final = rig.listener(lambda h, o: _pdf(h))
