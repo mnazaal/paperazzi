@@ -44,7 +44,7 @@ class Listener:
         class Handler(BaseHTTPRequestHandler):
             protocol_version = "HTTP/1.1"
 
-            def log_message(self, *args: Any) -> None:
+            def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
                 pass
 
             def do_GET(self) -> None:  # noqa: N802
@@ -80,6 +80,27 @@ def _pdf(handler: BaseHTTPRequestHandler, body: bytes = b"%PDF-1.4 fixture") -> 
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
     handler.wfile.write(body)
+
+
+def _redirect_to(location: str) -> Callable[[BaseHTTPRequestHandler, Listener], None]:
+    def handler(h: BaseHTTPRequestHandler, _listener: Listener) -> None:
+        h.send_response(302)
+        h.send_header("Location", location)
+        h.send_header("Content-Length", "0")
+        h.end_headers()
+
+    return handler
+
+
+def _pdf_or_page(h: BaseHTTPRequestHandler, _listener: Listener) -> None:
+    if h.path.endswith(".pdf"):
+        _pdf(h)
+        return
+    h.send_response(200)
+    h.send_header("Content-Type", "text/html")
+    h.send_header("Content-Length", "2")
+    h.end_headers()
+    h.wfile.write(b"ok")
 
 
 class Rig:
@@ -222,14 +243,7 @@ def test_a_public_pdf_redirecting_to_loopback_never_reaches_the_private_listener
     Checking ``response.url`` after the download cannot undo that request.
     """
     private = rig.listener(lambda h, o: _pdf(h, b"%PDF-1.4 private"))
-    public = rig.listener(
-        lambda h, o: (
-            h.send_response(302),
-            h.send_header("Location", f"http://127.0.0.1:{private.port}/secret.pdf"),
-            h.send_header("Content-Length", "0"),
-            h.end_headers(),
-        )
-    )
+    public = rig.listener(_redirect_to(f"http://127.0.0.1:{private.port}/secret.pdf"))
     pzi = rig.listener(lambda h, o: None)
 
     page = rig.extension_page()
@@ -252,14 +266,7 @@ def test_a_public_pdf_redirecting_to_loopback_never_reaches_the_private_listener
 def test_a_public_redirect_to_a_public_pdf_still_downloads(rig: Rig) -> None:
     """The guard is for private destinations; ordinary publisher redirects must work."""
     final = rig.listener(lambda h, o: _pdf(h))
-    public = rig.listener(
-        lambda h, o: (
-            h.send_response(302),
-            h.send_header("Location", f"http://{PUBLIC_HOST}:{final.port}/real.pdf"),
-            h.send_header("Content-Length", "0"),
-            h.end_headers(),
-        )
-    )
+    public = rig.listener(_redirect_to(f"http://{PUBLIC_HOST}:{final.port}/real.pdf"))
     pzi = rig.listener(lambda h, o: None)
 
     page = rig.extension_page()
@@ -337,12 +344,7 @@ def test_the_popup_does_not_see_a_pdf_the_service_worker_observed(rig: Rig) -> N
     running in the popup's realm, so a cache filled by the worker's listener
     cannot serve the popup. The cache was deleted rather than persisted.
     """
-    public = rig.listener(
-        lambda h, o: _pdf(h) if h.path.endswith(".pdf") else (
-            h.send_response(200), h.send_header("Content-Type", "text/html"),
-            h.send_header("Content-Length", "2"), h.end_headers(), h.wfile.write(b"ok"),
-        )
-    )
+    public = rig.listener(_pdf_or_page)
     # A real navigation: the worker's listener (if any) sees this response.
     viewer = rig.ctx.new_page()
     try:
