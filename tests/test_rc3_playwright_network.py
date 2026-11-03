@@ -288,3 +288,134 @@ def test_navigate_refuses_a_private_url_before_the_browser_requests_it(listener)
         with pytest.raises(SsrfBlocked):
             session.navigate(f"http://127.0.0.1:{listener.port}/secret")
     assert listener.hits == []
+
+
+# ---------------------------------------------------------------------------
+# Bodies are bounded while they arrive
+# ---------------------------------------------------------------------------
+
+
+class _StreamServer:
+    """Raw-socket server sending a chunked application/pdf response."""
+
+    def __init__(self, *, total: int | None, stall: bool = False):
+        self.sent = 0
+        self.total = total
+        self.stall = stall
+        self.sock = socket.socket()
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(4)
+        self.port = self.sock.getsockname()[1]
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def _accept(self) -> None:
+        while True:
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:
+                return
+            threading.Thread(target=self._handle, args=(conn,), daemon=True).start()
+
+    def _handle(self, conn: socket.socket) -> None:
+        import time
+
+        block = b"%PDF-1.4 " + b"x" * (65536 - 9)
+        chunk = b"10000\r\n" + block + b"\r\n"
+        try:
+            conn.recv(65536)
+            conn.sendall(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/pdf\r\n"
+                b"Transfer-Encoding: chunked\r\n\r\n"
+            )
+            conn.sendall(chunk)
+            self.sent += 65536
+            if self.stall:
+                time.sleep(30)
+                return
+            while self.total is None or self.sent < self.total:
+                conn.sendall(chunk)
+                self.sent += 65536
+            conn.sendall(b"0\r\n\r\n")
+        except OSError:
+            pass
+        finally:
+            conn.close()
+
+    def close(self) -> None:
+        self.sock.close()
+
+
+def _via_proxy_to(server: _StreamServer):
+    def connect(address, timeout=None):
+        return socket.create_connection(("127.0.0.1", server.port), timeout=timeout)
+
+    return {"getaddrinfo": _answers(PUBLIC_IP), "connect": connect}
+
+
+@pytest.mark.browser
+def test_oversized_chunked_pdf_is_cut_off_before_it_is_buffered() -> None:
+    import time
+
+    from tests.browser_probe import require_browser
+
+    require_browser()
+    cap = 4 * 1024 * 1024
+    server = _StreamServer(total=None)  # never ends on its own
+    try:
+        with bs.open_browser_session(
+            "chromium",
+            url_allowed=lambda u: True,
+            max_response_bytes=cap,
+            **_via_proxy_to(server),
+        ) as session:
+            started = time.monotonic()
+            result = session.fetch_direct("http://pub.test/big.pdf", timeout_seconds=40)
+            elapsed = time.monotonic() - started
+    finally:
+        server.close()
+    assert result.status == -1 and result.body == b""
+    # Cut by the byte budget, not by the time budget; the endless server was
+    # stopped within a socket buffer's worth of the cap.
+    assert elapsed < 30
+    assert server.sent < cap + 16 * 1024 * 1024
+
+
+@pytest.mark.browser
+def test_stalled_chunked_pdf_ends_at_the_time_budget() -> None:
+    import time
+
+    from tests.browser_probe import require_browser
+
+    require_browser()
+    server = _StreamServer(total=None, stall=True)
+    try:
+        with bs.open_browser_session(
+            "chromium", url_allowed=lambda u: True, **_via_proxy_to(server)
+        ) as session:
+            started = time.monotonic()
+            result = session.fetch_direct("http://pub.test/slow.pdf", timeout_seconds=3)
+            elapsed = time.monotonic() - started
+    finally:
+        server.close()
+    assert result.status == -1
+    assert elapsed < 10
+
+
+@pytest.mark.browser
+def test_pdf_within_the_cap_still_downloads() -> None:
+    from tests.browser_probe import require_browser
+
+    require_browser()
+    server = _StreamServer(total=1024 * 1024)
+    try:
+        with bs.open_browser_session(
+            "chromium",
+            url_allowed=lambda u: True,
+            max_response_bytes=4 * 1024 * 1024,
+            **_via_proxy_to(server),
+        ) as session:
+            result = session.fetch_direct("http://pub.test/ok.pdf")
+    finally:
+        server.close()
+    assert result.status == 200 and result.is_pdf()
+    assert len(result.body) == 1024 * 1024

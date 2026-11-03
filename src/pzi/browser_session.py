@@ -150,6 +150,20 @@ _PROXY_HEAD_LIMIT = 64 * 1024
 _PROXY_IDLE_SECONDS = 60.0
 _PROXY_CONNECT_SECONDS = 15.0
 
+#: Most bytes the proxy forwards from one upstream connection to the browser.
+#: Playwright's request client and Chromium buffer a whole response in memory
+#: and expose no size limit, so this is where a body is bounded while it is
+#: still arriving. Measured on the real path, the Node driver held about 13
+#: times a body's size (264 MiB peak for a 20 MiB body), so the cap is the PDF
+#: size limit of the HTTP API (64 MiB) plus headroom, not a larger figure.
+#: An HTTPS tunnel is one connection however many requests it carries, so a
+#: connection that has already carried this much is closed and the browser
+#: reconnects.
+DEFAULT_MAX_RESPONSE_BYTES = 80 * 1024 * 1024
+
+#: Wall-clock budget for one `fetch_direct` call, redirects included.
+FETCH_DIRECT_TIMEOUT_SECONDS = 60.0
+
 
 class PinningProxy:
     """A loopback forward proxy that dials only addresses it validated.
@@ -174,9 +188,11 @@ class PinningProxy:
         *,
         getaddrinfo: Callable[..., Any] = socket.getaddrinfo,
         connect: Callable[..., socket.socket] = socket.create_connection,
+        max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
     ) -> None:
         self._getaddrinfo = getaddrinfo
         self._connect = connect
+        self._max_response_bytes = max_response_bytes
         proxy = self
 
         class _Handler(socketserver.BaseRequestHandler):
@@ -269,7 +285,7 @@ class PinningProxy:
                 pending = request.encode("latin-1") + b"\r\n\r\n" + rest
             if pending:
                 upstream.sendall(pending)
-            self._relay(client, upstream)
+            self._relay(client, upstream, self._max_response_bytes)
 
     @staticmethod
     def _reply(client: socket.socket, status: int, reason: str) -> None:
@@ -280,7 +296,9 @@ class PinningProxy:
             )
 
     @staticmethod
-    def _relay(a: socket.socket, b: socket.socket) -> None:
+    def _relay(client: socket.socket, upstream: socket.socket, limit: int) -> None:
+        a, b = client, upstream
+        sent_down = 0
         sel = selectors.DefaultSelector()
         sel.register(a, selectors.EVENT_READ, b)
         sel.register(b, selectors.EVENT_READ, a)
@@ -293,6 +311,14 @@ class PinningProxy:
                     data = key.fileobj.recv(65536)  # type: ignore[union-attr]
                     if not data:
                         return
+                    if key.fileobj is upstream:
+                        room = limit - sent_down
+                        if len(data) >= room:
+                            # Over budget: forward what fits, then cut, so the
+                            # reader sees a truncated body, never an unbounded one.
+                            key.data.sendall(data[: max(room, 0)])
+                            return
+                        sent_down += len(data)
                     key.data.sendall(data)
         except OSError:
             return
@@ -379,7 +405,9 @@ class BrowserSession:
     # Direct HTTP requests (through browser's network stack)
     # ------------------------------------------------------------------
 
-    def fetch_direct(self, url: str) -> FetchResult:
+    def fetch_direct(
+        self, url: str, *, timeout_seconds: float = FETCH_DIRECT_TIMEOUT_SECONDS
+    ) -> FetchResult:
         """Perform a direct HTTP GET through the browser's request context.
 
         Returns a FetchResult with status, content_type, and body bytes.
@@ -398,10 +426,16 @@ class BrowserSession:
         self._check_open()
         if not self.url_allowed(url):
             return FetchResult(status=-1, content_type=None, body=b"")
+        deadline = time.monotonic() + timeout_seconds
         try:
             current = url
             for _ in range(_MAX_FETCH_DIRECT_REDIRECTS + 1):
-                response = self.page.request.get(current, max_redirects=0)
+                remaining_ms = (deadline - time.monotonic()) * 1000
+                if remaining_ms <= 0:
+                    return FetchResult(status=-1, content_type=None, body=b"")
+                response = self.page.request.get(
+                    current, max_redirects=0, timeout=remaining_ms
+                )
                 if response.status not in _REDIRECT_STATUSES:
                     ct = response.headers.get("content-type", "")
                     body = response.body() if response.status == 200 else b""
@@ -579,6 +613,7 @@ def launch_browser(
     url_allowed: Callable[[str], bool] = default_url_allowed,
     getaddrinfo: Callable[..., Any] = socket.getaddrinfo,
     connect: Callable[..., socket.socket] = socket.create_connection,
+    max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
 ) -> BrowserSession:
     """Launch a browser and return a BrowserSession.
 
@@ -597,7 +632,9 @@ def launch_browser(
     playwright = sync_playwright().start()
     options = browser_launch_options(browser, headless=headless)
     try:
-        pinning = PinningProxy(getaddrinfo=getaddrinfo, connect=connect)
+        pinning = PinningProxy(
+            getaddrinfo=getaddrinfo, connect=connect, max_response_bytes=max_response_bytes
+        )
     except BaseException:
         with contextlib.suppress(Exception):
             playwright.stop()
@@ -693,6 +730,7 @@ def open_browser_session(
     url_allowed: Callable[[str], bool] = default_url_allowed,
     getaddrinfo: Callable[..., Any] = socket.getaddrinfo,
     connect: Callable[..., socket.socket] = socket.create_connection,
+    max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
 ) -> Iterator[BrowserSession]:
     """Context manager: guaranteed cleanup even on exception.
 
@@ -708,6 +746,7 @@ def open_browser_session(
         url_allowed=url_allowed,
         getaddrinfo=getaddrinfo,
         connect=connect,
+        max_response_bytes=max_response_bytes,
     )
     try:
         yield session
