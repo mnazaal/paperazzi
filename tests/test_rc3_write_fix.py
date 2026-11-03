@@ -357,3 +357,37 @@ def test_a_user_owned_field_both_writers_set_differently_is_refused(tmp_path, cu
 def test_a_user_owned_field_only_the_plan_changed_still_applies(tmp_path):
     outcome, rec = _concurrent(tmp_path, {}, {"abstract": "x"}, {"tags": ["mine"]})
     assert outcome == "wrote" and rec["tags"] == ["mine"]
+
+
+# -- a name resolved free is not proof the bytes there are ours ----------------
+
+
+@pytest.mark.parametrize("hardlinks", [True, False], ids=["hardlink", "no-hardlink"])
+def test_a_writer_never_accepts_a_name_another_writer_filled_with_other_bytes(
+    tmp_path, monkeypatch, hardlinks
+):
+    import errno
+    import os
+
+    from pzi import pdf_download
+
+    if not hardlinks:
+        def no_link(*_a, **_k):
+            raise OSError(errno.EPERM, "no hardlinks")
+        monkeypatch.setattr(os, "link", no_link)
+    papers = tmp_path / "P"
+    papers.mkdir()
+    real_resolve = pdf_download.resolve_pdf_destination
+    fired: list[int] = []
+
+    def resolve(dest, data):
+        out = real_resolve(dest, data)
+        if not fired and data == b"%PDF-B":
+            fired.append(1)
+            pdf_download.write_pdf_bytes(data=b"%PDF-A", papers_dir=str(papers), citekey="k")
+        return out
+
+    monkeypatch.setattr(pdf_download, "resolve_pdf_destination", resolve)
+    stored = pdf_download.write_pdf_bytes(data=b"%PDF-B", papers_dir=str(papers), citekey="k")
+    assert Path(stored).read_bytes() == b"%PDF-B"
+    assert sorted(p.read_bytes() for p in papers.iterdir()) == [b"%PDF-A", b"%PDF-B"]

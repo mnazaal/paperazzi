@@ -175,6 +175,19 @@ def resolve_pdf_destination(destination: Path, data: bytes) -> Path:
     )
 
 
+def _holds(path: Path, data: bytes) -> bool:
+    """Whether *path* already holds exactly *data*.
+
+    Not ``exists()``: ``resolve_pdf_destination`` answered "free" a moment ago,
+    and another writer may have stored a different PDF at that name since.
+    Accepting the name then returns the other paper's bytes as ours.
+    """
+    try:
+        return path.read_bytes() == data
+    except OSError:
+        return False
+
+
 def write_pdf_bytes(
     *,
     data: bytes,
@@ -195,7 +208,7 @@ def write_pdf_bytes(
     destination.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
 
     destination = resolve_pdf_destination(destination, data)
-    if destination.exists():
+    if _holds(destination, data):
         return str(destination)
 
     # Bounded: every iteration must either return or move to a *new* name, and
@@ -231,7 +244,7 @@ def write_pdf_bytes(
                 except OSError:
                     pass
                 destination = resolve_pdf_destination(destination, data)
-                if destination.exists():
+                if _holds(destination, data):
                     return str(destination)
         finally:
             try:
