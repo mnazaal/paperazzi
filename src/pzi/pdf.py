@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time as _time
 import urllib.error
@@ -638,6 +639,13 @@ def remove_new_pdf(
     except OSError:
         return
     if resolved in existing_paths:
+        return
+    # `keep` as spelled by the caller may differ from `path` (a stored
+    # `~`-relative or symlinked form), so compare the normalised spellings too.
+    spellings = {os.path.abspath(path), str(resolved)}
+    if any(
+        os.path.abspath(os.path.expanduser(kept)) in spellings for kept in keep
+    ):
         return
     try:
         candidate.unlink(missing_ok=True)
