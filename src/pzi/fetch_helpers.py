@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 from urllib.request import Request
 
+from pzi import rate_limit
 from pzi.metadata_cache import MetadataCache
 from pzi.rate_limit import RateLimiter
 from pzi.safe_http import SsrfBlocked, safe_urlopen
@@ -117,6 +118,7 @@ def _fetch_with_retries(
     timeout: int,
     max_retries: int,
     allow_host: str | None = None,
+    before_attempt: Callable[[str], None] | None = None,
     extract: Callable[[Any], _T],
 ) -> _T:
     """Run one GET with the shared retry policy and hand the response to *extract*.
@@ -132,6 +134,10 @@ def _fetch_with_retries(
     last_error: Exception | None = None
     for attempt in range(max_retries + 1):
         try:
+            # Every attempt, not just the first: a retry after a 2s backoff is
+            # still a request to a host whose polite interval may be 6s.
+            if before_attempt is not None:
+                before_attempt(url)
             request = Request(url, headers=headers, method="GET")
             # Passed only when set, so the text path's call is byte-identical to
             # what it was before this helper existed -- allow_host is a
@@ -173,6 +179,7 @@ def fetch_text(
     timeout: int = DEFAULT_TIMEOUT,
     max_retries: int = DEFAULT_RETRIES,
     max_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
+    before_attempt: Callable[[str], None] | None = None,
 ) -> str:
     """Fetch a URL and return the response body decoded as UTF-8 text.
 
@@ -190,6 +197,7 @@ def fetch_text(
         headers=headers,
         timeout=timeout,
         max_retries=max_retries,
+        before_attempt=before_attempt,
         extract=lambda response: read_limited(response, max_bytes=max_bytes).decode("utf-8"),
     )
 
@@ -286,13 +294,21 @@ def build_metadata_fetch_text(
 
     ``inner`` / ``cache`` / ``rate_limiter`` are injectable for tests.
     """
-    base = inner or functools.partial(fetch_text, api_key=api_key)
     if cache is None:
         ttl = int(config.get("metadata_cache_ttl", 0) or 0)
         if ttl > 0:
             cache_dir = Path(str(config.get("pzi_data_home", "."))) / "metadata-cache"
             cache = MetadataCache(cache_dir, ttl)
-    limiter = rate_limiter if rate_limiter is not None else RateLimiter()
+    # One limiter per process unless a test injects one: `add --from-file` and
+    # `inbox` build a fetcher per item, and a limiter per fetcher forgot the
+    # previous item's request, so only spacing *within* an item held.
+    limiter = rate_limiter if rate_limiter is not None else rate_limit.shared_limiter()
+    # The default fetcher gates each attempt itself so retries are spaced too;
+    # an injected one is opaque, so it is gated once per call.
+    gate_outside = inner is not None
+    base = inner or functools.partial(
+        fetch_text, api_key=api_key, before_attempt=limiter.wait
+    )
 
     def fetch(url: str, **kwargs: Any) -> str:
         # Everything other than the URL that changes the response: the bound
@@ -304,7 +320,8 @@ def build_metadata_fetch_text(
             hit = cache.get(url, scope)
             if hit is not None:
                 return hit
-        limiter.wait(url)
+        if gate_outside:
+            limiter.wait(url)
         text = base(url, **kwargs)
         # Semantic Scholar reports a quota refusal as HTTP *200* with an
         # `error` body, so caching every 200 froze a transient rate-limit into

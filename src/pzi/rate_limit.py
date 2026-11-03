@@ -8,11 +8,14 @@ tuned per provider.
 
 The defaults match each API's documented polite-pool / keyless guidance; they
 are intentionally conservative so pzi stays a good citizen on shared APIs.
-Stdlib only; no global state (instantiate one limiter per service run).
+Stdlib only.  One limiter per process (:func:`shared_limiter`) is what the
+metadata fetcher uses by default, so a batch that builds a fetcher per item
+still spaces consecutive requests to the same host; tests inject their own.
 """
 
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Callable
 from urllib.parse import urlsplit
@@ -57,18 +60,36 @@ class RateLimiter:
         self._clock = clock
         self._sleep = sleep
         self._last: dict[str, float] = {}
+        self._lock = threading.Lock()
 
     def wait(self, url: str) -> None:
-        """Sleep if needed so the request to *url*'s host is politely spaced."""
+        """Sleep if needed so the request to *url*'s host is politely spaced.
+
+        The request slot is reserved under the lock and slept for outside it, so
+        concurrent callers (the HTTP API is threaded) queue one interval apart
+        instead of racing to the same instant.
+        """
         host = _host_of(url)
         if not host:
             return
         interval = _interval_for(host, self._intervals)
-        now = self._clock()
-        last = self._last.get(host)
-        if last is not None:
-            elapsed = now - last
-            if elapsed < interval:
-                self._sleep(interval - elapsed)
-                now = self._clock()
-        self._last[host] = now
+        with self._lock:
+            now = self._clock()
+            last = self._last.get(host)
+            slot = now if last is None else max(now, last + interval)
+            self._last[host] = slot
+        if slot > now:
+            self._sleep(slot - now)
+
+
+_SHARED: RateLimiter | None = None
+_SHARED_LOCK = threading.Lock()
+
+
+def shared_limiter() -> RateLimiter:
+    """The process-wide limiter, created on first use."""
+    global _SHARED
+    with _SHARED_LOCK:
+        if _SHARED is None:
+            _SHARED = RateLimiter()
+        return _SHARED
