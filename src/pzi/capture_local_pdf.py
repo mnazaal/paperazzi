@@ -507,7 +507,14 @@ def plan_with_applied_record(
         NormalizedRecord, {**plan["record"], **applied_record}
     )
     updated_plan["entry"] = updated_entries[match_index]
-    updated_plan["action"] = "update" if plan["action"] == "update" else plan["action"]
+    # What the write did, not what it planned: the rebase under the lock turns an
+    # insert into an update when a concurrent writer committed the same paper.
+    applied_action = getattr(updated_entries, "action", None)
+    if applied_action in ("insert", "update"):
+        updated_plan["action"] = applied_action
+        updated_plan["changed_fields"] = list(
+            getattr(updated_entries, "changed_fields", plan["changed_fields"])
+        )
     return cast(WritePlan, updated_plan)
 
 

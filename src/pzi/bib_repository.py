@@ -670,10 +670,10 @@ def _prepare_write(
     *,
     shared: bool,
     file_path_style: str = "absolute",
-) -> Iterator[tuple[str, str, list[BibtexEntry]]]:
+) -> Iterator[tuple[str, str, list[BibtexEntry], WritePlan]]:
     """Read, gate, rebase and render one plan, holding the lock over the yield.
 
-    Yields ``(source, new_source, updated_entries)`` to a body that decides what
+    Yields ``(source, new_source, updated_entries, applied_plan)`` to a body that decides what
     to do with it: :func:`execute_write_plan` commits, :func:`preview_write_plan`
     diffs. Those two were byte-identical from the read to the render, which is
     how they came to be two of the paths that "validated four different amounts"
@@ -718,7 +718,26 @@ def _prepare_write(
             source=source,
             file_path_style=file_path_style,
         )
-        yield source, new_source, updated_entries
+        yield source, new_source, updated_entries, plan
+
+
+class AppliedEntries(list):  # type: ignore[type-arg]
+    """The entries a write committed, plus what the write *actually* did.
+
+    The rebase under the lock can turn an insert into an update (a second writer
+    committed the same DOI first), so the planned action is not the applied one.
+    A list subclass keeps every existing ``execute_write_plan`` caller working.
+    """
+
+    action: str
+    changed_fields: list[str]
+
+    def __init__(
+        self, entries: list[BibtexEntry], *, action: str, changed_fields: list[str]
+    ) -> None:
+        super().__init__(entries)
+        self.action = action
+        self.changed_fields = list(changed_fields)
 
 
 def execute_write_plan(
@@ -741,10 +760,14 @@ def execute_write_plan(
     """
     with _prepare_write(
         path, plan, shared=False, file_path_style=file_path_style
-    ) as (source, new_source, updated_entries):
+    ) as (source, new_source, updated_entries, applied):
         if new_source != source:
             _write_bib_text_atomic(path, new_source, expected_source=source)
-        return updated_entries
+        return AppliedEntries(
+            updated_entries,
+            action=applied["action"],
+            changed_fields=applied["changed_fields"],
+        )
 
 
 def _invariant(condition: bool, message: str) -> None:
@@ -986,8 +1009,10 @@ def preview_write_plan(
     """
     with _prepare_write(
         path, plan, shared=True, file_path_style=file_path_style
-    ) as (source, new_source, updated_entries):
+    ) as (source, new_source, updated_entries, applied):
         return {
+            "action": applied["action"],
+            "changed_fields": applied["changed_fields"],
             "changed": source != new_source,
             "diff": _source_diff(source, new_source, path),
             "new_source": new_source,
@@ -1159,6 +1184,36 @@ def _validate_update_plan_against_current(
     current_citekey = current_records[index].get("citekey")
     if current_citekey != planned_citekey:
         raise _stale_plan("the entry it targets now has a different citekey")
+    _require_same_paper(current_records[index], plan)
+
+
+def _work_identities(record: Mapping[str, Any]) -> set[tuple[str, str]]:
+    # A URL names a location, not a paper (see `find_exact_match`), so only the
+    # DOI and arXiv ID say whether two entries are the same work.
+    return {
+        (i["kind"], i["value"])
+        for i in extract_identities(cast(NormalizedRecord, record))
+        if i["kind"] in ("doi", "arxiv")
+    }
+
+
+def _require_same_paper(current: NormalizedRecord, plan: WritePlan) -> None:
+    """Refuse a plan whose target was replaced by a different paper.
+
+    The citekey is not an identity: another writer can delete the entry and add
+    a different paper under the same key, and the rebase would then merge the
+    planned entry onto it, writing one paper's title with the other's DOI. The
+    plan's ``base_entry`` is the entry it was merged onto, so the current entry
+    must still share a DOI or arXiv ID with it. A plan with no base (promote's
+    replace mode changes identity on purpose) or whose base has no such
+    identity has nothing to compare and is left to the citekey check.
+    """
+    base = plan.get("base_entry")
+    if not isinstance(base, dict):
+        return
+    base_ids = _work_identities(bibtex_entry_to_record(base))
+    if base_ids and not base_ids & _work_identities(current):
+        raise _stale_plan("the entry it targets is now a different paper")
 
 
 def _rebase_update_plan_against_current(
