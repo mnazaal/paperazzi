@@ -17,6 +17,7 @@ import signal
 import subprocess
 import threading
 import time
+import urllib.parse
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -609,6 +610,28 @@ def _npm_cli_path(node_bin: str) -> Path:
 # ---------------------------------------------------------------------------
 
 
+#: Preloaded into the child (`--import` in `NODE_OPTIONS`, Node >= 20.6; pzi requires >= 22,
+#: user-set `node_path` and `PZI_NODE` included) so it exits when its parent
+#: does. The parent holds the write end of the child's stdin pipe, and the
+#: kernel closes it however the parent dies (SIGKILL and SIGHUP run no Python
+#: cleanup), which the child sees as end-of-file. No PID file, no packaged file.
+_EXIT_WITH_PARENT_JS = (
+    "process.stdin.on('end',()=>process.exit(0));"
+    "process.stdin.on('error',()=>process.exit(0));"
+    "process.stdin.resume();"
+)
+
+
+def _node_options_exiting_with_parent() -> str:
+    """The user's ``NODE_OPTIONS`` plus the preload that ends the child with its parent.
+
+    Passed in the environment, not argv, so the child's command line stays
+    ``node <server.js>``.
+    """
+    preload = "--import=data:text/javascript," + urllib.parse.quote(_EXIT_WITH_PARENT_JS)
+    return f"{os.environ.get('NODE_OPTIONS', '')} {preload}".strip()
+
+
 def start_ts(
     node_bin: str,
     ts_dir: Path,
@@ -636,7 +659,14 @@ def start_ts(
         cwd=str(ts_dir),
         # Every outbound fetch the child makes goes through the egress guard,
         # which refuses non-public destinations on each redirect/refresh hop.
-        env={**os.environ, **proxy_env(shared_guard()), **ts_child_env(port)},
+        env={
+            **os.environ,
+            **proxy_env(shared_guard()),
+            **ts_child_env(port),
+            "NODE_OPTIONS": _node_options_exiting_with_parent(),
+        },
+        # Held open for the child's lifetime; see `_EXIT_WITH_PARENT_JS`.
+        stdin=subprocess.PIPE,
         stdout=subprocess.DEVNULL,
         stderr=stderr_dest,
         start_new_session=True,

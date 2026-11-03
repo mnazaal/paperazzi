@@ -383,3 +383,113 @@ def test_fetch_direct_still_returns_a_close_delimited_pdf_within_the_cap() -> No
         server.close()
     assert result.status == 200 and result.is_pdf()
     assert len(result.body) == 65536 * 4
+
+
+# ---------------------------------------------------------------------------
+# The translation-server child dies with its parent
+# ---------------------------------------------------------------------------
+
+import os  # noqa: E402
+import shutil  # noqa: E402
+import signal  # noqa: E402
+import subprocess  # noqa: E402
+import sys  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+_SRC = str(Path(__file__).resolve().parents[1] / "src")
+
+_PARENT = """
+import pathlib, sys, time
+from pzi import ts_backend
+proc = ts_backend.start_ts(sys.argv[1], pathlib.Path(sys.argv[2]), port=int(sys.argv[3]))
+print(proc.pid, flush=True)
+time.sleep(120)
+"""
+
+_STAND_IN_SERVER = """
+const port = JSON.parse(process.env.NODE_CONFIG).port;
+require('http').createServer((q, r) => r.end('ok')).listen(port, '127.0.0.1');
+"""
+
+
+def _free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _listening(port: int) -> bool:
+    try:
+        socket.create_connection(("127.0.0.1", port), timeout=0.5).close()
+    except OSError:
+        return False
+    return True
+
+
+def _alive(pid: int) -> bool:
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+    except (OSError, IndexError):
+        return False
+    return state != "Z"  # an unreaped zombie is dead
+
+
+def _wait(predicate, seconds: float) -> bool:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.1)
+    return predicate()
+
+
+def _child_outlives_killed_parent(node: str, ts_dir: Path, sig: int) -> tuple[bool, bool]:
+    """Start the child from a parent process, signal the parent, report (alive, listening)."""
+    port = _free_port()
+    env = {**os.environ, "PYTHONPATH": _SRC, "PZI_SKIP_AUTO_START": "1"}
+    parent = subprocess.Popen(
+        [sys.executable, "-c", _PARENT, node, str(ts_dir), str(port)],
+        stdout=subprocess.PIPE, env=env, text=True,
+    )
+    child_pid = 0
+    try:
+        assert parent.stdout is not None
+        child_pid = int(parent.stdout.readline())
+        assert _wait(lambda: _listening(port), 30), "child never started listening"
+        os.kill(parent.pid, sig)
+        parent.wait(timeout=10)
+        # A node leader can read as a zombie while its threads still hold the port.
+        _wait(lambda: not _alive(child_pid) and not _listening(port), 10)
+        return _alive(child_pid), _listening(port)
+    finally:
+        if child_pid and _alive(child_pid):
+            os.kill(child_pid, signal.SIGKILL)  # only our own child, by PID
+        if parent.poll() is None:
+            parent.kill()
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js not found on PATH")
+@pytest.mark.parametrize("sig", [signal.SIGKILL, signal.SIGHUP])
+def test_stand_in_child_exits_when_the_parent_dies_uncleanly(tmp_path: Path, sig) -> None:
+    node = shutil.which("node")
+    assert node
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "server.js").write_text(_STAND_IN_SERVER)
+    alive, listening = _child_outlives_killed_parent(node, tmp_path, sig)
+    assert not alive and not listening, "the child survived its parent"
+
+
+def _real_backend():
+    from tests.test_rc3_server_network import _BACKEND
+
+    return _BACKEND
+
+
+@pytest.mark.skipif(_real_backend() is None, reason="pinned translation-server not installed")
+@pytest.mark.parametrize("sig", [signal.SIGKILL, signal.SIGHUP])
+def test_real_backend_child_exits_when_the_parent_dies_uncleanly(sig) -> None:
+    backend = _real_backend()
+    assert backend
+    node, ts_dir = backend
+    alive, listening = _child_outlives_killed_parent(node, ts_dir, sig)
+    assert not alive and not listening, "the child survived its parent"
