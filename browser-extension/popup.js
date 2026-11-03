@@ -12,7 +12,7 @@ import {
 } from "./background/config.js";
 import { detectAndExtractSearchResults, matchesAnySearchPattern } from "./background/search.js";
 import { captureCurrentTab } from "./background/capture.js";
-import { forgetBorrowedGrant, noteBorrowedGrant, sweepAbandonedCaptureState } from "./background/permissions.js";
+import { forgetBorrowedGrant, holdCaptureLock, noteBorrowedGrant, sweepAbandonedCaptureState } from "./background/permissions.js";
 import { formatCaptureResult, formatMultiCaptureResult } from "./popup_format.js";
 
 
@@ -477,6 +477,20 @@ export function stampPopupResult(result) {
 }
 
 async function doSingleCapture() {
+  // Requested here, in the click handler's own synchronous run and not awaited:
+  // a sweep must find the lock held from before the active-tab grant is
+  // journaled until after it is handed back, and an `await` placed ahead of
+  // `permissions.request` could lose the user gesture it needs. The lock
+  // request is queued at this line, ahead of any later sweep's.
+  const lockPending = holdCaptureLock();
+  try {
+    await runSingleCapture(lockPending);
+  } finally {
+    (await lockPending)();
+  }
+}
+
+async function runSingleCapture(lockPending) {
   const tags = document.getElementById("tags").value.split(",").map((s) => s.trim()).filter(Boolean);
   const bib = bibSelect.value || null;
   const dryRun = document.getElementById("dry").checked;
@@ -509,6 +523,7 @@ async function doSingleCapture() {
   // Kept, not discarded: the release below needs to know whether this capture
   // is the thing that granted it, or whether the user already had it.
   let originPermission = null;
+  await lockPending; // already settled in practice; the journal write must follow it
   if (!dryRun) {
     originPermission = await requestActiveTabOriginPermission(tabUrl);
   }
@@ -518,7 +533,7 @@ async function doSingleCapture() {
   await getStorage().remove(["pzi:captureStage"]);
   const stopProgress = watchCaptureStage((label) => { summary.textContent = label; });
   try {
-    const result = stampPopupResult(await captureCurrentTab({ tags, bib, dryRun, forceNew, tabId, tabUrl }));
+    const result = stampPopupResult(await captureCurrentTab({ tags, bib, dryRun, forceNew, tabId, tabUrl, captureLockHeld: true }));
     summary.textContent = formatCaptureResult(result);
     raw.textContent = JSON.stringify(result, null, 2);
     if (result.citekey) {

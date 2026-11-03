@@ -207,7 +207,10 @@ export async function sweepAbandonedCaptureState() {
         try {
           await chrome.permissions.remove({ origins: [pattern] });
         } catch (_error) {
-          continue; // stays journaled for the next sweep
+          // A permission the manifest declares (or one the user pinned in the
+          // browser's own settings) cannot be removed: remove rejects every
+          // time. The entry goes either way, so the journal does not carry it
+          // and retry it at every sweep for good.
         }
         await forgetBorrowedGrant(pattern);
       }

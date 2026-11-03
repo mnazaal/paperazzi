@@ -1151,7 +1151,7 @@ _MOCK_SEARCH_MODULE = (
 _MOCK_CAPTURE_MODULE = (
     # Writes the same `pzi:captureStage` values the real capture does, one per
     # await, so a test can watch the popup react to them.
-    "export async function captureCurrentTab() { for (const stage of (globalThis.__captureStages || [])) { await chrome.storage.session.set({ 'pzi:captureStage': stage }); } if (globalThis.__captureError) throw new Error(globalThis.__captureError); return globalThis.__captureResult ?? { status: 'ok' }; }\n"
+    "export async function captureCurrentTab(options = {}) { (globalThis.__journal ??= []).push(['capture', Boolean(options.captureLockHeld)]); for (const stage of (globalThis.__captureStages || [])) { await chrome.storage.session.set({ 'pzi:captureStage': stage }); } if (globalThis.__captureError) throw new Error(globalThis.__captureError); return globalThis.__captureResult ?? { status: 'ok' }; }\n"
 )
 
 _MOCK_PERMISSIONS_MODULE = (
@@ -1160,6 +1160,7 @@ _MOCK_PERMISSIONS_MODULE = (
     # cookies at all.
     "export async function cookieHeaderForUrl(url) { (globalThis.__cookieCalls ??= []).push(url); return globalThis.__cookieHeader ?? ''; }\n"
     # The popup journals the grant it borrows and sweeps what a closed popup left.
+    "export function holdCaptureLock() { (globalThis.__journal ??= []).push(['lock']); return Promise.resolve(() => { globalThis.__journal.push(['unlock']); }); }\n"
     "export async function noteBorrowedGrant(p) { (globalThis.__journal ??= []).push(['note', p]); }\n"
     "export async function forgetBorrowedGrant(p) { (globalThis.__journal ??= []).push(['forget', p]); }\n"
     "export async function sweepAbandonedCaptureState() { globalThis.__sweeps = (globalThis.__sweeps || 0) + 1; }\n"
@@ -1424,6 +1425,38 @@ console.log(JSON.stringify({ events: globalThis.events }));
     # Borrowed, then returned — in that order.
     kinds = [event["type"] for event in result["events"]]
     assert kinds.index("request") < kinds.index("remove")
+
+
+def test_the_capture_lock_is_held_from_before_the_grant_is_journaled_until_after_it_is_returned(
+    tmp_path: Path,
+) -> None:
+    """A sweep in the gap between the journal write and the lock removes a live grant."""
+    result = _run_popup_js_test(
+        _CAPTURE_DOM
+        + r'''
+await runCapture();
+console.log(JSON.stringify({ journal: globalThis.__journal }));
+''',
+        tmp_path,
+    )
+
+    steps = [entry[0] for entry in result["journal"]]
+    assert steps == ["lock", "note", "capture", "forget", "unlock"], result["journal"]
+    # The capture is told the popup holds the lock, so it does not take a second one.
+    assert ["capture", True] in result["journal"]
+
+
+def test_the_capture_lock_is_released_when_the_popup_finds_no_tab(tmp_path: Path) -> None:
+    result = _run_popup_js_test(
+        _CAPTURE_DOM
+        + r'''
+chrome.tabs.query = async () => [];
+await runCapture();
+console.log(JSON.stringify({ journal: globalThis.__journal }));
+''',
+        tmp_path,
+    )
+    assert result["journal"] == [["lock"], ["unlock"]], result["journal"]
 
 
 def test_a_permission_the_user_already_granted_is_not_taken_away(tmp_path: Path) -> None:
@@ -5018,10 +5051,13 @@ console.log(JSON.stringify({ log: globalThis.log }));
     install, removal = result["log"][0][1], result["log"][-1][1]
     block = [r for r in install["addRules"] if r["action"]["type"] == "block"]
     allow = [r for r in install["addRules"] if r["action"]["type"] == "allow"]
-    assert block and len(allow) == 1, install
-    # The pzi endpoint is the one loopback destination the extension needs.
-    assert allow[0]["condition"]["urlFilter"] == "|http://127.0.0.1:8765/", allow
-    assert all(allow[0]["priority"] > r["priority"] for r in block)
+    # The pzi endpoint on its own port is the one loopback destination the
+    # extension needs, under each spelling of loopback: the server may plan the
+    # attach URL with a different one. No other port, no other host.
+    assert block and sorted(r["condition"]["urlFilter"] for r in allow) == [
+        "|http://127.0.0.1:8765/", "|http://[::1]:8765/", "|http://localhost:8765/",
+    ], allow
+    assert all(a["priority"] > r["priority"] for a in allow for r in block)
     # Scoped to this extension's own requests, not to the user's browsing.
     assert all(r["condition"]["initiatorDomains"] == ["abcdef"] for r in block), block
     assert len({r["id"] for r in install["addRules"]}) == len(install["addRules"])
@@ -5605,6 +5641,34 @@ console.log(JSON.stringify({ before, granted: [...state.granted], journal: getJo
     assert out["before"]["granted"] == ["https://cdn.example.org/*"], out
     assert out["before"]["journal"] == ["https://cdn.example.org/*"], out
     assert out["granted"] == [] and out["journal"] == [] and out["rules"] == 0, out
+
+
+def test_a_journaled_grant_that_cannot_be_removed_leaves_the_journal_after_one_sweep(
+    tmp_path: Path,
+) -> None:
+    out = _borrowed(
+        tmp_path,
+        r'''
+const p = await import("./background/permissions.mjs");
+await p.noteBorrowedGrant("https://www.nature.com/*");
+await p.noteBorrowedGrant("https://cdn.example.org/*");
+let attempts = [];
+chrome.permissions.remove = async ({ origins }) => {
+  attempts.push(origins[0]);
+  if (origins[0].includes("nature.com")) throw new Error("You cannot remove required permissions.");
+  state.granted.delete(origins[0]);
+  return true;
+};
+await p.sweepAbandonedCaptureState();
+const first = { journal: getJournal(), attempts: [...attempts] };
+attempts = [];
+await p.sweepAbandonedCaptureState();
+console.log(JSON.stringify({ first, secondAttempts: attempts }));
+''',
+    )
+    assert out["first"]["journal"] == [], out
+    assert sorted(out["first"]["attempts"]) == ["https://cdn.example.org/*", "https://www.nature.com/*"], out
+    assert out["secondAttempts"] == [], out
 
 
 def test_a_sweep_leaves_a_live_capture_alone(tmp_path: Path) -> None:

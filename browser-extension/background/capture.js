@@ -54,7 +54,11 @@ export async function captureCurrentTab(options = {}) {
   // Held for the whole capture and dropped by the browser if this realm dies
   // (a popup closing mid-capture), which is how a later sweep knows nobody is
   // still using the grants and rules this capture borrowed.
-  const releaseCaptureLock = await holdCaptureLock();
+  //
+  // A caller that took the lock earlier (the popup, which must hold it before
+  // it journals the active-tab grant) says so with `captureLockHeld` and
+  // releases it itself, after handing its borrowed state back.
+  const releaseCaptureLock = options.captureLockHeld ? () => {} : await holdCaptureLock();
   try {
     return await runCapture(options);
   } finally {

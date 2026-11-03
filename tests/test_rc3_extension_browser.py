@@ -474,3 +474,38 @@ def test_other_local_ports_stay_blocked_under_every_spelling_of_the_endpoint(
         },
     )
     assert public.hits and other.hits == []
+
+
+# ---------------------------------------------------------------------------
+# A lock requested in the click handler (not awaited) already shields the grant
+# ---------------------------------------------------------------------------
+
+_SWEEP_WITH_UNAWAITED_LOCK = """
+async ({ holdFirst }) => {
+  const p = await import("./background/permissions.js?" + (holdFirst ? "held" : "bare"));
+  const key = "pzi:borrowedGrants";
+  await chrome.storage.local.set({ [key]: ["https://stale.example.org/*"] });
+  const original = chrome.permissions.remove.bind(chrome.permissions);
+  let removeCalls = 0;
+  chrome.permissions.remove = async (request) => { removeCalls += 1; return original(request); };
+  // Not awaited: the popup requests the lock inside its click handler, and the
+  // sweep a worker start or second popup issues lands right behind it.
+  const pending = holdFirst ? p.holdCaptureLock() : null;
+  await p.sweepAbandonedCaptureState();
+  const journalAfter = (await chrome.storage.local.get(key))[key] || [];
+  if (pending) (await pending)();
+  chrome.permissions.remove = original;
+  await chrome.storage.local.remove(key);
+  return { removeCalls, journalAfter };
+}
+"""
+
+
+def test_a_sweep_right_behind_an_unawaited_capture_lock_request_leaves_the_grant(rig: Rig) -> None:
+    page = rig.extension_page()
+    bare = page.evaluate(_SWEEP_WITH_UNAWAITED_LOCK, {"holdFirst": False})
+    held = page.evaluate(_SWEEP_WITH_UNAWAITED_LOCK, {"holdFirst": True})
+    # The control: with no lock the same sweep does remove and clear the entry,
+    # so the instrument can tell the two outcomes apart.
+    assert bare["removeCalls"] == 1 and bare["journalAfter"] == [], bare
+    assert held["removeCalls"] == 0 and held["journalAfter"] == ["https://stale.example.org/*"], held
