@@ -121,6 +121,39 @@ jobs:
       - name: Check package metadata (twine)
         run: .venv/bin/twine check dist/*.tar.gz dist/*.whl
 
+      - name: Smoke-test clean wheel and sdist installs
+        # Installs each artifact into its own empty venv (no checkout on the
+        # path, throwaway HOME) and runs `init` (reads the packaged
+        # config.template.toml) plus `library list` and `entries` on a temporary
+        # library. `--version` alone never touched package data or the sdist.
+        # Nothing here publishes or uploads.
+        shell: bash
+        run: |
+          set -euo pipefail
+          dist="$PWD/dist"
+          for kind in wheel sdist; do
+            if [ "$kind" = wheel ]; then artifact=$(ls "$dist"/*.whl); else artifact=$(ls "$dist"/*.tar.gz); fi
+            work=$(mktemp -d)
+            python -m venv "$work/venv"
+            "$work/venv/bin/pip" install "$artifact"
+            # Run from outside the checkout with a throwaway HOME so the installed
+            # package, not ./src, is what answers, and nothing touches a real library.
+            cd "$work"
+            export HOME="$work/home" XDG_CONFIG_HOME="$work/home/.config" XDG_DATA_HOME="$work/home/.local/share" PZI_SKIP_AUTO_START=1
+            mkdir -p "$HOME"
+            # Package data is present: `init` copies the packaged config.template.toml.
+            "$work/venv/bin/python" -c "import importlib.resources as r; assert r.files('pzi').joinpath('config.template.toml').is_file()"
+            "$work/venv/bin/pzi" init --config "$work/template.toml"
+            test -s "$work/template.toml"
+            # A representative config + library command against a temporary library.
+            printf '@article{smoke,\n  title={Smoke},\n  year={2020}\n}\n' > "$work/lib.bib"
+            printf '[[bibs]]\nname = "smoke"\npath = "%s"\ndefault = true\n' "$work/lib.bib" > "$work/config.toml"
+            "$work/venv/bin/pzi" library list --config "$work/config.toml"
+            "$work/venv/bin/pzi" entries --json --config "$work/config.toml" | grep -q '"smoke"'
+            echo "$kind install OK"
+            cd - > /dev/null
+          done
+
       - name: Build browser extension zips
         run: python tools/build_extension.py
 
