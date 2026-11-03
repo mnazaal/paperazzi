@@ -412,11 +412,14 @@ def _fold_into_session(session: BatchWriteSession, pending: _PendingWrite) -> No
         cast(NormalizedRecord, dict(current_record)),
         cast(NormalizedRecord, dict(pending.candidate)),
     )
-    updated_entry = (
-        apply_record_to_entry(current_entry, current_enriched)
-        if _changed_fields(current_record, current_enriched)
-        else current_entry
-    )
+    if not _changed_fields(current_record, current_enriched):
+        # Another writer already filled what the candidate would add. Nothing
+        # is committed, so nothing is reported: diffing the entry against its
+        # own record instead listed `local_pdf_path` under a relative path
+        # style, and the item read as applied.
+        pending.keep = False
+        return
+    updated_entry = apply_record_to_entry(current_entry, current_enriched)
     updated_record = bibtex_entry_to_record(updated_entry)
     changed = _changed_fields(current_record, updated_record)
     if not changed:
