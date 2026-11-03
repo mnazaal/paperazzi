@@ -22,6 +22,24 @@ from pzi.url_safety import safe_public_http_url
 
 CaptureResult = Mapping[str, Any]
 
+# Every add-service argument this module derives from the capture model, set
+# or not: an optional one absent from this capture must not be injectable
+# through `service_kwargs` either.
+_CAPTURE_OWNED = frozenset(
+    {
+        "config_path",
+        "home_dir",
+        "value",
+        "record_overrides",
+        "bib_selector",
+        "dry_run",
+        "force_new",
+        "metadata_strict",
+        "pdf_url_candidates",
+        "cookies",
+    }
+)
+
 
 def capture_to_bib(
     capture: CaptureInput,
@@ -68,7 +86,17 @@ def capture_to_bib(
     if capture.auth_hints.cookies:
         kwargs["cookies"] = capture.auth_hints.cookies
     if service_kwargs:
-        kwargs.update(dict(service_kwargs))
+        # `service_kwargs` injects collaborators (fetchers, browser, batch
+        # state). It must never replace an argument derived from the capture
+        # model: a silent override would send the add service a different
+        # target, library or dry-run flag than the request carried.
+        collisions = sorted(set(service_kwargs) & _CAPTURE_OWNED)
+        if collisions:
+            raise TypeError(
+                "service_kwargs would override capture arguments: "
+                + ", ".join(collisions)
+            )
+        kwargs.update(service_kwargs)
     return add_fn(**kwargs)
 
 
