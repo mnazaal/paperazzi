@@ -12,9 +12,14 @@ import {
 } from "./background/config.js";
 import { detectAndExtractSearchResults, matchesAnySearchPattern } from "./background/search.js";
 import { captureCurrentTab } from "./background/capture.js";
+import { forgetBorrowedGrant, noteBorrowedGrant, sweepAbandonedCaptureState } from "./background/permissions.js";
 import { formatCaptureResult, formatMultiCaptureResult } from "./popup_format.js";
 
 
+
+// A previous popup that closed mid-capture never ran its `finally`; hand back
+// what it borrowed. A capture still running holds a lock and is left alone.
+sweepAbandonedCaptureState();
 
 // ── DOM refs ────────────────────────────────────────────────────────────
 const summary = document.getElementById("summary");
@@ -381,10 +386,15 @@ export async function requestActiveTabOriginPermission(tabUrl) {
   } catch (_error) {
     // continue to request; popup click still holds user gesture in Firefox.
   }
+  // Journaled before the dialog: if the popup closes mid-capture, the next
+  // sweep removes this grant (see `sweepAbandonedCaptureState`).
+  await noteBorrowedGrant(request.origins[0]);
   try {
     const granted = Boolean(await chrome.permissions.request(request));
+    if (!granted) await forgetBorrowedGrant(request.origins[0]);
     return { status: granted ? "granted" : "denied", origin };
   } catch (_error) {
+    await forgetBorrowedGrant(request.origins[0]);
     return { status: "denied", origin };
   }
 }
@@ -408,7 +418,9 @@ export async function releaseActiveTabOriginPermission(tabUrl, permission) {
     return false;
   }
   try {
-    return Boolean(await chrome.permissions.remove({ origins: [`${origin}/*`] }));
+    const removed = Boolean(await chrome.permissions.remove({ origins: [`${origin}/*`] }));
+    if (removed) await forgetBorrowedGrant(`${origin}/*`);
+    return removed;
   } catch (_error) {
     return false;
   }

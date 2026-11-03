@@ -126,7 +126,99 @@ export function permissionForCandidate(permissions, candidate) {
   return permissions.get(origin) || null;
 }
 
-function originPatternForUrl(url) {
+// ── State a capture borrows, and how it is handed back if the popup dies ──
+// `captureCurrentTab` runs in the popup realm, and a popup closes on blur: a
+// `finally` that never runs cannot hand anything back. Two things are borrowed
+// for a capture. Temporary host permissions persist in the browser profile until
+// removed, so each new grant is journaled in `chrome.storage.local` before it
+// is requested and struck from the journal when handed back. Session rules die
+// with the browser but not with the popup, and their ids are fixed, so they need
+// no journal. A Web Lock held for the life of a capture says whether anyone is
+// still using either (the browser drops a lock when its realm dies), and
+// `sweepAbandonedCaptureState` clears whatever no live lock covers. Without
+// `navigator.locks` nothing is swept, because a live capture cannot be told
+// from a dead one.
+const BORROWED_GRANTS_KEY = "pzi:borrowedGrants";
+const CAPTURE_LOCK = "pzi-capture-active";
+const GUARD_LOCK = "pzi-guard-active";
+let _journalQueue = Promise.resolve();
+
+function updateGrantJournal(change) {
+  const next = _journalQueue.then(async () => {
+    const storage = chrome.storage?.local;
+    if (!storage?.get || !storage?.set) return;
+    const stored = (await storage.get(BORROWED_GRANTS_KEY))?.[BORROWED_GRANTS_KEY];
+    const current = Array.isArray(stored) ? stored.filter((item) => typeof item === "string") : [];
+    await storage.set({ [BORROWED_GRANTS_KEY]: change(current) });
+  });
+  _journalQueue = next.catch(() => {});
+  return next.catch(() => {});
+}
+
+/** Record that this capture is about to borrow `pattern` (a `https://host/*` origin pattern). */
+export function noteBorrowedGrant(pattern) {
+  return updateGrantJournal((list) => (list.includes(pattern) ? list : [...list, pattern]));
+}
+
+/** Strike `pattern` from the journal: it was handed back, or was never ours. */
+export function forgetBorrowedGrant(pattern) {
+  return updateGrantJournal((list) => list.filter((item) => item !== pattern));
+}
+
+/** Hold the "a capture is in progress" lock; the returned function lets go. */
+export async function holdCaptureLock() {
+  return holdLock(CAPTURE_LOCK);
+}
+
+function holdLock(name) {
+  const locks = globalThis.navigator?.locks;
+  if (!locks?.request) return Promise.resolve(() => {});
+  // The returned function resolves once the lock is really gone: a caller that
+  // goes on to ask for it exclusively would otherwise find it still held.
+  return new Promise((resolve) => {
+    const finished = locks.request(name, { mode: "shared" }, () => new Promise((release) => {
+      resolve(async () => { release(); await finished; });
+    }));
+  });
+}
+
+async function whenNobodyHolds(name, work, { withoutLocks }) {
+  const locks = globalThis.navigator?.locks;
+  if (!locks?.request) {
+    if (withoutLocks) await work();
+    return;
+  }
+  await locks.request(name, { mode: "exclusive", ifAvailable: true }, async (lock) => {
+    if (lock) await work();
+  });
+}
+
+/**
+ * Hand back what a capture that never finished still holds: journaled host
+ * permissions and the session guard rules. Runs at popup open and worker
+ * start; a capture still running in some realm holds a lock and is left alone.
+ */
+export async function sweepAbandonedCaptureState() {
+  try {
+    await whenNobodyHolds(CAPTURE_LOCK, async () => {
+      const stored = (await chrome.storage?.local?.get?.(BORROWED_GRANTS_KEY))?.[BORROWED_GRANTS_KEY];
+      for (const pattern of Array.isArray(stored) ? stored : []) {
+        if (typeof pattern !== "string") continue;
+        try {
+          await chrome.permissions.remove({ origins: [pattern] });
+        } catch (_error) {
+          continue; // stays journaled for the next sweep
+        }
+        await forgetBorrowedGrant(pattern);
+      }
+    }, { withoutLocks: false });
+    await whenNobodyHolds(GUARD_LOCK, removeGuardRules, { withoutLocks: false });
+  } catch (_error) {
+    /* a sweep is best effort; the next one tries again */
+  }
+}
+
+export function originPatternForUrl(url) {
   try {
     return `${new URL(candidateUrl(url)).origin}/*`;
   } catch (_error) {
@@ -150,11 +242,15 @@ export async function requestTemporaryOriginPermission(url) {
     return { status: "granted", origin: originOf(candidateUrl(url)), removed: false, already_granted: true };
   }
   let granted = false;
+  // Journaled first: a popup that closes while the dialog is open still leaves
+  // a record, and a grant the user then declines is struck again below.
+  await noteBorrowedGrant(pattern);
   try {
     granted = Boolean(await chrome.permissions.request(request));
   } catch (_error) {
     granted = false;
   }
+  if (!granted) await forgetBorrowedGrant(pattern);
   return { status: granted ? "granted" : "denied", origin: originOf(candidateUrl(url)), removed: false };
 }
 
@@ -167,6 +263,7 @@ export async function removeTemporaryOriginPermission(url, permission) {
   } catch (_error) {
     permission.removed = false;
   }
+  if (permission.removed) await forgetBorrowedGrant(pattern);
   return permission;
 }
 
@@ -279,54 +376,86 @@ export async function readBodyBounded(
 //
 // The pattern list lives in utils.js: `isSafePublicHttpUrl` is built from the
 // same list, so the rule table and the predicate cannot drift.
+//: Every fetch the extension makes to fetch a PDF is an XHR-type request.
+export const GUARD_RESOURCE_TYPES = ["xmlhttprequest"];
 const GUARD_ALLOW_RULE_ID = 91001;
 const GUARD_RULE_IDS = [
   GUARD_ALLOW_RULE_ID,
   ...PRIVATE_DESTINATION_PATTERNS.map((_pattern, index) => GUARD_ALLOW_RULE_ID + 1 + index),
 ];
 let _guardHolders = 0;
+let _guardInstalled = null; // the in-flight or finished install shared by every holder
+let _guardLockRelease = null;
 
 /**
  * Block private destinations for this extension's fetches until the returned
  * function is called. Resolves to `null` when the browser has no
  * declarativeNetRequest (a test realm); rejects when the rules cannot be
  * installed, so the caller can refuse to fetch rather than fetch unguarded.
+ *
+ * The holder count moves before the first await: counted after it, two
+ * concurrent installs each saw zero holders and the pair counted as one, so the
+ * first release dropped the rules under the second. The guard lock carries the
+ * same fact across realms.
  */
 export async function installPrivateNetworkGuard(endpoint) {
   const dnr = chrome.declarativeNetRequest;
   if (!dnr?.updateSessionRules || !chrome.runtime?.getURL) return null;
-  if (_guardHolders > 0) {
-    _guardHolders += 1;
-    return releasePrivateNetworkGuard;
+  _guardHolders += 1;
+  try {
+    if (!_guardInstalled) {
+      _guardInstalled = (async () => {
+        _guardLockRelease = await holdLock(GUARD_LOCK);
+        const initiator = new URL(chrome.runtime.getURL("/")).hostname;
+        const condition = { initiatorDomains: [initiator], resourceTypes: GUARD_RESOURCE_TYPES };
+        const addRules = [];
+        const endpointOrigin = originPatternForUrl(endpoint)?.replace(/\/\*$/, "");
+        if (endpointOrigin) {
+          addRules.push({
+            id: GUARD_ALLOW_RULE_ID,
+            priority: 2,
+            action: { type: "allow" },
+            condition: { ...condition, urlFilter: `|${endpointOrigin}/` },
+          });
+        }
+        PRIVATE_DESTINATION_PATTERNS.forEach((regexFilter, index) => {
+          addRules.push({
+            id: GUARD_ALLOW_RULE_ID + 1 + index,
+            priority: 1,
+            action: { type: "block" },
+            condition: { ...condition, regexFilter },
+          });
+        });
+        await dnr.updateSessionRules({ removeRuleIds: GUARD_RULE_IDS, addRules });
+      })();
+    }
+    await _guardInstalled;
+  } catch (error) {
+    await releaseGuardCount()?.();
+    throw error;
   }
-  const initiator = new URL(chrome.runtime.getURL("/")).hostname;
-  const condition = { initiatorDomains: [initiator], resourceTypes: ["xmlhttprequest"] };
-  const addRules = [];
-  const endpointOrigin = originPatternForUrl(endpoint)?.replace(/\/\*$/, "");
-  if (endpointOrigin) {
-    addRules.push({
-      id: GUARD_ALLOW_RULE_ID,
-      priority: 2,
-      action: { type: "allow" },
-      condition: { ...condition, urlFilter: `|${endpointOrigin}/` },
-    });
-  }
-  PRIVATE_DESTINATION_PATTERNS.forEach((regexFilter, index) => {
-    addRules.push({
-      id: GUARD_ALLOW_RULE_ID + 1 + index,
-      priority: 1,
-      action: { type: "block" },
-      condition: { ...condition, regexFilter },
-    });
-  });
-  await dnr.updateSessionRules({ removeRuleIds: GUARD_RULE_IDS, addRules });
-  _guardHolders = 1;
   return releasePrivateNetworkGuard;
 }
 
-async function releasePrivateNetworkGuard() {
+// Returns the function that lets go of this realm's guard lock when this was the
+// last holder here, else null.
+function releaseGuardCount() {
   _guardHolders = Math.max(0, _guardHolders - 1);
-  if (_guardHolders > 0) return;
+  if (_guardHolders > 0) return null;
+  _guardInstalled = null;
+  const release = _guardLockRelease || (async () => {});
+  _guardLockRelease = null;
+  return release;
+}
+
+async function releasePrivateNetworkGuard() {
+  const letGo = releaseGuardCount();
+  if (!letGo) return;
+  await letGo();
+  await whenNobodyHolds(GUARD_LOCK, removeGuardRules, { withoutLocks: true });
+}
+
+async function removeGuardRules() {
   try {
     await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: GUARD_RULE_IDS });
   } catch (_error) {

@@ -1159,6 +1159,10 @@ _MOCK_PERMISSIONS_MODULE = (
     # import; `__cookieCalls` is how a test asserts the popup never reached for
     # cookies at all.
     "export async function cookieHeaderForUrl(url) { (globalThis.__cookieCalls ??= []).push(url); return globalThis.__cookieHeader ?? ''; }\n"
+    # The popup journals the grant it borrows and sweeps what a closed popup left.
+    "export async function noteBorrowedGrant(p) { (globalThis.__journal ??= []).push(['note', p]); }\n"
+    "export async function forgetBorrowedGrant(p) { (globalThis.__journal ??= []).push(['forget', p]); }\n"
+    "export async function sweepAbandonedCaptureState() { globalThis.__sweeps = (globalThis.__sweeps || 0) + 1; }\n"
 )
 
 
@@ -1309,6 +1313,40 @@ console.log(JSON.stringify({ permission, events: globalThis.events }));
         {"type": "contains", "request": {"origins": ["https://ieeexplore.ieee.org/*"]}},
         {"type": "permission", "request": {"origins": ["https://ieeexplore.ieee.org/*"]}},
     ]
+
+
+def test_the_popup_journals_the_origin_it_borrows_and_sweeps_on_open(tmp_path: Path) -> None:
+    result = _run_popup_js_test(
+        r'''
+globalThis.events = [];
+const element = () => ({
+  value: "", checked: false, disabled: false, textContent: "", innerHTML: "", className: "", type: "",
+  style: { cssText: "" }, children: [], appendChild() {}, addEventListener() {}, querySelectorAll: () => [],
+});
+globalThis.document = { getElementById: () => element(), createElement: () => element() };
+globalThis.chrome = {
+  storage: {
+    local: { get: async () => ({}), set: async () => ({}), remove: async () => ({}) },
+    session: { get: async () => ({}), set: async () => ({}), remove: async () => ({}) },
+  },
+  tabs: { query: async () => [{ id: 7, url: "https://ieeexplore.ieee.org/document/1" }] },
+  runtime: { sendMessage: () => {} },
+  permissions: { contains: async () => false, request: async () => true, remove: async () => true },
+};
+globalThis.window = { open: () => {} };
+const mod = await import("./popup.js");
+const url = "https://ieeexplore.ieee.org/document/1";
+const permission = await mod.requestActiveTabOriginPermission(url);
+await mod.releaseActiveTabOriginPermission(url, permission);
+console.log(JSON.stringify({ journal: globalThis.__journal, sweeps: globalThis.__sweeps }));
+''',
+        tmp_path,
+    )
+    assert result["sweeps"] == 1, result
+    assert result["journal"] == [
+        ["note", "https://ieeexplore.ieee.org/*"],
+        ["forget", "https://ieeexplore.ieee.org/*"],
+    ], result
 
 
 # Drives a real single capture through the popup's "go" button, with the origin
@@ -5451,3 +5489,223 @@ console.log(JSON.stringify({
     )
     assert result["sameFunction"], result
     assert result["args"][1:] == result["limits"], result
+
+
+# ── Borrowed state: concurrent guards, and a popup that closes mid-capture ─
+# Node 24 ships a real `navigator.locks`, so these use the browser's own lock
+# semantics; a second module instance (`?realm=b`) stands in for a second realm.
+
+_BORROWED_STATE_PRELUDE = r'''
+const store = {};
+globalThis.state = { rules: new Set(), granted: new Set(), removed: [], requested: [] };
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} }, getURL: (p) => "chrome-extension://abcdef" + p },
+  storage: {
+    local: {
+      get: async (key) => ({ [key]: store[key] }),
+      set: async (obj) => { Object.assign(store, obj); },
+    },
+    session: { get: async () => ({}), set: async () => ({}) },
+  },
+  declarativeNetRequest: {
+    // Yields, as the real API does, so concurrent callers interleave.
+    updateSessionRules: async ({ removeRuleIds = [], addRules = [] }) => {
+      await new Promise((r) => setTimeout(r, 5));
+      removeRuleIds.forEach((id) => globalThis.state.rules.delete(id));
+      addRules.forEach((rule) => globalThis.state.rules.add(rule.id));
+    },
+  },
+  permissions: {
+    contains: async ({ origins }) => origins.every((o) => globalThis.state.granted.has(o)),
+    request: async ({ origins }) => { origins.forEach((o) => { globalThis.state.granted.add(o); globalThis.state.requested.push(o); }); return true; },
+    remove: async ({ origins }) => { origins.forEach((o) => { globalThis.state.granted.delete(o); globalThis.state.removed.push(o); }); return true; },
+  },
+};
+globalThis.getJournal = () => store["pzi:borrowedGrants"] || [];
+'''
+
+
+def _borrowed(tmp_path: Path, body: str) -> dict:
+    return _run_background_module(_BORROWED_STATE_PRELUDE + body, tmp_path)
+
+
+def test_two_concurrent_guard_installs_count_as_two_holders(tmp_path: Path) -> None:
+    out = _borrowed(
+        tmp_path,
+        r'''
+const { installPrivateNetworkGuard } = await import("./background/permissions.mjs");
+const [releaseA, releaseB] = await Promise.all([
+  installPrivateNetworkGuard("http://127.0.0.1:8765/capture"),
+  installPrivateNetworkGuard("http://127.0.0.1:8765/capture"),
+]);
+const installed = globalThis.state.rules.size;
+await releaseA();
+const afterFirst = globalThis.state.rules.size;
+await releaseB();
+console.log(JSON.stringify({ installed, afterFirst, afterSecond: globalThis.state.rules.size }));
+''',
+    )
+    assert out["installed"] > 0, out
+    assert out["afterFirst"] == out["installed"], out  # B still holds the guard
+    assert out["afterSecond"] == 0, out
+
+
+def test_a_guard_held_in_another_realm_survives_this_realms_release(tmp_path: Path) -> None:
+    out = _borrowed(
+        tmp_path,
+        r'''
+const a = await import("./background/permissions.mjs?realm=a");
+const b = await import("./background/permissions.mjs?realm=b");
+const releaseA = await a.installPrivateNetworkGuard("http://127.0.0.1:8765/capture");
+const releaseB = await b.installPrivateNetworkGuard("http://127.0.0.1:8765/capture");
+const installed = globalThis.state.rules.size;
+await releaseA();
+const afterA = globalThis.state.rules.size;
+await releaseB();
+console.log(JSON.stringify({ installed, afterA, afterB: globalThis.state.rules.size }));
+''',
+    )
+    assert out["afterA"] == out["installed"] > 0, out
+    assert out["afterB"] == 0, out
+
+
+def test_a_guard_failure_does_not_leave_a_phantom_holder(tmp_path: Path) -> None:
+    out = _borrowed(
+        tmp_path,
+        r'''
+const { installPrivateNetworkGuard } = await import("./background/permissions.mjs");
+const real = chrome.declarativeNetRequest.updateSessionRules;
+chrome.declarativeNetRequest.updateSessionRules = async () => { throw new Error("rejected"); };
+let failed = false;
+try { await installPrivateNetworkGuard("http://127.0.0.1:8765/capture"); } catch (_e) { failed = true; }
+chrome.declarativeNetRequest.updateSessionRules = real;
+const release = await installPrivateNetworkGuard("http://127.0.0.1:8765/capture");
+await release();
+console.log(JSON.stringify({ failed, left: globalThis.state.rules.size }));
+''',
+    )
+    assert out == {"failed": True, "left": 0}, out
+
+
+def test_a_popup_that_closed_mid_capture_has_its_grant_and_rules_swept(tmp_path: Path) -> None:
+    out = _borrowed(
+        tmp_path,
+        r'''
+const p = await import("./background/permissions.mjs");
+// A capture borrows a host permission and the guard, then its popup is gone:
+// no `finally` ran, and the browser has dropped its locks. What is left is the
+// journal entry, the permission, the rules and no lock.
+await p.requestTemporaryOriginPermission("https://cdn.example.org/x.pdf");
+state.rules.add(91001); state.rules.add(91002);
+const before = { granted: [...state.granted], journal: getJournal(), rules: state.rules.size };
+await p.sweepAbandonedCaptureState();
+console.log(JSON.stringify({ before, granted: [...state.granted], journal: getJournal(), rules: state.rules.size }));
+''',
+    )
+    assert out["before"]["granted"] == ["https://cdn.example.org/*"], out
+    assert out["before"]["journal"] == ["https://cdn.example.org/*"], out
+    assert out["granted"] == [] and out["journal"] == [] and out["rules"] == 0, out
+
+
+def test_a_sweep_leaves_a_live_capture_alone(tmp_path: Path) -> None:
+    out = _borrowed(
+        tmp_path,
+        r'''
+const a = await import("./background/permissions.mjs?realm=a");
+const b = await import("./background/permissions.mjs?realm=b");
+// Realm A is mid-capture: capture lock held, grant journaled, guard installed.
+const releaseCapture = await a.holdCaptureLock();
+await a.requestTemporaryOriginPermission("https://cdn.example.org/x.pdf");
+const releaseGuard = await a.installPrivateNetworkGuard("http://127.0.0.1:8765/capture");
+await b.sweepAbandonedCaptureState();
+const during = { granted: [...state.granted], rules: state.rules.size };
+await releaseGuard();
+await releaseCapture();
+await b.sweepAbandonedCaptureState();
+console.log(JSON.stringify({ during, granted: [...state.granted], rules: state.rules.size }));
+''',
+    )
+    assert out["during"]["granted"] == ["https://cdn.example.org/*"], out
+    assert out["during"]["rules"] > 0, out
+    assert out["granted"] == [], out  # once it ended, the leftover journal entry goes
+
+
+def test_a_grant_handed_back_normally_leaves_nothing_journaled(tmp_path: Path) -> None:
+    out = _borrowed(
+        tmp_path,
+        r'''
+const p = await import("./background/permissions.mjs");
+const permission = await p.requestTemporaryOriginPermission("https://cdn.example.org/x.pdf");
+const duringJournal = getJournal();
+await p.removeTemporaryOriginPermission("https://cdn.example.org/x.pdf", permission);
+// A grant that was already there is not ours, and is never journaled.
+state.granted.add("https://mine.example.org/*");
+await p.requestTemporaryOriginPermission("https://mine.example.org/y.pdf");
+console.log(JSON.stringify({ duringJournal, journal: getJournal(), granted: [...state.granted] }));
+''',
+    )
+    assert out["duringJournal"] == ["https://cdn.example.org/*"], out
+    assert out["journal"] == [], out
+    assert out["granted"] == ["https://mine.example.org/*"], out
+
+
+def test_a_capture_holds_the_capture_lock_until_it_ends(tmp_path: Path) -> None:
+    """`captureCurrentTab` is what makes a live capture visible to a sweep."""
+    out = _borrowed(
+        tmp_path,
+        r'''
+globalThis.chrome.tabs = { query: async () => [{ id: 7, url: "https://paper.test/article" }] };
+globalThis.chrome.webRequest = { onHeadersReceived: { addListener: () => {}, removeListener: () => {} } };
+globalThis.chrome.scripting = { executeScript: async () => [{ result: [] }] };
+chrome.storage.local.get = ((orig) => async (key) => (key === "endpoint" || (Array.isArray(key) && key.includes("endpoint")) ? { endpoint: "http://127.0.0.1:8765/capture" } : orig(key)))(chrome.storage.local.get);
+let openGate; const gate = new Promise((r) => { openGate = r; });
+globalThis.fetch = async (url) => { await gate; return { ok: true, status: 200, headers: { get: () => "application/json" }, json: async () => ({ status: "ok" }) }; };
+const mod = await import("./background.js");
+const p = await import("./background/permissions.mjs?other");
+const capture = mod.captureCurrentTab({ dryRun: true });
+await new Promise((r) => setTimeout(r, 50));
+state.granted.add("https://stale.example.org/*");
+await chrome.storage.local.set({ "pzi:borrowedGrants": ["https://stale.example.org/*"] });
+await p.sweepAbandonedCaptureState();
+const whileRunning = [...state.granted];
+openGate();
+await capture;
+await p.sweepAbandonedCaptureState();
+console.log(JSON.stringify({ whileRunning, after: [...state.granted] }));
+''',
+    )
+    assert out["whileRunning"] == ["https://stale.example.org/*"], out
+    assert out["after"] == [], out
+
+
+# ── The guard covers the resource types the fetches really use ────────────
+
+def test_the_guard_rules_cover_every_resource_type_the_extension_fetches_with(
+    tmp_path: Path,
+) -> None:
+    """The real-browser test is the only other thing that notices a wrong list.
+
+    Every network call in the PDF path is a `fetch()` from the service worker or
+    popup, which Chrome classifies as `xmlhttprequest`. A rule for any other
+    type would let them through; a `main_frame` rule would block the user's own
+    navigation, which the guard must not do.
+    """
+    out = _borrowed(
+        tmp_path,
+        r'''
+const calls = [];
+chrome.declarativeNetRequest.updateSessionRules = async (change) => { calls.push(change); };
+const { installPrivateNetworkGuard, GUARD_RESOURCE_TYPES } = await import("./background/permissions.mjs");
+const release = await installPrivateNetworkGuard("http://127.0.0.1:8765/capture");
+await release();
+console.log(JSON.stringify({ rules: calls[0].addRules, exported: GUARD_RESOURCE_TYPES }));
+''',
+    )
+    assert out["rules"], out
+    for rule in out["rules"]:
+        assert rule["condition"]["resourceTypes"] == ["xmlhttprequest"], rule
+    # And the code under guard really does use fetch() only, never a tab or XHR.
+    for name in ("pdf_fetch.js", "permissions.js", "capture.js"):
+        text = _source(BACKGROUND_DIR / name)
+        assert "XMLHttpRequest" not in text, name
+        assert "new WebSocket" not in text, name

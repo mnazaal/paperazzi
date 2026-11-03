@@ -26,6 +26,7 @@ import {
   cookieHeaderForUrl,
   releasePdfOriginPermissions,
   requestPdfOriginPermissions,
+  sweepAbandonedCaptureState,
 } from "./background/permissions.js";
 
 import { extractPageMetadata } from "./background/metadata.js";
@@ -74,6 +75,9 @@ export { botBypassPdfUrl };
 // without loading this module, whose listener registrations below must run in
 // the service worker only.
 export { captureCurrentTab } from "./background/capture.js";
+
+// Worker start: hand back what a capture that never finished still holds.
+sweepAbandonedCaptureState();
 
 // Exported for the test harness: the context-menu path decides what session a
 // captured link may reuse, which is worth asserting directly rather than

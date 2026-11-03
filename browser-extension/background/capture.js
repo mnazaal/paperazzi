@@ -27,6 +27,7 @@ import {
 } from "./utils.js";
 import {
   cookieHeaderForUrl,
+  holdCaptureLock,
   releasePdfOriginPermissions,
   requestPdfOriginPermissions,
 } from "./permissions.js";
@@ -49,7 +50,19 @@ import {
   resetBotBypassBudget,
 } from "./pdf_fetch.js";
 
-export async function captureCurrentTab({ tags = [], bib = null, dryRun = false, tabId = null, tabUrl = null, forceNew = false } = {}) {
+export async function captureCurrentTab(options = {}) {
+  // Held for the whole capture and dropped by the browser if this realm dies
+  // (a popup closing mid-capture), which is how a later sweep knows nobody is
+  // still using the grants and rules this capture borrowed.
+  const releaseCaptureLock = await holdCaptureLock();
+  try {
+    return await runCapture(options);
+  } finally {
+    releaseCaptureLock();
+  }
+}
+
+async function runCapture({ tags = [], bib = null, dryRun = false, tabId = null, tabUrl = null, forceNew = false } = {}) {
   let tab;
   if (tabId != null && tabUrl != null) {
     tab = { id: tabId, url: tabUrl };
