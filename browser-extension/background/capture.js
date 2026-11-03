@@ -62,7 +62,7 @@ export async function captureCurrentTab(options = {}) {
   try {
     return await runCapture(options);
   } finally {
-    releaseCaptureLock();
+    await releaseCaptureLock();
   }
 }
 
