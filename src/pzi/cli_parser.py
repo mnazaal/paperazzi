@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from collections.abc import Mapping
 from pathlib import Path
@@ -151,11 +152,17 @@ def _positive_int(value: str) -> int:
 
 
 def _non_negative_float(value: str) -> float:
-    """argparse type: a number ``>= 0`` (rejects negatives/garbage)."""
+    """argparse type: a finite number ``>= 0`` (rejects negatives, nan, inf, garbage).
+
+    `float()` accepts `inf`, `nan` and overflowing literals like `1e999`; a
+    batch delay of `inf` slept forever after the first item was written.
+    """
     try:
         parsed = float(value)
     except ValueError:
         raise argparse.ArgumentTypeError(f"expected a number, got {value!r}") from None
+    if not math.isfinite(parsed):
+        raise argparse.ArgumentTypeError(f"must be a finite number, got {value!r}")
     if parsed < 0:
         raise argparse.ArgumentTypeError(f"must be zero or greater, got {parsed}")
     return parsed
