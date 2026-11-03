@@ -493,3 +493,111 @@ def test_real_backend_child_exits_when_the_parent_dies_uncleanly(sig) -> None:
     node, ts_dir = backend
     alive, listening = _child_outlives_killed_parent(node, ts_dir, sig)
     assert not alive and not listening, "the child survived its parent"
+
+
+# ---------------------------------------------------------------------------
+# Every start_ts caller hands the child the guard (needs no backend)
+# ---------------------------------------------------------------------------
+
+import io  # noqa: E402
+from unittest.mock import MagicMock, patch  # noqa: E402
+
+from pzi import ts_backend, ts_egress_guard  # noqa: E402
+
+
+class _FakePopen:
+    """Records the environment each child would have been started with."""
+
+    envs: list[dict[str, str]] = []
+
+    def __init__(self, argv, **kwargs):
+        type(self).envs.append(dict(kwargs["env"]))
+        self.pid = 4242
+        self.args = argv
+
+    def poll(self):
+        return None
+
+
+@pytest.fixture
+def child_envs(monkeypatch):
+    _FakePopen.envs = []
+    monkeypatch.setattr(ts_backend.subprocess, "Popen", _FakePopen)
+    # A hostile parent environment: its own proxy, and NO_PROXY exempting everything.
+    for name, value in {
+        "HTTP_PROXY": "http://corp.invalid:3128", "http_proxy": "http://corp.invalid:3128",
+        "HTTPS_PROXY": "http://corp.invalid:3128", "https_proxy": "http://corp.invalid:3128",
+        "NO_PROXY": "*", "no_proxy": "*", "NODE_OPTIONS": "--max-old-space-size=512",
+    }.items():
+        monkeypatch.setenv(name, value)
+    ts_egress_guard.reset_shared_guard(None)
+    yield _FakePopen.envs
+    ts_egress_guard.reset_shared_guard(None)
+
+
+def _assert_guarded(env: dict[str, str]) -> None:
+    guard_url = ts_egress_guard.shared_guard().url
+    for name in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"):
+        assert env[name] == guard_url, name
+    assert env["NO_PROXY"] == "" and env["no_proxy"] == ""
+    assert "--max-old-space-size=512" in env["NODE_OPTIONS"]  # the user's options survive
+    assert "--import=data:" in env["NODE_OPTIONS"]
+
+
+def test_start_ts_child_environment_carries_the_guard(child_envs, tmp_path: Path) -> None:
+    ts_backend.start_ts("node", tmp_path)
+    assert len(child_envs) == 1
+    _assert_guarded(child_envs[0])
+
+
+def test_backend_session_child_environment_carries_the_guard(
+    child_envs, tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.delenv("PZI_SKIP_AUTO_START", raising=False)
+    with patch.object(ts_backend, "is_ts_reachable", return_value=False), \
+         patch.object(ts_backend, "ensure_node", return_value="node"), \
+         patch.object(ts_backend, "ensure_translation_server", return_value=tmp_path), \
+         patch.object(ts_backend, "wait_for_ts", return_value=True), \
+         patch.object(ts_backend, "terminate_ts"):
+        with ts_backend.backend_session(
+            {"translation_server_url": "http://127.0.0.1:19691", "pzi_data_home": str(tmp_path)},
+            str(tmp_path), stdout=io.StringIO(), stderr=io.StringIO(),
+        ) as handle:
+            assert handle["owned"] is True
+    assert len(child_envs) == 1
+    _assert_guarded(child_envs[0])
+
+
+def test_watchdog_restart_child_environment_carries_the_guard(child_envs, tmp_path: Path) -> None:
+    dead = MagicMock()
+    dead.poll.return_value = 1
+    watchdog = ts_backend.TranslationServerWatchdog(
+        ts_url="http://127.0.0.1:19691", proc=dead, node_bin="node", ts_dir=tmp_path,
+        port=19691, stderr_log=None, stdout=io.StringIO(), stderr=io.StringIO(),
+        is_reachable=lambda *a, **k: False,
+        wait=lambda *a, **k: True,
+        terminate=lambda *a, **k: None,
+    )
+    watchdog.tick()  # default `start`: the restart path
+    assert len(child_envs) == 1
+    _assert_guarded(child_envs[0])
+
+
+def test_replaced_proxy_is_noted_once_without_its_value(child_envs, tmp_path: Path, capsys,
+                                                         monkeypatch) -> None:
+    monkeypatch.setattr(ts_egress_guard, "_noted", False)
+    ts_backend.start_ts("node", tmp_path)
+    ts_backend.start_ts("node", tmp_path)  # a watchdog restart must not repeat it
+    err = capsys.readouterr().err
+    assert err.count("egress guard") == 1
+    assert "HTTPS_PROXY" in err and "does not chain" in err
+    assert "corp.invalid" not in err and "3128" not in err
+
+
+def test_no_proxy_note_when_the_environment_sets_none(child_envs, tmp_path: Path, capsys,
+                                                       monkeypatch) -> None:
+    for name in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"):
+        monkeypatch.delenv(name)
+    monkeypatch.setattr(ts_egress_guard, "_noted", False)
+    ts_backend.start_ts("node", tmp_path)
+    assert "egress guard" not in capsys.readouterr().err

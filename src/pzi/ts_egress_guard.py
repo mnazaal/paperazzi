@@ -8,6 +8,8 @@ start (one already reachable at `translation_server_url`) does not inherit this.
 
 from __future__ import annotations
 
+import os
+import sys
 import threading
 
 from pzi.pinning_proxy import PinningProxy
@@ -41,3 +43,30 @@ def proxy_env(guard: PinningProxy) -> dict[str, str]:
         "HTTPS_PROXY": guard.url, "https_proxy": guard.url,
         "NO_PROXY": "", "no_proxy": "",
     }
+
+
+_PROXY_VARIABLES = ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy")
+_noted = False
+
+
+def note_replaced_proxy(environ: dict[str, str] | None = None, stream=None) -> None:
+    """Say once per process that the guard replaces a proxy the environment sets.
+
+    The guard dials the web directly and does not chain to a proxy, so behind a
+    network that requires one, captures through the translation-server fail.
+    Names the variables, never their values: a proxy URL can carry credentials.
+    """
+    global _noted
+    env = os.environ if environ is None else environ
+    names = [name for name in _PROXY_VARIABLES if env.get(name)]
+    with _shared_lock:
+        if _noted or not names:
+            return
+        _noted = True
+    print(
+        f"note: {', '.join(names)} is set, but pzi's translation-server egress guard "
+        "replaces it and connects to the web directly (it refuses private addresses "
+        "on every redirect). If your network requires that proxy, translation-server "
+        "captures will fail; pzi does not chain to a proxy.",
+        file=sys.stderr if stream is None else stream,
+    )

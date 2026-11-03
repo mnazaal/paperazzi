@@ -30,7 +30,7 @@ import portalocker
 
 from pzi.node_runtime import ensure_node
 from pzi.pdf_planning import env_flag
-from pzi.ts_egress_guard import proxy_env, shared_guard
+from pzi.ts_egress_guard import note_replaced_proxy, proxy_env, shared_guard
 
 # ---------------------------------------------------------------------------
 # Pinned repository references.
@@ -654,6 +654,7 @@ def start_ts(
         stderr_handle = stderr_log.open("w")
         stderr_dest = stderr_handle
 
+    note_replaced_proxy()
     proc = subprocess.Popen(
         [node_bin, str(ts_dir / "src" / "server.js")],
         cwd=str(ts_dir),
