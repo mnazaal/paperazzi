@@ -2491,10 +2491,13 @@ def test_promote_re_asks_once_the_horizon_has_passed(tmp_path):
     config_path, ledger_file = _ledger_setup(tmp_path, promote_recheck_after_days=30)
     _promote(config_path, tmp_path, **_NOTHING_FOUND)
 
-    # Age the recorded answer past the horizon, exactly as the clock would.
+    # Age the recorded answer past the horizon, exactly as the clock would, and
+    # keep its identity so that age is the only reason it can be re-asked.
+    answer = ledger.load(ledger_file)["bibs"]["ml"]["smith2024graph"]
     stale = ledger.record_checked(
         {}, "ml", "smith2024graph",
         now=ledger.utc_now() - timedelta(days=31),
+        identity=answer["id"],
     )
     ledger.save(ledger_file, stale)
 
