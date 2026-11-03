@@ -601,3 +601,50 @@ def test_no_proxy_note_when_the_environment_sets_none(child_envs, tmp_path: Path
     monkeypatch.setattr(ts_egress_guard, "_noted", False)
     ts_backend.start_ts("node", tmp_path)
     assert "egress guard" not in capsys.readouterr().err
+
+
+@pytest.mark.skipif(_real_backend() is None, reason="pinned translation-server not installed")
+def test_real_backend_reports_a_guard_refusal_not_an_unsupported_format(tmp_path: Path) -> None:
+    import http.server
+    import urllib.error
+    import urllib.request
+
+    backend = _real_backend()
+    assert backend
+    node, ts_dir = backend
+    hits: list[str] = []
+
+    class Private(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            hits.append(self.path)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(b"<html><title>secret</title></html>")
+
+        def log_message(self, *a):
+            pass
+
+    private = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Private)
+    threading.Thread(target=private.serve_forever, daemon=True).start()
+    port = _free_port()
+    ts_egress_guard.reset_shared_guard(None)
+    proc = ts_backend.start_ts(node, ts_dir, port=port, stderr_log=tmp_path / "ts.err")
+    try:
+        assert _wait(lambda: _listening(port), 40)
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/web",
+            data=f"http://127.0.0.1:{private.server_address[1]}/secret".encode(),
+            headers={"Content-Type": "text/plain"},
+        )
+        try:
+            code, body = urllib.request.urlopen(req, timeout=40).status, b""
+        except urllib.error.HTTPError as exc:
+            code, body = exc.code, exc.read()
+    finally:
+        ts_backend.terminate_ts(proc)
+        ts_egress_guard.reset_shared_guard(None)
+        private.shutdown()
+    assert hits == []
+    assert code != 400  # the old guard reply surfaced as 400 "not in a supported format"
+    assert b"supported format" not in body

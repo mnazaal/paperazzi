@@ -64,7 +64,7 @@ def note_replaced_proxy(environ: dict[str, str] | None = None, stream=None) -> N
             return
         _noted = True
     print(
-        f"note: {', '.join(names)} is set, but pzi's translation-server egress guard "
+        f"note: the environment sets {', '.join(names)}, but pzi's translation-server egress guard "
         "replaces it and connects to the web directly (it refuses private addresses "
         "on every redirect). If your network requires that proxy, translation-server "
         "captures will fail; pzi does not chain to a proxy.",
