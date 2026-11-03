@@ -247,3 +247,44 @@ def test_fetch_direct_connects_only_through_the_pinning_proxy(listener) -> None:
         result = session.fetch_direct("http://never-resolves.test/doc")
     assert result.status == 200 and b"private" in result.body
     assert dialed == [(PUBLIC_IP, 80)]
+
+
+# ---------------------------------------------------------------------------
+# A page route that cannot install must not leave a browser that navigates
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.browser
+def test_launch_refuses_when_the_page_route_cannot_install(monkeypatch, listener) -> None:
+    from playwright.sync_api import Page
+
+    from pzi.safe_http import SsrfBlocked
+    from tests.browser_probe import require_browser
+
+    require_browser()
+
+    def broken_route(self, *args, **kwargs):
+        raise RuntimeError("route unavailable")
+
+    monkeypatch.setattr(Page, "route", broken_route)
+    with pytest.raises(SsrfBlocked):
+        with bs.open_browser_session("chromium"):
+            pytest.fail("a session without the request guard was handed out")
+    assert listener.hits == []
+
+
+@pytest.mark.browser
+def test_navigate_refuses_a_private_url_before_the_browser_requests_it(listener) -> None:
+    """The landing check ran after `goto`, i.e. after the request was sent."""
+    from pzi.safe_http import SsrfBlocked
+    from tests.browser_probe import require_browser
+
+    require_browser()
+    with bs.open_browser_session("chromium", url_allowed=lambda u: True) as session:
+        # Remove the route to model a guard that is absent, then narrow the
+        # session's own predicate to the production one.
+        session.page.unroute_all()
+        session.url_allowed = bs.default_url_allowed
+        with pytest.raises(SsrfBlocked):
+            session.navigate(f"http://127.0.0.1:{listener.port}/secret")
+    assert listener.hits == []

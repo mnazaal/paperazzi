@@ -506,23 +506,25 @@ def test_the_browser_request_guard_aborts_a_private_destination(monkeypatch) -> 
 def test_fetch_direct_refuses_a_redirect_to_a_private_address() -> None:
     from pzi.browser_session import BrowserSession
 
-    read_attempts: list[str] = []
+    requested: list[str] = []
+    redirect_consumed: list[bool] = []
 
-    class _Response:
-        status = 200
-        url = "http://127.0.0.1:8765/secret"
-        headers = {"content-type": "application/pdf"}
+    class _Redirect:
+        status = 302
+        headers = {"location": "http://127.0.0.1:8765/secret"}
 
         def body(self):
-            # Recorded rather than raised: `fetch_direct` swallows exceptions
-            # into a status -1 result, so raising here would look like the fix
-            # working when it is not.
-            read_attempts.append(self.url)
-            return b"%PDF-1.4 private"
+            return b""
 
     class _Request:
-        def get(self, _url):
-            return _Response()
+        # Mirrors the real signature: `fetch_direct` passes `max_redirects`,
+        # and a fake that omitted it raised TypeError, which `fetch_direct`
+        # swallows into the same empty result a working guard returns.
+        def get(self, url, *, max_redirects=None):
+            assert max_redirects == 0
+            requested.append(url)
+            redirect_consumed.append(True)
+            return _Redirect()
 
     class _Page:
         request = _Request()
@@ -531,9 +533,12 @@ def test_fetch_direct_refuses_a_redirect_to_a_private_address() -> None:
     session = BrowserSession(playwright=None, browser_ref=None, page=_Page())
     result = session.fetch_direct("https://example.com/paper.pdf")
 
+    # The redirect response was reached, and only the public URL was requested:
+    # the private hop was refused before it was made.
+    assert redirect_consumed == [True]
+    assert requested == ["https://example.com/paper.pdf"]
     assert result.status == -1
     assert result.body == b""
-    assert read_attempts == []
 
 
 # ---------------------------------------------------------------------------

@@ -342,6 +342,12 @@ class BrowserSession:
         ``file:``/``about:`` redirect, or a guard that failed to install).
         """
         self._check_open()
+        from pzi.safe_http import SsrfBlocked
+
+        if not self.url_allowed(url):
+            # Before `goto`: the landing check below runs after the request
+            # was sent, and the route guard may be absent.
+            raise SsrfBlocked(f"refusing to navigate to a non-public URL: {url}")
         response = self.page.goto(url, wait_until=wait_until, timeout=timeout)
         self._reject_non_public_landing()
         return response
@@ -597,6 +603,12 @@ def launch_browser(
             playwright.stop()
         raise
     options["proxy"] = {"server": pinning.url}
+    if url_allowed is not default_url_allowed:
+        # Playwright forces loopback through the proxy, which refuses it. Only
+        # a caller that replaced the production predicate (the test suite, for
+        # its loopback fixture servers) reaches loopback directly; the
+        # production predicate and the proxy both refuse it.
+        options["proxy"]["bypass"] = "127.0.0.1,localhost,[::1]"
 
     temp_profile: Path | None = None
     if profile_path:
