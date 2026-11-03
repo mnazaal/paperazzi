@@ -5,10 +5,6 @@
 // on the network observer. Also owns the bot-bypass domain allowlist.
 
 import { isSafePublicHttpUrl, originOf, sameOrigin, tryHostname } from "./utils.js";
-import {
-  getObserverUrlsForDomain,
-  recentObserverUrls,
-} from "./observer.js";
 
 // ── DOM PDF scanner (exported for testing) ──────────────────────────────
 // Keep the meta selectors in sync with the injected func in
@@ -89,14 +85,6 @@ export function addPdfUrlCandidate(candidates, value) {
 export async function extractPdfUrlCandidates(tabId, pageUrl) {
   const candidates = [];
   const addCandidate = (value) => addPdfUrlCandidate(candidates, value);
-  // Always-on observer: prepend PDF URLs recently seen for this domain.
-  let pageDomain;
-  try { pageDomain = new URL(pageUrl).hostname; } catch (_e) { pageDomain = null; }
-  if (pageDomain) {
-    const observerUrls = getObserverUrlsForDomain(pageDomain);
-    for (const u of observerUrls) addCandidate(u);
-  }
-
   // Include current tab URL even without a .pdf suffix. Many publisher PDF
   // viewers use opaque download URLs; browser-session fetch validates bytes
   // before attaching, so HTML pages are safely skipped.

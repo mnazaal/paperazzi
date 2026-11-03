@@ -35,7 +35,6 @@ import {
   stopPdfObserver,
   collectObservedPdfUrls,
   collectPdfObserverEvents,
-  addObserverEntry,
 } from "./background/observer.js";
 
 import {
@@ -172,32 +171,6 @@ async function _handleContextMenuCapture(info, tab) {
     setTimeout(_clearBadge, 5000);
   }
 }
-
-// ── Always-on PDF observer ──────────────────────────────────────────────
-// Passively records application/pdf responses from all tabs.
-// Observes main_frame, sub_frame, and xmlhttprequest.
-// Cache is domain-scoped with 3-minute TTL.
-(function _registerAlwaysOnPdfObserver() {
-  if (typeof chrome === "undefined" || !chrome.webRequest || !chrome.webRequest.onHeadersReceived) return;
-
-  try {
-    chrome.webRequest.onHeadersReceived.addListener(
-      (details) => {
-        const headers = details.responseHeaders || [];
-        for (const h of headers) {
-          if (h.name.toLowerCase() === "content-type" && h.value && h.value.toLowerCase().includes("application/pdf")) {
-            addObserverEntry(details.url, details.tabId);
-            break;
-          }
-        }
-      },
-      { urls: ["https://*/*", "http://*/*"] },
-      ["responseHeaders"],
-    );
-  } catch (_e) {
-    /* webRequest unavailable or lacks permissions */
-  }
-})();
 
 // ── Badge helpers ───────────────────────────────────────────────────────
 function _setBadge(text, color) {
