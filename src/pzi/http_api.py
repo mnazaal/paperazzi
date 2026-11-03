@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import socket
 import socketserver
+import threading
 import time
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
@@ -87,6 +89,12 @@ IDLE_POLL_SECONDS = 30
 # wall-clock deadline between chunks, so the *total* time spent reading a
 # body is capped regardless of how slowly the client paces its bytes.
 BODY_READ_DEADLINE_SECONDS = 120
+# Wall-clock cap on the request line plus header block, enforced before
+# `_request_gate` so it covers the pre-auth stage. The per-read timeout cannot:
+# `readline()` over a socket restarts it on every byte, so a client sending one
+# byte per ~29s holds a handler thread for as long as it likes. Legitimate
+# clients (the extension, curl) finish the header block in milliseconds.
+HEADER_READ_DEADLINE_SECONDS = 10
 #: Chunk size for `_read_body_with_deadline`. Bounded so a huge declared
 #: `Content-Length` never causes a single `rfile.read()` call to try to
 #: allocate the whole declared length in one shot before the deadline can be
@@ -249,8 +257,50 @@ def build_handler_class(
                 _error_response(request, code, message)
             ),
             "log_message": lambda request, format, *args: None,
+            "handle_one_request": _handle_one_request_with_header_deadline,
+            "parse_request": _parse_request_ending_header_deadline,
         },
     )
+
+
+def _handle_one_request_with_header_deadline(request: BaseHTTPRequestHandler) -> None:
+    """`handle_one_request`, with a wall-clock cap on reading the headers.
+
+    A timer shuts the socket down if `parse_request` has not finished by then;
+    that unblocks the handler thread's pending `recv()` with EOF, so the thread
+    ends and the socket closes. Cost: one short-lived `threading.Timer` thread
+    per connection, cancelled as soon as the headers are parsed.
+    """
+    done = threading.Event()
+
+    def _expire() -> None:
+        if done.is_set():
+            return
+        try:
+            request.connection.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+
+    timer = threading.Timer(HEADER_READ_DEADLINE_SECONDS, _expire)
+    timer.daemon = True
+    request._header_done = done  # type: ignore[attr-defined]
+    request._header_timer = timer  # type: ignore[attr-defined]
+    timer.start()
+    try:
+        BaseHTTPRequestHandler.handle_one_request(request)
+    finally:
+        done.set()
+        timer.cancel()
+
+
+def _parse_request_ending_header_deadline(request: BaseHTTPRequestHandler) -> bool:
+    try:
+        return BaseHTTPRequestHandler.parse_request(request)
+    finally:
+        done = getattr(request, "_header_done", None)
+        if done is not None:
+            done.set()
+            request._header_timer.cancel()  # type: ignore[attr-defined]
 
 
 def _send_error_as_json(
