@@ -23,6 +23,7 @@ from pzi.bib_repository import (
     preview_write_plan,
     read_bib_file,
     resolve_entry_type,
+    same_paper,
 )
 from pzi.bibtex import (
     USER_OWNED_FIELDS,
@@ -1091,8 +1092,17 @@ def _apply_in_place_promotion(
     candidate: NormalizedRecord,
     *,
     pdf_source: NormalizedRecord,
+    snapshot: NormalizedRecord,
 ) -> None:
     """Fold the in-place rewrite of *preprint_ck* into *session*.
+
+    *snapshot* is the preprint the candidate was searched for. Replace mode
+    changes the entry's identity on purpose, so the planned record cannot be
+    the yardstick; the entry the decision was made on can. The decision runs
+    over a rate-limited network search with no lock held, long enough for
+    another writer to replace the entry with a different paper under the same
+    key, and the rewrite would then put this preprint's published metadata on
+    that paper.
 
     The published metadata is merged onto the record as this session read it
     under the lock, not onto the snapshot taken before discovery ran — which is
@@ -1102,6 +1112,11 @@ def _apply_in_place_promotion(
     for index, record in enumerate(session.records):
         if record.get("citekey") != preprint_ck:
             continue
+        if not same_paper(snapshot, record):
+            raise _PreprintVanished(
+                f"{preprint_ck} is now a different paper than the one that was "
+                "searched for; left unchanged"
+            )
         entry = _promoted_entry(
             session.entries[index], record, candidate, pdf_source=pdf_source
         )
@@ -1295,7 +1310,8 @@ def _handle_update_in_place(
             existing_pdf_paths=existing_pdf_paths,
             counter="updated",
             apply=lambda session: _apply_in_place_promotion(
-                session, preprint_ck, candidate, pdf_source=updated
+                session, preprint_ck, candidate, pdf_source=updated,
+                snapshot=preprint_record,
             ),
         )
 

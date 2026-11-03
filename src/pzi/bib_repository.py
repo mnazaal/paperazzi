@@ -68,11 +68,13 @@ from pzi.bibtex import (
 )
 from pzi.errors import PziError
 from pzi.fileio import fsync_parent_dir, read_text_utf8, write_all
+from pzi.identifiers import normalize_arxiv_id
 from pzi.similarity import (
     IdentityKind,
     build_identity_index,
     extract_identities,
     find_exact_match,
+    normalize_title,
 )
 
 
@@ -1179,11 +1181,62 @@ def _validate_update_plan_against_current(
 def _work_identities(record: Mapping[str, Any]) -> set[tuple[str, str]]:
     # A URL names a location, not a paper (see `find_exact_match`), so only the
     # DOI and arXiv ID say whether two entries are the same work.
-    return {
+    identities = {
         (i["kind"], i["value"])
         for i in extract_identities(cast(NormalizedRecord, record))
         if i["kind"] in ("doi", "arxiv")
     }
+    # arXiv's own DOI names the same work as the eprint, so an entry that
+    # swaps one for the other is still that paper.
+    for kind, value in tuple(identities):
+        if kind == "doi" and value.startswith(_ARXIV_DOI_PREFIX):
+            arxiv_id = normalize_arxiv_id(value[len(_ARXIV_DOI_PREFIX):])
+            if arxiv_id:
+                identities.add(("arxiv", arxiv_id))
+    return identities
+
+
+_ARXIV_DOI_PREFIX = "10.48550/arxiv."
+
+
+def same_paper(base: Mapping[str, Any], current: Mapping[str, Any]) -> bool:
+    """Whether *current* is still the paper *base* described.
+
+    DOI and arXiv ID decide when both sides carry one: they must share an
+    identity. When either side has none (a URL-only entry, a book, a page
+    capture) they cannot decide, so the normalized titles do: two papers
+    sharing a citekey differ in title, while a first DOI gained or a DOI in
+    another spelling leaves the title alone. A missing title on either side
+    leaves nothing to compare, so the check stays out of the way.
+    """
+    base_ids = _work_identities(base)
+    current_ids = _work_identities(current)
+    if base_ids and current_ids:
+        return bool(base_ids & current_ids)
+    base_title = normalize_title(_title_of(base))
+    current_title = normalize_title(_title_of(current))
+    if not base_title or not current_title:
+        return True
+    return base_title == current_title
+
+
+def _title_of(record: Mapping[str, Any]) -> str | None:
+    title = record.get("title")
+    return title if isinstance(title, str) else None
+
+
+class _AnyPaper:
+    """Marker for a caller that has no snapshot of the entry it writes to."""
+
+    def __repr__(self) -> str:
+        return "ANY_PAPER"
+
+
+#: Passed to :func:`update_bib_entry` by a caller that deliberately writes to
+#: whatever entry holds the citekey now (a command the user types against a key
+#: that never went through a network step). Spelled out so a caller cannot
+#: omit the identity check by forgetting it.
+ANY_PAPER = _AnyPaper()
 
 
 def _require_same_paper(current: NormalizedRecord, plan: WritePlan) -> None:
@@ -1193,15 +1246,14 @@ def _require_same_paper(current: NormalizedRecord, plan: WritePlan) -> None:
     a different paper under the same key, and the rebase would then merge the
     planned entry onto it, writing one paper's title with the other's DOI. The
     plan's ``base_entry`` is the entry it was merged onto, so the current entry
-    must still share a DOI or arXiv ID with it. A plan with no base (promote's
-    replace mode changes identity on purpose) or whose base has no such
-    identity has nothing to compare and is left to the citekey check.
+    must still be that paper (see :func:`same_paper`). A plan with no base
+    (promote's replace mode changes identity on purpose and checks the
+    snapshot it was built from itself) has nothing to compare.
     """
     base = plan.get("base_entry")
     if not isinstance(base, dict):
         return
-    base_ids = _work_identities(bibtex_entry_to_record(base))
-    if base_ids and not base_ids & _work_identities(current):
+    if not same_paper(bibtex_entry_to_record(base), current):
         raise _stale_plan("the entry it targets is now a different paper")
 
 
