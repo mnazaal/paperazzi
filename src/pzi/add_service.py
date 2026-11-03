@@ -1020,7 +1020,11 @@ def add_records_to_bib_batch(
                     # outer except is not triggered, so no spurious cleanup.
                     # Not a file the library already points at: rollback of
                     # this batch must leave those to their entries.
-                    if not pdf_is_stored(record_pdf, committed_pdfs):
+                    # Nor a file outside papers_dir, which the snapshot cannot
+                    # vouch for: only what this batch could have created.
+                    if not pdf_is_stored(
+                        record_pdf, committed_pdfs
+                    ) and _created_in_papers_dir([record_pdf], papers_dir):
                         batch_pdfs.append(record_pdf)
                 # Apply in dry-run too. The session is pure in-memory state and
                 # was opened with `write=not dry_run`, so nothing reaches disk
@@ -1045,11 +1049,7 @@ def add_records_to_bib_batch(
         # nothing is left orphaned on disk. The session's lock is released by
         # now, so another writer may have committed one of them in the meantime.
         if not dry_run:
-            rollback_new_pdfs(
-                _created_in_papers_dir(batch_pdfs, papers_dir),
-                existing_pdf_paths,
-                bib_path=bib["path"],
-            )
+            rollback_new_pdfs(batch_pdfs, existing_pdf_paths, bib_path=bib["path"])
         raise
 
     return results
