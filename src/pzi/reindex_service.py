@@ -31,6 +31,7 @@ from pzi.bibtex import (
 from pzi.config import DEFAULT_PDF_FILE_PATH_STYLE
 from pzi.fileio import directory_folds_case
 from pzi.format_templates import format_citekey, format_pdf_filename
+from pzi.pdf import pdf_is_stored, stored_pdf_paths
 from pzi.pdf_download import _link_or_replace
 from pzi.pdf_planning import plan_pdf_path
 
@@ -49,6 +50,9 @@ class CitekeyChange(TypedDict):
     #: The entry holds several attachments. The `file` field is rewritten as one
     #: path, which would drop the rest, so the PDF is left where it is.
     kept_multi_attachment: NotRequired[str]
+    #: The PDF is listed by another entry that holds several attachments, so
+    #: moving it would leave that entry's reference dangling. Left where it is.
+    kept_shared_multi_attachment: NotRequired[str]
 
 
 def _has_several_attachments(entry: BibtexEntry) -> bool:
@@ -61,6 +65,51 @@ def _multi_attachment_error(citekey: str, path: str) -> str:
         f"kept PDF for {citekey} at {path}: its file field lists several "
         "attachments, and a rename would rewrite it as one"
     )
+
+
+def _shared_multi_attachment_error(citekey: str, path: str) -> str:
+    return (
+        f"kept PDF for {citekey} at {path}: another entry lists it among "
+        "several attachments, and a rename would leave that reference dangling"
+    )
+
+
+def _spellings(path: str, bib_dir: str | None) -> list[str]:
+    """*path* as the passes read it, plus as the bib file's directory reads it.
+
+    A relative ``file`` value is relative to the bib file, but the passes (like
+    the rest of pzi) read it against the working directory. Both readings are
+    protected so neither can hide a shared file.
+    """
+    expanded = os.path.expanduser(path)
+    if bib_dir is None or os.path.isabs(expanded):
+        return [path]
+    return [path, os.path.join(bib_dir, expanded)]
+
+
+def _multi_attachment_pdfs(
+    entries: list[BibtexEntry], bib_dir: str | None
+) -> set[str]:
+    """Every file any multi-attachment entry lists, in comparable form.
+
+    A rename or move of one of these breaks that entry: its ``file`` field is
+    never rewritten (a rewrite would drop the other attachments), so the
+    reference would dangle. Built from *all* attachments, not just the first.
+    """
+    listed = [
+        {"local_pdf_path": spelling}
+        for entry in entries
+        if _has_several_attachments(entry)
+        for attachment in parse_file_field(entry.get("fields", {}).get("file"))
+        for spelling in _spellings(attachment, bib_dir)
+    ]
+    return stored_pdf_paths(listed)
+
+
+def _is_multi_attachment_pdf(
+    path: str, protected: set[str], bib_dir: str | None
+) -> bool:
+    return any(pdf_is_stored(s, protected) for s in _spellings(path, bib_dir))
 
 
 def _blocks_rename(destination: str, source: str) -> bool:
@@ -201,6 +250,7 @@ def plan_reindex(
     papers_dir: str,
     citekey_format: str | None = None,
     pdf_filename_format: str | None = None,
+    bib_dir: str | None = None,
 ) -> list[CitekeyChange]:
     """Decide every citekey rename and the PDF move each one implies.
 
@@ -211,6 +261,7 @@ def plan_reindex(
     """
     existing_keys: set[str] = {entry["citekey"] for entry in entries}
     changes: list[CitekeyChange] = []
+    protected = _multi_attachment_pdfs(entries, bib_dir)
 
     for index, entry in enumerate(entries):
         old_citekey = entry["citekey"]
@@ -248,6 +299,10 @@ def plan_reindex(
                 )
                 if old_pdf != new_pdf and _has_several_attachments(entry):
                     change["kept_multi_attachment"] = old_pdf
+                elif old_pdf != new_pdf and _is_multi_attachment_pdf(
+                    old_pdf, protected, bib_dir
+                ):
+                    change["kept_shared_multi_attachment"] = old_pdf
                 elif old_pdf != new_pdf:
                     change["old_pdf"] = old_pdf
                     change["new_pdf"] = new_pdf
@@ -380,11 +435,18 @@ def reindex_library(
             papers_dir=papers_dir,
             citekey_format=citekey_format,
             pdf_filename_format=pdf_filename_format,
+            bib_dir=os.path.dirname(os.path.abspath(bib_path)),
         )
         errors: list[str] = [
             _multi_attachment_error(change["old_citekey"], change["kept_multi_attachment"])
             for change in changes
             if "kept_multi_attachment" in change
+        ] + [
+            _shared_multi_attachment_error(
+                change["old_citekey"], change["kept_shared_multi_attachment"]
+            )
+            for change in changes
+            if "kept_shared_multi_attachment" in change
         ]
         backup_path: Path | None = None
 
@@ -527,6 +589,8 @@ def rename_files_to_policy(
         skipped_cosmetic = 0
         planned_destinations: set[str] = set()
         planned_sources: set[tuple[int, int] | str] = set()
+        bib_dir = os.path.dirname(os.path.abspath(bib_path))
+        protected = _multi_attachment_pdfs(entries, bib_dir)
         #: One case-sensitivity probe per directory, shared by both sets.
         folds: dict[str, bool] = {}
 
@@ -554,6 +618,9 @@ def rename_files_to_policy(
 
             if _has_several_attachments(entry):
                 errors.append(_multi_attachment_error(citekey, current))
+                continue
+            if _is_multi_attachment_pdf(current, protected, bib_dir):
+                errors.append(_shared_multi_attachment_error(citekey, current))
                 continue
             destination = str(Path(papers_dir) / wanted)
             # The same two refusals the citekey pass makes, for the same
