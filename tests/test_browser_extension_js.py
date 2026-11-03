@@ -5323,3 +5323,131 @@ console.log(JSON.stringify({ outcome, bodies: globalThis.bodies }));
             tmp_path,
         )
         assert [b["source_url"] for b in result["bodies"]] == [final], (final, result)
+
+
+# ── Page-context fetch limits: byte cap, idle timer, total budget ─────────
+# `pageContextFetchPdf` is what `chrome.scripting.executeScript` injects. Each
+# test below fails when exactly one of its three limits is removed.
+
+_PAGE_FETCH_PRELUDE = r'''
+globalThis.chrome = { runtime: { onInstalled: { addListener: () => {} } } };
+globalThis.btoa = (v) => Buffer.from(v, "binary").toString("base64");
+// A fetch whose body yields `chunkBytes` every `everyMs` (0: immediately),
+// `chunks` times (Infinity: forever), and whose reads reject once aborted.
+globalThis.installFetch = ({ everyMs = 0, chunks = Infinity, chunkBytes = 10, stallAfter = Infinity }) => {
+  globalThis.fetch = async (_url, { signal }) => {
+    let sent = 0;
+    return {
+      ok: true, status: 200,
+      headers: { get: () => "application/pdf" },
+      body: { getReader: () => ({
+        read: () => new Promise((resolve, reject) => {
+          if (signal.aborted) { reject(new Error("aborted")); return; }
+          const onAbort = () => reject(new Error("aborted"));
+          signal.addEventListener("abort", onAbort, { once: true });
+          if (sent >= stallAfter) return; // silence: only an abort ends this read
+          const finish = () => {
+            signal.removeEventListener("abort", onAbort);
+            if (sent >= chunks) { resolve({ done: true }); return; }
+            sent += 1;
+            resolve({ done: false, value: new Uint8Array(chunkBytes) });
+          };
+          if (everyMs) setTimeout(finish, everyMs); else finish();
+        }),
+      }) },
+    };
+  };
+};
+const { pageContextFetchPdf } = await import("./background/pdf_fetch.mjs");
+const timed = async (...args) => {
+  const t0 = Date.now();
+  const result = await pageContextFetchPdf(...args);
+  return { result, ms: Date.now() - t0 };
+};
+'''
+
+
+def _page_fetch(tmp_path: Path, body: str) -> dict:
+    return _run_background_module(_PAGE_FETCH_PRELUDE + body, tmp_path)
+
+
+def test_the_page_context_fetch_stops_at_the_byte_cap(tmp_path: Path) -> None:
+    out = _page_fetch(
+        tmp_path,
+        r'''
+installFetch({ chunks: 100000, chunkBytes: 10 });
+const { result } = await timed("https://p.test/a.pdf", 100, 5000, 20000);
+console.log(JSON.stringify({ result }));
+''',
+    )
+    assert out["result"] == {"error": "too_large"}, out
+
+
+def test_the_page_context_fetch_gives_up_on_a_silent_body(tmp_path: Path) -> None:
+    out = _page_fetch(
+        tmp_path,
+        r'''
+installFetch({ stallAfter: 1 });
+const { result, ms } = await timed("https://p.test/a.pdf", 1e9, 150, 20000);
+console.log(JSON.stringify({ result, ms }));
+''',
+    )
+    assert out["result"].get("error") and "base64" not in out["result"], out
+    assert out["ms"] < 5000, out
+
+
+def test_the_page_context_idle_timer_restarts_on_every_chunk(tmp_path: Path) -> None:
+    """A slow but steady body, longer overall than the idle window, still completes."""
+    out = _page_fetch(
+        tmp_path,
+        r'''
+installFetch({ everyMs: 60, chunks: 12 });
+const { result } = await timed("https://p.test/a.pdf", 1e9, 250, 20000);
+console.log(JSON.stringify({ ok: !!result.base64, result }));
+''',
+    )
+    assert out["ok"], out
+
+
+def test_the_page_context_fetch_has_a_total_time_budget(tmp_path: Path) -> None:
+    """A trickle that always beats the idle timer still ends at the total budget."""
+    out = _page_fetch(
+        tmp_path,
+        r'''
+installFetch({ everyMs: 40, chunks: 150 });
+const { result, ms } = await timed("https://p.test/a.pdf", 1e9, 300, 500);
+console.log(JSON.stringify({ result, ms }));
+''',
+    )
+    assert out["result"] == {"error": "timeout"}, out
+    assert out["ms"] < 3000, out
+
+
+def test_the_page_context_fetch_is_given_all_three_limits_from_config(tmp_path: Path) -> None:
+    result = _run_background_module(
+        r'''
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} } },
+  scripting: { executeScript: async (injection) => { globalThis.injection = injection; return [{ result: { error: "x" } }]; } },
+  permissions: { contains: async () => true, request: async () => true, remove: async () => true },
+  storage: { local: { get: async () => ({}) } },
+};
+globalThis.fetch = async () => ({ ok: false, status: 404, headers: { get: () => null } });
+const pdfFetch = await import("./background/pdf_fetch.mjs");
+const config = await import("./background/config.mjs");
+pdfFetch.setCaptureTabId?.(7);
+config.setCaptureTabId(7);
+await pdfFetch.maybeStreamPdfBytes({
+  endpoint: "http://127.0.0.1:8765/capture", citekey: "k", bib: null,
+  pdfUrlCandidates: [{ url: "https://pub.test/a.pdf", method: "navigate_monitor" }], pageUrl: "https://pub.test/article",
+});
+console.log(JSON.stringify({
+  sameFunction: globalThis.injection?.func === pdfFetch.pageContextFetchPdf,
+  args: globalThis.injection?.args,
+  limits: [config.MAX_ATTACH_PDF_BYTES, config.PDF_BODY_IDLE_TIMEOUT_MS, config.PDF_BODY_TOTAL_TIMEOUT_MS],
+}));
+''',
+        tmp_path,
+    )
+    assert result["sameFunction"], result
+    assert result["args"][1:] == result["limits"], result

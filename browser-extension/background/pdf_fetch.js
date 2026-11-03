@@ -7,6 +7,7 @@
 import {
   MAX_ATTACH_PDF_BYTES,
   PDF_BODY_IDLE_TIMEOUT_MS,
+  PDF_BODY_TOTAL_TIMEOUT_MS,
   PDF_FETCH_TIMEOUT_MS,
   _captureTabId,
   endpointFor,
@@ -672,6 +673,61 @@ function attachSessionPayload(pdfRequest) {
   return { request_id: requestId, attach_token: token };
 }
 
+/**
+ * Runs inside the page (`world: "MAIN"`), so it must stay self-contained: the
+ * module's constants do not exist there and the limits arrive as arguments.
+ * The body is read as a stream so a page-origin response that never ends cannot
+ * grow the tab without bound. An abort fires on a silence of `idleMs`, on the
+ * first byte past `maxBytes`, and after `totalMs` however steadily bytes arrive.
+ * Exported so the limits can be tested directly.
+ */
+export async function pageContextFetchPdf(pdfUrl, maxBytes, idleMs, totalMs) {
+  const controller = new AbortController();
+  let budgetHit = false;
+  const stop = () => { budgetHit = true; controller.abort(); };
+  let timer = setTimeout(stop, idleMs);
+  // A trickle that always beats the idle timer still ends here.
+  const totalTimer = setTimeout(stop, totalMs);
+  try {
+    const response = await fetch(pdfUrl, { credentials: "include", signal: controller.signal });
+    if (!response.ok) return { error: `fetch HTTP ${response.status}` };
+    const contentType = response.headers.get("content-type") || "";
+    if (!contentType.toLowerCase().includes("pdf")) {
+      return { error: "not_pdf", contentType };
+    }
+    const reader = response.body.getReader();
+    const chunks = [];
+    let received = 0;
+    for (;;) {
+      clearTimeout(timer);
+      timer = setTimeout(stop, idleMs);
+      const { done, value } = await reader.read();
+      if (done) break;
+      received += value.byteLength;
+      if (received > maxBytes) {
+        controller.abort();
+        return { error: "too_large" };
+      }
+      chunks.push(value);
+    }
+    if (received === 0) return { error: "empty" };
+    // Return as base64 to background for secure API attach.
+    const bytes = new Uint8Array(received);
+    let at = 0;
+    for (const chunk of chunks) { bytes.set(chunk, at); at += chunk.byteLength; }
+    let binary = "";
+    for (let i = 0; i < bytes.byteLength; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return { base64: btoa(binary) };
+  } catch (e) {
+    return { error: budgetHit ? "timeout" : e.message };
+  } finally {
+    clearTimeout(timer);
+    clearTimeout(totalTimer);
+  }
+}
+
 async function fetchPdfViaPageContext(tabId, url, _endpoint, citekey, bib, attempts, pdfRequest = null) {
   if (!tabId || !url) return null;
 
@@ -680,52 +736,8 @@ async function fetchPdfViaPageContext(tabId, url, _endpoint, citekey, bib, attem
     const results = await chrome.scripting.executeScript({
       target: { tabId },
       world: "MAIN",
-      // Limits arrive as arguments: this runs in the page, where the module's
-      // constants do not exist. The body is read as a stream so a page-origin
-      // response that never ends cannot grow the tab without bound; an abort
-      // fires on a silence of `idleMs` or on the first byte past `maxBytes`.
-      func: async (pdfUrl, maxBytes, idleMs) => {
-        const controller = new AbortController();
-        let timer = setTimeout(() => controller.abort(), idleMs);
-        try {
-          const response = await fetch(pdfUrl, { credentials: "include", signal: controller.signal });
-          if (!response.ok) return { error: `fetch HTTP ${response.status}` };
-          const contentType = response.headers.get("content-type") || "";
-          if (!contentType.toLowerCase().includes("pdf")) {
-            return { error: "not_pdf", contentType };
-          }
-          const reader = response.body.getReader();
-          const chunks = [];
-          let received = 0;
-          for (;;) {
-            clearTimeout(timer);
-            timer = setTimeout(() => controller.abort(), idleMs);
-            const { done, value } = await reader.read();
-            if (done) break;
-            received += value.byteLength;
-            if (received > maxBytes) {
-              controller.abort();
-              return { error: "too_large" };
-            }
-            chunks.push(value);
-          }
-          if (received === 0) return { error: "empty" };
-          // Return as base64 to background for secure API attach.
-          const bytes = new Uint8Array(received);
-          let at = 0;
-          for (const chunk of chunks) { bytes.set(chunk, at); at += chunk.byteLength; }
-          let binary = "";
-          for (let i = 0; i < bytes.byteLength; i++) {
-            binary += String.fromCharCode(bytes[i]);
-          }
-          return { base64: btoa(binary) };
-        } catch (e) {
-          return { error: e.message };
-        } finally {
-          clearTimeout(timer);
-        }
-      },
-      args: [url, MAX_ATTACH_PDF_BYTES, PDF_BODY_IDLE_TIMEOUT_MS],
+      func: pageContextFetchPdf,
+      args: [url, MAX_ATTACH_PDF_BYTES, PDF_BODY_IDLE_TIMEOUT_MS, PDF_BODY_TOTAL_TIMEOUT_MS],
     });
     result = results?.[0]?.result;
   } catch (_e) {
