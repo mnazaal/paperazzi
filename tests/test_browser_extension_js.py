@@ -5080,3 +5080,173 @@ console.log(JSON.stringify({ listeners: globalThis.listeners, cacheApi: Object.k
     )
     assert result["listeners"] == 0, result
     assert result["cacheApi"] == [], result
+
+
+# ── One table for "private destination": rule list, JS predicate, Python ──
+# (url, private?). Each row is checked against the declarativeNetRequest
+# pattern list, `isSafePublicHttpUrl`, and (for the rows Python can decide
+# without DNS) `pzi.url_safety`. A row added here covers all three at once.
+_DESTINATION_TABLE: list[tuple[str, bool]] = [
+    # trailing-dot and other spellings of the local names
+    ("http://localhost./x.pdf", True),
+    ("http://localhost.:8765/x", True),
+    ("http://localhost..:8765/x", True),
+    ("http://LOCALHOST./x", True),
+    ("http://%6cocalhost./x", True),
+    ("http://localhost。/x", True),
+    ("http://a.localhost./x", True),
+    ("http://foo.local./x", True),
+    ("http://foo.internal./x", True),
+    ("http://nas.lan./x", True),
+    ("http://nas.home./x", True),
+    ("http://intranet./x", True),
+    ("http://intranet/x", True),
+    ("http://localhost.localdomain./x", True),
+    ("http://127.0.0.1./x", True),
+    ("http://127.1/x", True),
+    ("http://2130706433/x", True),
+    ("http://0x7f.0.0.1/x", True),
+    ("http://0177.0.0.1/x", True),
+    # reserved IPv4 ranges Python refuses
+    ("http://100.64.0.1/x", True),
+    ("http://100.100.100.100/x", True),
+    ("http://100.127.255.255/x", True),
+    ("http://198.18.0.1/x", True),
+    ("http://198.19.255.255/x", True),
+    ("http://192.0.0.1/x", True),
+    ("http://192.0.0.255/x", True),
+    ("http://192.0.2.1/x", True),
+    ("http://198.51.100.1/x", True),
+    ("http://203.0.113.1/x", True),
+    ("http://224.0.0.1/x", True),
+    ("http://239.255.255.255/x", True),
+    ("http://240.0.0.1/x", True),
+    ("http://254.1.1.1/x", True),
+    ("http://255.255.255.255/x", True),
+    ("http://10.0.0.5/x", True),
+    ("http://172.16.0.1/x", True),
+    ("http://172.31.255.1/x", True),
+    ("http://192.168.1.1/x", True),
+    ("http://169.254.169.254/x", True),
+    ("http://0.0.0.0/x", True),
+    # neighbours just outside each range stay public
+    ("http://100.63.255.255/x", False),
+    ("http://100.128.0.1/x", False),
+    ("http://198.17.255.255/x", False),
+    ("http://198.20.0.1/x", False),
+    ("http://192.0.1.1/x", False),
+    ("http://223.255.255.255/x", False),
+    ("http://172.15.0.1/x", False),
+    ("http://172.32.0.1/x", False),
+    ("http://11.0.0.1/x", False),
+    ("http://8.8.8.8/x", False),
+    ("http://8.8.8.8./x", False),
+    # IPv6 literals: the extension refuses all of them
+    ("http://[::1]/x", True),
+    ("http://[fe80::1]/x", True),
+    ("http://[fd00::1]/x", True),
+    ("http://[fc00::1]/x", True),
+    ("http://[::ffff:127.0.0.1]/x", True),
+    ("http://[2001:db8::1]/x", True),
+    # public names that merely start with fc/fd or contain a private word
+    ("https://www.fda.gov/x.pdf", False),
+    ("https://fda.gov/x.pdf", False),
+    ("https://fcc.gov/x.pdf", False),
+    ("https://fdslive.oup.com/x.pdf", False),
+    ("https://fd.example.com/x.pdf", False),
+    ("https://fc00.example.org/x.pdf", False),
+    ("https://fe80.example.org/x.pdf", False),
+    ("https://example.com./x.pdf", False),
+    ("https://www.nature.com/x.pdf", False),
+    ("https://localhost.example.com/x.pdf", False),
+    ("https://internal.example.com/x.pdf", False),
+    ("https://10.example.com/x.pdf", False),
+    ("https://127.0.0.1.example.com/x.pdf", False),
+]
+# Rows where the extension is deliberately stricter than Python: it cannot
+# resolve names, so it refuses every IPv6 literal and any userinfo.
+# Python passes the non-canonical IPv4 spellings to its resolver (here a stub
+# that answers with a public address); a real resolver maps them to loopback.
+_STRICTER_THAN_PYTHON = {
+    "http://[2001:db8::1]/x",
+    "http://127.1/x",
+    "http://0x7f.0.0.1/x",
+    "http://0177.0.0.1/x",
+}
+
+
+def _destination_rows(tmp_path: Path, urls: list[str]) -> list[dict]:
+    result = _run_background_module(
+        r'''
+const { PRIVATE_DESTINATION_PATTERNS } = await import("./background/permissions.mjs");
+const { isSafePublicHttpUrl } = await import("./background/utils.mjs");
+const patterns = PRIVATE_DESTINATION_PATTERNS.map((p) => new RegExp(p, "i"));
+const rows = URLS.map((url) => ({
+  url,
+  href: new URL(url).href,
+  blocked: patterns.some((re) => re.test(new URL(url).href)),
+  safe: isSafePublicHttpUrl(url),
+}));
+console.log(JSON.stringify({ rows }));
+'''.replace("URLS", json.dumps(urls)),
+        tmp_path,
+    )
+    return result["rows"]
+
+
+def test_one_table_of_destinations_holds_for_the_rules_and_the_predicate(
+    tmp_path: Path,
+) -> None:
+    rows = _destination_rows(tmp_path, [url for url, _ in _DESTINATION_TABLE])
+    failures = []
+    for (url, private), row in zip(_DESTINATION_TABLE, rows, strict=True):
+        if row["blocked"] != private or row["safe"] == private:
+            failures.append((url, row["href"], f"want private={private}", row))
+    assert not failures, failures
+
+
+def test_the_extension_is_never_looser_than_python_url_safety(tmp_path: Path) -> None:
+    from pzi.url_safety import safe_public_http_url
+
+    def public_dns(*_args: object, **_kwargs: object) -> list[tuple[object, ...]]:
+        return [(2, 1, 6, "", ("8.8.8.8", 0))]
+
+    rows = _destination_rows(tmp_path, [url for url, _ in _DESTINATION_TABLE])
+    loose, differing = [], []
+    for row in rows:
+        python_safe = safe_public_http_url(row["url"], resolve_host=public_dns)
+        if row["safe"] and not python_safe:
+            loose.append(row["url"])
+        if row["safe"] != python_safe and row["url"] not in _STRICTER_THAN_PYTHON:
+            differing.append((row["url"], row["safe"], python_safe))
+    assert not loose, loose
+    assert not differing, differing
+
+
+def test_the_extension_agrees_with_python_on_every_ipv4_range_boundary(tmp_path: Path) -> None:
+    """Sweep the first and last address of each special-use block and its neighbours."""
+    import ipaddress
+
+    from pzi.url_safety import public_ip_address
+
+    probes: set[str] = set()
+    for block in [
+        "0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16",
+        "172.16.0.0/12", "192.0.0.0/24", "192.0.2.0/24", "192.168.0.0/16",
+        "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "224.0.0.0/4", "240.0.0.0/4",
+    ]:
+        net = ipaddress.ip_network(block)
+        first, last = int(net.network_address), int(net.broadcast_address)
+        for n in (first - 1, first, first + 1, last - 1, last, last + 1):
+            if 0 <= n <= 0xFFFFFFFF:
+                probes.add(str(ipaddress.ip_address(n)))
+    for first_octet in range(0, 256):
+        probes.add(f"{first_octet}.1.2.3")
+    ordered = sorted(probes)
+    rows = _destination_rows(tmp_path, [f"http://{ip}/x" for ip in ordered])
+    mismatches = [
+        (ip, row["safe"], public_ip_address(ip))
+        for ip, row in zip(ordered, rows, strict=True)
+        if row["safe"] != public_ip_address(ip) or row["blocked"] == row["safe"]
+    ]
+    assert not mismatches, mismatches

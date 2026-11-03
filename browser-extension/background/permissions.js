@@ -4,7 +4,9 @@
 // fetch pipeline. Pure URL reasoning is delegated to utils.js.
 
 import { PDF_BODY_IDLE_TIMEOUT_MS, PDF_BODY_TOTAL_TIMEOUT_MS } from "./config.js";
-import { candidateUrl, originOf, sameOrigin } from "./utils.js";
+import { PRIVATE_DESTINATION_PATTERNS, candidateUrl, originOf, sameOrigin } from "./utils.js";
+
+export { PRIVATE_DESTINATION_PATTERNS };
 
 //: How many distinct cross-origin permission dialogs one capture may raise.
 //: The candidate list comes from the page, so without a cap a hostile page can
@@ -275,23 +277,8 @@ export async function readBodyBounded(
 // destinations for requests this extension initiates, with an allow rule for
 // the pzi endpoint it has to keep talking to.
 //
-// The pattern mirrors `isSafePublicHttpUrl` in utils.js: a test checks that
-// the two agree on a table of hosts.
-// One rule per pattern: Chrome refuses a single regexFilter that compiles past
-// 2 KB, and the whole table in one expression does.
-const _END = String.raw`([:/?#]|$)`;
-export const PRIVATE_DESTINATION_PATTERNS = [
-  String.raw`^https?://[^/?#]*@`, // userinfo: the real host is hard to read past it
-  String.raw`^https?://\[`, // IPv6 literal
-  String.raw`^https?://[^/?#:.@]+` + _END, // single-label host (localhost, intranet names)
-  String.raw`^https?://[^/?#:@]+\.(localhost|local|internal|lan|home)` + _END,
-  String.raw`^https?://localhost\.localdomain` + _END,
-  String.raw`^https?://(127|10|0|224|255)\.[0-9]+\.[0-9]+\.[0-9]+` + _END,
-  String.raw`^https?://192\.168\.[0-9]+\.[0-9]+` + _END,
-  String.raw`^https?://172\.(1[6-9]|2[0-9]|3[01])\.[0-9]+\.[0-9]+` + _END,
-  String.raw`^https?://169\.254\.[0-9]+\.[0-9]+` + _END,
-];
-
+// The pattern list lives in utils.js: `isSafePublicHttpUrl` is built from the
+// same list, so the rule table and the predicate cannot drift.
 const GUARD_ALLOW_RULE_ID = 91001;
 const GUARD_RULE_IDS = [
   GUARD_ALLOW_RULE_ID,

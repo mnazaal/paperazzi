@@ -132,6 +132,42 @@ export function looksLikePdfBytes(bytes) {
 
 // ── URL safety ──────────────────────────────────────────────────────────
 
+// One list answers "is this destination private?" for both the
+// declarativeNetRequest block rules (permissions.js) and `isSafePublicHttpUrl`
+// below, which tests the same patterns against the parsed `href`. The browser
+// matches rules against its canonical URL form (lowercased host, numeric hosts
+// rewritten to dotted decimal), and `new URL(...).href` is the same form, so
+// `0x7f.1`, `2130706433` and `%6cocalhost` arrive here already normalised.
+// What the canonical form keeps is trailing dots (`localhost.`), hence the `\.*`.
+// The extension has no resolver: a name that merely resolves to a private
+// address is outside what this list can see (docs/security.md, Design calls).
+//
+// Chrome refuses a single regexFilter that compiles past 2 KB, so this is a
+// table of small patterns rather than one expression.
+const _END = String.raw`\.*([:/?#]|$)`;
+const _OCTET = String.raw`[0-9]+`;
+export const PRIVATE_DESTINATION_PATTERNS = [
+  String.raw`^https?://[^/?#]*@`, // userinfo: the real host is hard to read past it
+  String.raw`^https?://\[`, // IPv6 literal (also keeps fc../fd.. host names out of any IPv6 test)
+  String.raw`^https?://[^/?#:.@]+` + _END, // single-label host (localhost, intranet names)
+  String.raw`^https?://[^/?#:@]+\.(localhost|local|internal|lan|home)` + _END,
+  String.raw`^https?://localhost\.localdomain` + _END,
+  // this-network 0/8, loopback, private 10/8, multicast and reserved 224/3
+  String.raw`^https?://(0|10|127|22[4-9]|23[0-9]|24[0-9]|25[0-5])\.${_OCTET}\.${_OCTET}\.${_OCTET}` + _END,
+  String.raw`^https?://192\.168\.${_OCTET}\.${_OCTET}` + _END,
+  String.raw`^https?://172\.(1[6-9]|2[0-9]|3[01])\.${_OCTET}\.${_OCTET}` + _END,
+  String.raw`^https?://169\.254\.${_OCTET}\.${_OCTET}` + _END,
+  // carrier-grade NAT 100.64/10 (Tailscale and friends)
+  String.raw`^https?://100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.${_OCTET}\.${_OCTET}` + _END,
+  // benchmarking 198.18/15 and TEST-NET-2 198.51.100/24
+  String.raw`^https?://198\.(1[89]\.${_OCTET}|51\.100)\.${_OCTET}` + _END,
+  // IETF protocol assignments 192.0.0/24 and TEST-NET-1 192.0.2/24
+  String.raw`^https?://192\.0\.[02]\.${_OCTET}` + _END,
+  // TEST-NET-3
+  String.raw`^https?://203\.0\.113\.${_OCTET}` + _END,
+];
+const _PRIVATE_DESTINATION_REGEXES = PRIVATE_DESTINATION_PATTERNS.map((pattern) => new RegExp(pattern, "i"));
+
 export function isSafePublicHttpUrl(value) {
   let parsed;
   try {
@@ -140,16 +176,8 @@ export function isSafePublicHttpUrl(value) {
     return false;
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
-  const host = parsed.hostname.toLowerCase();
-  if (!host || host === "localhost" || host === "localhost.localdomain") return false;
-  if (!host.includes(".") || host.endsWith(".localhost") || host.endsWith(".local")) return false;
-  if (host.endsWith(".internal") || host.endsWith(".lan") || host.endsWith(".home")) return false;
-  if (/^(127|10)\./.test(host)) return false;
-  if (/^192\.168\./.test(host)) return false;
-  if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(host)) return false;
-  if (/^(0|169\.254|224|255)\./.test(host)) return false;
-  if (host === "::1" || host.startsWith("fc") || host.startsWith("fd") || host.startsWith("fe80")) return false;
-  return true;
+  if (!parsed.hostname) return false;
+  return !_PRIVATE_DESTINATION_REGEXES.some((re) => re.test(parsed.href));
 }
 
 // ── Timing helpers ──────────────────────────────────────────────────────
