@@ -6,7 +6,7 @@ import os
 import tempfile
 from pathlib import Path
 
-from pzi.bib_repository import update_bib_entry
+from pzi.bib_repository import ANY_PAPER, update_bib_entry
 from pzi.import_service import import_from_bibtex
 
 # A minimal valid config.toml so `import_from_bibtex` can resolve the bib.
@@ -335,6 +335,8 @@ def test_import_skips_a_source_entry_whose_field_name_swallowed_a_comment(
         str(bib_path),
         "good2024",
         lambda entry, _record: {**entry, "fields": {**entry["fields"], "keywords": "x"}},
+    
+        expected_paper=ANY_PAPER,
     )
 
 

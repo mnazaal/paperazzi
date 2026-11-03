@@ -240,3 +240,64 @@ def test_add_does_not_hybridise_a_replaced_target_with_no_identifiers(tmp_path):
     b = entries["key2020"]["fields"]
     assert b["title"] == "Unrelated Paper B" and "doi" not in b and "abstract" not in b
     assert b["note"] == "mine"
+
+
+# -- citekey-scoped writers check the paper they planned against ---------------
+
+
+def test_update_does_not_write_a_looked_up_record_onto_a_paper_that_took_the_key(tmp_path):
+    lib = _Library(tmp_path)
+    lib.bib.write_text(
+        "@article{smith2024graph,\n  title = {Graph Parsers},\n  year = {2024},\n"
+        "  author = {Smith, Jane},\n}\n"
+    )
+    b_text = (
+        "@article{smith2024graph,\n  title = {Unrelated Paper B},\n  year = {2024},\n"
+        "  author = {Jones, Bob},\n  url = {https://x.org/b},\n}\n"
+    )
+
+    def search(_query, *, server_url):
+        lib.bib.write_text(b_text)
+        return [{
+            "item_type": "journalArticle",
+            "record": {"title": "Graph Parsers", "venue": "Journal of Parsing",
+                       "doi": "10.9/graph", "year": 2024, "authors": ["Smith, Jane"],
+                       "abstract": "abstract of A"},
+            "attachments": [],
+        }]
+
+    with pytest.raises(StalePlanError):
+        update_service.update_bib(**_common(lib), dry_run=False, fetch_search=search)
+    assert lib.bib.read_text() == b_text
+
+
+def test_pdf_retry_does_not_attach_a_pdf_to_a_paper_that_took_the_key(tmp_path):
+    lib = _Library(tmp_path)
+    b_text = (
+        "@article{target2024,\n  title = {Unrelated Paper B},\n  year = {2024},\n"
+        "  author = {Jones, Bob},\n  doi = {10.1000/bbb},\n}\n"
+    )
+
+    def fetch(url):
+        lib.bib.write_text(b_text)
+        return _fetch(url)
+
+    with pytest.raises(StalePlanError):
+        pdf_service.retry_pdf(**_common(lib), citekey="target2024", fetch_binary=fetch)
+    assert lib.bib.read_text() == b_text
+    assert list(lib.papers.glob("*.pdf")) == []
+
+
+def test_update_bib_entry_requires_a_stated_identity_precondition(tmp_path):
+    from pzi.bib_repository import ANY_PAPER, update_bib_entry
+
+    bib = tmp_path / "t.bib"
+    bib.write_text(_entry(A, doi="10.1000/aaa"))
+    with pytest.raises(TypeError):
+        update_bib_entry(str(bib), "key2020", lambda e, r: e)  # type: ignore[call-arg]
+    other = {"citekey": "key2020", "title": "Paper B", "doi": "10.1000/bbb"}
+    with pytest.raises(StalePlanError):
+        update_bib_entry(str(bib), "key2020", lambda e, r: e, expected_paper=other)
+    assert update_bib_entry(
+        str(bib), "key2020", lambda e, r: e, expected_paper=ANY_PAPER
+    )["found"]

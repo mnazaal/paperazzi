@@ -6,6 +6,7 @@ import unicodedata
 from typing import Literal, NotRequired, TypedDict, cast
 
 from pzi.bib_repository import (
+    ANY_PAPER,
     find_entry_index,
     read_bib_file,
     read_bib_file_with_notices,
@@ -322,7 +323,11 @@ def _mutate_entry_tags(
             return apply_record_to_entry(entry, locked_record)
 
         update_result = update_bib_entry(
-            bib["path"], citekey, _updater, file_path_style=file_path_style
+            bib["path"], citekey, _updater,
+            # The user named this key and the tags are the whole write: nothing
+            # derived from a snapshot of the entry goes into it.
+            expected_paper=ANY_PAPER,
+            file_path_style=file_path_style,
         )
         if not update_result["found"]:
             return {

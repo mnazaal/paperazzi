@@ -20,6 +20,7 @@ from pzi.bib_repository import (
     find_entry_index,
     preview_write_plan,
     read_bib_file,
+    same_paper,
 )
 from pzi.bib_serialize import validate_bibtex_roundtrip
 from pzi.bibtex import (
@@ -102,6 +103,9 @@ class _PendingWrite:
     item: UpdatePlanItem
     citekey: str
     candidate: Mapping[str, Any]
+    #: The record the lookup was made for. The entry under the lock must still
+    #: be that paper, or the candidate's DOI and abstract land on another one.
+    snapshot: Mapping[str, Any]
     #: Cleared when the write finds nothing left to change, so the run reports
     #: no item for it, exactly as a lookup that adds nothing does.
     keep: bool = True
@@ -354,7 +358,9 @@ def _plan_update_for_record(
     if metadata_warnings:
         item["metadata_warnings"] = metadata_warnings
     if not dry_run:
-        return _PendingWrite(item=item, citekey=citekey, candidate=candidate)
+        return _PendingWrite(
+            item=item, citekey=citekey, candidate=candidate, snapshot=record
+        )
     return item
 
 
@@ -392,6 +398,16 @@ def _fold_into_session(session: BatchWriteSession, pending: _PendingWrite) -> No
         return
     current_entry = session.entries[index]
     current_record = session.records[index]
+    if not same_paper(pending.snapshot, current_record):
+        # Per item, not a raise: the session writes nothing when it raises, and
+        # the rest of the chunk is unaffected by one replaced entry.
+        item["changed_fields"] = []
+        item["note"] = (
+            f"{pending.citekey} is now a different paper than the one looked up; "
+            "left unchanged"
+        )
+        item["failed"] = True
+        return
     current_enriched = _conservative_enrich(
         cast(NormalizedRecord, dict(current_record)),
         cast(NormalizedRecord, dict(pending.candidate)),

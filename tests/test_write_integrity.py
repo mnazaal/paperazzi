@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from pzi.bib_repository import (
+    ANY_PAPER,
     StalePlanError,
     _write_bib_text_atomic,
     batch_write_session,
@@ -127,7 +128,7 @@ def test_update_bib_entry_refuses_a_rename_onto_an_existing_key(tmp_path: Path) 
         return renamed  # type: ignore[return-value]
 
     with pytest.raises(PziError):
-        update_bib_entry(path, "smith2020", _rename)  # type: ignore[arg-type]
+        update_bib_entry(path, "smith2020", _rename, expected_paper=ANY_PAPER)  # type: ignore[arg-type]
 
     assert bib.read_text(encoding="utf-8") == TWO_ENTRIES
 
@@ -151,7 +152,7 @@ def test_update_bib_entry_refuses_an_entry_that_cannot_round_trip(
         return touched  # type: ignore[return-value]
 
     with pytest.raises(PziError):
-        update_bib_entry(path, "smith2020", _touch)  # type: ignore[arg-type]
+        update_bib_entry(path, "smith2020", _touch, expected_paper=ANY_PAPER)  # type: ignore[arg-type]
 
     assert bib.read_text(encoding="utf-8") == ONE_ENTRY
 
@@ -483,7 +484,7 @@ def test_a_stale_update_plan_does_not_revert_a_concurrent_writers_fields(
         fields["journal"] = "NeurIPS"
         return {**entry, "fields": fields}
 
-    update_bib_entry(str(bib), "a2020", _edit)
+    update_bib_entry(str(bib), "a2020", _edit, expected_paper=ANY_PAPER)
 
     execute_write_plan(str(bib), plan)
 
@@ -520,7 +521,7 @@ def test_a_stale_update_plan_still_wins_the_fields_it_changed(tmp_path: Path) ->
     def _edit(entry, record):
         return {**entry, "fields": {**entry["fields"], "journal": "NeurIPS"}}
 
-    update_bib_entry(str(bib), "a2020", _edit)
+    update_bib_entry(str(bib), "a2020", _edit, expected_paper=ANY_PAPER)
 
     execute_write_plan(str(bib), plan)
 
@@ -558,7 +559,7 @@ def test_a_field_the_other_writer_deleted_is_not_resurrected(tmp_path: Path) -> 
         fields = {key: value for key, value in entry["fields"].items() if key != "note"}
         return {**entry, "fields": fields}
 
-    update_bib_entry(str(bib), "a2020", _drop_the_note)
+    update_bib_entry(str(bib), "a2020", _drop_the_note, expected_paper=ANY_PAPER)
 
     execute_write_plan(str(bib), plan)
 
@@ -701,7 +702,7 @@ def test_a_unicode_field_key_does_not_block_writing_the_library(
     bib = tmp_path / "lib.bib"
     bib.write_text(f"@article{{legacy2019,\n  title = {{T}},\n  {key} = {{v}}\n}}\n")
 
-    update_bib_entry(str(bib), "legacy2019", _add_a_keyword)
+    update_bib_entry(str(bib), "legacy2019", _add_a_keyword, expected_paper=ANY_PAPER)
 
     assert key.lower() in bib.read_text().lower()
 
@@ -732,7 +733,7 @@ def test_a_structurally_unsafe_field_key_is_still_refused(
     before = bib.read_text()
 
     with pytest.raises(PziError):
-        update_bib_entry(str(bib), "legacy2019", _add_a_keyword)
+        update_bib_entry(str(bib), "legacy2019", _add_a_keyword, expected_paper=ANY_PAPER)
 
     assert bib.read_text() == before
 
@@ -812,7 +813,7 @@ BACKUP_WRITERS = {
         path, citekey_a="smith2020", citekey_b="jones2021", backup_label="smith2020"
     ).get("backup_path"),
     "update_bib_entry": lambda path, backup: (
-        update_bib_entry(path, "smith2020", _retitle, backup_path=backup),
+        update_bib_entry(path, "smith2020", _retitle, backup_path=backup, expected_paper=ANY_PAPER),
         backup,
     )[1],
 }

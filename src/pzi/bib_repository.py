@@ -1413,10 +1413,21 @@ def update_bib_entry(
     citekey: str,
     updater: Callable[[BibtexEntry, NormalizedRecord], BibtexEntry],
     *,
+    expected_paper: Mapping[str, Any] | _AnyPaper,
     file_path_style: str = "absolute",
     backup_path: Path | None = None,
 ) -> UpdateBibEntryResult:
     """Update one BibTeX entry under lock using a citekey-scoped callback.
+
+    *expected_paper* is the record the caller decided on, read before any
+    network step or download that ran without the lock. The citekey is not an
+    identity: another writer can replace the entry with a different paper under
+    the same key in that window, and the callback would then write one paper's
+    abstract, DOI or PDF onto the other. The entry under the lock must still be
+    that paper (see :func:`same_paper`), or :class:`StalePlanError` is raised
+    before anything is written. It is required so a new caller cannot leave
+    the check out by forgetting it; one that legitimately has no snapshot
+    passes :data:`ANY_PAPER` and says so.
 
     *backup_path*, when given, is written from the on-disk file **inside this
     lock** and only when the write actually changes something, exactly as
@@ -1436,6 +1447,12 @@ def update_bib_entry(
 
         current_entry = entries[index]
         current_record = records[index]
+        if not isinstance(expected_paper, _AnyPaper) and not same_paper(
+            expected_paper, current_record
+        ):
+            raise _stale_plan(
+                f"{citekey} is now a different paper than the one it was prepared for"
+            )
         previous_record = cast(NormalizedRecord, dict(current_record))
         updated_entry = updater(current_entry, current_record)
         updated_record = bibtex_entry_to_record(updated_entry)

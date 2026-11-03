@@ -27,6 +27,7 @@ from pathlib import Path
 import pytest
 
 from pzi.bib_repository import (
+    ANY_PAPER,
     execute_write_plan,
     parse_bib_library,
     preview_write_plan,
@@ -329,6 +330,8 @@ def test_a_comment_flush_against_its_entry_stays_flush(tmp_path: Path) -> None:
             **entry,
             "fields": {**entry["fields"], "keywords": "tagged"},
         },
+    
+        expected_paper=ANY_PAPER,
     )
     after = bib_path.read_text()
     assert "keywords = {tagged}" in after
@@ -381,6 +384,8 @@ def test_a_comment_flush_above_its_entry_stays_flush(tmp_path: Path) -> None:
             **entry,
             "fields": {**entry["fields"], "keywords": "tagged"},
         },
+    
+        expected_paper=ANY_PAPER,
     )
     after = bib_path.read_text()
     assert "keywords = {tagged}" in after
@@ -425,6 +430,8 @@ def test_a_file_separated_by_two_blank_lines_keeps_both(tmp_path: Path) -> None:
             **entry,
             "fields": {**entry["fields"], "keywords": "tagged"},
         },
+    
+        expected_paper=ANY_PAPER,
     )
     after = bib_path.read_text()
     assert "keywords = {tagged}" in after
@@ -487,6 +494,8 @@ def test_an_untouched_minority_style_entry_keeps_its_own_bytes(tmp_path: Path) -
             **entry,
             "fields": {**entry["fields"], "abstract": "Touched."},
         },
+    
+        expected_paper=ANY_PAPER,
     )
     assert result["found"] is True
     after = bib_path.read_text()
@@ -521,6 +530,7 @@ def test_update_bib_entry_preserves_extras(tmp_path: Path) -> None:
         str(bib_path),
         "smith2024",
         lambda entry, record: dict(entry),  # identity: no-op update
+        expected_paper=ANY_PAPER,
     )
     assert result["found"] is True
 
@@ -549,6 +559,8 @@ def test_update_bib_entry_modifies_only_target(tmp_path: Path) -> None:
             **entry,
             "fields": {**entry["fields"], "abstract": "New abstract text."},
         },
+    
+        expected_paper=ANY_PAPER,
     )
     assert result["found"] is True
 
@@ -701,6 +713,8 @@ def test_update_keeps_macro_references_in_the_entry_it_touches(tmp_path: Path) -
             "citekey": entry["citekey"],
             "fields": {**entry["fields"], "keywords": "reading"},
         },
+    
+        expected_paper=ANY_PAPER,
     )
     after = bib_path.read_text()
 
@@ -744,6 +758,8 @@ def test_update_keeps_an_unresolved_concatenation_intact(tmp_path: Path) -> None
             "citekey": entry["citekey"],
             "fields": {**entry["fields"], "keywords": "reading"},
         },
+    
+        expected_paper=ANY_PAPER,
     )
     after = bib_path.read_text()
 
@@ -817,7 +833,7 @@ def test_carriage_return_is_stripped_from_a_field_value(tmp_path: Path) -> None:
     def _add_abstract(entry, record):
         return {**entry, "fields": {**entry["fields"], "abstract": "para1\r\npara2"}}
 
-    update_bib_entry(str(bib), "ab2021", _add_abstract)
+    update_bib_entry(str(bib), "ab2021", _add_abstract, expected_paper=ANY_PAPER)
 
     raw = bib.read_bytes()
     assert b"\r\r" not in raw, raw
@@ -840,7 +856,7 @@ def test_duplicate_field_key_refusal_does_not_leak_parser_internals(
     )
 
     with pytest.raises(PziError) as excinfo:
-        update_bib_entry(str(bib), "a2020", lambda entry, record: entry)
+        update_bib_entry(str(bib), "a2020", lambda entry, record: entry, expected_paper=ANY_PAPER)
 
     message = excinfo.value.message
     assert "duplicate" in message.lower()
@@ -873,7 +889,7 @@ def test_a_write_names_the_entry_with_no_citekey(tmp_path: Path) -> None:
     )
 
     with pytest.raises(PziError) as excinfo:
-        update_bib_entry(str(bib), "good2020", lambda entry, record: entry)
+        update_bib_entry(str(bib), "good2020", lambda entry, record: entry, expected_paper=ANY_PAPER)
 
     message = excinfo.value.message
     assert "no citekey" in message, message
@@ -921,7 +937,7 @@ def test_a_write_refuses_an_entry_whose_field_keys_collide_on_case(
     bib.write_text(original)
 
     with pytest.raises(PziError) as excinfo:
-        update_bib_entry(str(bib), "good2020", lambda entry, record: entry)
+        update_bib_entry(str(bib), "good2020", lambda entry, record: entry, expected_paper=ANY_PAPER)
 
     assert "casedup2020" in excinfo.value.message, excinfo.value.message
     assert bib.read_text() == original, "the file was rewritten"
@@ -1150,6 +1166,8 @@ def test_single_entry_write_under_home_style_does_not_reformat_other_entries(
 
     result = update_bib_entry(
         str(bib_path), "smith2024", add_abstract, file_path_style="home",
+    
+        expected_paper=ANY_PAPER,
     )
     assert result["found"] is True
 

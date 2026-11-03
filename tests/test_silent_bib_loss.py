@@ -26,6 +26,7 @@ import pytest
 
 from pzi import exit_codes, parse_cache
 from pzi.bib_repository import (
+    ANY_PAPER,
     execute_write_plan,
     plan_bib_write,
     read_bib_file_raw_with_failures,
@@ -128,7 +129,7 @@ def test_a_truncated_entry_blocks_writes_to_any_entry(tmp_path: Path) -> None:
     before = bib.read_bytes()
 
     with pytest.raises(PziError, match="malformed BibTeX"):
-        update_bib_entry(str(bib), "good2020", _tag)
+        update_bib_entry(str(bib), "good2020", _tag, expected_paper=ANY_PAPER)
     with pytest.raises(PziError, match="malformed BibTeX"):
         execute_write_plan(
             str(bib),
@@ -236,7 +237,7 @@ def test_an_unrepresentable_value_blocks_writes_and_is_not_rewritten(
 
     for citekey in ("good2020", bad_key):
         with pytest.raises(PziError, match="malformed BibTeX"):
-            update_bib_entry(str(bib), citekey, _tag)
+            update_bib_entry(str(bib), citekey, _tag, expected_paper=ANY_PAPER)
 
     assert bib.read_bytes() == before
 
@@ -265,5 +266,5 @@ def test_legitimate_values_still_read_clean_and_write(shape: str, tmp_path: Path
     assert failures == []
 
     bib = _write(tmp_path, BENIGN[shape])
-    update_bib_entry(str(bib), "b1", _tag)
+    update_bib_entry(str(bib), "b1", _tag, expected_paper=ANY_PAPER)
     assert "keywords = {probe}" in bib.read_text(encoding="utf-8")

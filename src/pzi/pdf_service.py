@@ -11,6 +11,7 @@ from typing import Any, TypeAlias, cast
 
 from pzi.add_planning import next_pdf_candidate_for_config
 from pzi.bib_repository import (
+    StalePlanError,
     find_entry_index,
     read_bib_file,
     read_bib_file_with_failures,
@@ -235,6 +236,9 @@ def retry_pdf(
         }
 
     record = _record_at(read_result, index)
+    # What the PDF is being fetched for. `record` is replaced below by the
+    # discovery step, and the entry under the lock must still be this paper.
+    snapshot = record
     pdf_url = record.get("pdf_url")
     if not isinstance(pdf_url, str) or not pdf_url:
         # Derive one rather than refuse. `retry` used to demand a *stored*
@@ -332,6 +336,7 @@ def retry_pdf(
                 local_pdf_path=local_pdf_path,
                 pdf_url=pdf_url,
             ),
+            expected_paper=snapshot,
             file_path_style=config.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE),
         ),
         new_pdf=local_pdf_path,
@@ -487,23 +492,30 @@ def retry_failed_pdfs(
             failures.append({"citekey": citekey, "error": warning or "failed to fetch PDF"})
             continue
 
-        update_result = _update_entry_keeping_pdf_consistent(
-            lambda: update_bib_entry(
-                bib["path"],
-                citekey,
-                lambda entry, rec: _entry_with_pdf_fields(
-                    entry,
-                    cast(NormalizedRecord, dict(rec)),
-                    local_pdf_path=cast(str, local_pdf_path),
-                    pdf_url=pdf_url,
+        try:
+            update_result = _update_entry_keeping_pdf_consistent(
+                lambda: update_bib_entry(
+                    bib["path"],
+                    citekey,
+                    lambda entry, rec: _entry_with_pdf_fields(
+                        entry,
+                        cast(NormalizedRecord, dict(rec)),
+                        local_pdf_path=cast(str, local_pdf_path),
+                        pdf_url=pdf_url,
+                    ),
+                    expected_paper=record_dict,
+                    file_path_style=config.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE),
                 ),
-                file_path_style=config.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE),
-            ),
-            new_pdf=local_pdf_path,
-            existing_pdf_paths=existing_pdf_paths,
-            bib_path=bib["path"],
-            keep=committed_pdfs,
-        )
+                new_pdf=local_pdf_path,
+                existing_pdf_paths=existing_pdf_paths,
+                bib_path=bib["path"],
+                keep=committed_pdfs,
+            )
+        except StalePlanError as exc:
+            # The wrapper already removed the file. The entry is a different
+            # paper now, which concerns this item and not the ones after it.
+            failures.append({"citekey": citekey, "error": str(exc)})
+            continue
         if not update_result["found"]:
             rollback_new_pdfs(
                 [local_pdf_path], existing_pdf_paths, bib_path=bib["path"], keep=committed_pdfs
@@ -628,6 +640,7 @@ def attach_pdf(
                 local_pdf_path=local_pdf_path,
                 pdf_url=source if source.startswith(("http://", "https://")) else None,
             ),
+            expected_paper=_record_at(read_result, index),
             file_path_style=config.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE),
         ),
         new_pdf=local_pdf_path,
@@ -832,6 +845,7 @@ def _attach_pdf_data(
                 local_pdf_path=destination,
                 pdf_url=source_url,
             ),
+            expected_paper=_record_at(read_result, index),
             file_path_style=file_path_style,
         ),
         new_pdf=destination,

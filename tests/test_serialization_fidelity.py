@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from pzi.bib_repository import read_bib_file, update_bib_entry
+from pzi.bib_repository import ANY_PAPER, read_bib_file, update_bib_entry
 from pzi.bibtex import BibtexEntry, apply_record_to_entry
 from pzi.errors import PziError
 
@@ -45,7 +45,7 @@ def test_an_on_disk_citekey_survives_a_write_byte_identically(
         f"@article{{{citekey},\n  title = {{A Title}},\n  year = {{2020}},\n}}\n",
     )
 
-    result = update_bib_entry(path, citekey, _add_keyword)  # type: ignore[arg-type]
+    result = update_bib_entry(path, citekey, _add_keyword, expected_paper=ANY_PAPER)  # type: ignore[arg-type]
 
     assert result["found"] is True
     assert f"@article{{{citekey}," in bib.read_text(encoding="utf-8")
@@ -113,7 +113,7 @@ def test_a_write_does_not_add_lowercase_twins_of_capitalized_fields(
         tagged["tags"] = ["readme"]
         return apply_record_to_entry(entry, tagged)  # type: ignore[arg-type]
 
-    update_bib_entry(path, "jabref2020", _tag)  # type: ignore[arg-type]
+    update_bib_entry(path, "jabref2020", _tag, expected_paper=ANY_PAPER)  # type: ignore[arg-type]
 
     text = bib.read_text(encoding="utf-8")
     assert text.count("itle = ") == 1
@@ -144,7 +144,7 @@ def test_a_touched_entry_keeps_its_field_order(tmp_path: Path) -> None:
         "}\n",
     )
 
-    update_bib_entry(path, "a1", _add_keyword)  # type: ignore[arg-type]
+    update_bib_entry(path, "a1", _add_keyword, expected_paper=ANY_PAPER)  # type: ignore[arg-type]
 
     text = bib.read_text(encoding="utf-8")
     positions = [text.index(f"{key} = ") for key in ("title", "author", "year", "doi")]
@@ -167,7 +167,7 @@ def test_latex_escaped_braces_survive_a_write(tmp_path: Path) -> None:
         "}\n",
     )
 
-    update_bib_entry(path, "a1", _add_keyword)  # type: ignore[arg-type]
+    update_bib_entry(path, "a1", _add_keyword, expected_paper=ANY_PAPER)  # type: ignore[arg-type]
 
     assert "note = {a \\} b \\{ c \\\\ d}" in bib.read_text(encoding="utf-8")
 
@@ -236,7 +236,7 @@ def test_a_title_ending_in_a_backslash_survives_a_write(tmp_path: Path) -> None:
         "}\n",
     )
 
-    update_bib_entry(path, "a1", _add_keyword)  # type: ignore[arg-type]
+    update_bib_entry(path, "a1", _add_keyword, expected_paper=ANY_PAPER)  # type: ignore[arg-type]
 
     result = read_bib_file(path)
     assert [record["citekey"] for record in result["records"]] == ["a1", "a2"]
@@ -244,7 +244,7 @@ def test_a_title_ending_in_a_backslash_survives_a_write(tmp_path: Path) -> None:
     # verbatim — including the `\ ` that made it legal in the first place.
     assert "title = {Graph Networks\\ }" in bib.read_text(encoding="utf-8")
     # And the library still accepts writes.
-    update_bib_entry(path, "a2", _add_keyword)  # type: ignore[arg-type]
+    update_bib_entry(path, "a2", _add_keyword, expected_paper=ANY_PAPER)  # type: ignore[arg-type]
 
 
 def test_a_title_written_from_the_record_loses_its_trailing_backslash(
@@ -259,7 +259,7 @@ def test_a_title_written_from_the_record_loses_its_trailing_backslash(
         touched["fields"] = {**entry["fields"], "title": "Graph Networks\\"}
         return touched  # type: ignore[return-value]
 
-    update_bib_entry(path, "a1", _retitle)  # type: ignore[arg-type]
+    update_bib_entry(path, "a1", _retitle, expected_paper=ANY_PAPER)  # type: ignore[arg-type]
 
     assert "title = {Graph Networks}" in bib.read_text(encoding="utf-8")
     assert read_bib_file(path)["records"][0]["title"] == "Graph Networks"
@@ -340,6 +340,6 @@ def test_an_inline_comment_is_reported_and_the_entry_is_not_rewritten(
     assert any("'%' comment inside the entry" in message for message in warnings)
 
     with pytest.raises(PziError, match="cannot be rewritten until it is fixed"):
-        update_bib_entry(path, "a1", _add_keyword)  # type: ignore[arg-type]
+        update_bib_entry(path, "a1", _add_keyword, expected_paper=ANY_PAPER)  # type: ignore[arg-type]
 
     assert bib.read_text(encoding="utf-8") == COMMENTED

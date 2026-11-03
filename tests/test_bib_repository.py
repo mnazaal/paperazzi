@@ -8,6 +8,7 @@ import pytest
 from pzi import exit_codes
 from pzi.add_service import ensure_citekey_for_write
 from pzi.bib_repository import (
+    ANY_PAPER,
     StalePlanError,
     _write_bib_text_atomic,
     apply_write_plan,
@@ -231,6 +232,8 @@ def test_update_bib_entry_updates_matching_entry_under_lock(tmp_path: Path) -> N
             "citekey": entry["citekey"],
             "fields": {**entry["fields"], "title": "New Title"},
         },
+    
+        expected_paper=ANY_PAPER,
     )
 
     assert result["found"] is True
@@ -253,6 +256,8 @@ def test_update_bib_entry_returns_not_found_when_missing(tmp_path: Path) -> None
         str(path),
         "missing",
         lambda entry, record: entry,
+    
+        expected_paper=ANY_PAPER,
     )
 
     assert result == {
@@ -572,6 +577,8 @@ def test_update_bib_entry_two_threads_no_lost_update_and_no_stale_lock(
                             "counter": str(int(entry["fields"]["counter"]) + 1),
                         },
                     },
+                
+                    expected_paper=ANY_PAPER,
                 )
         except BaseException as exc:  # captured for the main thread
             errors.append(exc)
@@ -861,6 +868,8 @@ def test_write_paths_parse_the_library_exactly_once(tmp_path: Path, monkeypatch)
         str(path),
         "a2024",
         lambda entry, record: {**entry, "fields": {**entry["fields"], "year": "2024"}},
+    
+        expected_paper=ANY_PAPER,
     )
     assert calls["n"] == 1, "update_bib_entry re-parsed the library"
 
@@ -887,6 +896,8 @@ def test_write_refusal_names_the_duplicate_and_its_real_line(tmp_path: Path) -> 
             str(path),
             "smith2024",
             lambda entry, record: {**entry, "fields": {**entry["fields"], "year": "2024"}},
+        
+            expected_paper=ANY_PAPER,
         )
 
     message = str(excinfo.value)
@@ -1097,7 +1108,7 @@ def test_update_keeps_a_write_that_landed_while_it_held_the_lock(
         }
 
     with pytest.raises(PziError) as excinfo:
-        update_bib_entry(str(bib), "a2020", updater)
+        update_bib_entry(str(bib), "a2020", updater, expected_paper=ANY_PAPER)
 
     assert excinfo.value.code == exit_codes.ENVIRONMENT
     assert bib.read_text(encoding="utf-8") == foreign
@@ -1120,7 +1131,7 @@ def test_update_leaves_no_backup_when_it_refuses(tmp_path: Path) -> None:
         }
 
     with pytest.raises(PziError):
-        update_bib_entry(str(bib), "a2020", updater, backup_path=backup)
+        update_bib_entry(str(bib), "a2020", updater, backup_path=backup, expected_paper=ANY_PAPER)
 
     assert not backup.exists()
 
