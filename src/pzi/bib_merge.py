@@ -141,15 +141,20 @@ def _apply_untouched_fields_from_current(
         if planned_value != base_value:
             # This writer decided this field — it wins, unless the other writer
             # decided a user-owned one differently too.
-            if field not in _USER_OWNED_ENTRY_FIELDS or current_value is None:
+            if field not in _USER_OWNED_ENTRY_FIELDS:
                 continue
             if field == "keywords":
+                # No `current_value is None` shortcut here: the other writer
+                # removing every tag is a removal like any other, and letting
+                # the plan win would restore the tags it removed.
                 if current_value != base_value and current_value != planned_value:
                     merged = _merge_keywords(base_value, planned_value, current_value)
                     if merged is None:
                         rebased["fields"].pop(field, None)
                     else:
                         rebased["fields"][field] = merged
+                continue
+            if current_value is None:
                 continue
             same = (
                 _same_file_value(current_value, base_value)
