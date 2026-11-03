@@ -57,10 +57,12 @@ export function normalizeMetadataUrl(raw, pageUrl) {
       // null when it will not parse, never the raw string: the server rejects
       // the whole capture for a malformed URL (`http://[`), and every caller
       // already has a valid tab URL to fall back to. A parseable URL that is
-      // not http(s) (`javascript:`, `data:`) is as unusable as a page URL.
+      // not http(s) (`javascript:`, `data:`) is as unusable as a page URL, and
+      // so is a private one (`http://localhost:3000/x`): the server answers 400
+      // `must be a public http(s) URL` and drops the whole capture.
       try {
         const parsed = new URL(raw, pageUrl);
-        return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.href : null;
+        return isSafePublicHttpUrl(parsed.href) ? parsed.href : null;
       } catch (_) {
         return null;
       }

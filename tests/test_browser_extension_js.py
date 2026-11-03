@@ -4720,6 +4720,51 @@ def test_a_metadata_url_that_is_not_http_is_not_sent_as_a_page_url(tmp_path: Pat
     assert result["sent"]["canonical_url"] == "https://paper.test/article", result["sent"]
 
 
+def test_a_private_metadata_url_falls_back_to_the_tab_url_not_a_400(tmp_path: Path) -> None:
+    """The server answers 400 for a private canonical/source/abstract/embedded URL.
+
+    `src/pzi/http_post_routes.py` `metadata_url_override_error` rejects the whole
+    capture; the extension cannot resolve names, so it applies the same check it
+    has (`isSafePublicHttpUrl`) and falls back to the public tab URL.
+    """
+    for private in [
+        "http://localhost:3000/x",
+        "http://localhost.:3000/x",
+        "http://192.168.1.5/paper",
+        "http://100.100.100.100/paper",
+        "http://intranet/paper",
+    ]:
+        result = _capture_with_page_metadata(
+            tmp_path,
+            {
+                "pageTitle": "Paper",
+                "canonicalUrl": private,
+                "sourceUrl": private,
+                "abstractUrl": private,
+                "embedded_pdf_url": private,
+            },
+            observed=[],
+        )
+        sent = result["sent"]
+        assert sent["canonical_url"] == "https://paper.test/article", (private, sent)
+        assert sent["source_url"] == "https://paper.test/article", (private, sent)
+        assert sent["abstract_url"] == "https://paper.test/article", (private, sent)
+        assert sent["embedded_pdf_url"] is None, (private, sent)
+        assert not any(
+            "localhost" in str(v) or "192.168" in str(v) or "100.100" in str(v) or "intranet" in str(v)
+            for k, v in sent.items() if k.endswith("_url") or k == "pdf_url_candidates"
+        ), (private, sent)
+
+
+def test_a_public_metadata_url_still_travels_unchanged(tmp_path: Path) -> None:
+    result = _capture_with_page_metadata(
+        tmp_path,
+        {"pageTitle": "Paper", "canonicalUrl": "https://paper.test/canonical", "sourceUrl": "https://paper.test/article"},
+        observed=[],
+    )
+    assert result["sent"]["canonical_url"] == "https://paper.test/canonical", result["sent"]
+
+
 # ---------------------------------------------------------------------------
 # rc3 extension lane: permission budget, bounded bodies, private-network guard
 # ---------------------------------------------------------------------------
@@ -5250,3 +5295,31 @@ def test_the_extension_agrees_with_python_on_every_ipv4_range_boundary(tmp_path:
         if row["safe"] != public_ip_address(ip) or row["blocked"] == row["safe"]
     ]
     assert not mismatches, mismatches
+
+
+def test_a_download_that_ended_at_a_public_fc_or_fd_host_is_attached(tmp_path: Path) -> None:
+    """`fdslive.oup.com` and `fda.gov` are hosts, not IPv6 prefixes; the finished download stays."""
+    for final in ["https://fdslive.oup.com/real.pdf", "https://www.fda.gov/real.pdf"]:
+        result = _run_background_module(
+            _STREAMING_PRELUDE
+            + r'''
+globalThis.chrome = {
+  runtime: { onInstalled: { addListener: () => {} } },
+  storage: { local: { get: async () => ({}) } },
+  permissions: { contains: async () => true, request: async () => true, remove: async () => true },
+};
+globalThis.bodies = [];
+globalThis.fetch = async (url, options = {}) => {
+  if (options.method === "POST") { globalThis.bodies.push(JSON.parse(options.body)); return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({ status: "ok" }) }; }
+  return makeStreamResponse({ count: 1, url: FINAL }).response;
+};
+const { maybeStreamPdfBytes } = await import("./background/pdf_fetch.mjs");
+const outcome = await maybeStreamPdfBytes({
+  endpoint: "http://127.0.0.1:8765/capture", citekey: "k", bib: null,
+  pdfUrlCandidates: [{ url: "https://pub.test/a.pdf" }], pageUrl: "https://pub.test/article",
+});
+console.log(JSON.stringify({ outcome, bodies: globalThis.bodies }));
+'''.replace("FINAL", json.dumps(final)),
+            tmp_path,
+        )
+        assert [b["source_url"] for b in result["bodies"]] == [final], (final, result)
