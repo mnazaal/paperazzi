@@ -185,6 +185,26 @@ def _embedded_ipv4(ip: ipaddress.IPv6Address) -> ipaddress.IPv4Address | None:
     return None
 
 
+#: Special-use blocks the answer must not depend on the interpreter for. Patch
+#: releases disagree about them: `ipaddress` on Python 3.11.9 calls 192.0.0.254
+#: and 3fff:: global, and newer releases carve global exceptions out of the first
+#: two. `requires-python` admits all of these, and none of them hosts a paper.
+_NEVER_PUBLIC = tuple(
+    ipaddress.ip_network(block)
+    for block in (
+        "192.0.0.0/24",
+        "2001::/23",
+        "64:ff9b:1::/48",
+        "3fff::/20",
+        "5f00::/16",
+    )
+)
+
+
+def _is_never_public(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return any(ip in block for block in _NEVER_PUBLIC)
+
+
 def public_ip_address(value: str) -> bool:
     """Return True for globally-routable IP address strings.
 
@@ -198,12 +218,16 @@ def public_ip_address(value: str) -> bool:
         ip = ipaddress.ip_address(value)
     except ValueError:
         return False
+    if _is_never_public(ip):
+        return False
     if isinstance(ip, ipaddress.IPv6Address):
         embedded = _embedded_ipv4(ip)
         if embedded is _DEPRECATED_V6:
             return False
         if embedded is not None:
             ip = embedded
+            if _is_never_public(ip):
+                return False
     # is_global already excludes private/loopback/link-local/reserved/CGNAT,
     # but (surprisingly) not multicast, so that stays an explicit check.
     return ip.is_global and not ip.is_multicast
