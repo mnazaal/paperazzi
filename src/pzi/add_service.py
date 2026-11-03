@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import os
 import urllib.error
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, TypeAlias, cast
 from urllib.parse import urlsplit
@@ -824,13 +824,13 @@ def _execute_plan_with_retry(
                 # a replan kept the `file` that writer set, so the file this
                 # attempt stored is not what the committed entry points at. The
                 # rollback spares it when an entry does reference it.
-                _cleanup_new_pdf(record_with_hint, existing_pdf_paths, bib["path"])
+                _cleanup_new_pdf(record_with_hint, existing_pdf_paths, bib)
             return record_with_hint, plan_with_applied_record(
                 plan, record_with_hint, applied
             )
         except StalePlanError:
             if attempt == 1:
-                _cleanup_new_pdf(record_with_hint, existing_pdf_paths, bib["path"])
+                _cleanup_new_pdf(record_with_hint, existing_pdf_paths, bib)
                 raise
             # Re-read the externally-edited library and replan against it.
             # Under its own guard: a sibling `except` cannot catch what another
@@ -844,10 +844,10 @@ def _execute_plan_with_retry(
                 ]
                 record_with_hint, plan = build_plan(records, reread["entries"])
             except Exception:
-                _cleanup_new_pdf(record_with_hint, existing_pdf_paths, bib["path"])
+                _cleanup_new_pdf(record_with_hint, existing_pdf_paths, bib)
                 raise
         except Exception:
-            _cleanup_new_pdf(record_with_hint, existing_pdf_paths, bib["path"])
+            _cleanup_new_pdf(record_with_hint, existing_pdf_paths, bib)
             raise
     # Unreachable: the loop either returns, retries, or raises.
     raise AssertionError("retry loop exited without committing or raising")
@@ -869,13 +869,41 @@ def _committed_other_pdf(
     )
 
 
+def _created_in_papers_dir(paths: Iterable[str | None], papers_dir: str) -> list[str]:
+    """The *paths* that sit under *papers_dir*, the only place this module creates PDFs.
+
+    The pre-download snapshot covers only that directory, so it cannot say a
+    file elsewhere is not ours. A reused ``local_pdf_path`` taken from a matched
+    entry can name such a file (the user's own PDF), and unlinking it is
+    irreversible. Rollback therefore never considers a path outside it.
+    """
+    try:
+        root = Path(papers_dir).expanduser().resolve()
+    except OSError:
+        return []
+    kept: list[str] = []
+    for path in paths:
+        if not path:
+            continue
+        try:
+            if Path(path).expanduser().resolve().is_relative_to(root):
+                kept.append(path)
+        except OSError:
+            continue
+    return kept
+
+
 def _cleanup_new_pdf(
-    record_with_hint: NormalizedRecord, existing_pdf_paths: set[Path], bib_path: str
+    record_with_hint: NormalizedRecord, existing_pdf_paths: set[Path], bib: BibConfig
 ) -> None:
     """Roll back this write's download, sparing a file an entry now points at."""
     pdf_path = record_with_hint.get("local_pdf_path")
     if isinstance(pdf_path, str):
-        rollback_new_pdfs([pdf_path], existing_pdf_paths, bib_path=bib_path)
+        rollback_new_pdfs(
+            _created_in_papers_dir([pdf_path], bib["papers_dir"]),
+            existing_pdf_paths,
+            bib_path=bib["path"],
+        )
 
 
 def add_records_to_bib_batch(
@@ -973,10 +1001,11 @@ def add_records_to_bib_batch(
                         # bytes under one planned filename resolve to the same
                         # path. Removing it here would delete the PDF an
                         # earlier record is about to be committed with.
-                        _remove_new_pdf(
-                            record_pdf, existing_pdf_paths,
-                            keep=[*batch_pdfs, *committed_pdfs],
-                        )
+                        for created in _created_in_papers_dir([record_pdf], papers_dir):
+                            _remove_new_pdf(
+                                created, existing_pdf_paths,
+                                keep=[*batch_pdfs, *committed_pdfs],
+                            )
                     results.append(_error_result(
                         message="failed to import record", errors=[str(exc)],
                         dry_run=dry_run, warnings=[], bib=bib,
@@ -1016,7 +1045,11 @@ def add_records_to_bib_batch(
         # nothing is left orphaned on disk. The session's lock is released by
         # now, so another writer may have committed one of them in the meantime.
         if not dry_run:
-            rollback_new_pdfs(batch_pdfs, existing_pdf_paths, bib_path=bib["path"])
+            rollback_new_pdfs(
+                _created_in_papers_dir(batch_pdfs, papers_dir),
+                existing_pdf_paths,
+                bib_path=bib["path"],
+            )
         raise
 
     return results
