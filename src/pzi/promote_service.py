@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
@@ -220,7 +220,9 @@ def promote_bib(
 
     items: list[PromoteItem] = []
     summary = _empty_summary()
-    resolved_preprints: list[str] = []
+    #: citekey -> the preprint as the search saw it, so the follow-up tag write
+    #: can refuse an entry another writer has since replaced under that key.
+    resolved_preprints: dict[str, NormalizedRecord] = {}
     # One backup for the run, not one per promoted entry. `backup_path_for` never
     # reuses a name and `update_bib_entry` copies the whole file, so computing it
     # inside the loop left a full copy of the library per `--replace` promotion:
@@ -362,7 +364,8 @@ def promote_bib(
                     # `--mark-resolved` run. Replace mode rewrote the entry into the
                     # published version, which is no longer a preprint at all.
                     if keep_preprint:
-                        resolved_preprints.append(write.preprint_ck)
+                        if write.snapshot is not None:
+                            resolved_preprints[write.preprint_ck] = write.snapshot
                     else:
                         written.append(item_index)
         except BaseException:
@@ -695,7 +698,7 @@ def promote_bib(
             config_path=config_path,
             home_dir=home_dir,
             bib_selector=bib_selector,
-            citekeys=resolved_preprints,
+            snapshots=resolved_preprints,
         )
         summary["marked_resolved"] = tagged
         errors.extend(tag_failures)
@@ -743,7 +746,11 @@ def _empty_summary() -> dict[str, Any]:
 
 
 def _tag_resolved(
-    *, config_path: str, home_dir: str, bib_selector: str | None, citekeys: list[str]
+    *,
+    config_path: str,
+    home_dir: str,
+    bib_selector: str | None,
+    snapshots: Mapping[str, NormalizedRecord],
 ) -> tuple[int, list[str]]:
     """Tag each promoted preprint with the resolved marker.
 
@@ -755,14 +762,22 @@ def _tag_resolved(
     """
     tagged = 0
     failures: list[str] = []
-    for citekey in citekeys:
-        result = add_tags(
-            config_path=config_path,
-            home_dir=home_dir,
-            bib_selector=bib_selector,
-            citekey=citekey,
-            tags=[_RESOLVED_TAG],
-        )
+    for citekey, snapshot in snapshots.items():
+        try:
+            result = add_tags(
+                config_path=config_path,
+                home_dir=home_dir,
+                bib_selector=bib_selector,
+                citekey=citekey,
+                tags=[_RESOLVED_TAG],
+                expected_paper=snapshot,
+            )
+        except StalePlanError:
+            failures.append(
+                f"{citekey}: could not mark resolved "
+                "(now a different paper than the one promoted; left unchanged)"
+            )
+            continue
         if result.get("status") == "ok":
             tagged += 1
         else:
@@ -879,6 +894,9 @@ class _PendingWrite:
     counter: str
     #: Folds this promotion's edits into an open session.
     apply: Callable[[BatchWriteSession], None]
+    #: Keep mode: the preprint the search ran for, used to guard the later
+    #: `--mark-resolved` tag write. None in replace mode, which tags nothing.
+    snapshot: NormalizedRecord | None = None
 
 
 def _rollback_write_pdf(
@@ -969,7 +987,7 @@ def _handle_keep_preprint(
             bib_path,
             lambda preview: _apply_published_fork(
                 preview, published, preprint_ck, published_ck,
-                bib_path=bib_path, check_collision=False,
+                bib_path=bib_path, check_collision=False, snapshot=None,
             ),
             file_path_style=file_path_style,
         )["diff"]
@@ -979,9 +997,11 @@ def _handle_keep_preprint(
             record=published,
             existing_pdf_paths=existing_pdf_paths,
             counter="created",
+            snapshot=preprint_record,
             apply=lambda session: _apply_published_fork(
                 session, published, preprint_ck, published_ck,
                 bib_path=bib_path, check_collision=True,
+                snapshot=preprint_record,
             ),
         )
 
@@ -1025,6 +1045,7 @@ def _apply_published_fork(
     *,
     bib_path: str,
     check_collision: bool,
+    snapshot: NormalizedRecord | None,
 ) -> None:
     """Fold both of the fork's writes into *session*.
 
@@ -1064,6 +1085,18 @@ def _apply_published_fork(
     # the promotion `failed` and `_remove_new_pdf` deleted the PDF that
     # committed entry's `file =` now pointed at. The order is free: the insert
     # appends, so it cannot move the index the note plan resolves.
+    if snapshot is not None:
+        # Same guard as replace mode: the search ran with no lock held, long
+        # enough for another writer to put a different paper under the key,
+        # and the note would then cross-reference that paper.
+        for record in session.records:
+            if record.get("citekey") == preprint_ck and not same_paper(
+                snapshot, record
+            ):
+                raise _PreprintVanished(
+                    f"{preprint_ck} is now a different paper than the one that "
+                    "was searched for; left unchanged"
+                )
     insert_plan = plan_bib_write(published, session.records, force_new=True)
     note_plan = _plan_note_update(
         session, preprint_ck, f"Published version: {published_ck}"

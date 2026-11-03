@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import unicodedata
-from typing import Literal, NotRequired, TypedDict, cast
+from collections.abc import Mapping
+from typing import Any, Literal, NotRequired, TypedDict, cast
 
 from pzi.bib_repository import (
     ANY_PAPER,
+    _AnyPaper,
     find_entry_index,
     read_bib_file,
     read_bib_file_with_notices,
@@ -167,6 +169,7 @@ def add_tags(
     citekey: str,
     tags: list[str],
     dry_run: bool = False,
+    expected_paper: Mapping[str, Any] | _AnyPaper = ANY_PAPER,
 ) -> TagChangeResult:
     return _mutate_entry_tags(
         config_path=config_path,
@@ -176,6 +179,7 @@ def add_tags(
         tags=tags,
         mode="add",
         dry_run=dry_run,
+        expected_paper=expected_paper,
     )
 
 
@@ -208,6 +212,7 @@ def _mutate_entry_tags(
     tags: list[str],
     mode: Literal["add", "remove"],
     dry_run: bool,
+    expected_paper: Mapping[str, Any] | _AnyPaper = ANY_PAPER,
 ) -> TagChangeResult:
     resolved = load_bib_target(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector
@@ -326,7 +331,7 @@ def _mutate_entry_tags(
             bib["path"], citekey, _updater,
             # The user named this key and the tags are the whole write: nothing
             # derived from a snapshot of the entry goes into it.
-            expected_paper=ANY_PAPER,
+            expected_paper=expected_paper,
             file_path_style=file_path_style,
         )
         if not update_result["found"]:
