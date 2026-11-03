@@ -113,6 +113,10 @@ def _non_negative_int(value: str) -> int:
         raise argparse.ArgumentTypeError(f"expected an integer, got {value!r}") from None
     if parsed < 0:
         raise argparse.ArgumentTypeError(f"must be zero or greater, got {parsed}")
+    if parsed > _MAX_DELAY_SECONDS:
+        raise argparse.ArgumentTypeError(
+            f"must be at most {_MAX_DELAY_SECONDS:g} seconds (one day), got {parsed:g}"
+        )
     return parsed
 
 
@@ -151,11 +155,16 @@ def _positive_int(value: str) -> int:
     return parsed
 
 
+_MAX_DELAY_SECONDS = 86400.0
+
+
 def _non_negative_float(value: str) -> float:
-    """argparse type: a finite number ``>= 0`` (rejects negatives, nan, inf, garbage).
+    """argparse type: a sleepable number ``>= 0`` (rejects negatives, nan, inf, garbage).
 
     `float()` accepts `inf`, `nan` and overflowing literals like `1e999`; a
-    batch delay of `inf` slept forever after the first item was written.
+    batch delay of `inf` slept forever after the first item was written. A
+    finite `1e300` is no better: `time.sleep` raises OverflowError on it, also
+    after the first item was written.
     """
     try:
         parsed = float(value)
@@ -165,6 +174,10 @@ def _non_negative_float(value: str) -> float:
         raise argparse.ArgumentTypeError(f"must be a finite number, got {value!r}")
     if parsed < 0:
         raise argparse.ArgumentTypeError(f"must be zero or greater, got {parsed}")
+    if parsed > _MAX_DELAY_SECONDS:
+        raise argparse.ArgumentTypeError(
+            f"must be at most {_MAX_DELAY_SECONDS:g} seconds (one day), got {parsed:g}"
+        )
     return parsed
 
 

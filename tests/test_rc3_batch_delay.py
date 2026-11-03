@@ -59,3 +59,14 @@ def test_every_float_option_uses_the_finite_validator() -> None:
             elif action.type is _non_negative_float:
                 seen += 1
     assert seen == 2
+
+
+@pytest.mark.parametrize("value", ["1e300", "86401"])
+def test_a_delay_too_long_to_sleep_is_refused(value: str) -> None:
+    """`time.sleep(1e300)` raises OverflowError after the first item is written."""
+    with pytest.raises(argparse.ArgumentTypeError):
+        _non_negative_float(value)
+
+
+def test_a_one_day_delay_is_still_accepted() -> None:
+    assert _non_negative_float("86400") == 86400.0
