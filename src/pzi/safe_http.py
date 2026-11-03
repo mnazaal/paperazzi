@@ -89,6 +89,8 @@ def resolve_pinned_ip(
 #: leaves time for the next within a single connect budget.
 _PER_ADDRESS_CONNECT_SECONDS = 6.0
 
+_KEEP_BUDGET = object()
+
 
 def connect_first_reachable(
     ips: list[str],
@@ -96,8 +98,16 @@ def connect_first_reachable(
     *,
     timeout: float,
     connect: Callable[..., socket.socket] = socket.create_connection,
+    read_timeout: float | None | object = _KEEP_BUDGET,
 ) -> socket.socket:
-    """Dial *ips* in order within one *timeout* budget; raise the last ``OSError``."""
+    """Dial *ips* in order within one *timeout* budget; raise the last ``OSError``.
+
+    The dial timeout is shorter than the caller's and ``create_connection``
+    leaves it on the socket, so the connected socket gets ``read_timeout``
+    (default: *timeout*) back before it is returned.
+    """
+    if read_timeout is _KEEP_BUDGET:
+        read_timeout = timeout
     deadline = time.monotonic() + timeout
     last: OSError = OSError("no addresses to connect to")
     for index, ip in enumerate(ips):
@@ -107,10 +117,18 @@ def connect_first_reachable(
         is_last = index == len(ips) - 1
         attempt = remaining if is_last else min(remaining, _PER_ADDRESS_CONNECT_SECONDS)
         try:
-            return connect((ip, port), timeout=attempt)
+            sock = connect((ip, port), timeout=attempt)
         except OSError as exc:
             last = exc
+            continue
+        sock.settimeout(read_timeout)  # type: ignore[arg-type]
+        return sock
     raise last
+
+
+def _read_timeout(timeout: object) -> float | None:
+    """The socket timeout a connection's ``timeout`` asks for after the dial."""
+    return float(timeout) if isinstance(timeout, (int, float)) else socket.getdefaulttimeout()
 
 
 def _budget(timeout: object) -> float:
@@ -123,7 +141,10 @@ class _PinnedHTTPConnection(http.client.HTTPConnection):
 
     def connect(self) -> None:
         ips = resolve_pinned_ips(self.host, self.port, allow_host=self._allow_host)
-        self.sock = connect_first_reachable(ips, self.port, timeout=_budget(self.timeout))
+        self.sock = connect_first_reachable(
+            ips, self.port, timeout=_budget(self.timeout),
+            read_timeout=_read_timeout(self.timeout),
+        )
 
 
 class _PinnedHTTPSConnection(http.client.HTTPSConnection):
@@ -136,7 +157,10 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
 
     def connect(self) -> None:
         ips = resolve_pinned_ips(self.host, self.port, allow_host=self._allow_host)
-        sock = connect_first_reachable(ips, self.port, timeout=_budget(self.timeout))
+        sock = connect_first_reachable(
+            ips, self.port, timeout=_budget(self.timeout),
+            read_timeout=_read_timeout(self.timeout),
+        )
         # Dial the pinned IP, but verify TLS against the hostname (SNI + cert).
         self.sock = self._ssl_ctx.wrap_socket(sock, server_hostname=self.host)
 
