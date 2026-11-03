@@ -12,6 +12,10 @@ they connect next:
 Limits: it replaces, rather than chains to, a corporate proxy the user may have
 configured for those clients; and a client that opens raw sockets or spawns a
 process bypasses it.
+
+A refusal carries a ``text/plain`` body naming the guard. The translation-server
+reads a reply without a ``Content-Type`` as "not in a supported format", which
+hid every refusal behind one wrong message.
 """
 
 from __future__ import annotations
@@ -20,12 +24,13 @@ import contextlib
 import selectors
 import socket
 import socketserver
+import struct
 import threading
 from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlsplit
 
-from pzi.safe_http import SsrfBlocked, resolve_pinned_ip
+from pzi.safe_http import SsrfBlocked, connect_first_reachable, resolve_pinned_ips
 
 _PROXY_HEAD_LIMIT = 64 * 1024
 _PROXY_IDLE_SECONDS = 60.0
@@ -130,37 +135,65 @@ class PinningProxy:
             else:
                 split = urlsplit(target)
                 if split.scheme != "http" or not split.hostname:
-                    self._reply(client, 400, "Bad Request")
+                    self._reply(client, 400, "Bad Request", "not an absolute http:// request")
                     return
                 host, port = split.hostname, _valid_port(split.port or 80)
                 scheme_path = (split.path or "/") + (f"?{split.query}" if split.query else "")
         except ValueError:
-            self._reply(client, 400, "Bad Request")
+            self._reply(client, 400, "Bad Request", "malformed request target")
             return
 
+        body_length = 0
+        if scheme_path is not None:
+            names = [ln.split(":", 1)[0].strip().lower() for ln in lines[1:]]
+            if "transfer-encoding" in names:
+                self._reply(
+                    client, 501, "Not Implemented",
+                    "chunked or encoded request bodies are not supported",
+                )
+                return
+            lengths = [
+                ln.split(":", 1)[1].strip() for ln in lines[1:]
+                if ln.split(":", 1)[0].strip().lower() == "content-length"
+            ]
+            try:
+                if len(set(lengths)) > 1:
+                    raise ValueError
+                body_length = int(lengths[0]) if lengths else 0
+                if body_length < 0 or (lengths and not lengths[0].isdigit()):
+                    raise ValueError
+            except ValueError:
+                self._reply(client, 400, "Bad Request", "invalid Content-Length")
+                return
+
         try:
-            ip = resolve_pinned_ip(host.strip("[]"), port, getaddrinfo=self._getaddrinfo)
-        except SsrfBlocked:
-            self._reply(client, 403, "Forbidden")
+            ips = resolve_pinned_ips(host.strip("[]"), port, getaddrinfo=self._getaddrinfo)
+        except SsrfBlocked as exc:
+            self._reply(client, 403, "Forbidden", f"refused {host}: {exc}")
             return
         except (OSError, UnicodeError):
             # `getaddrinfo` raises UnicodeError for a label IDNA cannot encode.
-            self._reply(client, 502, "Bad Gateway")
+            self._reply(client, 502, "Bad Gateway", f"could not resolve {host}")
             return
         try:
-            upstream = self._connect((ip, port), timeout=_PROXY_CONNECT_SECONDS)
+            upstream = connect_first_reachable(
+                ips, port, timeout=_PROXY_CONNECT_SECONDS, connect=self._connect
+            )
         except OSError:
-            self._reply(client, 502, "Bad Gateway")
+            self._reply(client, 502, "Bad Gateway", f"could not connect to {host}:{port}")
             return
         with contextlib.closing(upstream):
             upstream.settimeout(_PROXY_IDLE_SECONDS)
+            upload_budget: int | None = None
             if scheme_path is None:
                 client.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
                 pending = rest
             else:
-                # One request per connection: the pinned address belongs to
-                # this request's host, so a kept-alive connection must not carry
-                # a second request for another one.
+                # One request per connection. The pinned address belongs to this
+                # request's host, so nothing the client sends after this request
+                # and its declared body is forwarded: a server that ignores
+                # `Connection: close` must not receive another host's request,
+                # cookies included.
                 kept = [
                     ln for ln in lines[1:]
                     if ln.split(":", 1)[0].strip().lower()
@@ -168,26 +201,50 @@ class PinningProxy:
                 ]
                 kept.append("Connection: close")
                 request = f"{method} {scheme_path} {version}\r\n" + "\r\n".join(kept)
-                pending = request.encode("latin-1") + b"\r\n\r\n" + rest
-            if pending:
-                upstream.sendall(pending)
-            self._relay(client, upstream, self._max_response_bytes)
+                pending = request.encode("latin-1") + b"\r\n\r\n" + rest[:body_length]
+                upload_budget = max(body_length - len(rest), 0)
+            upstream.sendall(pending)
+            self._relay(client, upstream, self._max_response_bytes, upload_budget)
 
     @staticmethod
-    def _reply(client: socket.socket, status: int, reason: str) -> None:
+    def _reply(client: socket.socket, status: int, reason: str, detail: str = "") -> None:
+        body = f"pzi egress guard: {detail or reason}\n".encode("latin-1", "replace")
         with contextlib.suppress(OSError):
             client.sendall(
-                f"HTTP/1.1 {status} {reason}\r\nContent-Length: 0\r\n"
-                "Connection: close\r\n\r\n".encode()
+                f"HTTP/1.1 {status} {reason}\r\nContent-Type: text/plain; charset=utf-8\r\n"
+                f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()
+                + body
             )
 
     @staticmethod
-    def _relay(client: socket.socket, upstream: socket.socket, limit: int) -> None:
-        a, b = client, upstream
+    def _reset(sock: socket.socket) -> None:
+        """Close with a TCP reset, so a cut body reads as an error, not a short one."""
+        # Closed here, not left to the server: `socketserver` shuts the write
+        # side down first, which sends a FIN and reads as a clean end.
+        with contextlib.suppress(OSError):
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+        sock.close()
+
+    @classmethod
+    def _relay(
+        cls,
+        client: socket.socket,
+        upstream: socket.socket,
+        limit: int,
+        upload_budget: int | None = None,
+    ) -> None:
+        """Copy both ways until either side closes.
+
+        ``upload_budget`` is how many more client bytes may be forwarded: the
+        unread rest of a plain-HTTP request's declared body. Once spent, the
+        client is no longer read. ``None`` (a CONNECT tunnel) is unbounded.
+        """
         sent_down = 0
         sel = selectors.DefaultSelector()
-        sel.register(a, selectors.EVENT_READ, b)
-        sel.register(b, selectors.EVENT_READ, a)
+        sel.register(client, selectors.EVENT_READ, upstream)
+        sel.register(upstream, selectors.EVENT_READ, client)
+        if upload_budget == 0:
+            sel.unregister(client)
         try:
             while True:
                 events = sel.select(timeout=_PROXY_IDLE_SECONDS)
@@ -200,11 +257,20 @@ class PinningProxy:
                     if key.fileobj is upstream:
                         room = limit - sent_down
                         if len(data) >= room:
-                            # Over budget: forward what fits, then cut, so the
-                            # reader sees a truncated body, never an unbounded one.
-                            key.data.sendall(data[: max(room, 0)])
+                            # Over budget: forward what fits, then reset, so the
+                            # reader sees a failed body, never a short one that
+                            # looks complete (a close-delimited body ends on a
+                            # clean close).
+                            with contextlib.suppress(OSError):
+                                client.sendall(data[: max(room, 0)])
+                            cls._reset(client)
                             return
                         sent_down += len(data)
+                    elif upload_budget is not None:
+                        data = data[:upload_budget]
+                        upload_budget -= len(data)
+                        if upload_budget == 0:
+                            sel.unregister(client)
                     key.data.sendall(data)
         except OSError:
             return

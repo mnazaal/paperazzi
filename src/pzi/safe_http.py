@@ -19,6 +19,7 @@ from __future__ import annotations
 import http.client
 import socket
 import ssl
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -38,21 +39,22 @@ class SsrfBlocked(urllib.error.URLError):
     """
 
 
-def resolve_pinned_ip(
+def resolve_pinned_ips(
     host: str,
     port: int,
     *,
     getaddrinfo: GetAddrInfo = socket.getaddrinfo,
     allow_host: str | None = None,
-) -> str:
-    """Resolve *host* and return one address, rejecting if any is non-public.
+) -> list[str]:
+    """Resolve *host* and return every address, rejecting if any is non-public.
 
     DNS failures propagate as ``OSError`` (transient, retryable).  A successful
     resolution that includes a non-public address raises :class:`SsrfBlocked`
     (terminal) — matching :func:`pzi.url_safety.safe_public_http_url`'s
     "all addresses must be public" rule.  ``allow_host`` names a single
     explicitly-trusted host (e.g. a configured EZProxy host) whose private IP
-    is permitted.
+    is permitted.  Order is the resolver's, without repeats, so a caller can
+    fall back to the next address the way a browser does.
     """
     infos = list(getaddrinfo(host, port, type=socket.SOCK_STREAM))
     if not infos:
@@ -61,20 +63,67 @@ def resolve_pinned_ip(
         allow_host
         and host.strip().lower().rstrip(".") == allow_host.strip().lower().rstrip(".")
     )
+    ips: list[str] = []
     for info in infos:
         sockaddr = info[4]
         ip = sockaddr[0] if sockaddr else ""
         if not isinstance(ip, str) or (not trusted and not public_ip_address(ip)):
             raise SsrfBlocked(f"blocked non-public address {ip!r} for host {host!r}")
-    return infos[0][4][0]
+        if ip not in ips:
+            ips.append(ip)
+    return ips
+
+
+def resolve_pinned_ip(
+    host: str,
+    port: int,
+    *,
+    getaddrinfo: GetAddrInfo = socket.getaddrinfo,
+    allow_host: str | None = None,
+) -> str:
+    """The first address of :func:`resolve_pinned_ips`."""
+    return resolve_pinned_ips(host, port, getaddrinfo=getaddrinfo, allow_host=allow_host)[0]
+
+
+#: Longest one address gets while others remain, so a dead first address
+#: leaves time for the next within a single connect budget.
+_PER_ADDRESS_CONNECT_SECONDS = 6.0
+
+
+def connect_first_reachable(
+    ips: list[str],
+    port: int,
+    *,
+    timeout: float,
+    connect: Callable[..., socket.socket] = socket.create_connection,
+) -> socket.socket:
+    """Dial *ips* in order within one *timeout* budget; raise the last ``OSError``."""
+    deadline = time.monotonic() + timeout
+    last: OSError = OSError("no addresses to connect to")
+    for index, ip in enumerate(ips):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        is_last = index == len(ips) - 1
+        attempt = remaining if is_last else min(remaining, _PER_ADDRESS_CONNECT_SECONDS)
+        try:
+            return connect((ip, port), timeout=attempt)
+        except OSError as exc:
+            last = exc
+    raise last
+
+
+def _budget(timeout: object) -> float:
+    """`HTTPConnection.timeout` as a number; the default sentinel means no limit."""
+    return float(timeout) if isinstance(timeout, (int, float)) else 60.0
 
 
 class _PinnedHTTPConnection(http.client.HTTPConnection):
     _allow_host: str | None = None
 
     def connect(self) -> None:
-        ip = resolve_pinned_ip(self.host, self.port, allow_host=self._allow_host)
-        self.sock = socket.create_connection((ip, self.port), self.timeout)
+        ips = resolve_pinned_ips(self.host, self.port, allow_host=self._allow_host)
+        self.sock = connect_first_reachable(ips, self.port, timeout=_budget(self.timeout))
 
 
 class _PinnedHTTPSConnection(http.client.HTTPSConnection):
@@ -86,8 +135,8 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
         self._ssl_ctx = ctx if isinstance(ctx, ssl.SSLContext) else ssl.create_default_context()
 
     def connect(self) -> None:
-        ip = resolve_pinned_ip(self.host, self.port, allow_host=self._allow_host)
-        sock = socket.create_connection((ip, self.port), self.timeout)
+        ips = resolve_pinned_ips(self.host, self.port, allow_host=self._allow_host)
+        sock = connect_first_reachable(ips, self.port, timeout=_budget(self.timeout))
         # Dial the pinned IP, but verify TLS against the hostname (SNI + cert).
         self.sock = self._ssl_ctx.wrap_socket(sock, server_hostname=self.host)
 
