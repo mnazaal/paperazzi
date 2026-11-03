@@ -208,7 +208,7 @@ def promote_bib(
     ledger_now = ledger.utc_now()
     #: Citekeys this run confirmed are still unpublished, written once at the
     #: end rather than per item.
-    checked_negative: list[str] = []
+    checked_negative: list[tuple[str, str]] = []
 
     read_result = read_bib_file(bib["path"])
     records = read_result["records"]
@@ -276,6 +276,7 @@ def promote_bib(
             str(record.get("citekey")),
             now=ledger_now,
             horizon_days=recheck_after_days,
+            identity=ledger.entry_identity(record),
         ):
             # Asked inside the horizon and the answer was "not published yet".
             return "skipped_recently_checked"
@@ -371,7 +372,9 @@ def promote_bib(
                 items[item_index]["backup_path"] = str(backup)
         queue.clear()
 
-    def note_still_unpublished(citekey: str, provider_errors: list[str]) -> None:
+    def note_still_unpublished(
+        citekey: str, provider_errors: list[str], looked_up: dict[str, Any]
+    ) -> None:
         """Record a negative answer for the ledger — if it is really an answer.
 
         A provider error means the search was incomplete, so "found nothing" is
@@ -382,7 +385,8 @@ def promote_bib(
         """
         if provider_errors:
             return
-        checked_negative.append(citekey)
+        # Bound to the entry as looked up, so a same-key replacement is re-asked.
+        checked_negative.append((citekey, ledger.entry_identity(looked_up)))
 
     def record_item(item: PromoteItem) -> None:
         """Append a verdict and stream it, in one place.
@@ -448,7 +452,7 @@ def promote_bib(
                 continue
             summary["provider_errors"] += len(provider_errors)
             summary["skipped_no_candidate"] += 1
-            note_still_unpublished(preprint_ck, provider_errors)
+            note_still_unpublished(preprint_ck, provider_errors, record)
             note = "no published candidate found"
             if provider_errors:
                 note = f"{note} (provider errors: {', '.join(provider_errors)})"
@@ -467,7 +471,7 @@ def promote_bib(
         title_similarity = match["title_similarity"]
         if score < effective_confidence_threshold or title_similarity < _MIN_TITLE_SIMILARITY:
             summary["skipped_low_confidence"] += 1
-            note_still_unpublished(preprint_ck, provider_errors)
+            note_still_unpublished(preprint_ck, provider_errors, record)
             reason = (
                 f"low confidence ({score} < {effective_confidence_threshold})"
                 if score < effective_confidence_threshold
@@ -625,9 +629,9 @@ def promote_bib(
         # state would silently drop that run's entries; re-reading and merging
         # this run's negatives onto the fresh state keeps both.
         ledger_state = ledger.load(ledger_file)
-        for citekey in checked_negative:
+        for citekey, identity in checked_negative:
             ledger_state = ledger.record_checked(
-                ledger_state, bib["name"], citekey, now=ledger_now
+                ledger_state, bib["name"], citekey, now=ledger_now, identity=identity
             )
         ledger.save(
             ledger_file,

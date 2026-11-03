@@ -507,6 +507,7 @@ def check_bib(
                 citekey,
                 now=effective_now,
                 horizon_days=recheck_after_days,
+                identity=ledger.entry_identity(record),
             ):
                 skipped_fresh += 1
             else:
@@ -524,7 +525,7 @@ def check_bib(
     # (which stays the run-start snapshot used for the skip-if-fresh filter
     # above) so the save below can merge them onto a freshly reread state
     # rather than persisting a snapshot that predates a concurrent run's save.
-    newly_verified: list[str] = []
+    newly_verified: list[tuple[str, str]] = []
     for index, record in enumerate(records):
         item = _verify_entry(
             record, providers, strict=strict, now_year=effective_year, breaker=breaker
@@ -532,7 +533,7 @@ def check_bib(
         counts[item["verdict"]] += 1
         items.append(item)
         if item["verdict"] == "verified" and ledger.is_enabled(recheck_after_days):
-            newly_verified.append(str(record.get("citekey")))
+            newly_verified.append((str(record.get("citekey")), ledger.entry_identity(record)))
         if on_item is not None:
             on_item(item, index, total_planned)
 
@@ -549,9 +550,9 @@ def check_bib(
         # pruning expired entries is itself useful, and what this run did
         # verify must not be lost to a stale save either way.
         fresh_state = ledger.load(ledger_file)
-        for citekey in newly_verified:
+        for citekey, identity in newly_verified:
             fresh_state = ledger.record_checked(
-                fresh_state, bib_name, citekey, now=effective_now
+                fresh_state, bib_name, citekey, now=effective_now, identity=identity
             )
         ledger.save(
             ledger_file,

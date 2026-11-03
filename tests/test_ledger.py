@@ -5,17 +5,18 @@ from datetime import UTC, datetime, timedelta
 from pzi import ledger
 
 _NOW = datetime(2026, 8, 24, 12, 0, 0, tzinfo=UTC)
+_ID = "id-1"
 
 
 def _state_with(citekey: str, checked_at: datetime, bib: str = "ml"):
-    return ledger.record_checked({}, bib, citekey, now=checked_at)
+    return ledger.record_checked({}, bib, citekey, now=checked_at, identity=_ID)
 
 
 def test_a_freshly_recorded_citekey_is_recently_checked():
     state = _state_with("yeh-decoupled-2021", _NOW)
 
     assert ledger.is_recently_checked(
-        state, "ml", "yeh-decoupled-2021", now=_NOW, horizon_days=30
+        state, "ml", "yeh-decoupled-2021", now=_NOW, horizon_days=30, identity=_ID
     )
 
 
@@ -29,10 +30,10 @@ def test_the_horizon_boundary_is_exclusive_on_both_sides():
 
     just_inside = _NOW - timedelta(hours=1)
     assert ledger.is_recently_checked(
-        state, "ml", "yeh-decoupled-2021", now=just_inside, horizon_days=30
+        state, "ml", "yeh-decoupled-2021", now=just_inside, horizon_days=30, identity=_ID
     )
     assert not ledger.is_recently_checked(
-        state, "ml", "yeh-decoupled-2021", now=_NOW, horizon_days=30
+        state, "ml", "yeh-decoupled-2021", now=_NOW, horizon_days=30, identity=_ID
     )
 
 
@@ -40,12 +41,12 @@ def test_an_unknown_citekey_or_bib_is_not_recently_checked():
     state = _state_with("yeh-decoupled-2021", _NOW)
 
     assert not ledger.is_recently_checked(
-        state, "ml", "someone-else-2020", now=_NOW, horizon_days=30
+        state, "ml", "someone-else-2020", now=_NOW, horizon_days=30, identity=_ID
     )
     # Same citekey, different bib: the ledger is keyed per bib, so two libraries
     # holding the same preprint are tracked independently.
     assert not ledger.is_recently_checked(
-        state, "other", "yeh-decoupled-2021", now=_NOW, horizon_days=30
+        state, "other", "yeh-decoupled-2021", now=_NOW, horizon_days=30, identity=_ID
     )
 
 
@@ -55,7 +56,7 @@ def test_a_zero_horizon_disables_the_ledger():
 
     assert not ledger.is_enabled(0)
     assert not ledger.is_recently_checked(
-        state, "ml", "yeh-decoupled-2021", now=_NOW, horizon_days=0
+        state, "ml", "yeh-decoupled-2021", now=_NOW, horizon_days=0, identity=_ID
     )
 
 
@@ -109,7 +110,7 @@ def test_a_round_trip_through_disk_preserves_the_decision(tmp_path):
     assert path.name == "promote-checked.json"
     assert ledger.is_recently_checked(
         ledger.load(path), "ml", "yeh-decoupled-2021",
-        now=_NOW, horizon_days=30,
+        now=_NOW, horizon_days=30, identity=_ID,
     )
 
 
@@ -144,18 +145,18 @@ def test_corrupt_or_foreign_state_reads_as_empty_rather_than_raising(tmp_path):
 def test_a_mangled_timestamp_means_not_checked():
     """Hand-editable implies hand-manglable; the entry is simply looked up again."""
     for value in ("yesterday", "", 7, None, []):
-        state = {"version": 1, "bibs": {"ml": {"x-2020": value}}}
+        state = {"version": 1, "bibs": {"ml": {"x-2020": {"at": value, "id": _ID}}}}
         assert not ledger.is_recently_checked(
-            state, "ml", "x-2020", now=_NOW, horizon_days=30
+            state, "ml", "x-2020", now=_NOW, horizon_days=30, identity=_ID
         )
 
 
 def test_a_naive_timestamp_is_read_as_utc():
     """Rejecting it would silently re-check that entry on every future sweep."""
-    state = {"version": 1, "bibs": {"ml": {"x-2020": "2026-08-24T11:00:00"}}}
+    state = {"version": 1, "bibs": {"ml": {"x-2020": {"at": "2026-08-24T11:00:00", "id": _ID}}}}
 
     assert ledger.is_recently_checked(
-        state, "ml", "x-2020", now=_NOW, horizon_days=30
+        state, "ml", "x-2020", now=_NOW, horizon_days=30, identity=_ID
     )
 
 
@@ -164,5 +165,5 @@ def test_a_timestamp_in_the_future_counts_as_fresh():
     state = _state_with("x-2020", _NOW + timedelta(days=5))
 
     assert ledger.is_recently_checked(
-        state, "ml", "x-2020", now=_NOW, horizon_days=30
+        state, "ml", "x-2020", now=_NOW, horizon_days=30, identity=_ID
     )

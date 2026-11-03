@@ -45,6 +45,7 @@ was there to solve.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import tempfile
@@ -53,6 +54,7 @@ from pathlib import Path
 from typing import Any
 
 from pzi.fileio import fsync_parent_dir
+from pzi.similarity import extract_identities, normalize_title
 
 #: Sidecar filenames under ``pzi_data_home``, one per calling command. Separate
 #: files rather than one keyed by command: the two horizons are set
@@ -79,6 +81,32 @@ def ledger_path(data_home: str | Path, filename: str) -> Path:
 def utc_now() -> datetime:
     """Current time, timezone-aware.  Injectable at the call sites for tests."""
     return datetime.now(UTC)
+
+
+def entry_identity(record: Any) -> str:
+    """A short digest of *which paper* a record is, for binding an answer to it.
+
+    A ledger answer ("verified", "not published yet") is about a paper, not a
+    citekey: another writer can delete an entry and add a different paper under
+    the same key, and the old answer must not follow the key.  The identity is
+    the DOI and arXiv id (the same two identifiers `bib_repository`'s
+    `_require_same_paper` trusts, canonicalised by `extract_identities`) plus
+    the normalised title.  The title is added because a DOI-less or
+    arXiv-less replacement would otherwise look unchanged.
+
+    Everything else is deliberately left out so ordinary enrichment (venue,
+    pages, abstract, tags, an author-name reformat) does not invalidate the
+    answer and force the sweep to redo work: a changed DOI, arXiv id or title
+    is the only thing that re-asks.  Gaining a DOI re-asks once.
+    """
+    ids = sorted(
+        f"{i['kind']}:{i['value']}"
+        for i in extract_identities(record)
+        if i["kind"] in ("doi", "arxiv")
+    )
+    title = normalize_title(record.get("title") if isinstance(record, dict) else None)
+    payload = json.dumps([ids, title], ensure_ascii=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
 def _format_ts(moment: datetime) -> str:
@@ -140,9 +168,20 @@ def is_enabled(horizon_days: int) -> bool:
     return horizon_days > 0
 
 
+def _stamp(value: object) -> object:
+    """The timestamp of a stored entry, in either on-disk shape.
+
+    Version 1 stored ``citekey -> timestamp``; entries now store
+    ``citekey -> {"at": timestamp, "id": identity}``.  Both stay readable (and
+    prunable by age) under the same ``version``; only the older shape lacks an
+    identity, so it can never prove an answer is about *this* entry.
+    """
+    return value.get("at") if isinstance(value, dict) else value
+
+
 def _is_fresh(value: object, *, now: datetime, horizon_days: int) -> bool:
     """True when a stored timestamp is inside the horizon."""
-    checked_at = _parse_ts(value)
+    checked_at = _parse_ts(_stamp(value))
     if checked_at is None:
         return False
     age_days = (now - checked_at).total_seconds() / 86400.0
@@ -159,11 +198,20 @@ def is_recently_checked(
     *,
     now: datetime,
     horizon_days: int,
+    identity: str,
 ) -> bool:
-    """True when *citekey* was checked inside the horizon and should be skipped."""
+    """True when *citekey* was checked inside the horizon and should be skipped.
+
+    *identity* (see :func:`entry_identity`) must equal the one recorded with the
+    answer.  A pre-identity timestamp-only entry never matches: it cannot say
+    which paper it was about, so it is re-asked once and rewritten with an
+    identity, which costs one sweep like any other lost ledger.
+    """
     if not is_enabled(horizon_days):
         return False
     value = _entries(state, bib_name).get(citekey)
+    if not isinstance(value, dict) or value.get("id") != identity:
+        return False
     return _is_fresh(value, now=now, horizon_days=horizon_days)
 
 
@@ -173,14 +221,19 @@ def record_checked(
     citekey: str,
     *,
     now: datetime,
+    identity: str = "",
 ) -> dict[str, Any]:
     """Return a new state with *citekey* marked as checked at *now*.
+
+    *identity* binds the answer to the entry that was looked up; the empty
+    default matches no real :func:`entry_identity`, so omitting it records an
+    answer that is never trusted.
 
     Pure: the input is never mutated, so a caller can accumulate a run's
     negatives and decide separately whether to persist them.
     """
     bibs = {name: dict(entries) for name, entries in _all_bibs(state).items()}
-    bibs.setdefault(bib_name, {})[citekey] = _format_ts(now)
+    bibs.setdefault(bib_name, {})[citekey] = {"at": _format_ts(now), "id": identity}
     return {"version": LEDGER_VERSION, "bibs": bibs}
 
 
