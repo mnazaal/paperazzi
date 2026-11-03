@@ -108,12 +108,18 @@ def run_delete_command(args, *, home_dir, config_path, stdout, stderr, bib_selec
                 "citekeys": citekeys,
                 "deleted": len(succeeded),
                 "message": _batch_message(succeeded, failed, dry_run=args.dry_run),
+                # Status stays `ok`; the failed items are still named here so
+                # `.errors` is not empty beside a non-zero exit.
+                "errors": _failed_errors(failed),
             }
         else:
             # Nothing was removed, so the envelope *is* the failure, carrying the
             # service's `reason`. A single missing citekey has to look exactly as
             # it did before `delete` learned to take several.
-            envelope = {**failed[0], "citekeys": citekeys, "deleted": 0}
+            envelope = {
+                **failed[0], "citekeys": citekeys, "deleted": 0,
+                "errors": _failed_errors(failed),
+            }
         cli_json.emit_result(
             envelope, stdout, command="delete", items=items, bib_name=target["name"],
         )
@@ -137,6 +143,11 @@ def run_delete_command(args, *, home_dir, config_path, stdout, stderr, bib_selec
                 file=stderr,
             )
     return _batch_exit_code(succeeded, failed, items)
+
+
+def _failed_errors(failed) -> list[str]:
+    """Every failed item's error lines, in batch order, for the envelope."""
+    return [str(error) for item in failed for error in item.get("errors") or ()]
 
 
 def _batch_message(succeeded, failed, *, dry_run: bool) -> str:
