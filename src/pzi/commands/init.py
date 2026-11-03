@@ -103,6 +103,18 @@ def _write_config_atomically(dest: Path, content: str) -> None:
     fsync_parent_dir(str(target))
 
 
+#: Where the optional browser extra installs from. pzi is not on PyPI yet (the
+#: `pzi` endpoint returned 404 when checked), so guidance names the GitHub
+#: distribution; switch to `pzi[playwright]` only once PyPI publishing is confirmed.
+PZI_GITHUB_SOURCE = "git+https://github.com/mnazaal/paperazzi.git"
+PLAYWRIGHT_SETUP_GUIDANCE = (
+    "for the browser PDF fallback, install the optional extra once: "
+    f"`uv tool install 'pzi[playwright] @ {PZI_GITHUB_SOURCE}'` "
+    f"(or `pipx install 'pzi[playwright] @ {PZI_GITHUB_SOURCE}'`), "
+    "then `playwright install chromium` (binaries also install on first use)."
+)
+
+
 def run_init_command(
     args, *, home_dir: str, config_path: str, stdout: TextIO, stderr: TextIO
 ) -> int:
@@ -212,10 +224,5 @@ def run_init_command(
             "translation-server installs and starts on first use.",
             file=stdout,
         )
-        print(
-            "for the browser PDF fallback, install the optional extra once: "
-            "`pip install 'pzi[playwright]'` (or `pipx install 'pzi[playwright]'`), "
-            "then `playwright install chromium` (binaries also install on first use).",
-            file=stdout,
-        )
+        print(PLAYWRIGHT_SETUP_GUIDANCE, file=stdout)
     return exit_codes.OK
