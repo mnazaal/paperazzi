@@ -5528,10 +5528,58 @@ console.log(JSON.stringify({
 
 
 # ── Borrowed state: concurrent guards, and a popup that closes mid-capture ─
-# Node 24 ships a real `navigator.locks`, so these use the browser's own lock
-# semantics; a second module instance (`?realm=b`) stands in for a second realm.
+# A second module instance (`?realm=b`) stands in for a second realm. Node has
+# `navigator.locks` only from 24 and CI pins 22, so the prelude installs a stand-in
+# when the runtime has none. `test_the_lock_stand_in_follows_the_browsers_rules`
+# holds it to the Web Locks behaviour these tests rely on, against the native
+# implementation too wherever one exists.
 
-_BORROWED_STATE_PRELUDE = r'''
+_LOCK_STAND_IN = r'''
+function makeLockManager() {
+  const held = new Map();
+  const queue = [];
+  const grantable = (name, mode) => {
+    const now = held.get(name) || [];
+    return now.length === 0 || (mode === "shared" && now.every((m) => m === "shared"));
+  };
+  const run = (name, mode, callback, settle) => {
+    held.set(name, [...(held.get(name) || []), mode]);
+    Promise.resolve().then(() => callback({ name, mode })).then(
+      (value) => { release(name, mode); settle.resolve(value); },
+      (error) => { release(name, mode); settle.reject(error); },
+    );
+  };
+  const release = (name, mode) => {
+    const now = held.get(name);
+    now.splice(now.indexOf(mode), 1);
+    while (queue.length) {
+      const next = queue.findIndex((w) => w.name === name);
+      if (next < 0 || !grantable(name, queue[next].mode)) break;
+      const [w] = queue.splice(next, 1);
+      run(w.name, w.mode, w.callback, w.settle);
+    }
+  };
+  return {
+    request(name, options, callback) {
+      const mode = options.mode || "exclusive";
+      return new Promise((resolve, reject) => {
+        const settle = { resolve, reject };
+        const waiting = queue.some((w) => w.name === name);
+        if (grantable(name, mode) && !waiting) return run(name, mode, callback, settle);
+        if (options.ifAvailable) {
+          return void Promise.resolve().then(() => callback(null)).then(resolve, reject);
+        }
+        queue.push({ name, mode, callback, settle });
+      });
+    },
+  };
+}
+'''
+
+_BORROWED_STATE_PRELUDE = _LOCK_STAND_IN + r'''
+if (!globalThis.navigator?.locks) {
+  Object.defineProperty(globalThis.navigator, "locks", { value: makeLockManager() });
+}
 const store = {};
 globalThis.state = { rules: new Set(), granted: new Set(), removed: [], requested: [] };
 globalThis.chrome = {
@@ -5563,6 +5611,71 @@ globalThis.getJournal = () => store["pzi:borrowedGrants"] || [];
 
 def _borrowed(tmp_path: Path, body: str) -> dict:
     return _run_background_module(_BORROWED_STATE_PRELUDE + body, tmp_path)
+
+
+_LOCK_RULES_SCRIPT = r'''
+async function rules(locks) {
+  const out = {};
+  let endShared, endExclusive;
+  const shared = locks.request("a", { mode: "shared" }, () => new Promise((r) => { endShared = r; }));
+  await new Promise((r) => setTimeout(r, 5));
+  out.secondSharedGranted = await locks.request("a", { mode: "shared", ifAvailable: true }, async (l) => l !== null);
+  out.exclusiveWhileSharedGranted = await locks.request("a", { mode: "exclusive", ifAvailable: true }, async (l) => l !== null);
+  out.otherNameGranted = await locks.request("b", { mode: "exclusive", ifAvailable: true }, async (l) => l !== null);
+  const order = [];
+  const queued = locks.request("a", { mode: "exclusive" }, async () => { order.push("exclusive"); });
+  await new Promise((r) => setTimeout(r, 5));
+  order.push("released shared");
+  endShared();
+  await shared;
+  await queued;
+  out.order = order;
+  out.afterAllGranted = await locks.request("a", { mode: "exclusive", ifAvailable: true }, async (l) => l !== null);
+  out.value = await locks.request("c", { mode: "exclusive" }, async () => 7);
+  out.releasedAfterThrow = await locks
+    .request("d", { mode: "exclusive" }, async () => { throw new Error("boom"); })
+    .catch(() => locks.request("d", { mode: "exclusive", ifAvailable: true }, async (l) => l !== null));
+  return out;
+}
+const standIn = await rules(makeLockManager());
+const native = globalThis.navigator?.locks ? await rules(globalThis.navigator.locks) : null;
+console.log(JSON.stringify({ standIn, native }));
+'''
+
+
+def test_the_lock_stand_in_follows_the_browsers_rules(tmp_path: Path) -> None:
+    """The stand-in decides what the sweep tests below prove, so pin it to the spec."""
+    out = _run_background_module(_LOCK_STAND_IN + _LOCK_RULES_SCRIPT, tmp_path)
+    expected = {
+        "secondSharedGranted": True,
+        "exclusiveWhileSharedGranted": False,
+        "otherNameGranted": True,
+        "order": ["released shared", "exclusive"],
+        "afterAllGranted": True,
+        "value": 7,
+        "releasedAfterThrow": True,
+    }
+    assert out["standIn"] == expected, out
+    if out["native"] is not None:
+        assert out["native"] == expected, out
+
+
+def test_without_web_locks_nothing_is_swept(tmp_path: Path) -> None:
+    """A live capture cannot be told from a dead one, so the grant must stay."""
+    out = _borrowed(
+        tmp_path,
+        r'''
+Object.defineProperty(globalThis, "navigator", { value: {}, configurable: true });
+const p = await import("./background/permissions.mjs");
+await p.requestTemporaryOriginPermission("https://cdn.example.org/x.pdf");
+state.rules.add(91001);
+await p.sweepAbandonedCaptureState();
+console.log(JSON.stringify({ granted: [...state.granted], journal: getJournal(), rules: state.rules.size }));
+''',
+    )
+    assert out["granted"] == ["https://cdn.example.org/*"], out
+    assert out["journal"] == ["https://cdn.example.org/*"], out
+    assert out["rules"] == 1, out
 
 
 def test_two_concurrent_guard_installs_count_as_two_holders(tmp_path: Path) -> None:
