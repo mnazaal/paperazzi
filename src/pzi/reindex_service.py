@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import shutil
 from collections.abc import Mapping
@@ -30,6 +31,7 @@ from pzi.bibtex import (
 from pzi.config import DEFAULT_PDF_FILE_PATH_STYLE
 from pzi.fileio import directory_folds_case
 from pzi.format_templates import format_citekey, format_pdf_filename
+from pzi.pdf_download import _link_or_replace
 from pzi.pdf_planning import plan_pdf_path
 
 
@@ -64,6 +66,25 @@ def _blocks_rename(destination: str, source: str) -> bool:
         # A missing source, or one that raced away: something is at the
         # destination and we cannot show it is ours, so refuse.
         return True
+
+
+def _rename_without_clobber(old: str, new: str) -> None:
+    """``os.rename`` that cannot replace a file created after the guard ran.
+
+    ``_blocks_rename`` and the rename are two steps; a concurrent ``pzi add``
+    can store a PDF at *new* between them, and ``os.rename`` replaces silently.
+    An occupied *new* that is the source itself under another case spelling
+    takes a plain rename; any other occupant is refused. Otherwise
+    link-then-unlink refuses an existing name.
+    """
+    if os.path.exists(new):
+        if not os.path.samefile(new, old):
+            raise FileExistsError(errno.EEXIST, "File exists", new)
+        os.rename(old, new)
+        return
+    _link_or_replace(Path(old), Path(new))
+    if os.path.lexists(old):
+        os.unlink(old)
 
 
 def _destination_key(destination: str, folds: dict[str, bool]) -> str:
@@ -276,7 +297,7 @@ def _rename_planned_pdfs(
 
         try:
             Path(new_pdf).parent.mkdir(parents=True, exist_ok=True)
-            os.rename(old_pdf, new_pdf)
+            _rename_without_clobber(old_pdf, new_pdf)
         except OSError as exc:
             errors.append(
                 f"failed to rename PDF for {change['old_citekey']} → "
@@ -497,7 +518,12 @@ def rename_files_to_policy(
             wanted = format_pdf_filename(
                 pdf_filename_format, {**record, "citekey": citekey}
             )
-            current_path = Path(current)
+            current_path = Path(current).expanduser()
+            if not _is_under(str(current_path), papers_dir):
+                # A PDF the user keeps elsewhere is theirs, in every mode: the
+                # destination is built from `papers_dir`, so renaming it would
+                # move it into the library. Same rule as the citekey pass.
+                continue
             if current_path.name == wanted:
                 continue
             if not any(marker in current_path.name for marker in _FILENAME_RESIDUE):
@@ -556,7 +582,15 @@ def rename_files_to_policy(
                             "already exists"
                         )
                         continue
-                    os.rename(change["old_pdf"], change["new_pdf"])
+                    try:
+                        _rename_without_clobber(change["old_pdf"], change["new_pdf"])
+                    except FileExistsError:
+                        errors.append(
+                            f"keeping PDF for {change['citekey']} at "
+                            f"{change['old_pdf']}: {change['new_pdf']} "
+                            "already exists"
+                        )
+                        continue
                     moved.append((change["old_pdf"], change["new_pdf"]))
                     applied.append(change)
                 for index, entry in enumerate(entries):

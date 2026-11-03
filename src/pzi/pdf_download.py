@@ -267,10 +267,10 @@ def _link_or_replace(temp_path: Path, destination: Path) -> None:
     ``FileExistsError`` used to be handled — so on an exFAT or CIFS
     ``papers_dir``, ``pzi add`` could not store a PDF at all.
 
-    The fallback checks first and renames, which is not atomic: two writers
-    racing on one name can have the second overwrite the first. That window is
-    narrow, only opens on filesystems that cannot do better, and is preferable
-    to refusing to store the file.
+    The fallback claims the name with ``O_CREAT | O_EXCL``, which is atomic on
+    every filesystem, and only then renames the finished temp file over its own
+    placeholder. A check-then-rename let two writers both see a free name, and
+    the second silently replaced the first writer's different PDF.
     """
     try:
         os.link(temp_path, destination)
@@ -280,8 +280,16 @@ def _link_or_replace(temp_path: Path, destination: Path) -> None:
     except OSError as exc:
         if exc.errno not in _NO_HARDLINK_ERRNOS:
             raise
-    if destination.exists():
-        raise FileExistsError(errno.EEXIST, "File exists", str(destination))
-    os.replace(temp_path, destination)
+    claim = os.open(destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    os.close(claim)
+    try:
+        os.replace(temp_path, destination)
+    except BaseException:
+        # Do not leave an empty placeholder squatting on the name.
+        try:
+            os.unlink(destination)
+        except OSError:
+            pass
+        raise
 
 
