@@ -15,15 +15,19 @@ from __future__ import annotations
 
 import contextlib
 import os
+import selectors
 import shutil
+import socket
+import socketserver
 import tempfile
+import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 #: `fetch_direct` follows redirects manually (see below) rather than letting
 #: Playwright's `request.get` do it, so this bounds how many hops a
@@ -39,6 +43,17 @@ _CLONE_PREFIX = "pzi-chrome-"
 #: child is killed at 180 s by its parent, and `pzi server`'s sessions are
 #: closed on idle well inside it.
 _CLONE_MAX_AGE_SECONDS = 6 * 60 * 60
+
+
+#: Shared by the two places that report a missing Playwright. The project is
+#: not on PyPI, so the install line names the GitHub distribution; see README.
+PLAYWRIGHT_INSTALL_HINT = (
+    "The browser-profile PDF fallback is optional. pzi is not published on "
+    "PyPI; reinstall it from GitHub with the extra, e.g. "
+    "uv tool install 'pzi[playwright] @ git+https://github.com/mnazaal/paperazzi.git' "
+    "(or pipx install 'pzi[playwright] @ git+https://github.com/mnazaal/paperazzi.git'), "
+    "then run: playwright install"
+)
 
 
 def _sweep_stale_profile_clones(
@@ -127,6 +142,164 @@ def default_url_allowed(url: str) -> bool:
     return safe_public_http_url(url)
 
 
+# ------------------------------------------------------------------
+# Connected-address pinning
+# ------------------------------------------------------------------
+
+_PROXY_HEAD_LIMIT = 64 * 1024
+_PROXY_IDLE_SECONDS = 60.0
+_PROXY_CONNECT_SECONDS = 15.0
+
+
+class PinningProxy:
+    """A loopback forward proxy that dials only addresses it validated.
+
+    ``url_allowed`` checks a URL with one DNS lookup, and Chromium (or the
+    Playwright request client) then resolves the name again to connect. A name
+    that answers public to the first lookup and private to the second reached
+    the private address with the URL check green. Handing the browser this
+    proxy removes the second lookup: the browser sends the *name*, and the
+    proxy resolves it once, rejects the connection if any answer is
+    non-public (the rule :func:`pzi.safe_http.resolve_pinned_ip` applies to
+    pzi's own fetches), and dials that exact address. HTTPS is a ``CONNECT``
+    tunnel to the same pinned address, so TLS still runs end to end between
+    the browser and the origin.
+
+    Chromium does not proxy loopback destinations, but those are refused by the
+    URL check before any request is made.
+    """
+
+    def __init__(
+        self,
+        *,
+        getaddrinfo: Callable[..., Any] = socket.getaddrinfo,
+        connect: Callable[..., socket.socket] = socket.create_connection,
+    ) -> None:
+        self._getaddrinfo = getaddrinfo
+        self._connect = connect
+        proxy = self
+
+        class _Handler(socketserver.BaseRequestHandler):
+            def handle(self) -> None:
+                with contextlib.suppress(OSError):
+                    proxy._serve(self.request)
+
+        class _Server(socketserver.ThreadingTCPServer):
+            daemon_threads = True
+            allow_reuse_address = True
+
+        self._server = _Server(("127.0.0.1", 0), _Handler)
+        self.port: int = self._server.server_address[1]
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread.start()
+
+    @property
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self.port}"
+
+    def close(self) -> None:
+        with contextlib.suppress(Exception):
+            self._server.shutdown()
+            self._server.server_close()
+
+    # -- request handling ------------------------------------------------
+
+    def _serve(self, client: socket.socket) -> None:
+        client.settimeout(_PROXY_IDLE_SECONDS)
+        head = b""
+        while b"\r\n\r\n" not in head:
+            chunk = client.recv(8192)
+            if not chunk or len(head) > _PROXY_HEAD_LIMIT:
+                return
+            head += chunk
+        head, _, rest = head.partition(b"\r\n\r\n")
+        lines = head.decode("latin-1").split("\r\n")
+        parts = lines[0].split(" ")
+        if len(parts) != 3:
+            self._reply(client, 400, "Bad Request")
+            return
+        method, target, version = parts
+        try:
+            if method.upper() == "CONNECT":
+                host, _, port_text = target.rpartition(":")
+                port = int(port_text)
+                scheme_path = None
+            else:
+                split = urlsplit(target)
+                if split.scheme != "http" or not split.hostname:
+                    self._reply(client, 400, "Bad Request")
+                    return
+                host, port = split.hostname, split.port or 80
+                scheme_path = (split.path or "/") + (f"?{split.query}" if split.query else "")
+        except ValueError:
+            self._reply(client, 400, "Bad Request")
+            return
+
+        from pzi.safe_http import SsrfBlocked, resolve_pinned_ip
+
+        try:
+            ip = resolve_pinned_ip(host.strip("[]"), port, getaddrinfo=self._getaddrinfo)
+        except SsrfBlocked:
+            self._reply(client, 403, "Forbidden")
+            return
+        except OSError:
+            self._reply(client, 502, "Bad Gateway")
+            return
+        try:
+            upstream = self._connect((ip, port), timeout=_PROXY_CONNECT_SECONDS)
+        except OSError:
+            self._reply(client, 502, "Bad Gateway")
+            return
+        with contextlib.closing(upstream):
+            upstream.settimeout(_PROXY_IDLE_SECONDS)
+            if scheme_path is None:
+                client.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                pending = rest
+            else:
+                # One request per connection: the pinned address belongs to
+                # this request's host, so a kept-alive connection must not carry
+                # a second request for another one.
+                kept = [
+                    ln for ln in lines[1:]
+                    if ln.split(":", 1)[0].strip().lower()
+                    not in {"proxy-connection", "proxy-authorization", "connection"}
+                ]
+                kept.append("Connection: close")
+                request = f"{method} {scheme_path} {version}\r\n" + "\r\n".join(kept)
+                pending = request.encode("latin-1") + b"\r\n\r\n" + rest
+            if pending:
+                upstream.sendall(pending)
+            self._relay(client, upstream)
+
+    @staticmethod
+    def _reply(client: socket.socket, status: int, reason: str) -> None:
+        with contextlib.suppress(OSError):
+            client.sendall(
+                f"HTTP/1.1 {status} {reason}\r\nContent-Length: 0\r\n"
+                "Connection: close\r\n\r\n".encode()
+            )
+
+    @staticmethod
+    def _relay(a: socket.socket, b: socket.socket) -> None:
+        sel = selectors.DefaultSelector()
+        sel.register(a, selectors.EVENT_READ, b)
+        sel.register(b, selectors.EVENT_READ, a)
+        try:
+            while True:
+                events = sel.select(timeout=_PROXY_IDLE_SECONDS)
+                if not events:
+                    return
+                for key, _ in events:
+                    data = key.fileobj.recv(65536)  # type: ignore[union-attr]
+                    if not data:
+                        return
+                    key.data.sendall(data)
+        except OSError:
+            return
+        finally:
+            sel.close()
+
+
 @dataclass
 class BrowserSession:
     """Unified browser session wrapping Playwright lifecycle.
@@ -148,6 +321,7 @@ class BrowserSession:
     url_allowed: Callable[[str], bool] = field(default=default_url_allowed, repr=False)
     _closed: bool = field(default=False, init=False)
     _temp_profile: Path | None = field(default=None, init=False, repr=False)
+    _proxy: PinningProxy | None = field(default=None, init=False, repr=False)
 
     # ------------------------------------------------------------------
     # Navigation
@@ -275,6 +449,8 @@ class BrowserSession:
             self.playwright.stop()
         except Exception:
             pass
+        if self._proxy is not None:
+            self._proxy.close()
         if self._temp_profile is not None:
             try:
                 shutil.rmtree(self._temp_profile, ignore_errors=True)
@@ -366,8 +542,9 @@ def install_request_guard(
     request through the same public-URL predicate closes redirect and
     rebinding, because each hop is a request of its own.
 
-    Best effort by construction: if Playwright cannot install the route (an
-    older build, a closed page) the caller still has the entry-point check.
+    Fails closed: if Playwright cannot install the route, this raises and the
+    launch is abandoned. A session without the route would send the first
+    request before any check could refuse it.
     """
     def _guard(route: Any, request: Any) -> None:
         url = getattr(request, "url", "") or ""
@@ -380,8 +557,12 @@ def install_request_guard(
             with contextlib.suppress(Exception):
                 route.abort()
 
-    with contextlib.suppress(Exception):
+    try:
         page.route("**/*", _guard)
+    except Exception as exc:
+        from pzi.safe_http import SsrfBlocked
+
+        raise SsrfBlocked(f"browser request guard could not be installed: {exc}") from exc
 
 
 def launch_browser(
@@ -390,19 +571,32 @@ def launch_browser(
     *,
     headless: bool = True,
     url_allowed: Callable[[str], bool] = default_url_allowed,
+    getaddrinfo: Callable[..., Any] = socket.getaddrinfo,
+    connect: Callable[..., socket.socket] = socket.create_connection,
 ) -> BrowserSession:
-    """Launch a browser and return a BrowserSession."""
+    """Launch a browser and return a BrowserSession.
+
+    Every non-loopback connection goes through a :class:`PinningProxy`, so the
+    address the browser connects to is the one that was validated.
+    ``getaddrinfo`` and ``connect`` are test seams for that proxy.
+    """
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:  # pragma: no cover — playwright installed in dev/test
         raise ImportError(
             "playwright is required for browser PDF features. "
-            "Install the optional extra: pip install 'pzi[playwright]' "
-            "(or pipx install 'pzi[playwright]'), then: playwright install"
+            + PLAYWRIGHT_INSTALL_HINT
         )
 
     playwright = sync_playwright().start()
     options = browser_launch_options(browser, headless=headless)
+    try:
+        pinning = PinningProxy(getaddrinfo=getaddrinfo, connect=connect)
+    except BaseException:
+        with contextlib.suppress(Exception):
+            playwright.stop()
+        raise
+    options["proxy"] = {"server": pinning.url}
 
     temp_profile: Path | None = None
     if profile_path:
@@ -430,17 +624,19 @@ def launch_browser(
                     user_data_dir=str(profile), **options
                 )
             page = ctx.new_page()
+            install_request_guard(page, url_allowed)
         except BaseException:
             if temp_profile is not None:
                 shutil.rmtree(temp_profile, ignore_errors=True)
+            pinning.close()
             with contextlib.suppress(Exception):
                 playwright.stop()
             raise
-        install_request_guard(page, url_allowed)
         session = BrowserSession(
             playwright=playwright, browser_ref=ctx, page=page, url_allowed=url_allowed,
         )
         session._temp_profile = temp_profile
+        session._proxy = pinning
         return session
 
     # Headless — no persistent profile. Wrapped for the same reason the
@@ -460,17 +656,20 @@ def launch_browser(
             browser_instance = playwright.chromium.launch(**options)
             context = browser_instance.new_context()
         page = context.new_page()
+        install_request_guard(page, url_allowed)
     except BaseException:
+        pinning.close()
         with contextlib.suppress(Exception):
             playwright.stop()
         raise
-    install_request_guard(page, url_allowed)
-    return BrowserSession(
+    session = BrowserSession(
         playwright=playwright,
         browser_ref=(browser_instance, context),
         page=page,
         url_allowed=url_allowed,
     )
+    session._proxy = pinning
+    return session
 
 
 @contextmanager
@@ -480,6 +679,8 @@ def open_browser_session(
     *,
     headless: bool = True,
     url_allowed: Callable[[str], bool] = default_url_allowed,
+    getaddrinfo: Callable[..., Any] = socket.getaddrinfo,
+    connect: Callable[..., socket.socket] = socket.create_connection,
 ) -> Iterator[BrowserSession]:
     """Context manager: guaranteed cleanup even on exception.
 
@@ -489,7 +690,12 @@ def open_browser_session(
             ...
     """
     session = launch_browser(
-        browser, profile_path, headless=headless, url_allowed=url_allowed
+        browser,
+        profile_path,
+        headless=headless,
+        url_allowed=url_allowed,
+        getaddrinfo=getaddrinfo,
+        connect=connect,
     )
     try:
         yield session

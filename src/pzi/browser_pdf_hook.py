@@ -33,6 +33,7 @@ from typing import Any
 from urllib.parse import urljoin
 
 from pzi.browser_session import (
+    PLAYWRIGHT_INSTALL_HINT,
     BrowserSession,
     FetchResult,
     default_url_allowed,
@@ -165,9 +166,7 @@ def _ensure_browser(browser: str = "firefox") -> bool:  # pragma: no cover — s
         from playwright.sync_api import sync_playwright
     except ImportError:
         print(
-            "playwright package not found. The browser-profile PDF fallback "
-            "is optional; install it with: pip install 'pzi[playwright]' "
-            "(or pipx install 'pzi[playwright]'), then run: playwright install",
+            "playwright package not found. " + PLAYWRIGHT_INSTALL_HINT,
             file=sys.stderr,
         )
         return False
