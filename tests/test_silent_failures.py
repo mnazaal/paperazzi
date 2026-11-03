@@ -215,7 +215,8 @@ def test_promote_counts_only_the_resolved_markers_that_landed(tmp_path: Path) ->
     promote_service.add_tags = _failing_add_tags
     try:
         tagged, failures = promote_service._tag_resolved(
-            config_path="c", home_dir="h", bib_selector=None, citekeys=["a2020", "b2021"],
+            config_path="c", home_dir="h", bib_selector=None,
+            snapshots={"a2020": {"title": "A"}, "b2021": {"title": "B"}},
         )
     finally:
         promote_service.add_tags = original
