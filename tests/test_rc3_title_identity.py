@@ -43,3 +43,40 @@ def test_ascii_ledger_digest_is_pinned() -> None:
 
 
 PINNED = "788d9e1826120ca0"
+
+
+@pytest.mark.parametrize(
+    "t",
+    [
+        "$\\sigma_{n}$ estimate",
+        "foo_ bar",
+        "foo _bar",
+        "foo__bar",
+        "a_-b",
+        "snake_case_name",
+        "x_t notation",
+        "Bound on $x_{t}$ and more",
+        "_leading and trailing_",
+        "Caf{\\'e} au lait",
+        "A  B-c: d?",
+        "x2 y3",
+        "",
+    ],
+)
+def test_ascii_digest_matches_pre_change_ledger_rule(t: str) -> None:
+    # Independent oracle: the ledger hashed normalize_title before the
+    # non-Latin change, and normalize_title is still the ASCII-only rule.
+    import hashlib
+    import json
+
+    from pzi.similarity import extract_identities
+
+    ids = sorted(
+        f"{i['kind']}:{i['value']}"
+        for i in extract_identities({"title": t})
+        if i["kind"] in ("doi", "arxiv")
+    )
+    payload = json.dumps([ids, normalize_title(t)], ensure_ascii=True)
+    old = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+    assert entry_identity({"title": t}) == old
+    assert title_identity(t) == normalize_title(t)

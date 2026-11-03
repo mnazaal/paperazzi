@@ -249,9 +249,11 @@ def normalize_title(title: str | None) -> str:
 def title_identity(title: str | None) -> str:
     """A title reduced for deciding whether two records name the same paper.
 
-    Same as :func:`normalize_title` for every title that folds to ASCII, but a
-    letter with no ASCII form (Cyrillic, CJK, Greek) is kept rather than
-    dropped. Dropping it made a wholly non-Latin title empty, and an empty
+    Same as :func:`normalize_title` for every title made only of ASCII
+    characters (and accents that fold to ASCII), but a letter with no ASCII
+    form (Cyrillic, CJK, Greek) is kept rather than dropped, and non-ASCII
+    punctuation between word characters (`Erdős–Rényi`, `Don’t`) separates
+    words instead of vanishing. Dropping it made a wholly non-Latin title empty, and an empty
     title means "no information", so two different papers compared equal.
     """
     if title is None:
@@ -270,7 +272,7 @@ def title_identity(title: str | None) -> str:
     return _IDENTITY_SEP.sub(" ", "".join(out)).strip()
 
 
-_IDENTITY_SEP = re.compile(r"[^\w]+|_+")
+_IDENTITY_SEP = re.compile(r"[\W_]+")
 
 
 def title_tokens(title: str | None) -> set[str]:
