@@ -25,6 +25,7 @@ item 560's decision, 2026-08-23.
 
 from __future__ import annotations
 
+import os
 import urllib.error
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -46,6 +47,7 @@ from pzi.add_planning import (
     minimum_metadata_diagnostics,
 )
 from pzi.bib_repository import (
+    AppliedWrite,
     StalePlanError,
     WritePlan,
     batch_write_session,
@@ -59,6 +61,7 @@ from pzi.bib_serialize import safe_composed_citekey
 from pzi.bibtex import (
     BibtexEntry,
     NormalizedRecord,
+    bibtex_entry_to_record,
     generate_citekey,
     normalize_authors,
     resolve_citekey_collision,
@@ -816,11 +819,11 @@ def _execute_plan_with_retry(
             applied = execute_write_plan(
                 bib["path"], plan, file_path_style=file_path_style
             )
-            if plan.get("action") == "insert" and applied.action == "update":
-                # The rebase found another writer's entry for this paper and
-                # updated it, so the file this attempt stored is not what that
-                # entry points at (different bytes, a `-1` name). The rollback
-                # spares it when the entry does reference it.
+            if _committed_other_pdf(record_with_hint, applied):
+                # The rebase updated another writer's entry for this paper, or
+                # a replan kept the `file` that writer set, so the file this
+                # attempt stored is not what the committed entry points at. The
+                # rollback spares it when an entry does reference it.
                 _cleanup_new_pdf(record_with_hint, existing_pdf_paths, bib["path"])
             return record_with_hint, plan_with_applied_record(
                 plan, record_with_hint, applied
@@ -848,6 +851,22 @@ def _execute_plan_with_retry(
             raise
     # Unreachable: the loop either returns, retries, or raises.
     raise AssertionError("retry loop exited without committing or raising")
+
+
+def _committed_other_pdf(
+    record_with_hint: NormalizedRecord, applied: AppliedWrite
+) -> bool:
+    """Whether the committed entry references a PDF other than the downloaded one."""
+    downloaded = record_with_hint.get("local_pdf_path")
+    if not isinstance(downloaded, str):
+        return False
+    committed = bibtex_entry_to_record(applied.entries[applied.committed_index])
+    kept = committed.get("local_pdf_path")
+    if not isinstance(kept, str):
+        return True
+    return os.path.abspath(os.path.expanduser(kept)) != os.path.abspath(
+        os.path.expanduser(downloaded)
+    )
 
 
 def _cleanup_new_pdf(
