@@ -157,6 +157,34 @@ def resolved_address_public(item: ResolvedAddress) -> bool:
     return public_ip_address(host)
 
 
+_DEPRECATED_V6 = ipaddress.IPv4Address(0)
+_SITE_LOCAL_V6 = ipaddress.IPv6Network("fec0::/10")
+_V4_COMPATIBLE_V6 = ipaddress.IPv6Network("::/96")
+_NAT64_V6 = ipaddress.IPv6Network("64:ff9b::/96")
+
+
+def _embedded_ipv4(ip: ipaddress.IPv6Address) -> ipaddress.IPv4Address | None:
+    """The IPv4 address an IPv6 address carries, judged in place of the wrapper.
+
+    ``ipaddress`` calls ``64:ff9b::7f00:1`` (NAT64 of loopback), ``::127.0.0.1``
+    (IPv4-compatible) and ``fec0::1`` (site-local) global, although each can
+    reach private space. Covers IPv4-mapped, NAT64, 6to4 and Teredo (client
+    address, where the obfuscation is undone). Returns ``_DEPRECATED_V6`` for a
+    range that is refused outright rather than judged by its embedded address.
+    """
+    if ip.ipv4_mapped is not None:
+        return ip.ipv4_mapped
+    if ip in _SITE_LOCAL_V6 or ip in _V4_COMPATIBLE_V6:
+        return _DEPRECATED_V6
+    if ip in _NAT64_V6:
+        return ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
+    if ip.sixtofour is not None:
+        return ip.sixtofour
+    if ip.teredo is not None:
+        return ip.teredo[1]
+    return None
+
+
 def public_ip_address(value: str) -> bool:
     """Return True for globally-routable IP address strings.
 
@@ -170,9 +198,12 @@ def public_ip_address(value: str) -> bool:
         ip = ipaddress.ip_address(value)
     except ValueError:
         return False
-    mapped = getattr(ip, "ipv4_mapped", None)
-    if mapped is not None:
-        ip = mapped
+    if isinstance(ip, ipaddress.IPv6Address):
+        embedded = _embedded_ipv4(ip)
+        if embedded is _DEPRECATED_V6:
+            return False
+        if embedded is not None:
+            ip = embedded
     # is_global already excludes private/loopback/link-local/reserved/CGNAT,
     # but (surprisingly) not multicast, so that stays an explicit check.
     return ip.is_global and not ip.is_multicast
