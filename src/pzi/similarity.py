@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import math
 import re
 import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
@@ -504,6 +505,19 @@ class FuzzyMatch(NamedTuple):
     shared_authors: int
 
 
+def _rarest_tokens(
+    tokens: frozenset[str] | set[str], frequency: Mapping[str, int], threshold: float
+) -> list[str]:
+    """The tokens of a title that any title at Jaccard ``>= threshold`` must meet.
+
+    The small subtraction keeps a product that floats just above a whole number
+    from shortening the prefix; rounding that way only widens it.
+    """
+    size = len(tokens)
+    keep = max(1, min(size, size - math.ceil(threshold * size - 1e-9) + 1))
+    return sorted(tokens, key=lambda token: (frequency.get(token, 0), token))[:keep]
+
+
 def best_fuzzy_match_details(
     records: Sequence[SimilarityCandidate],
     *,
@@ -528,19 +542,28 @@ def best_fuzzy_match_details(
     Three exact changes, none of which can drop a pair:
 
     * tokens, authors and year are derived once per record;
-    * an inverted index over title tokens supplies ``|A ∩ B|`` by counting
-      shared tokens, so a candidate sharing none is never visited — and Jaccard
-      at or above any positive threshold *requires* a shared token;
+    * an inverted index covers only each title's rarest tokens, its prefix under
+      one global order. Jaccard ``>= t`` implies ``|A ∩ B| >= ceil(t·|A|)``, so
+      any ``|A| - ceil(t·|A|) + 1`` tokens of A include a shared one, and two
+      such titles share a token inside their prefixes. Indexing every token
+      visited nearly the whole library through common title words, which was
+      99% of `library dedupe` at 22k entries;
     * a candidate whose title length cannot reach the threshold is skipped:
       ``|A ∩ B| ≤ min(|A|,|B|)`` and ``|A ∪ B| ≥ max(|A|,|B|)``, so
       ``min(|A|,|B|) ≥ threshold · max(|A|,|B|)`` is necessary.
     """
     prepared = _prepare(records)
+    frequency: dict[str, int] = {}
+    for item in prepared:
+        if item.citekey is not None:
+            for token in item.tokens:
+                frequency[token] = frequency.get(token, 0) + 1
+    prefixes = [_rarest_tokens(item.tokens, frequency, title_threshold) for item in prepared]
     by_token: dict[str, list[int]] = {}
     for position, item in enumerate(prepared):
         if item.citekey is None:
             continue
-        for token in item.tokens:
+        for token in prefixes[position]:
             by_token.setdefault(token, []).append(position)
 
     matches: dict[int, FuzzyMatch] = {}
@@ -548,23 +571,22 @@ def best_fuzzy_match_details(
         query = prepared[position]
         if not query.tokens:
             continue
-        shared: dict[int, int] = {}
-        for token in query.tokens:
-            for candidate in by_token.get(token, ()):
-                if candidate != position:
-                    shared[candidate] = shared.get(candidate, 0) + 1
+        candidates: set[int] = set()
+        for token in prefixes[position]:
+            candidates.update(by_token.get(token, ()))
+        candidates.discard(position)
 
         best: FuzzyMatch | None = None
         best_score = 0.0
         query_size = len(query.tokens)
         # Ascending, so "first to reach the highest score" means the same record
         # the sequential scan would have picked.
-        for candidate in sorted(shared):
+        for candidate in sorted(candidates):
             other = prepared[candidate]
-            overlap_tokens = shared[candidate]
             other_size = len(other.tokens)
             if min(query_size, other_size) < title_threshold * max(query_size, other_size):
                 continue
+            overlap_tokens = len(query.tokens & other.tokens)
             similarity = overlap_tokens / (query_size + other_size - overlap_tokens)
             if similarity < title_threshold:
                 continue
