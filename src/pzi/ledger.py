@@ -54,7 +54,7 @@ from pathlib import Path
 from typing import Any
 
 from pzi.fileio import fsync_parent_dir
-from pzi.similarity import extract_identities, normalize_title
+from pzi.similarity import extract_identities, title_identity
 
 #: Sidecar filenames under ``pzi_data_home``, one per calling command. Separate
 #: files rather than one keyed by command: the two horizons are set
@@ -104,7 +104,7 @@ def entry_identity(record: Any) -> str:
         for i in extract_identities(record)
         if i["kind"] in ("doi", "arxiv")
     )
-    title = normalize_title(record.get("title") if isinstance(record, dict) else None)
+    title = title_identity(record.get("title") if isinstance(record, dict) else None)
     payload = json.dumps([ids, title], ensure_ascii=True)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 

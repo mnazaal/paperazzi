@@ -74,7 +74,7 @@ from pzi.similarity import (
     build_identity_index,
     extract_identities,
     find_exact_match,
-    normalize_title,
+    title_identity,
 )
 
 
@@ -1227,8 +1227,8 @@ def same_paper(base: Mapping[str, Any], current: Mapping[str, Any]) -> bool:
     current_ids = _work_identities(current)
     if base_ids and current_ids:
         return bool(base_ids & current_ids)
-    base_title = normalize_title(_title_of(base))
-    current_title = normalize_title(_title_of(current))
+    base_title = title_identity(_title_of(base))
+    current_title = title_identity(_title_of(current))
     if not base_title or not current_title:
         return True
     return base_title == current_title

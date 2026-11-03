@@ -246,6 +246,33 @@ def normalize_title(title: str | None) -> str:
     return _NON_ALNUM.sub(" ", ascii_title.lower()).strip()
 
 
+def title_identity(title: str | None) -> str:
+    """A title reduced for deciding whether two records name the same paper.
+
+    Same as :func:`normalize_title` for every title that folds to ASCII, but a
+    letter with no ASCII form (Cyrillic, CJK, Greek) is kept rather than
+    dropped. Dropping it made a wholly non-Latin title empty, and an empty
+    title means "no information", so two different papers compared equal.
+    """
+    if title is None:
+        return ""
+    decoded = html.unescape(title).translate(_TITLE_FOLDINGS)
+    out: list[str] = []
+    for char in unicodedata.normalize("NFKD", decoded):
+        if unicodedata.combining(char):
+            continue
+        if char.isascii():
+            out.append(char.lower())
+        elif char.isalnum():
+            out.append(char.casefold())
+        else:
+            out.append(" ")
+    return _IDENTITY_SEP.sub(" ", "".join(out)).strip()
+
+
+_IDENTITY_SEP = re.compile(r"[^\w]+|_+")
+
+
 def title_tokens(title: str | None) -> set[str]:
     return {token for token in normalize_title(title).split() if len(token) > 2}
 
