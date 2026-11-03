@@ -60,6 +60,11 @@ def _load_project_version(path: Path | None = None) -> str:
 # above every pre-release of the same X.Y.Z.
 _PRERELEASE_BLOCK = {"a": 1000, "b": 2000, "rc": 3000}
 _FINAL_BLOCK = 9999
+#: Each phase owns this many 4th-component values; a serial past it would land
+#: in the next phase's block (`1.0.0a1001` == `1.0.0b1`).
+_BLOCK_WIDTH = 1000
+#: Browsers (Chrome, AMO) accept integers 0-65535 in every component.
+_COMPONENT_MAX = 65535
 
 _PEP440_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:(a|b|rc)(\d+))?$")
 
@@ -86,18 +91,27 @@ def extension_version(project_version: str) -> str:
         )
         sys.exit(1)
     major, minor, patch, phase, serial = match.groups()
-    if phase is None:
-        fourth = _FINAL_BLOCK
-    else:
-        fourth = _PRERELEASE_BLOCK[phase] + int(serial)
-        if fourth >= _FINAL_BLOCK:
+    for name, value in (("major", major), ("minor", minor), ("patch", patch)):
+        if int(value) > _COMPONENT_MAX:
             print(
-                f"error: pre-release number {serial} in {project_version!r} is "
-                "too large to order below the final release",
+                f"error: {name} component {value} in {project_version!r} exceeds "
+                f"the browser limit of {_COMPONENT_MAX}",
                 file=sys.stderr,
             )
             sys.exit(1)
-    return f"{major}.{minor}.{patch}.{fourth}"
+    if phase is None:
+        fourth = _FINAL_BLOCK
+    else:
+        if int(serial) >= _BLOCK_WIDTH:
+            print(
+                f"error: pre-release number {serial} in {project_version!r} must "
+                f"be below {_BLOCK_WIDTH}, or it would collide with the next "
+                "phase's extension versions",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        fourth = _PRERELEASE_BLOCK[phase] + int(serial)
+    return f"{int(major)}.{int(minor)}.{int(patch)}.{fourth}"
 
 
 def _manifest_with_version(base: dict[str, Any], version: str) -> dict[str, Any]:

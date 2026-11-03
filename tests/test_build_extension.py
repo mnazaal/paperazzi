@@ -3,6 +3,8 @@ import os
 import zipfile
 from pathlib import Path
 
+import pytest
+
 from tools.build_extension import (
     _build_chrome_manifest,
     _build_firefox_manifest,
@@ -299,3 +301,46 @@ def test_max_pdf_url_candidates_agrees_across_the_two_languages() -> None:
         f"extension caps candidates at {extension_cap} but the server accepts "
         f"{server_cap}; update both (pdf_discovery.js and http_post_routes.py)"
     )
+
+
+@pytest.mark.parametrize(
+    "version", ["1.0.0a1000", "1.0.0a1001", "1.0.0b1000", "1.0.0rc1000", "1.0.0rc9999", "1.0.0a99999"]
+)
+def test_extension_version_rejects_serials_that_cross_a_phase_block(version, capsys) -> None:
+    from tools.build_extension import extension_version
+
+    with pytest.raises(SystemExit):
+        extension_version(version)
+    assert "collide" in capsys.readouterr().err
+
+
+def test_extension_version_has_no_collisions_across_the_valid_range() -> None:
+    from tools.build_extension import extension_version
+
+    seen: dict[str, str] = {}
+    for phase in ("a", "b", "rc"):
+        for serial in (0, 1, 999):
+            raw = f"1.0.0{phase}{serial}"
+            seen_version = extension_version(raw)
+            assert seen_version not in seen, (raw, seen[seen_version])
+            seen[seen_version] = raw
+    assert extension_version("1.0.0") not in seen
+
+
+@pytest.mark.parametrize("version", ["65536.0.0", "1.65536.0", "1.0.65536", "1.0.65536rc1"])
+def test_extension_version_rejects_components_over_the_browser_limit(version, capsys) -> None:
+    from tools.build_extension import extension_version
+
+    with pytest.raises(SystemExit):
+        extension_version(version)
+    assert "65535" in capsys.readouterr().err
+
+
+def test_extension_version_keeps_released_forms_and_the_numeric_boundary() -> None:
+    from tools.build_extension import extension_version
+
+    assert extension_version("1.0.0rc1") == "1.0.0.3001"
+    assert extension_version("1.0.0rc3") == "1.0.0.3003"
+    assert extension_version("0.2.0") == "0.2.0.9999"
+    assert extension_version("0.1.0b5") == "0.1.0.2005"
+    assert extension_version("65535.65535.65535rc999") == "65535.65535.65535.3999"
