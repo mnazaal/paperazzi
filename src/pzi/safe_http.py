@@ -115,7 +115,11 @@ def connect_first_reachable(
         if remaining <= 0:
             break
         is_last = index == len(ips) - 1
-        attempt = remaining if is_last else min(remaining, _PER_ADDRESS_CONNECT_SECONDS)
+        # An equal share of what is left, so addresses after a dead one are
+        # still reached: each non-last attempt leaves at least its share for
+        # every address behind it.
+        share = remaining / (len(ips) - index)
+        attempt = remaining if is_last else min(share, _PER_ADDRESS_CONNECT_SECONDS)
         try:
             sock = connect((ip, port), timeout=attempt)
         except OSError as exc:
