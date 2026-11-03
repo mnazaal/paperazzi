@@ -47,10 +47,11 @@ from pzi.identifiers import (
     is_preprint_url,
     names_a_preprint_server,
 )
-from pzi.pdf import NextPdfCandidate, fetch_and_store_pdf_trying_sources
+from pzi.pdf import NextPdfCandidate, fetch_and_store_pdf_trying_sources, stored_pdf_paths
 from pzi.pdf import remove_new_pdf as _remove_new_pdf
 from pzi.pdf import snapshot_pdf_paths as _snapshot_pdf_paths
 from pzi.pdf_planning import PdfFallbackSettings
+from pzi.pdf_service import rollback_new_pdfs
 from pzi.promote_planning import (
     AcceptanceGate,
     find_published_candidate_with_diagnostics,
@@ -338,17 +339,13 @@ def promote_bib(
                 except _PreprintVanished as exc:
                     # Nothing was written and nothing was lost; the target is
                     # simply gone. Reported as that rather than as a failure.
-                    _remove_new_pdf(
-                        _local_pdf_path(write.record), write.existing_pdf_paths
-                    )
+                    _rollback_write_pdf(write, session, bib["path"])
                     items[item_index] = _promote_item(
                         write.preprint_ck, write.preprint_ck, "error", note=str(exc)
                     )
                     continue
                 except Exception as exc:  # one failing write must not abort the run
-                    _remove_new_pdf(
-                        _local_pdf_path(write.record), write.existing_pdf_paths
-                    )
+                    _rollback_write_pdf(write, session, bib["path"])
                     summary["skipped_failed"] += 1
                     items[item_index] = _skip_item(
                         write.preprint_ck, f"promotion failed: {exc}", failed=True
@@ -861,6 +858,24 @@ class _PendingWrite:
     counter: str
     #: Folds this promotion's edits into an open session.
     apply: Callable[[BatchWriteSession], None]
+
+
+def _rollback_write_pdf(
+    write: _PendingWrite, session: BatchWriteSession | None, bib_path: str
+) -> None:
+    """Roll back one promotion's new PDF, sparing a file an entry points at.
+
+    An open session holds the exclusive lock, so its records answer the question
+    a re-read could not. Without one, opening it is what failed and no lock is
+    held.
+    """
+    pdf_path = _local_pdf_path(write.record)
+    if session is None:
+        rollback_new_pdfs([pdf_path], write.existing_pdf_paths, bib_path=bib_path)
+    else:
+        _remove_new_pdf(
+            pdf_path, write.existing_pdf_paths, keep=stored_pdf_paths(session.records)
+        )
 
 
 def _handle_keep_preprint(

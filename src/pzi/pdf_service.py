@@ -5,12 +5,17 @@ from __future__ import annotations
 import base64
 import os
 import re
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from pathlib import Path
 from typing import Any, TypeAlias, cast
 
 from pzi.add_planning import next_pdf_candidate_for_config
-from pzi.bib_repository import find_entry_index, read_bib_file, update_bib_entry
+from pzi.bib_repository import (
+    find_entry_index,
+    read_bib_file,
+    read_bib_file_with_failures,
+    update_bib_entry,
+)
 from pzi.bibtex import (
     BibtexEntry,
     NormalizedRecord,
@@ -29,6 +34,7 @@ from pzi.errors import REASON_CONFIG, REASON_NOT_FOUND, REASON_UNAVAILABLE, REAS
 from pzi.pdf import (
     fetch_and_store_pdf_trying_sources,
     fetch_and_store_pdf_with_fallbacks,
+    stored_pdf_paths,
     write_pdf_bytes,
 )
 from pzi.pdf import remove_new_pdf as _remove_new_pdf
@@ -39,11 +45,46 @@ from pzi.pdf_planning import PdfFallbackSettings, pdf_file_present
 from pzi.protocols import BinaryFetcher
 
 
+def rollback_new_pdfs(
+    paths: Iterable[str | None],
+    existing_pdf_paths: set[Path],
+    *,
+    bib_path: str,
+    keep: Collection[str] = (),
+) -> None:
+    """Roll back a failed write's new PDFs, sparing any the library points at.
+
+    The pre-download snapshot cannot tell a file this writer made from one a
+    concurrent writer stored under the same name afterwards (identical bytes
+    resolve to the same path) and committed. The library can: a file it
+    references is somebody's. If the read fails or drops a block, the files are
+    kept, because an orphan is recoverable and a deleted PDF behind a live entry
+    is not.
+
+    Call this with no lock on *bib_path* held: the read takes a shared lock,
+    which would wait behind this process's own exclusive one. Inside an open
+    session, use `remove_new_pdf` with `keep=stored_pdf_paths(session.records)`.
+    """
+    to_remove = [path for path in paths if path]
+    if not to_remove:
+        return
+    try:
+        read_result, dropped_blocks = read_bib_file_with_failures(bib_path)
+    except Exception:
+        return
+    if dropped_blocks:
+        return
+    referenced = stored_pdf_paths(read_result["records"])
+    for path in to_remove:
+        _remove_new_pdf(path, existing_pdf_paths, keep=[*keep, *referenced])
+
+
 def _update_entry_keeping_pdf_consistent(
     update: Callable[[], Any],
     *,
     new_pdf: str | None,
     existing_pdf_paths: set[Path],
+    bib_path: str,
     keep: Collection[str] = (),
 ) -> Any:
     """Run *update*, removing a newly downloaded PDF if the write raises.
@@ -66,7 +107,7 @@ def _update_entry_keeping_pdf_consistent(
     try:
         return update()
     except BaseException:
-        _remove_new_pdf(new_pdf, existing_pdf_paths, keep=keep)
+        rollback_new_pdfs([new_pdf], existing_pdf_paths, bib_path=bib_path, keep=keep)
         raise
 
 
@@ -295,9 +336,10 @@ def retry_pdf(
         ),
         new_pdf=local_pdf_path,
         existing_pdf_paths=existing_pdf_paths,
+        bib_path=bib["path"],
     )
     if not update_result["found"]:
-        _remove_new_pdf(local_pdf_path, existing_pdf_paths)
+        rollback_new_pdfs([local_pdf_path], existing_pdf_paths, bib_path=bib["path"])
         return {
             "status": "error",
             "bib_name": bib["name"],
@@ -459,10 +501,13 @@ def retry_failed_pdfs(
             ),
             new_pdf=local_pdf_path,
             existing_pdf_paths=existing_pdf_paths,
+            bib_path=bib["path"],
             keep=committed_pdfs,
         )
         if not update_result["found"]:
-            _remove_new_pdf(local_pdf_path, existing_pdf_paths, keep=committed_pdfs)
+            rollback_new_pdfs(
+                [local_pdf_path], existing_pdf_paths, bib_path=bib["path"], keep=committed_pdfs
+            )
             failures.append({"citekey": citekey, "error": "citekey disappeared during update"})
             continue
 
@@ -587,9 +632,10 @@ def attach_pdf(
         ),
         new_pdf=local_pdf_path,
         existing_pdf_paths=existing_pdf_paths,
+        bib_path=bib["path"],
     )
     if not update_result["found"]:
-        _remove_new_pdf(local_pdf_path, existing_pdf_paths)
+        rollback_new_pdfs([local_pdf_path], existing_pdf_paths, bib_path=bib["path"])
         return {
             "status": "error",
             "bib_name": bib["name"],
@@ -790,9 +836,10 @@ def _attach_pdf_data(
         ),
         new_pdf=destination,
         existing_pdf_paths=existing_pdf_paths,
+        bib_path=bib_path,
     )
     if not update_result["found"]:
-        _remove_new_pdf(destination, existing_pdf_paths)
+        rollback_new_pdfs([destination], existing_pdf_paths, bib_path=bib_path)
         return {
             "status": "error",
             "bib_name": bib_name,

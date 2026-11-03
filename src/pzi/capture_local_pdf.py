@@ -21,12 +21,11 @@ from pzi.identifiers import normalize_doi
 from pzi.pdf import (
     NextPdfCandidate,
     fetch_and_store_pdf_trying_sources,
-    remove_new_pdf,
     snapshot_pdf_paths,
 )
 from pzi.pdf_download import copy_pdf_to_papers_dir
 from pzi.pdf_planning import PdfFallbackSettings, plan_pdf_path
-from pzi.pdf_service import extract_pdf_metadata
+from pzi.pdf_service import extract_pdf_metadata, rollback_new_pdfs
 from pzi.protocols import (
     BinaryFetcher,
     MetadataRecordFetcher,
@@ -365,7 +364,7 @@ def add_local_pdf(
             file_path_style=file_path_style,
         )
     except Exception:
-        remove_new_pdf(copied_local_path, existing_pdf_paths)
+        rollback_new_pdfs([copied_local_path], existing_pdf_paths, bib_path=bib["path"])
         raise
     result["warnings"] = [*provider_warnings, *warnings, *result["warnings"]]
     return result

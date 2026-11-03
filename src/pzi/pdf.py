@@ -9,7 +9,7 @@ import sys
 import time as _time
 import urllib.error
 import webbrowser
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Iterable, Mapping
 from pathlib import Path
 from typing import Any, NamedTuple
 from urllib.parse import quote, urlsplit
@@ -606,6 +606,42 @@ def snapshot_pdf_paths(papers_dir: str) -> set[Path]:
         return set()
 
 
+def _canonical_paths(paths: Iterable[str]) -> set[str]:
+    """*paths* with ``~`` expanded and their directories' symlinks resolved.
+
+    Directories rather than whole paths, each resolved once: `os.path.realpath`
+    stats every component, which took 1.9 s over a 23k-entry library, and a
+    library's files share one or two directories. A symlink that is itself the
+    attachment is left as spelled.
+    """
+    real_directories: dict[str, str] = {}
+    canonical: set[str] = set()
+    for path in paths:
+        directory, name = os.path.split(os.path.abspath(os.path.expanduser(path)))
+        if directory not in real_directories:
+            real_directories[directory] = os.path.realpath(directory)
+        canonical.add(os.path.join(real_directories[directory], name))
+    return canonical
+
+
+def stored_pdf_paths(records: Iterable[Mapping[str, object]]) -> set[str]:
+    """The files library entries point at, in the form `pdf_is_stored` compares.
+
+    `local_pdf_path` is the record's attachment and is also what
+    `library clean` counts as referenced, so the two agree on what is an orphan.
+    """
+    return _canonical_paths(
+        path
+        for record in records
+        if isinstance(path := record.get("local_pdf_path"), str) and path
+    )
+
+
+def pdf_is_stored(path: str, stored: Collection[str]) -> bool:
+    """Whether *path* is one of *stored*, however the two are spelled."""
+    return not _canonical_paths([path]).isdisjoint(stored)
+
+
 def remove_new_pdf(
     path: str | None,
     existing_paths: set[Path],
@@ -631,8 +667,6 @@ def remove_new_pdf(
     """
     if not path:
         return
-    if path in keep:
-        return
     candidate = Path(path)
     try:
         resolved = candidate.resolve()
@@ -641,11 +675,8 @@ def remove_new_pdf(
     if resolved in existing_paths:
         return
     # `keep` as spelled by the caller may differ from `path` (a stored
-    # `~`-relative or symlinked form), so compare the normalised spellings too.
-    spellings = {os.path.abspath(path), str(resolved)}
-    if any(
-        os.path.abspath(os.path.expanduser(kept)) in spellings for kept in keep
-    ):
+    # `~`-relative or symlinked form), so compare the normalised spellings.
+    if pdf_is_stored(path, _canonical_paths(keep)):
         return
     try:
         candidate.unlink(missing_ok=True)

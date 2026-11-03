@@ -89,13 +89,14 @@ def test_both_batch_paths_pass_their_claimed_files_to_the_rollback() -> None:
     assert "keep=batch_pdfs" in batch_src, "batch rollback ignores applied records"
 
 
-def test_the_outer_batch_cleanup_still_removes_every_downloaded_pdf() -> None:
-    """The one place `keep` must NOT be passed, pinned so it is not "tidied" in.
+def test_the_outer_batch_cleanup_spares_only_what_the_library_points_at() -> None:
+    """`keep` stays off this path; the library on disk decides instead.
 
     `add_records_to_bib_batch`'s outer handler runs when the whole batch failed
-    to commit — nothing was written, so every PDF it downloaded is an orphan
-    and all of them must go, including the ones records had claimed. Passing
-    `keep=batch_pdfs` there would leak exactly the files it exists to remove.
+    to commit, so nothing it applied was written and every PDF it downloaded is
+    an orphan. Passing `keep=batch_pdfs` there would leak exactly the files it
+    exists to remove. The behaviour, including a writer that committed one of
+    them after the lock was released, is in `test_rc3_rollback_siblings.py`.
     """
     import inspect
 
@@ -103,7 +104,7 @@ def test_the_outer_batch_cleanup_still_removes_every_downloaded_pdf() -> None:
 
     source = inspect.getsource(add_records_to_bib_batch)
     outer = source.split("except Exception:")[-1]
-    assert "for pdf_path in batch_pdfs:" in outer
+    assert "rollback_new_pdfs(batch_pdfs" in outer
     assert "keep=" not in outer, (
-        "the whole-batch cleanup must not spare claimed files — nothing was written"
+        "the whole-batch cleanup must not spare claimed files, because nothing was written"
     )

@@ -25,9 +25,8 @@ item 560's decision, 2026-08-23.
 
 from __future__ import annotations
 
-import os
 import urllib.error
-from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, TypeAlias, cast
 from urllib.parse import urlsplit
@@ -81,7 +80,7 @@ from pzi.errors import (
 from pzi.fetch_helpers import build_metadata_fetch_text
 from pzi.format_templates import format_citekey
 from pzi.identifiers import classify_input
-from pzi.pdf import NextPdfCandidate
+from pzi.pdf import NextPdfCandidate, pdf_is_stored, stored_pdf_paths
 from pzi.pdf import remove_new_pdf as _remove_new_pdf
 from pzi.pdf import snapshot_pdf_paths as _snapshot_pdf_paths
 from pzi.pdf_discovery import (
@@ -90,6 +89,7 @@ from pzi.pdf_discovery import (
     web_attachment_step,
 )
 from pzi.pdf_planning import PdfFallbackSettings, is_pdf_bytes, plan_pdf_path
+from pzi.pdf_service import rollback_new_pdfs
 from pzi.protocols import (
     BinaryFetcher,
     HtmlFetcher,
@@ -844,46 +844,13 @@ def _execute_plan_with_retry(
     raise AssertionError("retry loop exited without committing or raising")
 
 
-def _normalised(path: str) -> str:
-    return os.path.abspath(os.path.expanduser(path))
-
-
-def _stored_pdf_paths(records: Iterable[Mapping[str, object]]) -> set[str]:
-    """The ``local_pdf_path`` values some library entry already points at.
-
-    Absolute, ``~``-expanded spellings, so membership is a set lookup.
-    """
-    return {
-        _normalised(path)
-        for record in records
-        if isinstance(path := record.get("local_pdf_path"), str) and path
-    }
-
-
-def _is_stored(path: str, stored: Collection[str]) -> bool:
-    return _normalised(path) in stored
-
-
 def _cleanup_new_pdf(
     record_with_hint: NormalizedRecord, existing_pdf_paths: set[Path], bib_path: str
 ) -> None:
-    """Roll back this write's download, sparing a file an entry now points at.
-
-    The pre-download snapshot cannot tell a file this writer made from one a
-    concurrent writer stored under the same name afterwards (identical bytes
-    resolve to the same path) and committed. The library, read now that the
-    failed write has released its lock, can: a file it references is somebody's.
-    If the library cannot be read the file is kept, because an orphan is
-    recoverable and a deleted PDF behind a live entry is not.
-    """
-    pdf_path_for_cleanup = record_with_hint.get("local_pdf_path")
-    if not isinstance(pdf_path_for_cleanup, str):
-        return
-    try:
-        referenced = _stored_pdf_paths(read_bib_file(bib_path)["records"])
-    except Exception:
-        return
-    _remove_new_pdf(pdf_path_for_cleanup, existing_pdf_paths, keep=referenced)
+    """Roll back this write's download, sparing a file an entry now points at."""
+    pdf_path = record_with_hint.get("local_pdf_path")
+    if isinstance(pdf_path, str):
+        rollback_new_pdfs([pdf_path], existing_pdf_paths, bib_path=bib_path)
 
 
 def add_records_to_bib_batch(
@@ -941,7 +908,7 @@ def add_records_to_bib_batch(
             # the local aliases just make the per-record read calls below terse.
             existing_records = session.records
             index = session.index
-            committed_pdfs = _stored_pdf_paths(existing_records)
+            committed_pdfs = stored_pdf_paths(existing_records)
 
             for position, raw in enumerate(records):
                 record_pdf: str | None = None
@@ -999,7 +966,7 @@ def add_records_to_bib_batch(
                     # outer except is not triggered, so no spurious cleanup.
                     # Not a file the library already points at: rollback of
                     # this batch must leave those to their entries.
-                    if not _is_stored(record_pdf, committed_pdfs):
+                    if not pdf_is_stored(record_pdf, committed_pdfs):
                         batch_pdfs.append(record_pdf)
                 # Apply in dry-run too. The session is pure in-memory state and
                 # was opened with `write=not dry_run`, so nothing reaches disk
@@ -1021,10 +988,10 @@ def add_records_to_bib_batch(
     except Exception:
         # Batch commit failed (invariant violation or roundtrip check). The bib
         # was not written. Remove any PDFs we downloaded for applied records so
-        # nothing is left orphaned on disk.
+        # nothing is left orphaned on disk. The session's lock is released by
+        # now, so another writer may have committed one of them in the meantime.
         if not dry_run:
-            for pdf_path in batch_pdfs:
-                _remove_new_pdf(pdf_path, existing_pdf_paths)
+            rollback_new_pdfs(batch_pdfs, existing_pdf_paths, bib_path=bib["path"])
         raise
 
     return results
