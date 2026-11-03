@@ -255,6 +255,10 @@ def _find_endpoint_anchor(content: str) -> re.Match[str] | None:
 _GIT_TIMEOUT_SECONDS = 300
 #: `npm install --production` on a cold cache is slow but not unbounded.
 _NPM_TIMEOUT_SECONDS = 900
+#: How long a second process waits for another's install: the holder's own
+#: clone + npm budgets plus slack. Past that the holder is wedged, not busy.
+_INSTALL_LOCK_WAIT_SECONDS = _GIT_TIMEOUT_SECONDS * 2 + _NPM_TIMEOUT_SECONDS + 60
+_INSTALL_LOCK_POLL_SECONDS = 0.25
 
 
 def _run_git(args: list[str]) -> subprocess.CompletedProcess[str]:
@@ -385,25 +389,33 @@ def ensure_translation_server(
     # is implicit — shared a single `ts.new`: the second `rmtree` deleted the
     # first's half-finished clone, and both then raced to rename their tree over
     # `ts`. The lock makes the second wait and find the install already current.
-    with _install_lock(data_home, stderr=stderr):
-        if not force and not _needs_reinstall(ts_dir):
-            # The other process finished while this one waited.
-            return ts_dir
-        build_dir = data_home / f"ts.new.{os.getpid()}"
-        shutil.rmtree(build_dir, ignore_errors=True)
-        build_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            return _build_translation_server(
-                ts_dir, build_dir, node_bin, stdout=stdout, stderr=stderr
-            )
-        finally:
-            # `_build_translation_server` reports a clone/npm/patch failure by
-            # returning `None`, not by raising, so cleanup keyed only on the
-            # exception path missed it — leaving `ts.new.<pid>` behind, and the
-            # pid in the name means no later run's `_needs_reinstall` check ever
-            # revisits it to clean it up. On the success path build_dir has
-            # already been renamed to ts_dir, so this is a no-op.
+    try:
+        with _install_lock(data_home, stderr=stderr):
+            if not force and not _needs_reinstall(ts_dir):
+                # The other process finished while this one waited.
+                return ts_dir
+            build_dir = data_home / f"ts.new.{os.getpid()}"
             shutil.rmtree(build_dir, ignore_errors=True)
+            build_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                return _build_translation_server(
+                    ts_dir, build_dir, node_bin, stdout=stdout, stderr=stderr
+                )
+            finally:
+                # `_build_translation_server` reports a clone/npm/patch failure
+                # by returning `None`, not by raising, so cleanup keyed only on
+                # the exception path missed it — leaving `ts.new.<pid>` behind,
+                # and the pid in the name means no later run's
+                # `_needs_reinstall` check ever revisits it. On the success path
+                # build_dir has already been renamed to ts_dir: a no-op.
+                shutil.rmtree(build_dir, ignore_errors=True)
+    except _InstallLockTimeout as exc:
+        print(str(exc), file=stderr)
+        return None
+
+
+class _InstallLockTimeout(Exception):
+    """Another process held the install lock past the wait deadline."""
 
 
 @contextmanager
@@ -424,7 +436,21 @@ def _install_lock(data_home: Path, *, stderr: TextIO) -> Iterator[None]:
                 "translation-server …",
                 file=stderr,
             )
-            portalocker.lock(handle, portalocker.LOCK_EX)
+            deadline = time.monotonic() + _INSTALL_LOCK_WAIT_SECONDS
+            while True:
+                time.sleep(_INSTALL_LOCK_POLL_SECONDS)
+                try:
+                    portalocker.lock(handle, portalocker.LOCK_EX | portalocker.LOCK_NB)
+                    break
+                except portalocker.exceptions.BaseLockException:
+                    if time.monotonic() >= deadline:
+                        raise _InstallLockTimeout(
+                            "gave up waiting for another pzi process to finish "
+                            f"installing the translation-server ({lock_path} "
+                            f"still held after {_INSTALL_LOCK_WAIT_SECONDS:g}s). "
+                            "If no other `pzi` is running, stop the stuck process "
+                            "(or delete that lock file) and retry."
+                        ) from None
         try:
             yield
         finally:
