@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any, NotRequired, TypedDict, cast
 
 from pzi.add_planning import (
@@ -12,12 +13,15 @@ from pzi.add_planning import (
     select_best_metadata_result,
 )
 from pzi.bib_repository import (
+    BatchWriteSession,
     StalePlanError,
     WritePlan,
+    batch_write_session,
+    find_entry_index,
     preview_write_plan,
     read_bib_file,
-    update_bib_entry,
 )
+from pzi.bib_serialize import validate_bibtex_roundtrip
 from pzi.bibtex import (
     USER_OWNED_FIELDS,
     BibtexEntry,
@@ -82,6 +86,26 @@ _USER_OWNED_UPDATE_FIELDS = USER_OWNED_FIELDS
 
 _ENTRY_DISAPPEARED = "entry disappeared during update"
 
+#: Enrichments written per bib lock. A write session parses and validates the
+#: whole library once, so writing N updates one by one cost N parses (about
+#: 3.5 s each on a 22,000-entry library). Chunking, rather than writing every
+#: update at the end, keeps what is already looked up durable if a long run is
+#: interrupted and bounds how long the lock is held. Lookups always happen
+#: outside the lock.
+_WRITE_BATCH = 50
+
+
+@dataclass
+class _PendingWrite:
+    """A looked-up enrichment waiting for the next write session."""
+
+    item: UpdatePlanItem
+    citekey: str
+    candidate: Mapping[str, Any]
+    #: Cleared when the write finds nothing left to change, so the run reports
+    #: no item for it, exactly as a lookup that adds nothing does.
+    keep: bool = True
+
 
 def update_bib(
     *,
@@ -112,6 +136,13 @@ def update_bib(
     entries = read_result["entries"]
 
     items: list[UpdatePlanItem] = []
+    queued: list[_PendingWrite] = []
+    chunk: list[_PendingWrite] = []
+
+    def flush() -> None:
+        if chunk:
+            _write_pending(bib["path"], chunk, file_path_style=file_path_style)
+            chunk.clear()
 
     for record in records:
         citekey = record.get("citekey")
@@ -157,8 +188,17 @@ def update_bib(
                 "failed": True,
             }
             item = failed_item
-        if item is not None:
+        if isinstance(item, _PendingWrite):
+            items.append(item.item)
+            queued.append(item)
+            chunk.append(item)
+            if len(chunk) >= _WRITE_BATCH:
+                flush()
+        elif item is not None:
             items.append(item)
+    flush()
+    dropped = {id(p.item) for p in queued if not p.keep}
+    items = [item for item in items if id(item) not in dropped]
 
     # A run where *every* item failed is not `ok`. A partial failure stays
     # `ok` and is reported through `errors` and each item's `failed`, which
@@ -203,10 +243,12 @@ def _plan_update_for_record(
     dry_run: bool,
     metadata_confidence_min_score: int,
     file_path_style: str = DEFAULT_PDF_FILE_PATH_STYLE,
-) -> UpdatePlanItem | None:
-    """Plan (and, unless *dry_run*, apply) one record's metadata enrichment.
+) -> UpdatePlanItem | _PendingWrite | None:
+    """Plan one record's metadata enrichment; in a real run, queue its write.
 
-    Returns the per-item result, or ``None`` when there is nothing to do (no
+    Returns the per-item result, a `_PendingWrite` for the caller to write in
+    its next chunk (a real run only, so the lookups never hold the bib lock),
+    or ``None`` when there is nothing to do (no
     query, no results, or no changed fields).  A network lookup failure is
     reported as a per-item note rather than raised; any *other* error is left to
     propagate so the caller's per-record guard can record it without aborting
@@ -259,41 +301,13 @@ def _plan_update_for_record(
     if not changed_fields:
         return None
 
-    applied = False
     note: str | None = None
     diff: str | None = None
     enriched = _conservative_enrich(
         cast(NormalizedRecord, dict(record)),
         cast(NormalizedRecord, dict(candidate)),
     )
-    if not dry_run:
-
-        def _apply_update(entry, current_record):
-            # Re-enrich against the record as it is on disk *now*: the snapshot
-            # this run opened with may be stale.
-            current_enriched = _conservative_enrich(
-                cast(NormalizedRecord, dict(current_record)),
-                cast(NormalizedRecord, dict(candidate)),
-            )
-            if not _changed_fields(current_record, current_enriched):
-                return entry
-            return apply_record_to_entry(entry, current_enriched)
-
-        update_result = update_bib_entry(
-            bib_path, citekey, _apply_update, file_path_style=file_path_style
-        )
-        if not update_result["found"]:
-            note = _ENTRY_DISAPPEARED
-        else:
-            # Diff the returned records rather than having the callback mutate a
-            # captured dict to smuggle the answer back out.
-            changed_fields = _changed_fields(
-                update_result["previous_record"], update_result["record"]
-            )
-            applied = bool(changed_fields)
-            if not changed_fields:
-                return None
-    else:
+    if dry_run:
         # Target the entry the real run will target. `update_bib_entry` above
         # resolves by *citekey*; `plan_bib_write` resolves by *identity*. Those
         # disagree precisely when enrichment supplies an identifier the library
@@ -325,7 +339,7 @@ def _plan_update_for_record(
     item: UpdatePlanItem = {
         "citekey": citekey,
         "changed_fields": changed_fields,
-        "applied": applied if not dry_run else False,
+        "applied": False,
         "note": note,
     }
     if note == _ENTRY_DISAPPEARED:
@@ -339,7 +353,78 @@ def _plan_update_for_record(
         item["metadata_diagnostics"] = metadata_diagnostics
     if metadata_warnings:
         item["metadata_warnings"] = metadata_warnings
+    if not dry_run:
+        return _PendingWrite(item=item, citekey=citekey, candidate=candidate)
     return item
+
+
+def _write_pending(
+    bib_path: str, chunk: list[_PendingWrite], *, file_path_style: str
+) -> None:
+    """Write a chunk of looked-up enrichments in one session and report each.
+
+    One lock, one parse and one atomic write for the chunk. Each entry is
+    re-enriched against the record as it is on disk *now*, since the snapshot
+    the run opened with may be stale, and is gated on its own round trip, so one
+    unrepresentable entry fails its own item rather than the chunk.
+    """
+    try:
+        with batch_write_session(bib_path, file_path_style=file_path_style) as session:
+            for pending in chunk:
+                _fold_into_session(session, pending)
+    except StalePlanError:
+        raise
+    except Exception as exc:  # the session writes nothing when it raises
+        for pending in chunk:
+            pending.keep = True
+            pending.item["applied"] = False
+            pending.item["changed_fields"] = []
+            pending.item["note"] = f"update failed: {exc}"
+            pending.item["failed"] = True
+
+
+def _fold_into_session(session: BatchWriteSession, pending: _PendingWrite) -> None:
+    item = pending.item
+    index = find_entry_index(session.entries, pending.citekey)
+    if index is None:
+        item["note"] = _ENTRY_DISAPPEARED
+        item["failed"] = True
+        return
+    current_entry = session.entries[index]
+    current_record = session.records[index]
+    current_enriched = _conservative_enrich(
+        cast(NormalizedRecord, dict(current_record)),
+        cast(NormalizedRecord, dict(pending.candidate)),
+    )
+    updated_entry = (
+        apply_record_to_entry(current_entry, current_enriched)
+        if _changed_fields(current_record, current_enriched)
+        else current_entry
+    )
+    updated_record = bibtex_entry_to_record(updated_entry)
+    changed = _changed_fields(current_record, updated_record)
+    if not changed:
+        pending.keep = False
+        return
+    if updated_entry != current_entry:
+        try:
+            validate_bibtex_roundtrip([updated_entry])
+        except Exception as exc:  # this entry only; the rest of the chunk proceeds
+            item["changed_fields"] = []
+            item["note"] = f"update failed: {exc}"
+            item["failed"] = True
+            return
+        session.apply_plan(
+            {
+                "action": "update",
+                "index": index,
+                "record": updated_record,
+                "entry": updated_entry,
+                "changed_fields": changed,
+            }
+        )
+    item["changed_fields"] = changed
+    item["applied"] = True
 
 
 def _needs_update(record: Mapping[str, object]) -> bool:
