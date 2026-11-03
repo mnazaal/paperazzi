@@ -596,13 +596,20 @@ async function attachPdfToServer({ endpoint, citekey, bib, sourceUrl, bytes, pdf
   // a rejected security check in the server log for every such capture.
   const hasAttachSession = Boolean(pdfRequest?.request_id);
   if (hasAttachSession) {
-    const rawResponse = await fetch(rawAttachUrl(endpoint, { citekey, bib, sourceUrl, pdfRequest, originCandidate }), {
-      method: "POST",
-      headers: { "Content-Type": "application/pdf", ...attachTokenHeader(pdfRequest), ...(await getAuthHeaders()) },
-      body: bytes,
-    });
-    const rawResult = await jsonOrNull(rawResponse);
-    if (rawResponse.ok && rawResult && rawResult.status === "ok") return rawResult;
+    // A refused or failed raw POST (the network guard blocking a planned host it
+    // does not know, a dropped connection) falls through to the base64 route
+    // below, as a non-ok reply does; it must not end the capture.
+    try {
+      const rawResponse = await fetch(rawAttachUrl(endpoint, { citekey, bib, sourceUrl, pdfRequest, originCandidate }), {
+        method: "POST",
+        headers: { "Content-Type": "application/pdf", ...attachTokenHeader(pdfRequest), ...(await getAuthHeaders()) },
+        body: bytes,
+      });
+      const rawResult = await jsonOrNull(rawResponse);
+      if (rawResponse.ok && rawResult && rawResult.status === "ok") return rawResult;
+    } catch (_error) {
+      /* fall back to the base64 route */
+    }
   }
 
   const base64 = arrayBufferToBase64(bytes);

@@ -389,3 +389,88 @@ def test_the_popup_does_not_see_a_pdf_the_service_worker_observed(rig: Rig) -> N
 
     assert public.hits, "the PDF must actually have been requested"
     assert rig.public_url(public, "/seen.pdf") not in candidates, candidates
+
+
+# ---------------------------------------------------------------------------
+# The configured pzi endpoint stays reachable under every loopback spelling
+# ---------------------------------------------------------------------------
+
+_RUN_CAPTURE_WITH_ATTACH_SESSION = """
+async ({ endpoint, candidate, pageUrl, attachUrl }) => {
+  await chrome.storage.local.set({ endpoint });
+  const { maybeStreamPdfBytes } = await import("./background/pdf_fetch.js");
+  return await maybeStreamPdfBytes({
+    endpoint,
+    citekey: "smith2024paper",
+    bib: null,
+    pdfUrlCandidates: [{ url: candidate }],
+    pageUrl,
+    originPermissions: null,
+    pdfRequest: { request_id: "req-1", attach: { url: attachUrl, token: "tok" } },
+  });
+}
+"""
+
+
+def _capture_with_attach_session(rig: Rig, endpoint: str, attach_url: str) -> dict[str, Any]:
+    public = rig.listener(_pdf_or_page)
+    page = rig.extension_page()
+    return page.evaluate(
+        _RUN_CAPTURE_WITH_ATTACH_SESSION,
+        {
+            "endpoint": endpoint,
+            "candidate": rig.public_url(public, "/paper.pdf"),
+            "pageUrl": rig.public_url(public, "/article"),
+            "attachUrl": attach_url,
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    ("endpoint_host", "planned_host"),
+    [("localhost", "127.0.0.1"), ("127.0.0.1", "localhost")],
+)
+def test_raw_attach_reaches_pzi_when_endpoint_and_planned_url_spell_loopback_differently(
+    rig: Rig, endpoint_host: str, planned_host: str
+) -> None:
+    pzi = rig.listener(lambda h, o: None)
+    result = _capture_with_attach_session(
+        rig,
+        f"http://{endpoint_host}:{pzi.port}/capture",
+        f"http://{planned_host}:{pzi.port}/attach-pdf-raw?citekey=smith2024paper",
+    )
+    assert result["status"] == "ok", result
+    assert [path.split("?")[0] for path, _ in pzi.posts] == ["/attach-pdf-raw"]
+
+
+def test_a_blocked_raw_attach_falls_back_to_the_base64_route(rig: Rig) -> None:
+    pzi = rig.listener(lambda h, o: None)
+    # 127.0.0.2 is loopback to the extension's own check but is neither the
+    # endpoint nor one of its spellings, so the guard blocks the raw POST.
+    result = _capture_with_attach_session(
+        rig,
+        f"http://127.0.0.1:{pzi.port}/capture",
+        f"http://127.0.0.2:{pzi.port}/attach-pdf-raw?citekey=smith2024paper",
+    )
+    assert result["status"] == "ok", result
+    assert [path for path, _ in pzi.posts] == ["/attach-pdf-bytes"]
+
+
+@pytest.mark.parametrize("redirect_host", ["localhost", "127.0.0.1"])
+def test_other_local_ports_stay_blocked_under_every_spelling_of_the_endpoint(
+    rig: Rig, redirect_host: str
+) -> None:
+    other = rig.listener(lambda h, o: _pdf(h, b"%PDF-1.4 private"))
+    public = rig.listener(_redirect_to(f"http://{redirect_host}:{other.port}/secret.pdf"))
+    pzi = rig.listener(lambda h, o: None)
+    page = rig.extension_page()
+    page.evaluate(
+        _RUN_CAPTURE,
+        {
+            "endpoint": f"http://localhost:{pzi.port}/capture",
+            "candidate": rig.public_url(public, "/paper.pdf"),
+            "pageUrl": rig.public_url(public, "/article"),
+            "shrinkTimers": False,
+        },
+    )
+    assert public.hits and other.hits == []

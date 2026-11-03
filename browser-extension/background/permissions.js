@@ -379,10 +379,42 @@ export async function readBodyBounded(
 //: Every fetch the extension makes to fetch a PDF is an XHR-type request.
 export const GUARD_RESOURCE_TYPES = ["xmlhttprequest"];
 const GUARD_ALLOW_RULE_ID = 91001;
+// The endpoint's own origin takes the first id; spellings of the same loopback
+// address (see `endpointOriginsToAllow`) take ids after the block rules.
+const GUARD_EXTRA_ALLOW_RULE_ID = GUARD_ALLOW_RULE_ID + 1 + PRIVATE_DESTINATION_PATTERNS.length;
 const GUARD_RULE_IDS = [
   GUARD_ALLOW_RULE_ID,
   ...PRIVATE_DESTINATION_PATTERNS.map((_pattern, index) => GUARD_ALLOW_RULE_ID + 1 + index),
+  GUARD_EXTRA_ALLOW_RULE_ID,
+  GUARD_EXTRA_ALLOW_RULE_ID + 1,
 ];
+
+const LOOPBACK_SPELLINGS = ["localhost", "127.0.0.1", "[::1]"];
+
+/**
+ * The origins the guard must leave reachable for the pzi endpoint: its own, and
+ * the other spellings of the same loopback address on the same scheme and port.
+ * The server plans the raw attach URL from its own listen address, which may
+ * spell the loopback differently from the endpoint the user typed
+ * (`localhost` against `127.0.0.1`), and that POST must not be blocked. Any
+ * other host, and any other port, stays blocked.
+ */
+export function endpointOriginsToAllow(endpoint) {
+  let url;
+  try {
+    url = new URL(endpoint);
+  } catch (_error) {
+    return [];
+  }
+  const origins = [url.origin];
+  if (LOOPBACK_SPELLINGS.includes(url.hostname.toLowerCase())) {
+    for (const spelling of LOOPBACK_SPELLINGS) {
+      const sibling = `${url.protocol}//${spelling}${url.port ? `:${url.port}` : ""}`;
+      if (!origins.includes(sibling)) origins.push(sibling);
+    }
+  }
+  return origins;
+}
 let _guardHolders = 0;
 let _guardInstalled = null; // the in-flight or finished install shared by every holder
 let _guardLockRelease = null;
@@ -409,15 +441,14 @@ export async function installPrivateNetworkGuard(endpoint) {
         const initiator = new URL(chrome.runtime.getURL("/")).hostname;
         const condition = { initiatorDomains: [initiator], resourceTypes: GUARD_RESOURCE_TYPES };
         const addRules = [];
-        const endpointOrigin = originPatternForUrl(endpoint)?.replace(/\/\*$/, "");
-        if (endpointOrigin) {
+        endpointOriginsToAllow(endpoint).forEach((origin, index) => {
           addRules.push({
-            id: GUARD_ALLOW_RULE_ID,
+            id: index === 0 ? GUARD_ALLOW_RULE_ID : GUARD_EXTRA_ALLOW_RULE_ID + index - 1,
             priority: 2,
             action: { type: "allow" },
-            condition: { ...condition, urlFilter: `|${endpointOrigin}/` },
+            condition: { ...condition, urlFilter: `|${origin}/` },
           });
-        }
+        });
         PRIVATE_DESTINATION_PATTERNS.forEach((regexFilter, index) => {
           addRules.push({
             id: GUARD_ALLOW_RULE_ID + 1 + index,
