@@ -196,7 +196,7 @@ pzi tag add|remove <citekey> <tag...> [--dry-run]
 pzi tag list [citekey] [--json]
 pzi search [--query <text>] [--author <name>] [--year <int>] [--tag <tag>] [--venue <name>] [--doi <text>]
            [--sort citekey|title|year|author] [--offset N] [--limit N]   # unlike `entries`, search shows *all* matches unless --limit is given
-pzi library check [--strict] [--report PATH] [--jsonl PATH] [--force] [--limit N] [--recheck-after DAYS] [--json]   # validate references; --force overwrites an existing report, --limit audits only the first N, --recheck-after skips entries verified within DAYS
+pzi library check [--strict] [--report PATH] [--jsonl PATH] [--force] [--limit N] [--recheck-after DAYS] [--json]   # validate references; --force overwrites an existing report, --limit audits only the first N, --recheck-after skips entries verified within DAYS; neither output path may name a library or the other
 pzi update [--dry-run]                        # fill missing metadata
 pzi update --promote [--dry-run] [--keep-preprint] [--mark-resolved] [--limit N] [--best-of N]  # replace preprints with published versions
 pzi entries [--offset N] [--limit N] [--sort citekey|title|year|author]

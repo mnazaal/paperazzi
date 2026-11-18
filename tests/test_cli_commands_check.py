@@ -430,3 +430,192 @@ def test_progress_is_printed_for_a_long_run_only(tmp_path: Path) -> None:
     assert "checked 200/200 entries" in long_err
     # One line per 25, not one per entry.
     assert long_err.count("entries\n") == 8, long_err
+
+
+# ── output paths that alias the library or each other ────────────────────────
+#
+# `check` opens `--report`/`--jsonl` before the audit runs, so every path here
+# is the same shape of defect: the destination is written before anything has
+# established it is not also the source. `--force` is the flag that unlocks
+# overwriting, which is exactly the flag a caller uses when they mean it.
+
+
+def _write_config(tmp_path: Path, bibs: list[tuple[str, Path]], *,
+                  default: str | None = None) -> Path:
+    lines: list[str] = []
+    for name, path in bibs:
+        lines += ["[[bibs]]", f'name = "{name}"', f'path = "{path}"']
+        if default == name:
+            lines.append("default = true")
+    config = tmp_path / "config.toml"
+    config.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return config
+
+
+def _run_configured(tmp_path: Path, args, fake, *, selector: str | None = None,
+                    config: Path | None = None):
+    stdout, stderr = StringIO(), StringIO()
+    code = run_check_command(
+        args,
+        home_dir=str(tmp_path),
+        config_path=str(config or tmp_path / "config.toml"),
+        stdout=stdout,
+        stderr=stderr,
+        bib_selector=selector,
+        check_bib_fn=fake,
+    )
+    return code, stdout.getvalue(), stderr.getvalue()
+
+
+def _never_ran(**_kw):
+    raise AssertionError("the audit ran before the invocation was refused")
+
+
+LIBRARY = "@article{smith2020,\n  title = {A},\n  year = {2020},\n}\n"
+
+
+def test_jsonl_naming_the_checked_library_is_refused(tmp_path: Path) -> None:
+    """`--jsonl <the library>` truncated it, then audited the empty remainder.
+
+    Executed through the shipped CLI: a two-entry library became 0 bytes, the
+    command printed "no entries to check" and exited 0 with no backup. The
+    stream is opened before the audit reads the file it is pointing at.
+    """
+    bib = tmp_path / "main.bib"
+    bib.write_text(LIBRARY, encoding="utf-8")
+    config = _write_config(tmp_path, [("main", bib)], default="main")
+
+    code, out, err = _run_configured(
+        tmp_path, _args(jsonl=str(bib), force=True), _never_ran, config=config
+    )
+
+    assert code == exit_codes.USAGE, err
+    assert out == "", out
+    assert "names the library being checked" in err
+    assert bib.read_text(encoding="utf-8") == LIBRARY, "the library was rewritten"
+
+
+def test_report_naming_the_checked_library_is_refused(tmp_path: Path) -> None:
+    bib = tmp_path / "main.bib"
+    bib.write_text(LIBRARY, encoding="utf-8")
+    config = _write_config(tmp_path, [("main", bib)], default="main")
+
+    code, _out, err = _run_configured(
+        tmp_path, _args(report=str(bib), force=True), _never_ran, config=config
+    )
+
+    assert code == exit_codes.USAGE, err
+    assert "names the library being checked" in err
+    assert bib.read_text(encoding="utf-8") == LIBRARY
+
+
+def test_output_naming_another_configured_library_is_refused(tmp_path: Path) -> None:
+    """The alias that matters is the whole library set, not only the selected one.
+
+    A default library is audited; the report is aimed at a second configured
+    library. Nothing in the audit names that second file, so a guard written
+    against "the target I resolved" leaves it truncatable.
+    """
+    main = tmp_path / "main.bib"
+    other = tmp_path / "other.bib"
+    main.write_text(LIBRARY, encoding="utf-8")
+    other.write_text(LIBRARY, encoding="utf-8")
+    config = _write_config(tmp_path, [("main", main), ("other", other)], default="main")
+
+    code, _out, err = _run_configured(
+        tmp_path, _args(jsonl=str(other), force=True), _never_ran, config=config
+    )
+
+    assert code == exit_codes.USAGE, err
+    assert "names a library" in err
+    assert other.read_text(encoding="utf-8") == LIBRARY
+
+
+def test_a_symlink_to_the_library_is_refused(tmp_path: Path) -> None:
+    """Spelling the output as another path is not a different file."""
+    bib = tmp_path / "main.bib"
+    bib.write_text(LIBRARY, encoding="utf-8")
+    link = tmp_path / "audit.jsonl"
+    link.symlink_to(bib)
+    config = _write_config(tmp_path, [("main", bib)], default="main")
+
+    code, _out, err = _run_configured(
+        tmp_path, _args(jsonl=str(link), force=True), _never_ran, config=config
+    )
+
+    assert code == exit_codes.USAGE, err
+    assert bib.read_text(encoding="utf-8") == LIBRARY
+
+
+def test_a_hard_link_to_the_library_is_refused(tmp_path: Path) -> None:
+    """A hard link is a second name for the same inode; realpath cannot see it."""
+    bib = tmp_path / "main.bib"
+    bib.write_text(LIBRARY, encoding="utf-8")
+    link = tmp_path / "audit.jsonl"
+    link.hardlink_to(bib)
+    config = _write_config(tmp_path, [("main", bib)], default="main")
+
+    code, _out, err = _run_configured(
+        tmp_path, _args(jsonl=str(link), force=True), _never_ran, config=config
+    )
+
+    assert code == exit_codes.USAGE, err
+    assert bib.read_text(encoding="utf-8") == LIBRARY
+
+
+def test_report_and_jsonl_naming_one_file_is_refused(tmp_path: Path) -> None:
+    """The streamed NDJSON was replaced by the report, exit 1, no warning.
+
+    Executed: both flags pointed at one path, so the per-entry stream written
+    during the audit was overwritten by the final report. Nothing was left in
+    the file that the flag promising a stream had promised.
+    """
+    bib = tmp_path / "main.bib"
+    bib.write_text(LIBRARY, encoding="utf-8")
+    config = _write_config(tmp_path, [("main", bib)], default="main")
+    out = tmp_path / "audit.json"
+
+    code, _out, err = _run_configured(
+        tmp_path, _args(report=str(out), jsonl=str(out), force=True),
+        _never_ran, config=config,
+    )
+
+    assert code == exit_codes.USAGE, err
+    assert "--report and --jsonl" in err
+    assert not out.exists(), "the shared output was created before the refusal"
+
+
+def test_distinct_outputs_still_write_both_files(tmp_path: Path) -> None:
+    """The guard must refuse collisions only; two real paths keep both artifacts."""
+    bib = tmp_path / "main.bib"
+    bib.write_text(LIBRARY, encoding="utf-8")
+    config = _write_config(tmp_path, [("main", bib)], default="main")
+    report = tmp_path / "audit.json"
+    jsonl = tmp_path / "audit.jsonl"
+
+    code, _out, err = _run_configured(
+        tmp_path, _args(report=str(report), jsonl=str(jsonl), force=True),
+        lambda **_k: _result(), config=config,
+    )
+
+    assert code == exit_codes.OK, err
+    assert json.loads(report.read_text())["total"] == 1
+    assert json.loads(jsonl.read_text().splitlines()[0])["citekey"] == "smith2020"
+
+
+def test_an_unresolvable_config_still_reaches_the_service(tmp_path: Path) -> None:
+    """No config means no input identity to compare; the service reports it.
+
+    The guard must not invent a second failure path for a broken configuration —
+    that is the service's job and its message is what the user already sees.
+    """
+    bib = tmp_path / "main.bib"
+    bib.write_text(LIBRARY, encoding="utf-8")
+    out = tmp_path / "audit.json"
+
+    code, _out, err = _run_configured(
+        tmp_path, _args(report=str(out), force=True), lambda **_k: _result()
+    )
+
+    assert code == exit_codes.OK, err
+    assert json.loads(out.read_text())["total"] == 1

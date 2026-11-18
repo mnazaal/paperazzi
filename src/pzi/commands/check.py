@@ -18,6 +18,7 @@ from pzi.commands.common import (
     print_read_warnings,
     write_atomic,
 )
+from pzi.config import BibResolutionFailure, load_bib_target
 from pzi.errors import REASON_UNAVAILABLE, exit_code_for_error
 
 
@@ -43,6 +44,58 @@ def _describe_unwritable(path: str) -> str | None:
         except OSError:  # pragma: no cover — it exists, we just made it
             pass
     return None
+
+
+def _canonical_path(path: str) -> str:
+    """*path* as one absolute name with every symlink resolved."""
+    return os.path.realpath(os.path.abspath(os.path.expanduser(path)))
+
+
+def _same_file(left: str, right: str) -> bool:
+    """True when the two names reach the same file, by name or by inode.
+
+    The inode half is not redundant: two hard links are different paths that
+    `realpath` cannot join, and writing through one truncates the other.
+    """
+    if _canonical_path(left) == _canonical_path(right):
+        return True
+    try:
+        left_stat = os.stat(left)
+        right_stat = os.stat(right)
+    except OSError:
+        return False
+    return (left_stat.st_dev, left_stat.st_ino) == (
+        right_stat.st_dev,
+        right_stat.st_ino,
+    )
+
+
+def _libraries_this_run_could_read(
+    *, config_path: str, home_dir: str, bib_selector: str | None
+) -> list[tuple[str, str | None, bool]]:
+    """``(path, name, selected)`` for every library the audit may read from.
+
+    Every configured library, not only the selected one: a report aimed at a
+    second library is the same truncation, and the audit never names that file
+    while resolving its target. When the config cannot be resolved there is no
+    input identity to compare — the service reports that failure itself — but a
+    direct `.bib` selector still names a file the run would read.
+    """
+    resolved = load_bib_target(
+        config_path=config_path, home_dir=home_dir, bib_selector=bib_selector
+    )
+    if isinstance(resolved, BibResolutionFailure):
+        if bib_selector and bib_selector.strip().endswith(".bib"):
+            return [(bib_selector.strip(), None, True)]
+        return []
+    config, bib = resolved
+    selected = (bib["path"], bib["name"], True)
+    others = [
+        (other["path"], other["name"], False)
+        for other in config["bibs"]
+        if other["path"] != bib["path"]
+    ]
+    return [selected, *others]
 
 
 def run_check_command(
@@ -96,6 +149,55 @@ def run_check_command(
         return emit_usage_error(
             args,
             "--report - and --jsonl - both write to stdout and cannot be combined",
+            command_path=("library", "check"),
+            stdout=stdout,
+            stderr=stderr,
+        )
+    # Every output path is opened before the audit runs, so an output that is
+    # also an input is truncated before anything reads it: `--jsonl <the
+    # library> --force` turned a two-entry library into 0 bytes, printed "no
+    # entries to check" and exited 0, with no backup. `--force` is not the
+    # problem — it is the flag a caller uses when they mean to replace a report.
+    # Refused by identity rather than by spelling, because a symlink or a hard
+    # link reaches the same file under another name.
+    libraries = _libraries_this_run_could_read(
+        config_path=config_path, home_dir=home_dir, bib_selector=bib_selector
+    )
+    for flag, path in (("--report", report_path), ("--jsonl", jsonl_path)):
+        if not path or path == "-":
+            continue
+        for library_path, name, selected in libraries:
+            if not _same_file(path, library_path):
+                continue
+            if selected:
+                message = (
+                    f"{flag} {path} names the library being checked"
+                    f"{f' ({name})' if name else ''}; that would overwrite it —"
+                    " write the output to another path"
+                )
+            else:
+                message = (
+                    f"{flag} {path} names a library pzi also manages"
+                    f"{f' ({name})' if name else ''}; checking would overwrite"
+                    " it — write the output to another path"
+                )
+            return emit_usage_error(
+                args, message, command_path=("library", "check"),
+                stdout=stdout, stderr=stderr,
+            )
+    if (
+        report_path and jsonl_path
+        and report_path != "-" and jsonl_path != "-"
+        and _same_file(report_path, jsonl_path)
+    ):
+        # Both writers accepted these two flags and the last one won: the NDJSON
+        # streamed during the audit was replaced by the final report, so the
+        # file that promised a per-entry stream held one document. Only the
+        # `-`/`-` pair was refused; a shared real path was not.
+        return emit_usage_error(
+            args,
+            f"--report and --jsonl name the same file {jsonl_path};"
+            " pass two different paths",
             command_path=("library", "check"),
             stdout=stdout,
             stderr=stderr,
