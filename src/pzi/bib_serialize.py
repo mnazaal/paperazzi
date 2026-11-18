@@ -317,6 +317,29 @@ def resolve_file_field(record: NormalizedRecord, entry: BibtexEntry, bib_path: s
     record["local_pdf_path"] = str(Path(bib_dir) / value)
 
 
+def resolved_attachment_paths(entry: BibtexEntry, bib_path: str) -> list[str]:
+    """Every path the entry's `file` field names, resolved like the primary one.
+
+    The record carries `local_pdf_path`, which answers "which PDF do I open";
+    ownership questions (may this file be moved, is it still referenced) need
+    "which files does this entry own", and an entry with `file = {a.pdf;b.pdf}`
+    owns both. Reads the entry rather than the record so the answer does not
+    widen `NormalizedRecord`, whose public projection is a frozen 1.0 type.
+    """
+    raw_paths = parse_file_field(entry.get("fields", {}).get("file"))
+    return [_resolve_attachment_path(path, bib_path) for path in raw_paths]
+
+
+def _resolve_attachment_path(value: str, bib_path: str) -> str:
+    """*value* as an absolute path, resolving a relative spelling against the bib.
+
+    Absolute paths and home-relative paths (``~/...``) are kept as-is.
+    """
+    if value.startswith(("/", "~")):
+        return value
+    return str(Path(bib_path).parent / value)
+
+
 def resolved_bib_dir(bib_path: str) -> Path:
     """The resolved directory *bib_path* sits in, for ``file``-field shortening.
 

@@ -412,6 +412,11 @@ def bibtex_entry_to_record(entry: BibtexEntry) -> NormalizedRecord:
         # The *path*, not the raw field: a Zotero/JabRef composite carries a
         # description and mimetype around it, and every consumer of
         # `local_pdf_path` treats it as a filesystem path.
+        #
+        # The complete list is deliberately NOT a record key: `EntryRecord` is a
+        # frozen public type, and `attachment_paths` would leak into `entries
+        # --json` and the envelope fixtures. Ownership questions read the entry
+        # instead — `bib_serialize.resolved_attachment_paths`.
         "local_pdf_path": primary_pdf_path(fields.get("file")),
         "abstract": _empty_to_none(fields.get("abstract")),
         # Read back so a record that already has an answer looks non-empty to

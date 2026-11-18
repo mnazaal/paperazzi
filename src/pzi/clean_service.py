@@ -21,6 +21,7 @@ from pzi.bib_serialize import (
     describe_unrepresentable_values,
     failed_block_details,
     parse_bib_library_resolving_macros,
+    resolved_attachment_paths,
     validate_bibtex_roundtrip,
 )
 from pzi.bibtex import BibtexEntry
@@ -30,6 +31,27 @@ from pzi.fileio import read_text_utf8
 from pzi.pdf_planning import pdf_file_present
 
 QUARANTINE_DIRNAME = ".orphans"
+
+
+def attachment_paths_of(
+    entry: BibtexEntry | None, record: Mapping[str, Any], bib_path: str
+) -> list[str]:
+    """Every attachment path the entry names, resolved against *bib_path*.
+
+    One function for the three ownership questions below (this library's
+    orphans, a sibling's, and the same question re-read under the disposal
+    lock), because those three disagreeing is how a referenced PDF gets moved.
+    Reads the entry, not the record: `local_pdf_path` is the primary attachment
+    only, and a record that has no entry beside it (a caller assembling one by
+    hand) still falls back to that primary.
+    """
+    if entry is not None:
+        paths = resolved_attachment_paths(entry, bib_path)
+        if paths:
+            return paths
+    primary = record.get("local_pdf_path")
+    return [str(primary)] if primary else []
+
 
 
 class CleanResult(TypedDict):
@@ -298,10 +320,14 @@ def validate_library(
 
     # --- Orphan PDFs ---
     referenced_paths: set[str] = set()
-    for record in records:
-        pdf = record.get("local_pdf_path")
-        if pdf and pdf_file_present(pdf):
-            referenced_paths.add(os.path.realpath(str(Path(str(pdf)).expanduser())))
+    for record, entry in zip(records, entries):
+        # Every attachment, not only the primary: an entry naming `a.pdf;b.pdf`
+        # references both, and counting one made the other an orphan.
+        for path in attachment_paths_of(entry, record, bib_path):
+            if pdf_file_present(path):
+                referenced_paths.add(
+                    os.path.realpath(str(Path(str(path)).expanduser()))
+                )
 
     # A sibling library pointed at the same `papers_dir` references PDFs too, and
     # they are just as much not-orphans as this library's own.
@@ -392,10 +418,11 @@ def _referenced_under_held_lock(bib_paths: Sequence[str]) -> set[str]:
         if not Path(path).exists():
             continue
         raw, _failures = read_bib_file_raw_with_failures(path)
-        for record in raw["records"]:
-            pdf = record.get("local_pdf_path")
-            if pdf:
-                referenced.add(os.path.realpath(str(Path(str(pdf)).expanduser())))
+        for record, entry in zip(raw["records"], raw["entries"]):
+            for pdf in attachment_paths_of(entry, record, path):
+                referenced.add(
+                    os.path.realpath(str(Path(str(pdf)).expanduser()))
+                )
     return referenced
 
 
@@ -426,12 +453,13 @@ def referenced_pdf_paths(
         raw, failures = read_bib_file_with_failures(sibling)
         for message in failures:
             errors.append(f"{Path(sibling).name}: {message}")
-        for record in raw["records"]:
+        for record, entry in zip(raw["records"], raw["entries"]):
             if record.get("citekey") in dropped:
                 continue
-            pdf = record.get("local_pdf_path")
-            if pdf:
-                referenced.add(os.path.realpath(str(Path(str(pdf)).expanduser())))
+            for pdf in attachment_paths_of(entry, record, sibling):
+                referenced.add(
+                    os.path.realpath(str(Path(str(pdf)).expanduser()))
+                )
     return referenced, errors
 
 

@@ -804,3 +804,70 @@ def test_clean_fix_rechecks_references_under_the_lock(
 
     assert pdf.exists()
     assert not any(a.get("done") for a in result["actions"])
+
+
+# ── every attachment counts as a reference, not only the primary one ─────────
+
+
+def _dual_attachment_library(td: str) -> tuple[str, str, str, str]:
+    """A library whose one entry carries two PDFs in its own papers dir."""
+    bib = os.path.join(td, "lib.bib")
+    papers = os.path.join(td, "papers")
+    os.makedirs(papers, exist_ok=True)
+    first = os.path.join(papers, "a.pdf")
+    second = os.path.join(papers, "b.pdf")
+    for path in (first, second):
+        Path(path).write_bytes(b"%PDF-1.4\n")
+    _write_bib(
+        bib,
+        f"@article{{dual,\n  title = {{Two Attachments}},\n"
+        f"  file = {{{first};{second}}},\n}}\n",
+    )
+    return bib, papers, first, second
+
+
+def test_clean_keeps_a_secondary_attachment_its_entry_names() -> None:
+    """`clean --fix` moved `b.pdf` into `.orphans/duplicates/` and called it clean.
+
+    Reference collection read the record's primary `local_pdf_path`, so the
+    second attachment in `file = {a.pdf;b.pdf}` was not a reference at all. The
+    entry kept naming a path that no longer existed, and the result reported one
+    action performed rather than a contradiction.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        bib, papers, first, second = _dual_attachment_library(td)
+
+        result = clean_library(bib_path=bib, papers_dir=papers, dry_run=False)
+
+        assert Path(second).exists(), (
+            "the still-referenced second attachment was quarantined: "
+            f"{result['issues']}"
+        )
+        assert Path(first).exists()
+        assert result["orphan_pdfs"] == [], result["orphan_pdfs"]
+        assert not (Path(papers) / ".orphans").exists(), (
+            "an orphan directory was created for a file the entry references"
+        )
+
+
+def test_referenced_pdf_paths_counts_every_attachment() -> None:
+    """The sibling/disposal collector asked the same narrow question."""
+    with tempfile.TemporaryDirectory() as td:
+        bib, papers, first, second = _dual_attachment_library(td)
+
+        referenced, errors = clean_service.referenced_pdf_paths([bib])
+
+        assert errors == []
+        expected = {os.path.realpath(first), os.path.realpath(second)}
+        assert expected <= referenced, f"missing from {referenced}"
+
+
+def test_the_lock_held_reference_set_counts_every_attachment() -> None:
+    """Targeted quarantine reads this set under its mutation lock."""
+    with tempfile.TemporaryDirectory() as td:
+        bib, papers, first, second = _dual_attachment_library(td)
+
+        referenced = clean_service._referenced_under_held_lock([bib])
+
+        expected = {os.path.realpath(first), os.path.realpath(second)}
+        assert expected <= referenced, f"missing from {referenced}"
