@@ -150,6 +150,29 @@ def test_every_documented_exit_code_is_reachable(tmp_path: Path) -> None:
         )
 
 
+def test_delete_returns_the_two_codes_its_table_row_promises(tmp_path: Path) -> None:
+    """The row's two special cases are behaviour, so they are pinned as such.
+
+    `delete` is the one command whose all-failed batch is NOT `5`: a list naming
+    no existing citekey is `3`. The row used to omit `delete` from `4` entirely
+    and say every all-failed batch is `5`, wrong in both directions, which a
+    script written against the table would have branched on.
+    """
+    config = _library(tmp_path, ONE_ENTRY)
+
+    mixed = _run(
+        ["delete", "smith2020", "nosuchkey", "--force", "--config", str(config)],
+        tmp_path,
+    )
+    assert mixed == exit_codes.PARTIAL
+
+    all_missing = _run(
+        ["delete", "nosuchkey", "alsomissing", "--force", "--config", str(config)],
+        tmp_path,
+    )
+    assert all_missing == exit_codes.NOT_FOUND
+
+
 def test_the_signal_codes_are_mapped_where_they_are_documented() -> None:
     """130 and 141 come from `main`, not from any command.
 

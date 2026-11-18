@@ -65,7 +65,9 @@ Native Windows is unsupported — WSL2 works. `docs/reference.md` sets out
 
 The first capture downloads what it needs from the network: Node.js if it is
 missing and the translation-server with its npm dependencies. Together those
-took about 400 MB on one Linux machine, under `~/.local/share/pzi`.
+run to several hundred megabytes under `~/.local/share/pzi` —
+[`docs/reference.md`](docs/reference.md#what-pzi-writes-to-disk) has the
+per-directory figures, one measured and one estimated.
 
 ### 1. Install
 

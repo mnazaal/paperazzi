@@ -147,7 +147,7 @@ Shared flags: every command accepts `[--config PATH]` to point at a config file 
 | 1 | Ran fine and has something to report: no search matches, duplicates or fuzzy near-duplicates found, integrity issues, entries `check` could not verify, or a library only partly read (a block the parser had to drop) |
 | 2 | Usage error (unknown command, bad or missing arguments, or a refusal to overwrite without `--force`) |
 | 3 | Entry not found (unknown citekey) |
-| 4 | Batch partly failed — one or more items in a batch failed while at least one succeeded (`add --from-file`, `import`, `inbox`, `update`, `update --promote`, `pdf retry --failed-only`). A batch in which *nothing* succeeded is `5`. |
+| 4 | Batch partly failed — one or more items in a batch failed while at least one succeeded (`add --from-file`, `import`, `inbox`, `update`, `update --promote`, `pdf retry --failed-only`, `delete` with several citekeys). A batch in which *nothing* succeeded is `5`, except `delete`: a list naming no existing citekey is `3`. |
 | 5 | Could not run: unreadable or invalid config, unknown `--target`, a bib locked by another process or changed out from under a prepared write, permission denied, unreachable service |
 | 130 / 141 | Stopped by a signal (SIGINT, or SIGTERM to `pzi server`) / downstream pipe closed (SIGPIPE) |
 
@@ -493,12 +493,12 @@ Nothing is lost, but a sync landing mid-import costs you the import.
 paperazzi follows [SemVer](https://semver.org/). This section says what that
 covers — which is not everything, and the boundary is the useful part.
 
-**The freeze takes effect at 1.0.** Until then the version is `0.x.y` and the
-surfaces below still move; several of them moved in the current beta. `git log`
-says which — there is no changelog file; it covered releases through 0.2.0 and
-was deleted, and `git log` since then is the record. What is already true is
-that each one has a test that fails when it changes, so a break is a decision
-rather than an accident.
+**The freeze takes effect at 1.0, and 1.0 is in release candidate.** The
+surfaces below are already frozen: each has a test that fails when it changes,
+so a break is a decision rather than an accident. The version is a pre-release
+of 1.0 (`1.0.0rcN`) precisely because those surfaces are frozen while the
+integrity work in the plan finishes. `git log` is the record — there is no
+changelog file; it covered releases through 0.2.0 and was deleted.
 
 ### The frozen surfaces
 
@@ -550,10 +550,10 @@ without saying so, so a retired key in a config nobody runs `doctor` against is
 silent. Worth knowing before relying on the notice; `doctor` is the command that
 reads your configuration back to you.
 
-That is the whole mechanism — `pzi.config.RETIRED_CONFIG_KEYS`, one entry today,
-with a test holding all three properties at once: out of the loader (it does
-nothing), out of the template (nobody should newly write it), and in the
-registry (so it is explained rather than reported as unknown).
+That is the whole mechanism — `pzi.config.RETIRED_CONFIG_KEYS`, one entry per
+retired setting, with a test holding all three properties at once: out of the
+loader (it does nothing), out of the template (nobody should newly write it),
+and in the registry (so it is explained rather than reported as unknown).
 
 **A deprecated thing lives until the next major version.** It is removed there,
 not before.
