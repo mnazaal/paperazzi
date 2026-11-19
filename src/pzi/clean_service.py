@@ -320,7 +320,10 @@ def validate_library(
 
     # --- Orphan PDFs ---
     referenced_paths: set[str] = set()
-    for record, entry in zip(records, entries):
+    # `records` is built one-per-entry from the same parse, so `strict=True`
+    # states the invariant the pairing depends on: a shorter list would pair a
+    # record with another entry's `file` field and quarantine a referenced PDF.
+    for record, entry in zip(records, entries, strict=True):
         # Every attachment, not only the primary: an entry naming `a.pdf;b.pdf`
         # references both, and counting one made the other an orphan.
         for path in attachment_paths_of(entry, record, bib_path):
@@ -418,7 +421,7 @@ def _referenced_under_held_lock(bib_paths: Sequence[str]) -> set[str]:
         if not Path(path).exists():
             continue
         raw, _failures = read_bib_file_raw_with_failures(path)
-        for record, entry in zip(raw["records"], raw["entries"]):
+        for record, entry in zip(raw["records"], raw["entries"], strict=True):
             for pdf in attachment_paths_of(entry, record, path):
                 referenced.add(
                     os.path.realpath(str(Path(str(pdf)).expanduser()))
@@ -453,7 +456,7 @@ def referenced_pdf_paths(
         raw, failures = read_bib_file_with_failures(sibling)
         for message in failures:
             errors.append(f"{Path(sibling).name}: {message}")
-        for record, entry in zip(raw["records"], raw["entries"]):
+        for record, entry in zip(raw["records"], raw["entries"], strict=True):
             if record.get("citekey") in dropped:
                 continue
             for pdf in attachment_paths_of(entry, record, sibling):
