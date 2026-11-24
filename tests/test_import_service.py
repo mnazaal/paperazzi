@@ -706,23 +706,7 @@ def test_import_onto_an_entry_with_a_composite_keeps_its_own_attachments() -> No
         assert written == own, written
 
 
-@pytest.mark.parametrize(
-    "dry_run",
-    [
-        True,
-        pytest.param(
-            False,
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason=(
-                    "pre-existing (same on 564f299): a duplicate import re-writes "
-                    "the matched entry and folds its absolute `file` to `~/`. "
-                    "PLAN lane C item 2; this marker flips when that lands."
-                ),
-            ),
-        ),
-    ],
-)
+@pytest.mark.parametrize("dry_run", [True, False])
 def test_import_onto_an_entry_naming_the_same_primary_changes_nothing(
     dry_run: bool,
 ) -> None:
@@ -742,6 +726,7 @@ def test_import_onto_an_entry_naming_the_same_primary_changes_nothing(
         )
         cp, bp, _pd = _setup_config(td)
         Path(bp).write_text(existing)
+        before = Path(bp).read_bytes()
         src = os.path.join(td, "src", "export.bib")
         Path(src).write_text(
             existing.replace("{" + first + "}", "{" + f"{first};{second}" + "}")
@@ -760,6 +745,7 @@ def test_import_onto_an_entry_naming_the_same_primary_changes_nothing(
 
         written = read_bib_file(bp)["entries"][0]["fields"]["file"]
         assert written == first, written
+        assert Path(bp).read_bytes() == before
 
 
 def test_import_keeps_a_multi_attachment_field_in_the_source_spelling() -> None:

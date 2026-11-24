@@ -861,6 +861,7 @@ class BatchWriteSession:
         """Fold one write plan into the in-memory state, keeping entries,
         records, and the identity index in sync."""
         planned_record = cast(NormalizedRecord, plan["record"])
+        modified = True
         if plan["action"] == "insert":
             position = len(self.records)
             self.entries.append(plan["entry"])
@@ -883,15 +884,26 @@ class BatchWriteSession:
             # `plan_bib_write`'s `existing_entries`). Merging here as well would
             # give one plan type two different meanings depending on which sink
             # consumed it.
+            #
+            # An update whose entry equals the one already there changes
+            # nothing, so its block stays untouched: marking it re-rendered the
+            # entry and folded its `file` to the configured style while the
+            # import reported a skipped duplicate.
+            unchanged = self.entries[idx] == plan["entry"]
             self.entries[idx] = plan["entry"]
             self.records[idx] = planned_record
-        self.touched.add(position)
-        for identity in extract_identities(planned_record):
-            self.index.setdefault((identity["kind"], identity["value"]), []).append(position)
+            modified = not unchanged
+        if modified:
+            self.touched.add(position)
+        self._index_record(planned_record, position)
         _invariant(
             len(self.entries) == len(self.records),
             f"batch state desync: {len(self.entries)} entries != {len(self.records)} records",
         )
+
+    def _index_record(self, record: NormalizedRecord, position: int) -> None:
+        for identity in extract_identities(record):
+            self.index.setdefault((identity["kind"], identity["value"]), []).append(position)
 
     def _remove_from_index(self, record: NormalizedRecord, position: int) -> None:
         """Remove *position* from every identity bucket *record* contributes,
