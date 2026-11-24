@@ -798,3 +798,41 @@ def test_report_to_stdout_appended_into_the_library_is_refused(tmp_path: Path) -
 
     assert proc.returncode == exit_codes.USAGE, proc.stderr
     assert bib.read_text(encoding="utf-8") == "% comment-only library\n"
+
+
+def test_stdout_is_compared_by_descriptor_not_by_dev_stdout(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Where `/dev/stdout` does not exist, the comparison must not fail open.
+
+    fd 1 is pointed at the library (as `>> main.bib` would) and the path
+    `/dev/stdout` is made to vanish; the library must still be recognised.
+    """
+    import os
+
+    bib = tmp_path / "main.bib"
+    bib.write_text(LIBRARY, encoding="utf-8")
+    config = _write_config(tmp_path, [("main", bib)], default="main")
+    real_stat = os.stat
+
+    def no_dev_stdout(path, *args, **kwargs):
+        if str(path) == "/dev/stdout":
+            raise FileNotFoundError(path)
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", no_dev_stdout)
+    saved = os.dup(1)
+    fd = os.open(bib, os.O_WRONLY | os.O_APPEND)
+    try:
+        os.dup2(fd, 1)
+        code, _out, err = _run_configured(
+            tmp_path, _args(report="-"), _never_ran, config=config
+        )
+    finally:
+        os.dup2(saved, 1)
+        os.close(saved)
+        os.close(fd)
+
+    assert code == exit_codes.USAGE, err
+    assert "which is the library" in err
+    assert bib.read_text(encoding="utf-8") == LIBRARY

@@ -874,4 +874,55 @@ def test_an_unresolvable_home_in_a_library_file_field_does_not_fail_the_import()
 
         assert result["status"] == "ok", result
         assert result["imported"] == 1, result
-        assert any("could not re-read the library" in w for w in result["warnings"])
+        assert any(w.startswith("dual: could not compare") for w in result["warnings"])
+
+
+def test_one_unresolvable_entry_keeps_the_other_entries_warnings() -> None:
+    """`~unknownuser/` on one merged entry must not discard another's warning."""
+    with tempfile.TemporaryDirectory() as td:
+        first, second = _two_source_pdfs(td)
+        cp, bp, _pd = _setup_config(td)
+        kept = os.path.join(td, "kept.pdf")
+        Path(kept).write_bytes(b"%PDF-1.4\nkept")
+        Path(bp).write_text(
+            "@article{good, title = {Good}, author = {Doe, Jane}, year = {2020},\n"
+            "  doi = {10.1000/good}, file = {" + kept + "}}\n"
+            "@article{odd, title = {Odd}, author = {Roe, R}, year = {2019},\n"
+            "  doi = {10.1000/odd}, file = {~nosuchuser_pzi_zz/x.pdf}}\n"
+        )
+        src = os.path.join(td, "src", "export.bib")
+        Path(src).write_text(
+            "@article{good, title = {Good}, author = {Doe, Jane}, year = {2020},\n"
+            "  doi = {10.1000/good}, file = {" + f"{first};{second}" + "}}\n"
+            "@article{odd, title = {Odd}, author = {Roe, R}, year = {2019},\n"
+            "  doi = {10.1000/odd}, file = {" + first + "}}\n"
+        )
+
+        result = import_from_bibtex(config_path=cp, home_dir=td, source_path=src)
+
+        assert result["status"] == "ok", result
+        assert any(w.startswith("good: kept the library entry's own file field")
+                   for w in result["warnings"]), result["warnings"]
+        assert any(w.startswith("odd: could not compare") for w in result["warnings"])
+
+
+def test_a_programming_error_in_the_warning_step_is_not_swallowed(monkeypatch) -> None:
+    """Only operational failures become warnings; a bug must still surface."""
+    import pytest
+
+    from pzi import import_service
+
+    def broken(*_a, **_k):
+        raise TypeError("a bug, not an operational failure")
+
+    monkeypatch.setattr(import_service, "_unmerged_attachment_warnings", broken)
+    with tempfile.TemporaryDirectory() as td:
+        first, _second = _two_source_pdfs(td)
+        cp, _bp, _pd = _setup_config(td)
+        src = os.path.join(td, "src", "export.bib")
+        Path(src).write_text(
+            "@article{x, title = {X}, author = {Doe, J}, year = {2020},\n"
+            "  doi = {10.1000/x}, file = {" + first + "}}\n"
+        )
+        with pytest.raises(TypeError, match="a bug"):
+            import_from_bibtex(config_path=cp, home_dir=td, source_path=src)

@@ -133,6 +133,15 @@ def _output_alias_refusal(
         for library_path, name, selected in libraries:
             if not _same_file(path, library_path):
                 continue
+            if path == "-":
+                # By the time pzi runs, a shell `>` has already truncated the
+                # file; "would overwrite" would tell the user it is intact.
+                return (
+                    f"{flag} - writes to stdout, which is the library"
+                    f"{f' {name}' if name else ''}; nothing was written — if stdout"
+                    " was redirected with `>`, the shell has already emptied that"
+                    " file, so restore it from a backup"
+                )
             if selected:
                 return (
                     f"{flag} {path} names the library being checked"

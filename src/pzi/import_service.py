@@ -362,9 +362,17 @@ def _unmerged_attachment_warnings(
         entry = by_key.get(citekey)
         if entry is None or not (entry["fields"].get("file") or "").strip():
             continue
-        kept = located(resolved_attachment_paths(entry, bib_path))
-        offered = resolved_attachment_paths(source_entry, source_path)
-        left_out = [path for path in offered if located([path]).isdisjoint(kept)]
+        try:
+            kept = located(resolved_attachment_paths(entry, bib_path))
+            offered = resolved_attachment_paths(source_entry, source_path)
+            left_out = [path for path in offered if located([path]).isdisjoint(kept)]
+        except (OSError, ValueError, RuntimeError) as exc:
+            # Per entry: one unresolvable path (`~unknownuser/` raises in
+            # `expanduser`) must not discard the warnings for every other entry.
+            warnings.append(
+                f"{citekey}: could not compare its attachments with the source's: {exc}"
+            )
+            continue
         if left_out:
             warnings.append(
                 f"{citekey}: kept the library entry's own file field; not merged "
