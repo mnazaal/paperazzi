@@ -1300,3 +1300,24 @@ def test_stdin_warning_skips_an_entry_whose_path_was_not_written(tmp_path: Path)
     assert [w for w in first.get("warnings", []) if "stdin" in w]
     assert second["skipped_duplicates"] == 1
     assert not [w for w in second.get("warnings", []) if "stdin" in w], second["warnings"]
+
+
+def test_stdin_warning_names_a_merge_that_filled_the_attachment(tmp_path: Path) -> None:
+    """A merge that gives an existing entry its first `file` stored the path."""
+    from pzi.bib_repository import read_bib_file
+
+    cp, bp, _papers = _setup_config(str(tmp_path))
+    Path(bp).write_text(
+        "@article{old, title = {A}, author = {Doe, J}, year = {2020}, doi = {10.1000/aaa}}\n"
+    )
+    text = (
+        "@article{new, title = {A}, author = {Doe, J}, year = {2020}, doi = {10.1000/aaa},\n"
+        "  file = {papers/a.pdf}}\n"
+    )
+    result = import_from_bibtex(
+        config_path=cp, home_dir=str(tmp_path), source_path="<stdin>", source_text=text
+    )
+    files = {e["citekey"]: e["fields"].get("file") for e in read_bib_file(bp)["entries"]}
+    assert files.get("old") == "papers/a.pdf", files
+    stdin_warnings = [w for w in result.get("warnings", []) if "stdin" in w]
+    assert len(stdin_warnings) == 1 and "old" in stdin_warnings[0], result.get("warnings")

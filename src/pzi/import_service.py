@@ -246,10 +246,12 @@ def import_from_bibtex(
         citekey = result.get("citekey", record.get("citekey", "?"))
         status = result.get("status", "unknown")
         # Named only when the relative path was written: a new entry, or a merge
-        # that changed the `file` field. A duplicate or a failed write stored nothing.
+        # that changed the attachment. The writer reports that field by its
+        # record key, `local_pdf_path`, not by the BibTeX name `file`. A duplicate
+        # or a failed write stored nothing.
         if relative_from_stdin and status == "ok" and (
             result.get("action", "insert") != "update"
-            or "file" in (result.get("changed_fields") or [])
+            or "local_pdf_path" in (result.get("changed_fields") or [])
         ):
             unresolved_from_stdin.append(citekey or "?")
         # The writer reports a near-duplicate as a warning, not an error, and
