@@ -422,25 +422,6 @@ def _excluded_keys(
     return set((excluding or {}).get(bib_path, ()))
 
 
-def _target_blocking_problems(bib_path: str) -> list[str]:
-    """What stops the target's quarantine under the lock: the scan's own rule.
-
-    The target cannot be read, or the parser dropped a block (unparseable, or a
-    duplicate citekey): either way an entry's `file =` may be missing from the
-    reference set. Other findings the scan reports without blocking do not.
-    """
-    if not Path(bib_path).exists():
-        return []
-    try:
-        library = parse_bib_library_resolving_macros(read_text_utf8(bib_path))
-    except _UNREADABLE as exc:
-        return [f"{Path(bib_path).name}: cannot read: {exc}"]
-    return [
-        f"{Path(bib_path).name}: {message}"
-        for _key, message in failed_block_details(library)
-    ]
-
-
 def _referenced_under_held_lock(
     bib_paths: Sequence[str],
     *,
@@ -825,6 +806,22 @@ def clean_library(
         redundant = set(validation.get("duplicate_orphan_pdfs") or [])
         unclaimed = [p for p in validation["orphan_pdfs"] if p not in redundant]
 
+        # Anything the parser reports about the target (a case-colliding or
+        # mangled key, a `#` concatenation, an unrepresentable value) may hide a
+        # `file =`: two `file` keys differing in case keep only one. So any such
+        # finding keeps every orphan, decided here so the dry run says what the
+        # real run does; the recheck under the lock applies the same rule.
+        try:
+            _raw, target_notes = read_bib_file_raw_with_failures(bib_path)
+        except _UNREADABLE as exc:
+            target_notes = [f"cannot read: {exc}"]
+        if target_notes:
+            return _skip_quarantine(
+                validation,
+                f"{Path(bib_path).name} has entries pzi cannot fully read "
+                f"({'; '.join(target_notes)}); fix them first",
+            )
+
         # An other library that is not there cannot prove the PDF unreferenced,
         # and locking it would create its directory and a lock file — pzi never
         # writes at another library's path. Same policy as `quarantine_pdf`.
@@ -873,19 +870,10 @@ def clean_library(
                 # unreadable since the scan) or that fails to parse could name
                 # any of these PDFs: keep them all, as the scan does, rather
                 # than move on what the readable libraries alone say.
-                # Judged as the scan judges them: any problem in another
-                # library blocks, but the target blocks only on what the scan
-                # blocks on (unreadable, or blocks the parser dropped). Its
-                # non-blocking findings (`#` concatenation, case-colliding
-                # keys) stopped every `--fix` while `--dry-run` said it would
-                # move the orphans.
                 recheck_errors: list[str] = []
-                others = [path for path in lock_targets if path != bib_path]
                 still_referenced = _referenced_under_held_lock(
-                    others, errors=recheck_errors
+                    lock_targets, errors=recheck_errors
                 )
-                still_referenced |= _referenced_under_held_lock([bib_path])
-                recheck_errors += _target_blocking_problems(bib_path)
                 if recheck_errors:
                     return _skip_quarantine(
                         validation,

@@ -1456,36 +1456,49 @@ def test_clean_fix_keeps_orphans_when_a_library_turns_unreadable_under_the_lock(
     assert any(i["type"] == "quarantine_skipped" for i in result["issues"])
 
 
-def test_clean_fix_is_not_blocked_by_the_targets_own_non_blocking_findings(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    "body",
+    [
+        "File = {{{ref}}},\n  file = {{{other}}}",
+        "file = {{{other}}},\n  File = {{{ref}}}",
+        "title = {{a}} # {{b}},\n  file = {{{ref}}}",
+    ],
+    ids=["File-then-file", "file-then-File", "hash-concat"],
+)
+def test_clean_fix_and_its_dry_run_keep_orphans_when_the_target_has_parser_notes(
+    tmp_path: Path, body: str
 ) -> None:
-    """The under-lock recheck blocks the target on the scan's rule, not on every note.
+    """Any parser note about the target keeps every orphan, in both modes.
 
-    A `#`-concatenated title is reported by the parser but drops nothing; the
-    scan does not block on it and `--dry-run` previews the move, so `--fix`
-    must make it.
+    Two `file` keys differing only in case keep one value, so the other PDF looks
+    orphaned though the entry names it. Notes are not sorted into harmless and
+    hiding ones: any of them stops the sweep, and the dry run says so too.
     """
     from pzi import clean_service
 
     pa = tmp_path / "pa"
     pa.mkdir()
-    (pa / "x.pdf").write_bytes(b"%PDF-1.4\nx")
+    ref = pa / "ref.pdf"
+    ref.write_bytes(b"%PDF-1.4\nref")
+    other = pa / "other.pdf"
+    other.write_bytes(b"%PDF-1.4\nother")
     orphan = pa / "orphan.pdf"
     orphan.write_bytes(b"%PDF-1.4\no")
     a = tmp_path / "a.bib"
     a.write_text(
-        "@article{h,\n  title = {a} # {b},\n  author = {Smith, J},\n"
-        f"  year = {{2020}},\n  file = {{{pa / 'x.pdf'}}},\n}}\n"
+        "@article{k,\n  author = {Smith, J},\n  year = {2020},\n  "
+        + body.format(ref=ref, other=other) + ",\n}\n"
     )
 
-    dry = clean_service.clean_library(
-        bib_path=str(a), papers_dir=str(pa), dry_run=True, sibling_bib_paths=[]
-    )
-    real = clean_service.clean_library(
-        bib_path=str(a), papers_dir=str(pa), dry_run=False, sibling_bib_paths=[]
-    )
+    results = [
+        clean_service.clean_library(
+            bib_path=str(a), papers_dir=str(pa), dry_run=dry, sibling_bib_paths=[]
+        )
+        for dry in (True, False)
+    ]
 
-    assert [Path(x["source"]).name for x in dry["actions"]] == ["orphan.pdf"]
-    assert [Path(x["source"]).name for x in real["actions"]] == ["orphan.pdf"]
-    assert not orphan.exists()
-    assert (pa / "x.pdf").exists()
+    for result in results:
+        assert result["actions"] == []
+        assert any(i["type"] == "quarantine_skipped" for i in result["issues"])
+    for pdf in (ref, other, orphan):
+        assert pdf.exists(), pdf
