@@ -87,6 +87,30 @@ def _carry_over(content: str, existing: _ConfiguredHome) -> str:
     return f"{note}\n" + "\n".join(lines) + f"\n\n{content}"
 
 
+def _refuse_rotation_behind_token_source(
+    dest: Path, existing: _ConfiguredHome, *, stderr: TextIO
+) -> int | None:
+    """Refuse a rotation the server would not see.
+
+    `api_auth_token_cmd` and `api_auth_token` outrank `<data_home>/api_token` in
+    `resolve_api_auth_token`, so replacing the file leaves the resolved token
+    unchanged while the command would report success. Names the keys, never
+    their values.
+    """
+    if not existing.token_settings:
+        return None
+    keys = " / ".join(f"`{key}`" for key, _value in existing.token_settings)
+    print(
+        f"error: {dest} sets {keys}, which the server reads ahead of the data "
+        "home's api_token file, so --rotate-token would change nothing it uses. "
+        "Nothing was rotated or written. To rotate, change the token at that "
+        "source, or remove the key from the config to fall back to the data "
+        "home's file and rerun `pzi init --rotate-token`.",
+        file=stderr,
+    )
+    return exit_codes.USAGE
+
+
 def _rotate_token_only(
     dest: Path, *, home_dir: str, stdout: TextIO, stderr: TextIO
 ) -> int:
@@ -240,6 +264,10 @@ def run_init_command(
     # the token orphaned for anyone who sets that key — the server then fell
     # back to `auth: DISABLED` while `init` reported a token had been written.
     existing = _existing_data_home(dest)
+    if rotate_token:
+        refused = _refuse_rotation_behind_token_source(dest, existing, stderr=stderr)
+        if refused is not None:
+            return refused
     data_home = _data_home_path(dest, existing, home_dir)
     if existing.unreadable is not None:
         print(

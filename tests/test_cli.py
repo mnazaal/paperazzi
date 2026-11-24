@@ -2603,3 +2603,41 @@ def test_init_force_carries_a_plaintext_token_through_without_printing_it(
     assert code == exit_codes.OK, err
     assert tomllib.loads(config_path.read_text())["api_auth_token"] == "SYNTHETIC-PLAIN-TOKEN"
     assert "SYNTHETIC-PLAIN-TOKEN" not in out + err
+
+
+@pytest.mark.parametrize("force", [False, True])
+@pytest.mark.parametrize(
+    "source_line",
+    [
+        'api_auth_token_cmd = "echo SYNTHETIC-CMD-TOKEN"\n',
+        'api_auth_token = "SYNTHETIC-PLAIN-TOKEN"\n',
+    ],
+)
+def test_init_rotate_token_refuses_when_config_sets_a_token_source(
+    tmp_path: Path, source_line: str, force: bool
+) -> None:
+    """The token command and the plaintext token outrank `<data_home>/api_token`, so
+    rotating the file changed nothing the server reads while exit 0 said it did."""
+    data_home = tmp_path / "data"
+    data_home.mkdir()
+    (data_home / "api_token").write_text("SYNTHETIC-FILE-TOKEN\n")
+    config_path = tmp_path / "config.toml"
+    original = f'pzi_data_home = "{data_home}"\n{source_line}'
+    config_path.write_text(original)
+    stdout, stderr = StringIO(), StringIO()
+
+    code = run_cli(
+        ["init", "--rotate-token", *(["--force"] if force else []), "--config", str(config_path)],
+        home_dir=str(tmp_path), stdout=stdout, stderr=stderr,
+    )
+
+    assert code == exit_codes.USAGE
+    key = "api_auth_token_cmd" if "_cmd" in source_line else "api_auth_token"
+    assert key in stderr.getvalue()
+    assert "rotat" in stderr.getvalue()
+    assert (data_home / "api_token").read_text() == "SYNTHETIC-FILE-TOKEN\n"
+    assert config_path.read_text() == original
+    assert not (data_home / "config-backups").exists()
+    assert "written" not in stdout.getvalue()
+    for secret in ("SYNTHETIC-CMD-TOKEN", "SYNTHETIC-PLAIN-TOKEN", "SYNTHETIC-FILE-TOKEN"):
+        assert secret not in stdout.getvalue() + stderr.getvalue()
