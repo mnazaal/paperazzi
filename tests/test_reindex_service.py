@@ -1244,3 +1244,54 @@ def test_convert_file_paths_refuses_to_overwrite_drift_from_its_source(
 
     assert "EXTERNAL" in bib.read_text()
     assert f"{home}/x.pdf" in bib.read_text()
+
+
+# ── an unreadable sibling holds moves; it does not abort the run ──────────────
+
+def _sibling_unreadable_library(tmp_path, *, sibling_bytes: bytes):
+    bib, papers, shared = _shared_library(tmp_path, lambda p: "")
+    sibling = tmp_path / "sib.bib"
+    sibling.write_bytes(sibling_bytes)
+    return bib, papers, shared, sibling
+
+
+_LATIN1_SIBLING = b"@article{theirs,\n  title = {Caf\xe9},\n  author = {X, Y},\n}\n"
+
+
+@pytest.mark.parametrize("dry_run", [True, False], ids=["dry-run", "apply"])
+def test_reindex_holds_every_move_when_a_sibling_cannot_be_read_at_all(
+    tmp_path, dry_run
+) -> None:
+    bib, papers, shared, sibling = _sibling_unreadable_library(
+        tmp_path, sibling_bytes=_LATIN1_SIBLING
+    )
+
+    result = reindex_library(
+        bib_path=str(bib), papers_dir=str(papers), dry_run=dry_run,
+        file_path_style="absolute", sibling_bib_paths=[str(sibling)],
+    )
+
+    assert shared.read_bytes() == b"%PDF-1.4\nSHARED\n", "moved a PDF a sibling might name"
+    assert any("sib.bib" in e for e in result["errors"]), result["errors"]
+    assert sibling.read_bytes() == _LATIN1_SIBLING
+    if not dry_run:
+        assert "smith2020first" in _file_values(bib), "citekey rewrite must still apply"
+        assert Path(_file_values(bib)["smith2020first"]) == shared
+
+
+def test_reindex_does_not_move_a_pdf_a_readable_sibling_names_beside_an_unreadable_one(
+    tmp_path,
+) -> None:
+    bib, papers, shared, bad = _sibling_unreadable_library(
+        tmp_path, sibling_bytes=_LATIN1_SIBLING
+    )
+    good = tmp_path / "good.bib"
+    good.write_text(f"@article{{g,\n  title = {{G}},\n  file = {{{shared}}},\n}}\n")
+
+    result = reindex_library(
+        bib_path=str(bib), papers_dir=str(papers), dry_run=False,
+        file_path_style="absolute", sibling_bib_paths=[str(bad), str(good)],
+    )
+
+    assert shared.exists()
+    assert any("sib.bib" in e for e in result["errors"]), result["errors"]

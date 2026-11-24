@@ -30,6 +30,7 @@ from pzi.bibtex import (
 )
 from pzi.clean_service import referenced_pdf_paths
 from pzi.config import DEFAULT_PDF_FILE_PATH_STYLE
+from pzi.errors import PziError
 from pzi.fileio import directory_folds_case
 from pzi.format_templates import format_citekey, format_pdf_filename
 from pzi.pdf import pdf_is_stored, stored_pdf_paths
@@ -83,6 +84,28 @@ def _other_library_error(citekey: str, path: str) -> str:
         f"kept PDF for {citekey} at {path}: another library may still name it, "
         "and a rename would leave that reference dangling"
     )
+
+
+def _sibling_references(sibling_bib_paths: Sequence[str]) -> tuple[set[str], list[str]]:
+    """PDF paths the siblings name, and a message for each one that did not read.
+
+    ``referenced_pdf_paths`` raises on a file it cannot read at all (not UTF-8, no
+    permission), which aborted a reindex of a healthy target at exit 5. Read one
+    sibling at a time so that failure becomes the same held-move report a
+    partial read already produces, while the readable siblings still count.
+    """
+    referenced: set[str] = set()
+    errors: list[str] = []
+    for sibling in sibling_bib_paths:
+        try:
+            found, failures = referenced_pdf_paths([sibling])
+        except (PziError, OSError) as exc:
+            errors.append(f"{Path(sibling).name}: could not be read ({exc}); "
+                          "no PDF was moved that it might name")
+            continue
+        referenced |= found
+        errors.extend(failures)
+    return referenced, errors
 
 
 def _attachment_key(path: str, bib_dir: str | None) -> str:
@@ -510,7 +533,7 @@ def reindex_library(
                 "backup_path": None,
             }
 
-        foreign_pdfs, sibling_errors = referenced_pdf_paths(sibling_bib_paths)
+        foreign_pdfs, sibling_errors = _sibling_references(sibling_bib_paths)
         changes = plan_reindex(
             entries=entries,
             records=records,
