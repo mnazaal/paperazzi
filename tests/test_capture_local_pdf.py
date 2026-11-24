@@ -917,3 +917,37 @@ def test_local_pdf_strict_tags_alone_do_not_exempt_an_unverified_pdf(
     assert result["status"] == "error"
     assert "no metadata provider found this PDF" in result["message"]
     assert writes == []
+
+
+@pytest.mark.parametrize("overrides", [{"doi": None}, {"year": "n/a"}, {"title": "Graph Parsers"}])
+def test_local_pdf_strict_an_empty_or_unchanged_override_does_not_exempt(
+    tmp_path: Path, monkeypatch, overrides: dict
+) -> None:
+    """Only an override that puts a real, new identifying value in counts."""
+    import pzi.capture_local_pdf as clp
+
+    source_pdf = tmp_path / "paper.pdf"
+    source_pdf.write_bytes(b"%PDF-1.4\n")
+    papers_dir = tmp_path / "papers"
+    papers_dir.mkdir()
+    bib_path = tmp_path / "library.bib"
+    bib_path.write_text("")
+    scraped = {"title": "Graph Parsers", "doi": "10.1000/scraped", "authors": ["Smith, Jane"]}
+    monkeypatch.setattr(clp, "extract_pdf_metadata", lambda _p: dict(scraped))
+    monkeypatch.setattr(clp, "local_pdf_base_record", lambda **_kw: dict(scraped))
+    writes: list[dict] = []
+
+    result = clp.add_local_pdf(
+        bib={"name": "main", "path": str(bib_path),
+             "papers_dir": str(papers_dir), "default": True},
+        raw_value=str(source_pdf),
+        record_overrides=dict(overrides),
+        dry_run=True,
+        server_url="http://127.0.0.1:1",
+        fetch_search=lambda *a, **kw: [],
+        ensure_citekey=lambda record, *a, **kw: {**record, "citekey": "key"},
+        add_record=lambda **kw: writes.append(kw) or {"status": "ok", "warnings": []},
+        strict_metadata=True,
+    )
+    assert result["status"] == "error", result
+    assert writes == []

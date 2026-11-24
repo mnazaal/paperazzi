@@ -142,6 +142,26 @@ def local_pdf_base_record(
 _IDENTIFYING_FIELDS = frozenset({"title", "doi", "authors", "year"})
 
 
+def _supplies_identifying_metadata(
+    overrides: Mapping[str, object],
+    base_record: Mapping[str, object],
+    merged: Mapping[str, object],
+) -> bool:
+    """Whether the user's overrides put an identifying value into the record.
+
+    A key alone is not enough: `{"doi": null}` is dropped by the merge and
+    `{"year": "n/a"}` coerces to nothing, so both leave a record resting on the
+    PDF's text. Counted only when the merged value is real and is not simply the
+    value the PDF already gave.
+    """
+    return any(
+        key in overrides
+        and merged.get(key) not in (None, "", [], {})
+        and merged.get(key) != base_record.get(key)
+        for key in _IDENTIFYING_FIELDS
+    )
+
+
 def _provider_added_to_extraction(
     base_record: Mapping[str, object], extracted: Mapping[str, object]
 ) -> bool:
@@ -402,7 +422,7 @@ def add_local_pdf(
                     warnings=[],
                     bib=bib,
                 )
-            if not _IDENTIFYING_FIELDS & record_overrides.keys():
+            if not _supplies_identifying_metadata(record_overrides, base_record, merged):
                 return _add_planning.error_result(
                     message="no metadata provider found this PDF (--strict-metadata)",
                     errors=[
