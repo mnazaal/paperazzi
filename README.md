@@ -369,7 +369,7 @@ Two autouse fixtures in `tests/conftest.py` stub the SSRF guard's hostname
 lookup (`url_safety.resolve_host_with_timeout`) and refuse any non-loopback
 `connect()`, so a test that forgets to mock an outbound call cannot connect out.
 Every other lookup uses the real resolver: connect-time resolution in
-`safe_http.resolve_pinned_ips` (and the browser egress proxy), the plain
+`safe_http.resolve_pinned_ips` (and the browser and translation-server egress proxies), the plain
 `urlopen` calls in `server_browser`, `flaresolverr`, `ts_backend` and
 `translation_server`, and `cli_server`'s bind-address check. Such a test can
 therefore make a real DNS lookup, and whether it then fails at once or after
