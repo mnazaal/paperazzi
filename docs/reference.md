@@ -488,6 +488,19 @@ both tools side by side.
 whenever they pull a remote change, with the same effect and the same refusal.
 Nothing is lost, but a sync landing mid-import costs you the import.
 
+**Known limits.** Two cases the refusal above does not cover.
+
+- *Network filesystems.* The lock is an advisory `flock`. On NFS and SMB shares
+  it can be unreliable or silently not shared between machines, so two pzi
+  processes on different hosts may both think they hold it. Keep the library on
+  a local disk, or run pzi from one machine only.
+- *A writer that does not take the lock.* The re-read and the replace are two
+  steps, not one. A program that writes after the re-read and before the
+  replace is overwritten, with no refusal and no error. The window is
+  milliseconds, but it is the one way another program's write can be lost
+  without a trace; the guarantee that the file is never left half-written holds
+  either way.
+
 ## Versioning and compatibility
 
 paperazzi follows [SemVer](https://semver.org/). This section says what that
