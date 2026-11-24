@@ -128,13 +128,20 @@ def test_every_documented_exit_code_is_reachable(tmp_path: Path) -> None:
              tmp_path),
         "pzi entries against a --target that is not there",
     )
-    # PARTIAL is the one code with no offline single-invocation route: it needs a
-    # batch where one item succeeds and another fails, and every offline batch
-    # this suite can build fails wholly (which is ENVIRONMENT, deliberately —
-    # see `batch_exit_code`). Exercised at the shared helper instead, which is
-    # where all five batch commands get their answer, and named here so the gap
-    # is visible rather than implied.
-    record(batch_exit_code(succeeded=1, failed=1), "batch_exit_code(1 ok, 1 failed)")
+    # PARTIAL has one offline single-invocation route: `delete` with one
+    # citekey that exists and one that does not. (`batch_exit_code` itself is
+    # still pinned below, since the other five batch commands answer through it.)
+    (tmp_path / "partial").mkdir()
+    partial_config = _library(tmp_path / "partial", ONE_ENTRY)
+    record(
+        _run(
+            ["delete", "smith2020", "nosuchkey", "--force",
+             "--config", str(partial_config)],
+            tmp_path / "partial",
+        ),
+        "pzi delete of one existing and one missing citekey",
+    )
+    assert batch_exit_code(succeeded=1, failed=1) == exit_codes.PARTIAL
 
     for code in (
         exit_codes.OK,
@@ -171,6 +178,69 @@ def test_delete_returns_the_two_codes_its_table_row_promises(tmp_path: Path) -> 
         tmp_path,
     )
     assert all_missing == exit_codes.NOT_FOUND
+
+    # A fresh library: the mixed run above already deleted `smith2020`.
+    (tmp_path / "all-present").mkdir()
+    fresh = _library(tmp_path / "all-present", ONE_ENTRY)
+    assert (
+        _run(["delete", "smith2020", "--force", "--config", str(fresh)],
+             tmp_path / "all-present")
+        == exit_codes.OK
+    ), "a delete of every named citekey must succeed outright"
+
+
+def test_delete_that_cannot_move_its_pdf_aside_reports_findings(tmp_path: Path) -> None:
+    """The entry is gone but its PDF stayed put: ran fine, something to report.
+
+    Forced by making `papers/.orphans` a plain file, so the quarantine move
+    fails with EEXIST while the bib write succeeds.
+    """
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    pdf = papers / "smith.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    (papers / ".orphans").write_text("", encoding="utf-8")
+    bib = tmp_path / "ml.bib"
+    bib.write_text(ONE_ENTRY.replace("year = {2020},", f"year = {{2020}},\n  file = {{{pdf}}},"),
+                   encoding="utf-8")
+    config = tmp_path / "config.toml"
+    config.write_text(
+        MINIMAL_CONFIG.format(bib_path=bib) + f'papers_dir = "{papers}"\n',
+        encoding="utf-8",
+    )
+
+    code = _run(["delete", "smith2020", "--force", "--config", str(config)], tmp_path)
+
+    assert code == exit_codes.FINDINGS
+    assert "smith2020" not in bib.read_text(encoding="utf-8")
+    assert pdf.exists()
+
+
+def test_the_table_and_help_state_the_delete_outcomes_the_tests_above_drive() -> None:
+    """The two tests above drive `delete`; this ties their codes to the words.
+
+    Without it the outcomes were pinned and the documents were not: swapping in
+    the pre-fix reference (row 4 without `delete`, "nothing succeeded is 5")
+    left every test in this file green.
+    """
+    from pzi.cli_parser import _top_level_epilog
+
+    rows = {
+        int(m.group(1)): m.group(2)
+        for m in re.finditer(r"^\| (\d+) \| (.*) \|$", user_docs_text(), re.MULTILINE)
+    }
+    assert "`delete` with several citekeys" in rows[exit_codes.PARTIAL]
+    assert "except `delete`: a list naming no existing citekey is `3`" in rows[
+        exit_codes.PARTIAL
+    ]
+    assert "`delete` that removed its entries but could not move a PDF aside" in rows[
+        exit_codes.FINDINGS
+    ]
+
+    epilog = " ".join(_top_level_epilog().split())
+    assert "delete with several citekeys" in epilog
+    assert "delete, where no citekey matching is 3" in epilog
+    assert "a delete that could not move a PDF aside" in epilog
 
 
 def test_the_signal_codes_are_mapped_where_they_are_documented() -> None:

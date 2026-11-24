@@ -144,7 +144,7 @@ Shared flags: every command accepts `[--config PATH]` to point at a config file 
 | Code | Meaning |
 |---|---|
 | 0 | Success |
-| 1 | Ran fine and has something to report: no search matches, duplicates or fuzzy near-duplicates found, integrity issues, entries `check` could not verify, or a library only partly read (a block the parser had to drop) |
+| 1 | Ran fine and has something to report: no search matches, duplicates or fuzzy near-duplicates found, integrity issues, entries `check` could not verify, a library only partly read (a block the parser had to drop), or a `delete` that removed its entries but could not move a PDF aside |
 | 2 | Usage error (unknown command, bad or missing arguments, or a refusal to overwrite without `--force`) |
 | 3 | Entry not found (unknown citekey) |
 | 4 | Batch partly failed — one or more items in a batch failed while at least one succeeded (`add --from-file`, `import`, `inbox`, `update`, `update --promote`, `pdf retry --failed-only`, `delete` with several citekeys). A batch in which *nothing* succeeded is `5`, except `delete`: a list naming no existing citekey is `3`. |

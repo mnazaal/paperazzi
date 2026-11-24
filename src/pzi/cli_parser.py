@@ -237,7 +237,8 @@ def _top_level_epilog() -> str:
         for code, meaning in (
             (0, "success"),
             (1, "ran fine, has something to report (no search matches,"),
-            (" ", "   duplicates found, integrity issues, unverified citations)"),
+            (" ", "   duplicates found, integrity issues, unverified citations,"),
+            (" ", "   a delete that could not move a PDF aside)"),
             (2, "usage error"),
             (3, "entry not found"),
             (4, "batch partly failed: some items succeeded and some did not"),
