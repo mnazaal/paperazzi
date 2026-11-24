@@ -1056,3 +1056,104 @@ def test_a_key_from_the_pre_transliteration_default_scheme_is_not_a_rename() -> 
     stale = {**entry, "citekey": "smith1999old"}
     assert plan_reindex(entries=[stale], records=[{**record, "citekey": "smith1999old"}],
                         papers_dir="/p")[0]["new_citekey"] == "weiss2020deep"
+
+
+# ── shared PDF: references that are not themselves being renamed ──────────────
+
+
+def _shared_library(tmp_path, survivor_file, *, extra_bib=None):
+    """`old` changes its key; `jones2021second` already has its policy key.
+
+    Returns ``(bib, papers, shared_pdf)``; *survivor_file* is built from the
+    PDF path so a test can spell it bare, composite or relative.
+    """
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    shared = papers / "shared.pdf"
+    shared.write_bytes(b"%PDF-1.4\nSHARED\n")
+    bib = tmp_path / "lib.bib"
+    bib.write_text(
+        f"@article{{old,\n  title = {{First Paper}},\n  author = {{Smith, Jane}},\n"
+        f"  year = {{2020}},\n  file = {{{shared}}},\n}}\n\n"
+        f"@article{{jones2021second,\n  title = {{Second Paper}},\n"
+        f"  author = {{Jones, Ann}},\n  year = {{2021}},\n"
+        f"  file = {{{survivor_file(shared)}}},\n}}\n"
+    )
+    return bib, papers, shared
+
+
+def _file_values(bib) -> dict[str, str]:
+    from pzi.bib_repository import read_bib_file
+
+    result = read_bib_file(str(bib))
+    return {e["citekey"]: e["fields"].get("file", "") for e in result["entries"]}
+
+
+def test_reindex_repoints_an_unchanged_entry_sharing_the_moved_pdf(tmp_path) -> None:
+    bib, papers, shared = _shared_library(tmp_path, str)
+
+    result = reindex_library(
+        bib_path=str(bib), papers_dir=str(papers), dry_run=False,
+        file_path_style="absolute",
+    )
+
+    values = _file_values(bib)
+    assert set(values) == {"smith2020first", "jones2021second"}, values
+    for key, value in values.items():
+        assert Path(value).exists(), f"{key} dangles at {value}"
+    assert values["jones2021second"] == values["smith2020first"]
+    assert not shared.exists()
+    assert not result["errors"], result["errors"]
+
+
+def test_reindex_keeps_the_pdf_when_an_unchanged_entry_lists_it_composite(
+    tmp_path,
+) -> None:
+    """A single Zotero-style composite is not a bare path: repointing it would
+    rewrite the user's description and mimetype, so the file stays put."""
+    bib, papers, shared = _shared_library(
+        tmp_path, lambda p: f"Full Text PDF:{p}:application/pdf"
+    )
+
+    result = reindex_library(
+        bib_path=str(bib), papers_dir=str(papers), dry_run=False,
+        file_path_style="absolute",
+    )
+
+    assert shared.exists()
+    values = _file_values(bib)
+    assert values["jones2021second"] == f"Full Text PDF:{shared}:application/pdf"
+    assert Path(values["smith2020first"]) == shared
+    assert any("shared.pdf" in e for e in result["errors"]), result["errors"]
+
+
+def test_reindex_keeps_the_pdf_a_sibling_library_references(tmp_path) -> None:
+    bib, papers, shared = _shared_library(tmp_path, lambda p: "")
+    sibling = tmp_path / "other.bib"
+    sibling_text = f"@article{{theirs,\n  title = {{Theirs}},\n  file = {{{shared}}},\n}}\n"
+    sibling.write_text(sibling_text)
+
+    result = reindex_library(
+        bib_path=str(bib), papers_dir=str(papers), dry_run=False,
+        file_path_style="absolute", sibling_bib_paths=[str(sibling)],
+    )
+
+    assert shared.exists(), "moved a PDF another library still names"
+    assert sibling.read_text() == sibling_text
+    assert Path(_file_values(bib)["smith2020first"]) == shared
+    assert any("another library" in e for e in result["errors"]), result["errors"]
+
+
+def test_reindex_dry_run_previews_the_sibling_hold(tmp_path) -> None:
+    bib, papers, shared = _shared_library(tmp_path, lambda p: "")
+    sibling = tmp_path / "other.bib"
+    sibling.write_text(f"@article{{theirs,\n  title = {{T}},\n  file = {{{shared}}},\n}}\n")
+
+    result = reindex_library(
+        bib_path=str(bib), papers_dir=str(papers), dry_run=True,
+        sibling_bib_paths=[str(sibling)],
+    )
+
+    first = next(c for c in result["changed"] if c["old_citekey"] == "old")
+    assert not first["renamed_pdf"]
+    assert any("another library" in e for e in result["errors"])

@@ -5,7 +5,7 @@ from __future__ import annotations
 import errno
 import os
 import shutil
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict, cast
 
@@ -28,6 +28,7 @@ from pzi.bibtex import (
     normalize_authors,
     parse_file_field,
 )
+from pzi.clean_service import referenced_pdf_paths
 from pzi.config import DEFAULT_PDF_FILE_PATH_STYLE
 from pzi.fileio import directory_folds_case
 from pzi.format_templates import format_citekey, format_pdf_filename
@@ -53,6 +54,9 @@ class CitekeyChange(TypedDict):
     #: The PDF is listed by another entry that holds several attachments, so
     #: moving it would leave that entry's reference dangling. Left where it is.
     kept_shared_multi_attachment: NotRequired[str]
+    #: Another configured library, which this run cannot rewrite, still names
+    #: the PDF (or could not be read to rule that out). Left where it is.
+    kept_other_library_pdf: NotRequired[str]
 
 
 def _has_several_attachments(entry: BibtexEntry) -> bool:
@@ -72,6 +76,44 @@ def _shared_multi_attachment_error(citekey: str, path: str) -> str:
         f"kept PDF for {citekey} at {path}: another entry lists it among "
         "several attachments, and a rename would leave that reference dangling"
     )
+
+
+def _other_library_error(citekey: str, path: str) -> str:
+    return (
+        f"kept PDF for {citekey} at {path}: another library may still name it, "
+        "and a rename would leave that reference dangling"
+    )
+
+
+def _attachment_key(path: str, bib_dir: str | None) -> str:
+    """*path* as one comparable location, however the ``file`` field spelled it."""
+    expanded = os.path.expanduser(path)
+    if bib_dir is not None and not os.path.isabs(expanded):
+        expanded = os.path.join(bib_dir, expanded)
+    return os.path.realpath(expanded)
+
+
+def _is_bare_path_field(entry: BibtexEntry) -> bool:
+    """Whether the ``file`` field is exactly one path, with nothing to preserve."""
+    value = str(entry.get("fields", {}).get("file") or "").strip()
+    return parse_file_field(value) == [value]
+
+
+def _unrewritable_references(
+    entries: list[BibtexEntry], bib_dir: str | None
+) -> dict[str, set[int]]:
+    """Attachment location -> entries whose ``file`` field names it but is not a bare path.
+
+    Repointing such a field would drop the description, mimetype or the other
+    attachments, so a PDF one of them lists cannot follow a rename.
+    """
+    listed: dict[str, set[int]] = {}
+    for index, entry in enumerate(entries):
+        if _is_bare_path_field(entry):
+            continue
+        for attachment in parse_file_field(entry.get("fields", {}).get("file")):
+            listed.setdefault(_attachment_key(attachment, bib_dir), set()).add(index)
+    return listed
 
 
 def _spellings(path: str, bib_dir: str | None) -> list[str]:
@@ -251,6 +293,8 @@ def plan_reindex(
     citekey_format: str | None = None,
     pdf_filename_format: str | None = None,
     bib_dir: str | None = None,
+    foreign_pdfs: frozenset[str] = frozenset(),
+    hold_all_moves: bool = False,
 ) -> list[CitekeyChange]:
     """Decide every citekey rename and the PDF move each one implies.
 
@@ -258,10 +302,15 @@ def plan_reindex(
     from the record's own ``local_pdf_path`` — never from guessing a filename
     out of the old citekey, which would pick up an unrelated namesake file and
     orphan the entry's real PDF.
+
+    *foreign_pdfs* are resolved locations other libraries reference (they are not
+    this run's to rewrite); *hold_all_moves* is set when those libraries could
+    not all be read, so none can be ruled out.
     """
     existing_keys: set[str] = {entry["citekey"] for entry in entries}
     changes: list[CitekeyChange] = []
     protected = _multi_attachment_pdfs(entries, bib_dir)
+    unrewritable = _unrewritable_references(entries, bib_dir)
 
     for index, entry in enumerate(entries):
         old_citekey = entry["citekey"]
@@ -303,6 +352,14 @@ def plan_reindex(
                     old_pdf, protected, bib_dir
                 ):
                     change["kept_shared_multi_attachment"] = old_pdf
+                elif old_pdf != new_pdf and (
+                    unrewritable.get(_attachment_key(old_pdf, bib_dir), set()) - {index}
+                ):
+                    change["kept_shared_multi_attachment"] = old_pdf
+                elif old_pdf != new_pdf and (
+                    hold_all_moves or _attachment_key(old_pdf, bib_dir) in foreign_pdfs
+                ):
+                    change["kept_other_library_pdf"] = old_pdf
                 elif old_pdf != new_pdf:
                     change["old_pdf"] = old_pdf
                     change["new_pdf"] = new_pdf
@@ -322,8 +379,13 @@ def _rename_planned_pdfs(
     changes: list[CitekeyChange],
     entries: list[BibtexEntry],
     errors: list[str],
+    bib_dir: str | None = None,
 ) -> list[tuple[str, str]]:
-    """Apply each planned PDF move, returning the moves that succeeded."""
+    """Apply each planned PDF move, returning the moves that succeeded.
+
+    Every other entry whose ``file`` field is a bare path to a moved PDF is
+    repointed with it, whether or not that entry's own citekey changes.
+    """
     renamed: list[tuple[str, str]] = []
     #: Absolute source path -> where this batch moved it. Lets a second entry
     #: referencing the same PDF follow it instead of dangling.
@@ -383,6 +445,16 @@ def _rename_planned_pdfs(
         # does not dangle (write honors file_path_style).
         entry["fields"]["file"] = new_pdf
         change["renamed_pdf"] = True
+        moved_key = _attachment_key(old_pdf, bib_dir)
+        for other in entries:
+            value = str(other.get("fields", {}).get("file") or "").strip()
+            if (
+                other is not entry
+                and value
+                and _is_bare_path_field(other)
+                and _attachment_key(value, bib_dir) == moved_key
+            ):
+                other["fields"]["file"] = new_pdf
 
     return renamed
 
@@ -395,6 +467,7 @@ def reindex_library(
     pdf_filename_format: str | None = None,
     dry_run: bool = True,
     file_path_style: str = DEFAULT_PDF_FILE_PATH_STYLE,
+    sibling_bib_paths: Sequence[str] = (),
 ) -> ReindexResult:
     """Regenerate citekeys for all entries and fix file references.
 
@@ -406,6 +479,9 @@ def reindex_library(
     Returns a dict with ``status``, ``total_entries``, ``changed`` (list of
     ``{old_citekey, new_citekey, renamed_pdf}``, plus ``old_pdf``/``new_pdf``
     when a PDF move is planned), and ``errors``.
+
+    A PDF another library in *sibling_bib_paths* still names is not moved: this
+    run cannot rewrite that library's ``file`` field.
     """
     with with_bib_lock(bib_path, shared=dry_run):
         raw, dropped = read_bib_file_raw_with_failures(bib_path)
@@ -429,6 +505,7 @@ def reindex_library(
                 "backup_path": None,
             }
 
+        foreign_pdfs, sibling_errors = referenced_pdf_paths(sibling_bib_paths)
         changes = plan_reindex(
             entries=entries,
             records=records,
@@ -436,8 +513,17 @@ def reindex_library(
             citekey_format=citekey_format,
             pdf_filename_format=pdf_filename_format,
             bib_dir=os.path.dirname(os.path.abspath(bib_path)),
+            foreign_pdfs=frozenset(foreign_pdfs),
+            hold_all_moves=bool(sibling_errors),
         )
         errors: list[str] = [
+            *sibling_errors,
+            *(
+                _other_library_error(change["old_citekey"], change["kept_other_library_pdf"])
+                for change in changes
+                if "kept_other_library_pdf" in change
+            ),
+        ] + [
             _multi_attachment_error(change["old_citekey"], change["kept_multi_attachment"])
             for change in changes
             if "kept_multi_attachment" in change
@@ -515,7 +601,10 @@ def reindex_library(
             shutil.copy2(bib_path, backup_path)
             renamed: list[tuple[str, str]] = []
             try:
-                renamed = _rename_planned_pdfs(changes, entries, errors)
+                renamed = _rename_planned_pdfs(
+                    changes, entries, errors,
+                    bib_dir=os.path.dirname(os.path.abspath(bib_path)),
+                )
                 rewrite_entries_in_order_locked(
                     bib_path, entries, file_path_style=file_path_style
                 )

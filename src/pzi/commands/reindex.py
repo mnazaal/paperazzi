@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from pzi import cli_json, exit_codes
+from pzi.clean_service import siblings_sharing_papers_dir
 from pzi.cli_render import reindex_error_lines, render_reindex_result
 from pzi.commands.common import (
     emit_usage_error,
@@ -202,6 +203,7 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
         pdf_filename_format=config.get("pdf_filename_format"),
         dry_run=not apply,
         file_path_style=config.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE),
+        sibling_bib_paths=siblings_sharing_papers_dir(config, target),
     )
 
     # Computed once above the format branch, as `library dedupe` does. Keying only
