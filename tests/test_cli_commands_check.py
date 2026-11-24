@@ -4,6 +4,7 @@ from io import StringIO
 from pathlib import Path
 
 from pzi import exit_codes
+from pzi.check_service import check_bib
 from pzi.commands.check import run_check_command
 
 
@@ -348,7 +349,15 @@ def test_jsonl_is_written_as_the_audit_goes(tmp_path: Path) -> None:
             seen_midway.append(out_path.read_text(encoding="utf-8").count("\n"))
         return result
 
-    code, _out, err = _run(_args(jsonl=str(out_path)), fake, tmp_path)
+    # A resolving config: streaming starts only once the target resolved, which
+    # is the only case in which a real audit runs at all.
+    bib = tmp_path / "main.bib"
+    bib.write_text(LIBRARY, encoding="utf-8")
+    config = _write_config(tmp_path, [("main", bib)], default="main")
+
+    code, _out, err = _run_configured(
+        tmp_path, _args(jsonl=str(out_path)), fake, config=config
+    )
 
     assert code == 0, err
     assert seen_midway == [1, 2, 3], seen_midway
@@ -619,3 +628,91 @@ def test_an_unresolvable_config_still_reaches_the_service(tmp_path: Path) -> Non
 
     assert code == exit_codes.OK, err
     assert json.loads(out.read_text())["total"] == 1
+
+
+# ── an unresolved target must not leave the alias guard blind ─────────────────
+
+
+def _two_libraries(tmp_path: Path) -> tuple[Path, Path]:
+    first = tmp_path / "a.bib"
+    second = tmp_path / "b.bib"
+    first.write_text(LIBRARY, encoding="utf-8")
+    second.write_text(LIBRARY, encoding="utf-8")
+    return first, second
+
+
+def test_jsonl_at_a_library_survives_an_ambiguous_target(tmp_path: Path) -> None:
+    """Two libraries, no default, no `--target`: the library was wiped to 0 bytes.
+
+    Resolution failed, so the guard compared against an empty list, and the
+    stream was opened for "w" before the service reported the failure.
+    """
+    first, second = _two_libraries(tmp_path)
+    config = _write_config(tmp_path, [("a", first), ("b", second)])
+
+    code, _out, err = _run_configured(
+        tmp_path, _args(jsonl=str(first), force=True), check_bib, config=config
+    )
+
+    assert code == exit_codes.ENVIRONMENT, err
+    assert first.read_text(encoding="utf-8") == LIBRARY, "the library was truncated"
+
+
+def test_jsonl_at_a_library_survives_an_unknown_target(tmp_path: Path) -> None:
+    first, _second = _two_libraries(tmp_path)
+    config = _write_config(tmp_path, [("a", first)], default="a")
+
+    code, _out, err = _run_configured(
+        tmp_path, _args(jsonl=str(first), force=True), check_bib,
+        selector="typo", config=config,
+    )
+
+    assert code == exit_codes.ENVIRONMENT, err
+    assert first.read_text(encoding="utf-8") == LIBRARY, "the library was truncated"
+
+
+def test_jsonl_at_a_library_survives_a_config_that_does_not_parse(
+    tmp_path: Path,
+) -> None:
+    first, _second = _two_libraries(tmp_path)
+    config = tmp_path / "config.toml"
+    config.write_text(
+        f'[[bibs]]\nname = "a"\npath = "{first}"\nbroken =\n', encoding="utf-8"
+    )
+
+    code, _out, err = _run_configured(
+        tmp_path, _args(jsonl=str(first), force=True), check_bib, config=config
+    )
+
+    assert code == exit_codes.ENVIRONMENT, err
+    assert first.read_text(encoding="utf-8") == LIBRARY, "the library was truncated"
+
+
+def test_outputs_spelled_through_a_symlinked_parent_are_one_file(
+    tmp_path: Path,
+) -> None:
+    """`L/../out.json` with `L -> elsewhere/sub` is `elsewhere/out.json`.
+
+    `abspath` collapsed the `..` as text before `realpath` saw the symlink, so
+    two spellings of one file that did not exist yet compared unequal, and the
+    report overwrote the NDJSON stream.
+    """
+    bib = tmp_path / "main.bib"
+    bib.write_text(LIBRARY, encoding="utf-8")
+    config = _write_config(tmp_path, [("main", bib)], default="main")
+    (tmp_path / "elsewhere" / "sub").mkdir(parents=True)
+    link = tmp_path / "L"
+    link.symlink_to(tmp_path / "elsewhere" / "sub")
+
+    code, _out, err = _run_configured(
+        tmp_path,
+        _args(
+            report=f"{link}/../out.json",
+            jsonl=str(tmp_path / "elsewhere" / "out.json"),
+            force=True,
+        ),
+        _never_ran, config=config,
+    )
+
+    assert code == exit_codes.USAGE, err
+    assert "--report and --jsonl" in err

@@ -47,8 +47,13 @@ def _describe_unwritable(path: str) -> str | None:
 
 
 def _canonical_path(path: str) -> str:
-    """*path* as one absolute name with every symlink resolved."""
-    return os.path.realpath(os.path.abspath(os.path.expanduser(path)))
+    """*path* as one absolute name with every symlink resolved.
+
+    No `abspath` first: it collapses `<symlinked dir>/..` as text, so two
+    spellings of one not-yet-existing file compared unequal; `realpath` makes
+    the path absolute itself and resolves `..` after the symlink.
+    """
+    return os.path.realpath(os.path.expanduser(path))
 
 
 def _same_file(left: str, right: str) -> bool:
@@ -72,22 +77,25 @@ def _same_file(left: str, right: str) -> bool:
 
 def _libraries_this_run_could_read(
     *, config_path: str, home_dir: str, bib_selector: str | None
-) -> list[tuple[str, str | None, bool]]:
+) -> tuple[list[tuple[str, str | None, bool]], bool]:
     """``(path, name, selected)`` for every library the audit may read from.
 
     Every configured library, not only the selected one: a report aimed at a
     second library is the same truncation, and the audit never names that file
-    while resolving its target. When the config cannot be resolved there is no
-    input identity to compare — the service reports that failure itself — but a
-    direct `.bib` selector still names a file the run would read.
+    while resolving its target.
+
+    The second value says whether the target resolved. When it did not, the
+    list is incomplete — a TOML error hides every library, and an ambiguous or
+    unknown `--target` hides the configured ones — so "not in the list" proves
+    nothing, and the caller must not open an output on the strength of it.
     """
     resolved = load_bib_target(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector
     )
     if isinstance(resolved, BibResolutionFailure):
         if bib_selector and bib_selector.strip().endswith(".bib"):
-            return [(bib_selector.strip(), None, True)]
-        return []
+            return [(bib_selector.strip(), None, True)], False
+        return [], False
     config, bib = resolved
     selected = (bib["path"], bib["name"], True)
     others = [
@@ -95,7 +103,46 @@ def _libraries_this_run_could_read(
         for other in config["bibs"]
         if other["path"] != bib["path"]
     ]
-    return [selected, *others]
+    return [selected, *others], True
+
+
+def _output_alias_refusal(
+    report_path: str | None,
+    jsonl_path: str | None,
+    libraries: list[tuple[str, str | None, bool]],
+) -> str | None:
+    """Why an output may not be written, or None: it names a library or the other output."""
+    for flag, path in (("--report", report_path), ("--jsonl", jsonl_path)):
+        if not path or path == "-":
+            continue
+        for library_path, name, selected in libraries:
+            if not _same_file(path, library_path):
+                continue
+            if selected:
+                return (
+                    f"{flag} {path} names the library being checked"
+                    f"{f' ({name})' if name else ''}; that would overwrite it —"
+                    " write the output to another path"
+                )
+            return (
+                f"{flag} {path} names a library pzi also manages"
+                f"{f' ({name})' if name else ''}; checking would overwrite"
+                " it — write the output to another path"
+            )
+    if (
+        report_path and jsonl_path
+        and report_path != "-" and jsonl_path != "-"
+        and _same_file(report_path, jsonl_path)
+    ):
+        # Both writers accepted these two flags and the last one won: the NDJSON
+        # streamed during the audit was replaced by the final report, so the
+        # file that promised a per-entry stream held one document. Only the
+        # `-`/`-` pair was refused; a shared real path was not.
+        return (
+            f"--report and --jsonl name the same file {jsonl_path};"
+            " pass two different paths"
+        )
+    return None
 
 
 def run_check_command(
@@ -160,47 +207,14 @@ def run_check_command(
     # problem — it is the flag a caller uses when they mean to replace a report.
     # Refused by identity rather than by spelling, because a symlink or a hard
     # link reaches the same file under another name.
-    libraries = _libraries_this_run_could_read(
+    libraries, target_resolved = _libraries_this_run_could_read(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector
     )
-    for flag, path in (("--report", report_path), ("--jsonl", jsonl_path)):
-        if not path or path == "-":
-            continue
-        for library_path, name, selected in libraries:
-            if not _same_file(path, library_path):
-                continue
-            if selected:
-                message = (
-                    f"{flag} {path} names the library being checked"
-                    f"{f' ({name})' if name else ''}; that would overwrite it —"
-                    " write the output to another path"
-                )
-            else:
-                message = (
-                    f"{flag} {path} names a library pzi also manages"
-                    f"{f' ({name})' if name else ''}; checking would overwrite"
-                    " it — write the output to another path"
-                )
-            return emit_usage_error(
-                args, message, command_path=("library", "check"),
-                stdout=stdout, stderr=stderr,
-            )
-    if (
-        report_path and jsonl_path
-        and report_path != "-" and jsonl_path != "-"
-        and _same_file(report_path, jsonl_path)
-    ):
-        # Both writers accepted these two flags and the last one won: the NDJSON
-        # streamed during the audit was replaced by the final report, so the
-        # file that promised a per-entry stream held one document. Only the
-        # `-`/`-` pair was refused; a shared real path was not.
+    refusal = _output_alias_refusal(report_path, jsonl_path, libraries)
+    if refusal is not None:
         return emit_usage_error(
-            args,
-            f"--report and --jsonl name the same file {jsonl_path};"
-            " pass two different paths",
-            command_path=("library", "check"),
-            stdout=stdout,
-            stderr=stderr,
+            args, refusal, command_path=("library", "check"),
+            stdout=stdout, stderr=stderr,
         )
     if getattr(args, "force", False) and not report_path and not jsonl_path:
         # `--force` here means only "overwrite the file at --report/--jsonl", and
@@ -279,10 +293,16 @@ def run_check_command(
         jsonl_stream: TextIO | None = None
         if jsonl_path == "-":
             jsonl_stream = stdout
-        elif jsonl_path:
+        elif jsonl_path and target_resolved:
             # Not `write_atomic`: all-or-nothing is the opposite of what is
             # wanted here. The up-front `--force` gate already established that
             # this path is either new or one the user asked to replace.
+            #
+            # Only once the target resolved: an unresolved one leaves the alias
+            # guard an incomplete library list, and opening for "w" here wiped a
+            # configured library to 0 bytes before the service reported the
+            # resolution failure (two libraries and no default, a mistyped
+            # `--target`, a TOML error).
             jsonl_stream = stack.enter_context(
                 open(jsonl_path, "w", encoding="utf-8")
             )
@@ -310,6 +330,25 @@ def run_check_command(
             # that does not stream still gets a complete file.
             for item in result["items"][streamed:]:
                 print(json.dumps(item, default=str), file=jsonl_stream)
+
+    if not target_resolved and result["items"]:
+        # The audit produced items although the guard could not resolve the
+        # target (the configuration changed in between, or an injected
+        # `check_bib_fn`). Nothing has been written yet; re-run the guard on a
+        # fresh resolution — every library it can now name — before writing.
+        libraries, _resolved = _libraries_this_run_could_read(
+            config_path=config_path, home_dir=home_dir, bib_selector=bib_selector
+        )
+        refusal = _output_alias_refusal(report_path, jsonl_path, libraries)
+        if refusal is not None:
+            return emit_usage_error(
+                args, refusal, command_path=("library", "check"),
+                stdout=stdout, stderr=stderr,
+            )
+        if jsonl_path and jsonl_path != "-":
+            with open(jsonl_path, "w", encoding="utf-8") as late_stream:
+                for item in result["items"]:
+                    print(json.dumps(item, default=str), file=late_stream)
 
     # The audit never ran: no config, no library, nothing to report. An audit
     # that *did* run and reached no source is also `error` now (the service
