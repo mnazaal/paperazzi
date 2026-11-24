@@ -543,7 +543,11 @@ def validate_app_config(
         errors.append("metadata_cache_ttl must be a non-negative integer")
 
     raw_pdf_file_path_style = raw.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE)
-    if raw_pdf_file_path_style not in {"home", "absolute", "relative"}:
+    if not isinstance(raw_pdf_file_path_style, str) or raw_pdf_file_path_style not in {
+        "home",
+        "absolute",
+        "relative",
+    }:
         errors.append("pdf_file_path_style must be 'home', 'absolute' or 'relative'")
 
     # Both are URLs and both were discarded in silence when malformed:

@@ -1389,3 +1389,27 @@ def test_the_partial_read_verdict_is_the_same_under_json(tmp_path: Path) -> None
         envelope = json.loads(out)
         assert envelope["status"] == "ok", (argv, envelope)
         assert code == exit_codes.FINDINGS, (argv, err)
+
+
+# ---------------------------------------------------------------------------
+# Config values of the wrong type
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("key", ["pdf_file_path_style", "browser_engine"])
+@pytest.mark.parametrize("value", ["[]", "{}"])
+def test_wrong_typed_enum_config_is_a_structured_error(
+    tmp_path: Path, key: str, value: str
+) -> None:
+    config_path, _bib = _library(tmp_path)
+    original = config_path.read_text(encoding="utf-8")
+    config_path.write_text(f"{key} = {value}\n" + original, encoding="utf-8")
+
+    code, stdout, stderr = _run(["entries", "--json", "--config", str(config_path)], tmp_path)
+
+    import json
+
+    assert code == exit_codes.ENVIRONMENT
+    assert json.loads(stdout)["status"] == "error"
+    assert "Traceback" not in stderr
+    assert key in stdout
