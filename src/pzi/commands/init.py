@@ -314,12 +314,22 @@ def run_init_command(
         print(f"created {dest} (mode 0600)", file=stdout)
 
     if token_created:
-        print(
-            f"API auth token written to {token_path} (mode 0600). pzi auto-reads "
-            "it at runtime, so config.toml holds no secret or path and is safe to "
-            "commit. To use a manager instead, set `api_auth_token_cmd`.",
-            file=stdout,
-        )
+        # The carried-over plaintext token lives in the config just written, so
+        # the "safe to commit" claim holds only when none was carried.
+        print(f"API auth token written to {token_path} (mode 0600).", file=stdout)
+        if any(key == "api_auth_token" for key, _value in existing.token_settings):
+            print(
+                "config.toml holds your plaintext api_auth_token and must not be "
+                "committed.",
+                file=stdout,
+            )
+        else:
+            print(
+                "pzi auto-reads it at runtime, so config.toml holds no secret or "
+                "path and is safe to commit. To use a manager instead, set "
+                "`api_auth_token_cmd`.",
+                file=stdout,
+            )
     elif existing.unreadable is not None:
         print(f"found an API auth token at {token_path} (mode 0600).", file=stdout)
     else:

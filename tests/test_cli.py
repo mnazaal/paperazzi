@@ -2641,3 +2641,29 @@ def test_init_rotate_token_refuses_when_config_sets_a_token_source(
     assert "written" not in stdout.getvalue()
     for secret in ("SYNTHETIC-CMD-TOKEN", "SYNTHETIC-PLAIN-TOKEN", "SYNTHETIC-FILE-TOKEN"):
         assert secret not in stdout.getvalue() + stderr.getvalue()
+
+
+def test_init_force_does_not_call_a_config_with_a_plaintext_token_safe_to_commit(
+    tmp_path: Path,
+) -> None:
+    """The "safe to commit" sentence was printed after the plaintext token had been
+    carried into the new config."""
+    code, out, err, config_path = _force_init(
+        tmp_path, 'api_auth_token = "SYNTHETIC-PLAIN-TOKEN"\n'
+    )
+
+    assert code == exit_codes.OK, err
+    assert "api_auth_token" in config_path.read_text()
+    assert "safe to commit" not in out
+    assert "plaintext" in out
+    assert "not be committed" in out
+    assert "SYNTHETIC-PLAIN-TOKEN" not in out + err
+
+
+def test_init_without_a_plaintext_token_still_says_the_config_is_safe_to_commit(
+    tmp_path: Path,
+) -> None:
+    code, out, err, _config_path = _force_init(tmp_path, "")
+
+    assert code == exit_codes.OK, err
+    assert "safe to commit" in out
