@@ -183,7 +183,9 @@ placeholder notes go to stderr, so `pzi search --query graph | cut -f1 | xargs -
 is safe. `pzi entries` writes five tab-separated columns
 (citekey, year, title, authors, `pdf` when a PDF is attached).
 `pzi import -` reads BibTeX from stdin, so `pzi export --target a | pzi import - --target b`
-moves entries between libraries.
+moves entries between libraries. Stdin has no folder, so a relative `file` path read
+from it is kept as written and the import warns, naming the entries; importing the
+`.bib` file by path resolves relative paths against that file's folder.
 
 ```sh
 pzi init [--force] [--rotate-token] [--setup --bib PATH] [--papers-dir PATH] [--name NAME] [--browser chromium|firefox]

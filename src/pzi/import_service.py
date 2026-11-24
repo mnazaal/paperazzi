@@ -136,12 +136,19 @@ def import_from_bibtex(
     skipped_in_source = 0
 
     # Only a source file has a directory to resolve against; text read from
-    # stdin has none, and no base is documented for it, so it is left as written.
+    # stdin has none, so its relative paths are kept as written and named in a
+    # warning (owner decision 2026-11-25: warn and document, no guessed base).
     source_dir = os.path.dirname(os.path.abspath(source_path)) if source_text is None else None
 
+    # Citekeys whose relative attachment paths stdin left as written; named in a
+    # warning below so the import does not quietly store paths that resolve
+    # against the target library's folder instead of the source's.
+    unresolved_from_stdin: list[str] = []
     for entry in source_entries:
         if source_dir is not None:
             entry = _with_source_resolved_attachments(entry, source_dir)
+        elif _relative_attachment_paths(entry):
+            unresolved_from_stdin.append(entry.get("citekey", ""))
         citekey = entry.get("citekey", "")
         if citekey in seen_citekeys:
             skipped_in_source += 1
@@ -169,6 +176,16 @@ def import_from_bibtex(
     skipped_errors = len(dropped_blocks)
     errors: list[str] = list(dropped_blocks)
     warnings: list[str] = []
+    if unresolved_from_stdin:
+        shown = ", ".join(unresolved_from_stdin[:5])
+        more = len(unresolved_from_stdin) - 5
+        if more > 0:
+            shown += f" and {more} more"
+        warnings.append(
+            f"{len(unresolved_from_stdin)} entr(ies) read from stdin have relative "
+            f"attachment paths, kept as written ({shown}): stdin has no folder to "
+            "resolve them against. Import the .bib file by path to resolve them."
+        )
 
     if isinstance(resolved, BibResolutionFailure):
         # Nothing ran: an unloadable config or an unknown `--target` is not a
@@ -383,6 +400,33 @@ def _resolve_like_the_kernel(source_dir: str, path: str) -> str:
     return kernel
 
 
+def _is_relative_local_path(path: str) -> bool:
+    """Whether an attachment path is relative to the file it was written in.
+
+    Absolute and `~` paths, URLs, `file://` URIs and Windows drive paths are not.
+    """
+    return bool(path) and not path.startswith(("/", "~")) and not _NOT_A_LOCAL_PATH_RE.match(path)
+
+
+def _relative_attachment_paths(entry: Any) -> list[str]:
+    """The relative local paths in *entry*'s `file` field, split as the reader splits it.
+
+    A `scheme:rest` component counts too: with no source folder there is no way
+    to tell `arXiv:2101.00001.pdf` from a URI, so it is named rather than guessed.
+    """
+    value = entry["fields"].get("file")
+    if not value or not value.strip():
+        return []
+    paths = []
+    for parts, index in split_file_field(value):
+        path = _unescape_file_component(
+            parts[index] if index is not None else ":".join(parts)
+        ).strip()
+        if _is_relative_local_path(path):
+            paths.append(path)
+    return paths
+
+
 def _with_source_resolved_attachments(entry: Any, source_dir: str) -> Any:
     """*entry* with each relative attachment path of its `file` field made absolute.
 
@@ -407,7 +451,7 @@ def _with_source_resolved_attachments(entry: Any, source_dir: str) -> Any:
         path = _unescape_file_component(
             parts[index] if index is not None else ":".join(parts)
         ).strip()
-        if not path or path.startswith(("/", "~")) or _NOT_A_LOCAL_PATH_RE.match(path):
+        if not _is_relative_local_path(path):
             rewritten.append(":".join(parts))
             continue
         resolved = _resolve_like_the_kernel(source_dir, path)

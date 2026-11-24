@@ -1232,3 +1232,44 @@ def test_a_dotdot_attachment_keeps_a_symlinked_home_spelling(
     resolved = _resolve_like_the_kernel(str(home / "src"), "../pp/x.pdf")
 
     assert resolved == str(home / "pp" / "x.pdf")
+
+
+def test_stdin_import_warns_naming_entries_with_relative_attachments(
+    tmp_path: Path,
+) -> None:
+    """Stdin has no folder: relative paths are kept as written and named.
+
+    Owner decision 2026-11-25 ("warn and document"): no guessed base. Absolute
+    paths and URLs need no base, so their entries are not named.
+    """
+    cp, bp, _papers = _setup_config(str(tmp_path))
+    Path(bp).write_text("")
+    text = (
+        "@article{rel1, title = {A}, author = {Doe, J}, year = {2020}, doi = {10.1/a},\n"
+        "  file = {papers/a.pdf}}\n"
+        "@article{rel2, title = {B}, author = {Doe, J}, year = {2020}, doi = {10.1/b},\n"
+        "  file = {Full Text:papers/b.pdf:application/pdf}}\n"
+        "@article{abs, title = {C}, author = {Doe, J}, year = {2020}, doi = {10.1/c},\n"
+        "  file = {/x/c.pdf}}\n"
+        "@article{url, title = {D}, author = {Doe, J}, year = {2020}, doi = {10.1/d},\n"
+        "  file = {https://example.org/d.pdf}}\n"
+    )
+
+    result = import_from_bibtex(
+        config_path=cp, home_dir=str(tmp_path), source_path="<stdin>", source_text=text
+    )
+
+    stdin_warnings = [w for w in result.get("warnings", []) if "stdin" in w]
+    assert len(stdin_warnings) == 1, result.get("warnings")
+    assert "2 entr(ies)" in stdin_warnings[0]
+    assert "rel1, rel2" in stdin_warnings[0]
+    assert "abs" not in stdin_warnings[0] and "url" not in stdin_warnings[0]
+    from pzi.bib_repository import read_bib_file
+
+    files = {e["citekey"]: e["fields"].get("file") for e in read_bib_file(bp)["entries"]}
+    assert files["rel1"] == "papers/a.pdf"
+
+
+def test_file_import_does_not_give_the_stdin_warning(tmp_path: Path) -> None:
+    written = _import_with_relative_source(str(tmp_path), "papers/original.pdf", "absolute")
+    assert os.path.isabs(written)
