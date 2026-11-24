@@ -32,6 +32,11 @@ from pzi.pdf_planning import pdf_file_present
 
 QUARANTINE_DIRNAME = ".orphans"
 
+#: What reading another library can raise: a lock wait that timed out
+#: (`PziError`, not `OSError`), a file the user cannot open, or bytes that are
+#: not UTF-8 (`UnicodeError`). Each means "references we could not see".
+_UNREADABLE = (PziError, OSError, UnicodeError)
+
 
 def attachment_paths_of(
     entry: BibtexEntry | None, record: Mapping[str, Any], bib_path: str
@@ -435,7 +440,12 @@ def _referenced_under_held_lock(
         if not Path(path).exists():
             continue
         dropped = _excluded_keys(excluding, path)
-        raw, failures = read_bib_file_raw_with_failures(path)
+        try:
+            raw, failures = read_bib_file_raw_with_failures(path)
+        except _UNREADABLE as exc:
+            if errors is not None:
+                errors.append(f"{Path(path).name}: cannot read: {exc}")
+            continue
         if errors is not None:
             errors.extend(f"{Path(path).name}: {message}" for message in failures)
         for record, entry in zip(raw["records"], raw["entries"], strict=True):
@@ -474,7 +484,11 @@ def referenced_pdf_paths(
         if not Path(sibling).exists():
             continue
         dropped = _excluded_keys(excluding, sibling)
-        raw, failures = read_bib_file_with_failures(sibling)
+        try:
+            raw, failures = read_bib_file_with_failures(sibling)
+        except _UNREADABLE as exc:
+            errors.append(f"{Path(sibling).name}: cannot read: {exc}")
+            continue
         for message in failures:
             errors.append(f"{Path(sibling).name}: {message}")
         for record, entry in zip(raw["records"], raw["entries"], strict=True):
@@ -619,7 +633,7 @@ def quarantine_pdf(
                 }
             try:
                 locks.enter_context(with_bib_lock(path, shared=False))
-            except OSError as exc:
+            except _UNREADABLE as exc:
                 if not recheck_bibs:
                     raise
                 return {

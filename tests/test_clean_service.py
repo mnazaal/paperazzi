@@ -1195,3 +1195,121 @@ def test_delete_keeps_the_pdf_when_another_library_cannot_be_read_or_is_absent(
     assert pdf.read_bytes() == _SHARED_PDF
     assert not b_bib.exists() and not Path(str(b_bib) + ".lock").exists()
     assert list(pb.iterdir()) == []
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Another library that cannot be READ (not merely absent) must veto the PDF move
+# and nothing else: the entry delete already committed stays a success.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@pytest.fixture()
+def _other_library_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Build libraries a (entries x, y with PDFs in pa) and b, broken as asked."""
+    import portalocker
+
+    from pzi import bib_repository
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("PZI_SKIP_AUTO_START", "1")
+    cleanup: list = []
+
+    def build(state: str):
+        a_bib, b_bib, pa, _pb, cfg = _cross_dir_config(tmp_path, other_text=None)
+        for key in ("x", "y"):
+            (pa / f"{key}.pdf").write_bytes(_SHARED_PDF + key.encode())
+        a_bib.write_text(_entry("x", pa / "x.pdf") + _entry("y", pa / "y.pdf"))
+        body = _entry("bk", tmp_path / "nowhere" / "bk.pdf")
+        if state == "latin1":
+            b_bib.write_bytes(body.replace("Graph", "Gräph").encode("latin-1"))
+        elif state == "mode000":
+            if os.geteuid() == 0:
+                pytest.skip("root reads mode-000 files")
+            b_bib.write_text(body)
+            b_bib.chmod(0)
+            cleanup.append(lambda: b_bib.chmod(0o644))
+        elif state == "locked":
+            b_bib.write_text(body)
+            lock_fh = open(str(b_bib) + ".lock", "a")  # noqa: SIM115
+            portalocker.lock(lock_fh, portalocker.LOCK_EX)
+            cleanup.append(lock_fh.close)
+            kwdefaults = bib_repository.with_bib_lock.__wrapped__.__kwdefaults__  # type: ignore[attr-defined]
+            monkeypatch.setitem(kwdefaults, "timeout", 0.3)
+        return a_bib, b_bib, pa, cfg
+
+    yield build
+    for undo in cleanup:
+        undo()
+
+
+@pytest.mark.parametrize("state", ["latin1", "mode000", "locked"])
+def test_delete_cli_stays_ok_and_keeps_pdfs_when_another_library_is_unreadable(
+    state: str, _other_library_state, tmp_path: Path
+) -> None:
+    import json
+    from io import StringIO
+
+    from pzi.cli import run_cli
+
+    a_bib, _b_bib, pa, cfg = _other_library_state(state)
+    out, err = StringIO(), StringIO()
+    code = run_cli(
+        ["delete", "x", "y", "--target", "a", "--force", "--json", "--config", str(cfg)],
+        home_dir=str(tmp_path / "home"), stdout=out, stderr=err,
+    )
+
+    assert code == 0, (out.getvalue(), err.getvalue())
+    text = a_bib.read_text()
+    assert "x," not in text and "y," not in text, "both deletes must commit"
+    assert (pa / "x.pdf").exists() and (pa / "y.pdf").exists()
+    assert not (pa / ".orphans").exists()
+    items = json.loads(out.getvalue())["items"]
+    assert [item["citekey"] for item in items] == ["x", "y"]
+    for item in items:
+        assert item["pdf_action"]["status"] == "kept"
+        assert "b.bib" in item["pdf_action"]["reason"]
+
+
+@pytest.mark.parametrize("state", ["latin1", "mode000", "locked"])
+def test_delete_api_returns_not_raises_when_another_library_is_unreadable(
+    state: str, _other_library_state, tmp_path: Path
+) -> None:
+    import pzi
+
+    a_bib, _b_bib, pa, cfg = _other_library_state(state)
+    result = pzi.delete("x", dry_run=False, config_path=str(cfg), library="a")
+
+    assert "x," not in a_bib.read_text()
+    assert result["pdf_action"]["status"] == "kept"
+    assert "b.bib" in result["pdf_action"]["reason"]
+    assert result.get("backup_path")
+    assert (pa / "x.pdf").exists()
+
+
+def test_quarantine_pdf_keeps_the_file_when_a_recheck_lock_times_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lock timeout is a PziError, not an OSError, and must read as 'cannot verify'."""
+    import portalocker
+
+    from pzi import bib_repository
+
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    pdf = papers / "x.pdf"
+    pdf.write_bytes(_SHARED_PDF)
+    mine, other = tmp_path / "mine.bib", tmp_path / "other.bib"
+    mine.write_text("")
+    other.write_text("")
+    with open(str(other) + ".lock", "a") as holder:
+        portalocker.lock(holder, portalocker.LOCK_EX)
+        kwdefaults = bib_repository.with_bib_lock.__wrapped__.__kwdefaults__  # type: ignore[attr-defined]
+        monkeypatch.setitem(kwdefaults, "timeout", 0.3)
+        result = quarantine_pdf(
+            pdf_path=str(pdf), papers_dir=str(papers), bib_path=str(mine),
+            recheck_bibs=[str(other)],
+        )
+
+    assert result["status"] == "kept"
+    assert "other.bib" in result["reason"]
+    assert pdf.read_bytes() == _SHARED_PDF
