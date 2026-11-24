@@ -69,9 +69,23 @@ def _pin_data_home(content: str, data_home: str) -> str:
     return f"{note}\npzi_data_home = {quoted}\n\n{content}"
 
 
-def _rotate_token_only(dest: Path, *, home_dir: str, stdout: TextIO) -> int:
+def _rotate_token_only(
+    dest: Path, *, home_dir: str, stdout: TextIO, stderr: TextIO
+) -> int:
     """Replace the API token, leaving an existing config file untouched."""
-    data_home = _data_home_path(dest, _existing_data_home(dest), home_dir)
+    existing = _existing_data_home(dest)
+    if existing.unreadable is not None:
+        # The token lives under the config's `pzi_data_home`, which cannot be
+        # read. Rotating the default home instead would retire nothing the
+        # server reads and still report success.
+        print(
+            f"error: {dest} is not valid TOML ({existing.unreadable}); cannot tell "
+            "where the API token lives, so nothing was rotated. Fix the config, "
+            "then rerun `pzi init --rotate-token`.",
+            file=stderr,
+        )
+        return exit_codes.USAGE
+    data_home = _data_home_path(dest, existing, home_dir)
     token_path, _created = setup_service.provision_api_token(data_home, rotate=True)
     print(
         f"API auth token replaced at {token_path} (mode 0600). Any paired "
@@ -166,7 +180,7 @@ def run_init_command(
             # template: the flag documented as replacing a token could only be
             # used by discarding the user's configuration.
             return _rotate_token_only(
-                dest, home_dir=home_dir, stdout=stdout,
+                dest, home_dir=home_dir, stdout=stdout, stderr=stderr,
             )
         print(f"config already exists: {dest} (use --force to overwrite)", file=stderr)
         # USAGE: refused before doing anything, not a finding.

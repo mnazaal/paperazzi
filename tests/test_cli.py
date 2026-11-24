@@ -2545,3 +2545,29 @@ def test_init_force_over_unparseable_toml_does_not_claim_the_token_is_reused(
     assert "reusing" not in out
     assert "not valid TOML" in err
     assert "SYNTHETIC-TEST-TOKEN" not in out + err
+
+
+def test_init_rotate_token_refuses_a_config_that_does_not_parse(tmp_path: Path) -> None:
+    """A rotation must not guess where the token lives: with the data home
+    unreadable it rotated the default home's token and reported success."""
+    from pzi.config import default_data_home
+
+    default_home = Path(default_data_home(str(tmp_path)))
+    default_home.mkdir(parents=True)
+    (default_home / "api_token").write_text("SYNTHETIC-TEST-TOKEN\n")
+    config_path = tmp_path / "config.toml"
+    broken = 'pzi_data_home = "~/custom"\nthis is not toml\n'
+    config_path.write_text(broken)
+    stdout, stderr = StringIO(), StringIO()
+
+    code = run_cli(
+        ["init", "--rotate-token", "--config", str(config_path)],
+        home_dir=str(tmp_path), stdout=stdout, stderr=stderr,
+    )
+
+    assert code != exit_codes.OK
+    assert str(config_path) in stderr.getvalue()
+    assert "not valid TOML" in stderr.getvalue()
+    assert (default_home / "api_token").read_text() == "SYNTHETIC-TEST-TOKEN\n"
+    assert config_path.read_text() == broken
+    assert not (tmp_path / "custom").exists()
