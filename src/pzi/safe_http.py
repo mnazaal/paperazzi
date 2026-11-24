@@ -19,6 +19,7 @@ from __future__ import annotations
 import http.client
 import socket
 import ssl
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -26,7 +27,11 @@ import urllib.request
 from collections.abc import Callable, Sequence
 from typing import Any
 
-from pzi.url_safety import classify_public_http_url, public_ip_address
+from pzi.url_safety import (
+    DEFAULT_DNS_LOOKUP_TIMEOUT_SECONDS,
+    classify_public_http_url,
+    public_ip_address,
+)
 
 GetAddrInfo = Callable[..., Sequence[tuple[Any, ...]]]
 
@@ -37,6 +42,39 @@ class SsrfBlocked(urllib.error.URLError):
     Subclasses ``URLError`` so it surfaces as a network failure, but callers
     treat it as terminal (no retry) since re-attempting is always blocked.
     """
+
+
+def _bounded_getaddrinfo(
+    getaddrinfo: GetAddrInfo, host: str, port: int
+) -> list[tuple[Any, ...]]:
+    """Run *getaddrinfo* for at most ``DEFAULT_DNS_LOOKUP_TIMEOUT_SECONDS``.
+
+    Same mechanism as :func:`pzi.url_safety.resolve_host_with_timeout` (a daemon
+    thread and a bounded wait) and the same budget as the pre-fetch URL check,
+    but with the injectable resolver and with a failed lookup re-raised as the
+    ``OSError`` it was.  A lookup that outlives the budget raises
+    :class:`SsrfBlocked`: fail closed and terminal, so the retry loop does not
+    multiply the wait.  This bounds DNS only; see docs/reference.md for what
+    bounds the rest of an outbound fetch.
+    """
+    outcome: list[Any] = []
+    done = threading.Event()
+
+    def lookup() -> None:
+        try:
+            outcome.append(list(getaddrinfo(host, port, type=socket.SOCK_STREAM)))
+        except BaseException as exc:  # handed to the caller's thread below
+            outcome.append(exc)
+        finally:
+            done.set()
+
+    threading.Thread(target=lookup, daemon=True).start()
+    if not done.wait(max(0.001, DEFAULT_DNS_LOOKUP_TIMEOUT_SECONDS)):
+        raise SsrfBlocked(f"DNS lookup timed out for {host}")
+    result = outcome[0]
+    if isinstance(result, BaseException):
+        raise result
+    return result
 
 
 def resolve_pinned_ips(
@@ -56,7 +94,7 @@ def resolve_pinned_ips(
     is permitted.  Order is the resolver's, without repeats, so a caller can
     fall back to the next address the way a browser does.
     """
-    infos = list(getaddrinfo(host, port, type=socket.SOCK_STREAM))
+    infos = _bounded_getaddrinfo(getaddrinfo, host, port)
     if not infos:
         raise SsrfBlocked(f"no addresses resolved for {host}")
     trusted = bool(

@@ -183,3 +183,28 @@ def test_fetch_text_does_not_retry_wrapped_ssrf_block(monkeypatch) -> None:
 
 def test_ssrf_blocked_is_a_urlerror() -> None:
     assert issubclass(SsrfBlocked, urllib.error.URLError)
+
+
+def test_connect_time_resolution_is_bounded_by_the_dns_lookup_timeout(monkeypatch) -> None:
+    """A hung resolver must fail closed within the pre-fetch DNS budget, not run on."""
+    import time
+
+    monkeypatch.setattr(safe_http, "DEFAULT_DNS_LOOKUP_TIMEOUT_SECONDS", 0.2, raising=False)
+
+    def hanging(*_a, **_k):
+        time.sleep(3.0)
+        return _addrinfo("93.184.216.34")
+
+    start = time.monotonic()
+    with pytest.raises(SsrfBlocked, match="timed out"):
+        safe_http.resolve_pinned_ips("example.com", 443, getaddrinfo=hanging)
+    assert time.monotonic() - start < 1.5
+
+
+def test_connect_time_resolution_still_propagates_a_failed_lookup() -> None:
+    def failing(*_a, **_k):
+        raise OSError("name or service not known")
+
+    with pytest.raises(OSError, match="not known") as info:
+        safe_http.resolve_pinned_ips("example.com", 443, getaddrinfo=failing)
+    assert not isinstance(info.value, SsrfBlocked)
