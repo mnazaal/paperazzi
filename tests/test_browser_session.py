@@ -457,3 +457,64 @@ def test_a_browser_handle_that_cannot_answer_is_treated_as_alive() -> None:
     session.browser_ref = _Opaque()
 
     session._check_open()  # does not raise
+
+
+# === profile-clone sweep ===
+
+
+def _old_clone(root, name: str):
+    import os
+
+    clone = root / f"pzi-chrome-{name}"
+    clone.mkdir()
+    (clone / "Cookies").write_bytes(b"secrets")
+    os.utime(clone, (1_000, 1_000))
+    return clone
+
+
+def test_sweep_removes_an_over_age_clone_with_no_owner(tmp_path) -> None:
+    from pzi.browser_session import _sweep_stale_profile_clones
+
+    clone = _old_clone(tmp_path, "orphan")
+    assert _sweep_stale_profile_clones(temp_root=tmp_path) == [clone]
+    assert not clone.exists()
+
+
+def test_sweep_keeps_an_over_age_clone_a_live_session_owns(tmp_path, monkeypatch) -> None:
+    """`pzi server` run without `--stop-after` keeps a session past six hours."""
+    from pzi import browser_session as module
+
+    monkeypatch.setattr(module.tempfile, "tempdir", str(tmp_path))
+    profile = tmp_path / "profile"
+    profile.mkdir()
+    (profile / "Cookies").write_bytes(b"secrets")
+    clone = module._clone_chrome_profile(profile)
+    assert clone.parent == tmp_path and (clone / "Cookies").read_bytes() == b"secrets"
+    import os
+
+    os.utime(clone, (1_000, 1_000))
+
+    assert module._sweep_stale_profile_clones(temp_root=tmp_path) == []
+    assert (clone / "Cookies").exists()
+
+    # Once the owner releases it (session close / process exit) it is swept.
+    module._discard_profile_clone(clone)
+    assert not clone.exists()
+
+
+def test_sweep_removes_an_over_age_clone_whose_owner_died(tmp_path, monkeypatch) -> None:
+    """The lock dies with its process, so a killed hook child leaves a sweepable clone."""
+    from pzi import browser_session as module
+
+    monkeypatch.setattr(module.tempfile, "tempdir", str(tmp_path))
+    profile = tmp_path / "profile"
+    profile.mkdir()
+    clone = module._clone_chrome_profile(profile)
+    import os
+
+    os.utime(clone, (1_000, 1_000))
+    # Simulate owner death: drop the held descriptor without removing the dir.
+    module._release_profile_clone(clone)
+
+    assert module._sweep_stale_profile_clones(temp_root=tmp_path) == [clone]
+    assert not clone.exists()

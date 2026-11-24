@@ -38,10 +38,20 @@ _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 #: Prefix for cloned-profile temp dirs, shared by the cleanup sweep below.
 _CLONE_PREFIX = "pzi-chrome-"
 
-#: A clone older than this cannot belong to a live session: the browser-hook
-#: child is killed at 180 s by its parent, and `pzi server`'s sessions are
-#: closed on idle well inside it.
+#: Age after which a clone with no live owner is swept. Age alone is not proof
+#: of abandonment: a `pzi server` run without `--stop-after` keeps one session,
+#: and its clone, for as long as the server runs. The owner lock below is what
+#: keeps a live session's clone from being swept.
 _CLONE_MAX_AGE_SECONDS = 6 * 60 * 60
+
+#: File inside each clone that its owning process holds an exclusive `flock` on.
+#: The kernel drops the lock when that process exits or is killed, so a clone
+#: whose lock can be taken has no owner and is safe to sweep once it is old.
+_CLONE_OWNER_FILE = ".pzi-owner.lock"
+
+#: Descriptors holding the owner lock of this process's clones, by clone path.
+#: Python opens them close-on-exec, so the browser child does not inherit them.
+_OWNED_CLONE_FDS: dict[Path, int] = {}
 
 
 #: Shared by the two places that report a missing Playwright. The project is
@@ -63,6 +73,53 @@ def _dispose_response(response: Any) -> None:
         pass
 
 
+def _claim_profile_clone(clone: Path) -> None:
+    """Take the owner lock on a fresh clone. No lock where `fcntl` is missing."""
+    try:
+        import fcntl
+
+        fd = os.open(clone / _CLONE_OWNER_FILE, os.O_RDWR | os.O_CREAT, 0o600)
+    except (ImportError, OSError):
+        return
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        return
+    _OWNED_CLONE_FDS[clone] = fd
+
+
+def _release_profile_clone(clone: Path) -> None:
+    """Drop this process's owner lock on `clone`, if it holds one."""
+    fd = _OWNED_CLONE_FDS.pop(clone, None)
+    if fd is not None:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+
+
+def _discard_profile_clone(clone: Path) -> None:
+    """Delete a clone and release its owner lock."""
+    shutil.rmtree(clone, ignore_errors=True)
+    _release_profile_clone(clone)
+
+
+def _clone_has_live_owner(clone: Path) -> bool:
+    """True when some process still holds `clone`'s owner lock."""
+    try:
+        import fcntl
+
+        fd = os.open(clone / _CLONE_OWNER_FILE, os.O_RDONLY)
+    except (ImportError, OSError):
+        return False
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+    except OSError:
+        return True
+    finally:
+        os.close(fd)
+    return False
+
+
 def _sweep_stale_profile_clones(
     *, now: float | None = None, temp_root: Path | None = None
 ) -> list[Path]:
@@ -74,8 +131,9 @@ def _sweep_stale_profile_clones(
     else sweeps, so every hook timeout left another readable copy of the user's
     logged-in sessions behind until the machine was rebooted.
 
-    Age-based rather than PID-based: a clone has no owner to check once the
-    process is gone. Returns what it removed, so a test can assert on it.
+    A clone is removed only when it is older than `_CLONE_MAX_AGE_SECONDS` and
+    no process holds its owner lock (`_CLONE_OWNER_FILE`). Returns what it
+    removed, so a test can assert on it.
     """
     root = temp_root or Path(tempfile.gettempdir())
     cutoff = (now if now is not None else time.time()) - _CLONE_MAX_AGE_SECONDS
@@ -89,6 +147,8 @@ def _sweep_stale_profile_clones(
             if not candidate.is_dir() or candidate.stat().st_mtime > cutoff:
                 continue
         except OSError:
+            continue
+        if _clone_has_live_owner(candidate):
             continue
         shutil.rmtree(candidate, ignore_errors=True)
         if not candidate.exists():
@@ -108,6 +168,7 @@ def _clone_chrome_profile(profile: Path) -> Path:
     # Tighten permissions so other users on the system cannot read
     # the cloned profile (which contains cookies and session tokens).
     os.chmod(temp_dir, 0o700)
+    _claim_profile_clone(temp_dir)
 
     def _ignore(_dir: str, contents: list[str]) -> list[str]:
         return [
@@ -358,7 +419,7 @@ class BrowserSession:
             self._proxy.close()
         if self._temp_profile is not None:
             try:
-                shutil.rmtree(self._temp_profile, ignore_errors=True)
+                _discard_profile_clone(self._temp_profile)
             except Exception:
                 pass
 
@@ -541,7 +602,7 @@ def launch_browser(
             install_request_guard(page, url_allowed)
         except BaseException:
             if temp_profile is not None:
-                shutil.rmtree(temp_profile, ignore_errors=True)
+                _discard_profile_clone(temp_profile)
             pinning.close()
             with contextlib.suppress(Exception):
                 playwright.stop()
