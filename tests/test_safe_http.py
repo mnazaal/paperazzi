@@ -196,9 +196,35 @@ def test_connect_time_resolution_is_bounded_by_the_dns_lookup_timeout(monkeypatc
         return _addrinfo("93.184.216.34")
 
     start = time.monotonic()
-    with pytest.raises(SsrfBlocked, match="timed out"):
+    with pytest.raises(OSError, match="timed out") as info:
         safe_http.resolve_pinned_ips("example.com", 443, getaddrinfo=hanging)
     assert time.monotonic() - start < 1.5
+    # A slow resolver is a temporary failure, retried like a fast one; only a
+    # resolved non-public address is the terminal, security-refused case.
+    assert not isinstance(info.value, SsrfBlocked)
+
+
+def test_the_egress_proxy_answers_a_slow_resolver_with_502_not_403(monkeypatch) -> None:
+    """403 is the proxy's answer to a blocked address; a DNS timeout is not one."""
+    import socket
+    import time
+
+    from pzi.pinning_proxy import PinningProxy
+
+    monkeypatch.setattr(safe_http, "DEFAULT_DNS_LOOKUP_TIMEOUT_SECONDS", 0.2, raising=False)
+
+    def hanging(*_a, **_k):
+        time.sleep(2.0)
+        return _addrinfo("93.184.216.34")
+
+    proxy = PinningProxy(getaddrinfo=hanging)
+    try:
+        with socket.create_connection(("127.0.0.1", proxy.port), timeout=10) as s:
+            s.sendall(b"CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n")
+            status_line = s.recv(4096).split(b"\r\n", 1)[0]
+    finally:
+        proxy.close()
+    assert status_line.startswith(b"HTTP/1.1 502"), status_line
 
 
 def test_connect_time_resolution_still_propagates_a_failed_lookup() -> None:

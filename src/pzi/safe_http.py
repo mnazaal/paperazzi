@@ -53,9 +53,11 @@ def _bounded_getaddrinfo(
     thread and a bounded wait) and the same budget as the pre-fetch URL check,
     but with the injectable resolver and with a failed lookup re-raised as the
     ``OSError`` it was.  A lookup that outlives the budget raises
-    :class:`SsrfBlocked`: fail closed and terminal, so the retry loop does not
-    multiply the wait.  This bounds DNS only; see docs/reference.md for what
-    bounds the rest of an outbound fetch.
+    ``socket.gaierror(EAI_AGAIN)``: a temporary resolver failure like any other,
+    so the retry loop retries it as it retries a fast one, and the egress proxy
+    answers 502 rather than the 403 it keeps for a blocked address.  Each attempt
+    is bounded, so a retry adds at most one budget.  This bounds DNS only; see
+    docs/reference.md for what bounds the rest of an outbound fetch.
     """
     outcome: list[Any] = []
     done = threading.Event()
@@ -70,7 +72,7 @@ def _bounded_getaddrinfo(
 
     threading.Thread(target=lookup, daemon=True).start()
     if not done.wait(max(0.001, DEFAULT_DNS_LOOKUP_TIMEOUT_SECONDS)):
-        raise SsrfBlocked(f"DNS lookup timed out for {host}")
+        raise socket.gaierror(socket.EAI_AGAIN, f"DNS lookup timed out for {host}")
     result = outcome[0]
     if isinstance(result, BaseException):
         raise result
