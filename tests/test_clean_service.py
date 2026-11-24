@@ -1031,3 +1031,59 @@ def test_targeted_quarantine_rechecks_new_reference(
     assert pdf.read_bytes() == _SHARED_PDF, f"moved a PDF a {writer} entry references"
     assert action is not None
     assert action["status"] == "kept"
+
+
+def test_targeted_quarantine_rechecks_a_readded_removed_citekey(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A writer re-adding the REMOVED citekey in the gap must still veto the move."""
+    from pzi.clean_service import plan_pdf_disposal
+    from pzi.config import load_config_file
+
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    pdf = papers / "smith2024.pdf"
+    pdf.write_bytes(_SHARED_PDF)
+    bib, _sibling, _papers, cfg = _two_library_config(tmp_path, sibling_text="")
+    bib.write_text("")
+    config = load_config_file(str(cfg), home_dir=str(tmp_path))["config"]
+    real_quarantine = clean_service.quarantine_pdf
+
+    def readd_then_quarantine(*args, **kwargs):
+        bib.write_text(_entry("deleted", pdf))
+        return real_quarantine(*args, **kwargs)
+
+    monkeypatch.setattr(clean_service, "quarantine_pdf", readd_then_quarantine)
+    action = plan_pdf_disposal(
+        result={"citekey": "deleted", "pdf_path": str(pdf)},
+        config=config, target=config["bibs"][0], keep_pdf=False, dry_run=False,
+    )
+
+    assert pdf.read_bytes() == _SHARED_PDF
+    assert action is not None and action["status"] == "kept"
+
+
+def test_batch_disposal_keeps_pdf_of_a_not_yet_removed_batch_entry(
+    tmp_path: Path,
+) -> None:
+    """Disposing a's PDF while b (same PDF, same batch) is still in the file keeps it."""
+    from pzi.clean_service import plan_pdf_disposal
+    from pzi.config import load_config_file
+
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    pdf = papers / "shared.pdf"
+    pdf.write_bytes(_SHARED_PDF)
+    bib, _sibling, _papers, cfg = _two_library_config(tmp_path, sibling_text="")
+    bib.write_text(_entry("b", pdf))  # a is already removed, b is not yet
+    config = load_config_file(str(cfg), home_dir=str(tmp_path))["config"]
+
+    action = plan_pdf_disposal(
+        result={"citekey": "a", "pdf_path": str(pdf)},
+        config=config, target=config["bibs"][0], keep_pdf=False, dry_run=False,
+        removed_citekeys=["a", "b"],
+    )
+
+    assert pdf.read_bytes() == _SHARED_PDF
+    assert action is not None and action["status"] == "kept"
+

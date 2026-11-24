@@ -550,7 +550,6 @@ def quarantine_pdf(
     bib_path: str,
     dry_run: bool = False,
     recheck_bibs: Sequence[str] = (),
-    excluding: Mapping[str, Sequence[str]] | None = None,
 ) -> QuarantineResult:
     """File one orphaned PDF into ``papers_dir/.orphans/``.
 
@@ -576,8 +575,10 @@ def quarantine_pdf(
     (in sorted path order, as :func:`clean_library` does, so two such callers
     cannot deadlock) and re-reads every `file =` reference under those locks. A
     reference that a writer committed after the caller's earlier, unlocked check
-    is then seen, and the file is left in place. *excluding* is the per-bib
-    citekey exclusion of :func:`referenced_pdf_paths`.
+    is then seen, and the file is left in place. No citekey is excluded from
+    that read: on a real run the entry being removed is already gone, so an
+    exclusion could only hide a live reference (a writer re-adding the same
+    citekey, or a batch sibling entry that is not yet removed).
     """
     source = Path(str(pdf_path)).expanduser()
     if not pdf_file_present(str(source)):
@@ -612,7 +613,7 @@ def quarantine_pdf(
             # bibs say now, under the locks that writer needs.
             read_errors: list[str] = []
             still_referenced = _referenced_under_held_lock(
-                lock_targets, excluding=excluding, errors=read_errors
+                lock_targets, errors=read_errors
             )
             if read_errors:
                 return {
@@ -944,6 +945,5 @@ def plan_pdf_disposal(
             bib_path=target["path"],
             dry_run=dry_run,
             recheck_bibs=owners,
-            excluding=excluding,
         )
     )
