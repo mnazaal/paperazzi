@@ -832,6 +832,34 @@ def _index_positions(
     return {key: set(positions) for key, positions in index.items() if positions}
 
 
+def _same_entry_up_to_file_spelling(
+    existing: BibtexEntry,
+    planned: BibtexEntry,
+    existing_record: NormalizedRecord,
+    planned_record: NormalizedRecord,
+) -> bool:
+    """Whether *planned* changes nothing in *existing*.
+
+    The planned `file` is the record's resolved path, while the entry on disk may
+    spell the same attachment relative or as a Zotero/JabRef composite. The
+    writer keeps the on-disk spelling of a `file` that still points at the same
+    primary, so such a difference is not a change.
+    """
+    if existing == planned:
+        return True
+    old_path = existing_record.get("local_pdf_path")
+    new_path = planned_record.get("local_pdf_path")
+    if not old_path or not new_path:
+        return False
+    if os.path.normpath(os.path.expanduser(old_path)) != os.path.normpath(
+        os.path.expanduser(new_path)
+    ):
+        return False
+    return {**existing, "fields": {**existing["fields"], "file": ""}} == {
+        **planned, "fields": {**planned["fields"], "file": ""},
+    }
+
+
 @dataclass
 class BatchWriteSession:
     """In-memory view of a bib opened for a batch of edits under one lock.
@@ -889,7 +917,10 @@ class BatchWriteSession:
             # nothing, so its block stays untouched: marking it re-rendered the
             # entry and folded its `file` to the configured style while the
             # import reported a skipped duplicate.
-            unchanged = self.entries[idx] == plan["entry"]
+            unchanged = _same_entry_up_to_file_spelling(
+                self.entries[idx], plan["entry"],
+                self.records[idx], planned_record,
+            )
             self.entries[idx] = plan["entry"]
             self.records[idx] = planned_record
             modified = not unchanged

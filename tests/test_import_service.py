@@ -989,3 +989,82 @@ def test_import_resolves_a_relative_multi_attachment_field_and_keeps_its_spellin
         )
         base = Path(td, "source", "papers")
         assert written == f"{base}/original.pdf;{base}/second.pdf", written
+
+
+_DUP_ENTRY = (
+    "@article{k, title = {Deep Learning}, author = {Doe, Jane}, year = {2020},"
+    " doi = {10.1000/abc}%s}\n"
+)
+
+
+def _duplicate_import_bytes(
+    td: str, lib_file: str, src_file: str | None, extra: tuple[str, str] = ("", "")
+) -> tuple[bytes, bytes]:
+    """Library bytes before and after importing an entry the library already has.
+
+    *lib_file* / *src_file* are `file` field values (or None); *extra* is an
+    additional field line for the library and the source respectively.
+    """
+    lib = os.path.join(td, "lib")
+    papers = os.path.join(lib, "papers")
+    os.makedirs(papers)
+    Path(papers, "x.pdf").write_bytes(b"%PDF-1.4\nx")
+    bp = os.path.join(lib, "library.bib")
+
+    def entry(file_value: str | None, more: str) -> str:
+        fields = (f", file = {{{file_value}}}" if file_value else "") + more
+        return _DUP_ENTRY % fields
+
+    Path(bp).write_text(entry(lib_file, extra[0]))
+    cp = os.path.join(td, "config.toml")
+    Path(cp).write_text(MINIMAL_CONFIG_TOML.format(bib_path=bp, papers_dir=papers))
+    os.makedirs(os.path.join(td, "src"))
+    src = os.path.join(td, "src", "export.bib")
+    Path(src).write_text(entry(src_file, extra[1]))
+    before = Path(bp).read_bytes()
+    import_from_bibtex(config_path=cp, home_dir=td, source_path=src)
+    return before, Path(bp).read_bytes()
+
+
+def test_a_duplicate_import_leaves_a_relative_file_field_alone() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        td = str(Path(raw).resolve())
+        before, after = _duplicate_import_bytes(
+            td, "papers/x.pdf", f"{td}/lib/papers/x.pdf"
+        )
+        assert after == before
+
+
+def test_a_duplicate_import_leaves_a_composite_file_field_alone() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        td = str(Path(raw).resolve())
+        value = f"Full Text:{td}/lib/papers/x.pdf:application/pdf"
+        before, after = _duplicate_import_bytes(td, value, value)
+        assert after == before
+
+
+@pytest.mark.parametrize(
+    ("extra", "expected"),
+    [
+        (("", ", abstract = {An abstract.}"), "An abstract."),
+        ((", keywords = {a}", ", keywords = {b}"), "b"),
+        (("", ", url = {https://e.org/x}"), "https://e.org/x"),
+        (("", ", journal = {JMLR}"), "JMLR"),
+    ],
+)
+def test_a_duplicate_import_with_a_real_change_is_still_written(
+    extra: tuple[str, str], expected: str
+) -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        td = str(Path(raw).resolve())
+        before, after = _duplicate_import_bytes(td, None, None, extra)
+        assert after != before
+        assert expected in after.decode()
+
+
+def test_a_duplicate_import_that_adds_a_file_is_still_written() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        td = str(Path(raw).resolve())
+        before, after = _duplicate_import_bytes(td, None, f"{td}/lib/papers/x.pdf")
+        assert after != before
+        assert "x.pdf" in after.decode()
