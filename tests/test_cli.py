@@ -2464,3 +2464,84 @@ def test_cli_update_promote_prints_run_level_warnings_when_it_fails(tmp_path: Pa
     )
     assert exit_code != 0
     assert "warning: credential: unpaywall_email_cmd failed" in stderr.getvalue()
+
+
+def _force_init(tmp_path: Path, old_config: str, *extra: str) -> tuple[int, str, str, Path]:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(old_config)
+    stdout, stderr = StringIO(), StringIO()
+    code = run_cli(
+        ["init", "--force", "--config", str(config_path), *extra],
+        home_dir=str(tmp_path), stdout=stdout, stderr=stderr,
+    )
+    return code, stdout.getvalue(), stderr.getvalue(), config_path
+
+
+def test_init_force_pins_no_data_home_when_the_old_config_set_none(tmp_path: Path) -> None:
+    """The loader fills `pzi_data_home` with the XDG default, which init then wrote
+    out as if the user had configured it."""
+    code, _out, err, config_path = _force_init(
+        tmp_path, f'[[bibs]]\nname = "m"\npath = "{tmp_path / "m.bib"}"\n'
+    )
+
+    assert code == exit_codes.OK, err
+    assert "pzi_data_home" not in [
+        line.split("=")[0].strip() for line in config_path.read_text().splitlines()
+    ]
+
+
+def test_init_force_keeps_a_tilde_data_home_as_written(tmp_path: Path) -> None:
+    import tomllib
+
+    code, _out, err, config_path = _force_init(tmp_path, 'pzi_data_home = "~/custom-data"\n')
+
+    assert code == exit_codes.OK, err
+    assert tomllib.loads(config_path.read_text())["pzi_data_home"] == "~/custom-data"
+    assert (tmp_path / "custom-data" / "api_token").is_file()
+
+
+def test_init_force_writes_a_non_bmp_data_home_as_valid_toml(tmp_path: Path) -> None:
+    import tomllib
+
+    home = tmp_path / "dat\U0001F600"
+    code, _out, err, config_path = _force_init(tmp_path, f'pzi_data_home = "{home}"\n')
+
+    assert code == exit_codes.OK, err
+    assert tomllib.loads(config_path.read_text())["pzi_data_home"] == str(home)
+
+
+def test_init_force_keeps_the_data_home_of_a_config_that_fails_validation(
+    tmp_path: Path,
+) -> None:
+    """A config broken enough to need --force still names where its token lives."""
+    custom = tmp_path / "custom"
+    custom.mkdir()
+    (custom / "api_token").write_text("SYNTHETIC-TEST-TOKEN\n")
+
+    code, out, err, config_path = _force_init(
+        tmp_path, f'pzi_data_home = "{custom}"\napi_listen_port = 0\n'
+    )
+
+    import tomllib
+
+    assert code == exit_codes.OK, err
+    assert tomllib.loads(config_path.read_text())["pzi_data_home"] == str(custom)
+    assert (custom / "api_token").read_text().strip() == "SYNTHETIC-TEST-TOKEN"
+    assert "SYNTHETIC-TEST-TOKEN" not in out + err
+
+
+def test_init_force_over_unparseable_toml_does_not_claim_the_token_is_reused(
+    tmp_path: Path,
+) -> None:
+    from pzi.config import default_data_home
+
+    default_home = Path(default_data_home(str(tmp_path)))
+    default_home.mkdir(parents=True)
+    (default_home / "api_token").write_text("SYNTHETIC-TEST-TOKEN\n")
+
+    code, out, err, _config = _force_init(tmp_path, 'pzi_data_home = "unterminated\n')
+
+    assert code == exit_codes.OK, err
+    assert "reusing" not in out
+    assert "not valid TOML" in err
+    assert "SYNTHETIC-TEST-TOKEN" not in out + err

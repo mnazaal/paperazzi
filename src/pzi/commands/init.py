@@ -3,38 +3,59 @@
 from __future__ import annotations
 
 import importlib.resources
-import json
 import os
 import shutil
 import tempfile
 import time
+import tomllib
 from pathlib import Path
-from typing import TextIO
+from typing import NamedTuple, TextIO
 
 from pzi import exit_codes, setup_service
-from pzi.config import default_data_home, load_config_file
+from pzi.config import _normalize_path, default_data_home, escape_toml_string
 from pzi.fileio import fsync_parent_dir
 
 
-def _existing_data_home(config_path: Path, home_dir: str) -> str | None:
-    """The data home the config being (over)written points at.
+class _ConfiguredHome(NamedTuple):
+    """What the config being replaced says about its data home.
 
-    On a fresh `init` there is no config yet and the XDG default is right. With
-    `--force` over a config that sets `pzi_data_home`, that key is where the
-    runtime will look for the token, so that is where it has to go.
+    *spelled* is the value as the user wrote it (``~/x`` stays ``~/x``), or
+    ``None`` when the key is absent or not a usable string. *unreadable* is the
+    parse error when the file is not TOML at all.
     """
-    if config_path.exists():
-        loaded = load_config_file(str(config_path), home_dir=home_dir)
-        config = loaded.get("config")
-        if config is not None:
-            configured = config.get("pzi_data_home")
-            if isinstance(configured, str) and configured.strip():
-                return configured
-    return None
+
+    spelled: str | None
+    unreadable: str | None
 
 
-def _configured_data_home(config_path: Path, home_dir: str) -> str:
-    return _existing_data_home(config_path, home_dir) or default_data_home(home_dir)
+def _existing_data_home(config_path: Path) -> _ConfiguredHome:
+    """Read ``pzi_data_home`` from the raw TOML of the config being replaced.
+
+    Read raw rather than through the validating loader: a config that fails
+    validation is a common reason for `--force`, and the loader returns no
+    config for it, which dropped a custom data home the token still lived under.
+    The loader also fills an unset key with the XDG default, which is not
+    something the user configured and so is not carried over.
+    """
+    if not config_path.exists():
+        return _ConfiguredHome(None, None)
+    try:
+        raw = tomllib.loads(config_path.read_bytes().decode("utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        return _ConfiguredHome(None, str(exc))
+    configured = raw.get("pzi_data_home")
+    if isinstance(configured, str) and configured.strip():
+        return _ConfiguredHome(configured, None)
+    return _ConfiguredHome(None, None)
+
+
+def _data_home_path(config_path: Path, home: _ConfiguredHome, home_dir: str) -> Path:
+    """Where the runtime will look for the token under *config_path*."""
+    if home.spelled is None:
+        return Path(default_data_home(home_dir))
+    return Path(
+        _normalize_path(home.spelled, home_dir=home_dir, base_dir=str(config_path.parent))
+    )
 
 
 def _pin_data_home(content: str, data_home: str) -> str:
@@ -43,14 +64,14 @@ def _pin_data_home(content: str, data_home: str) -> str:
     A replacement config that omits `pzi_data_home` makes the reader look in the
     XDG default, where the token provisioned from the old config is not.
     """
-    quoted = json.dumps(data_home)
+    quoted = f'"{escape_toml_string(data_home)}"'
     note = "# kept from the replaced config: the API token is stored here"
     return f"{note}\npzi_data_home = {quoted}\n\n{content}"
 
 
 def _rotate_token_only(dest: Path, *, home_dir: str, stdout: TextIO) -> int:
     """Replace the API token, leaving an existing config file untouched."""
-    data_home = Path(_configured_data_home(dest, home_dir))
+    data_home = _data_home_path(dest, _existing_data_home(dest), home_dir)
     token_path, _created = setup_service.provision_api_token(data_home, rotate=True)
     print(
         f"API auth token replaced at {token_path} (mode 0600). Any paired "
@@ -186,8 +207,15 @@ def run_init_command(
     # `<pzi_data_home>/api_token`, so writing to the XDG default regardless left
     # the token orphaned for anyone who sets that key — the server then fell
     # back to `auth: DISABLED` while `init` reported a token had been written.
-    existing_data_home = _existing_data_home(dest, home_dir)
-    data_home = Path(existing_data_home or default_data_home(home_dir))
+    existing = _existing_data_home(dest)
+    data_home = _data_home_path(dest, existing, home_dir)
+    if existing.unreadable is not None:
+        print(
+            f"warning: {dest} is not valid TOML ({existing.unreadable}); its "
+            "pzi_data_home, if any, could not be read, so the API token is looked "
+            f"up under the default data home {data_home}",
+            file=stderr,
+        )
     token_path, token_created = setup_service.provision_api_token(
         data_home, rotate=getattr(args, "rotate_token", False)
     )
@@ -204,8 +232,8 @@ def run_init_command(
         template = importlib.resources.files("pzi").joinpath("config.template.toml")
         with importlib.resources.as_file(template) as src:
             content = Path(src).read_text()
-    if existing_data_home is not None:
-        content = _pin_data_home(content, existing_data_home)
+    if existing.spelled is not None:
+        content = _pin_data_home(content, existing.spelled)
     # Owner-only from creation: config.toml may carry an api_auth_token in
     # plaintext and *_cmd hooks that pzi executes, so it should never be briefly
     # group/world-readable. chmod after the write also tightens a pre-existing
@@ -230,6 +258,8 @@ def run_init_command(
             "commit. To use a manager instead, set `api_auth_token_cmd`.",
             file=stdout,
         )
+    elif existing.unreadable is not None:
+        print(f"found an API auth token at {token_path} (mode 0600).", file=stdout)
     else:
         print(
             f"reusing the existing API auth token at {token_path} — your browser "
