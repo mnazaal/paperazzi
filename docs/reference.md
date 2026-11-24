@@ -604,22 +604,7 @@ moving. It does not mean a support commitment, a release cadence, or a
 maintenance branch for older majors. Native Windows stays unsupported; WSL2
 works.
 
-## Source coverage
-
-Which publishers pzi handles — a different question from the section above,
-which is about versions. Expected coverage for common sources. ✅ = works out-of-box. ⚠️ = needs config (browser profile / FlareSolverr / extension). ❌ = metadata only.
-
-| Source | Type | Meta | PDF |
-|--------|------|------|-----|
-| arXiv, bioRxiv, medRxiv | Preprint | ✅ | ✅ |
-| PLOS ONE, eLife, Frontiers, MDPI, JMLR | OA journal | ✅ | ✅ |
-| ACL Anthology, OpenReview | Proceedings | ✅ | ✅ |
-| NeurIPS, ICML, AAAI | Proceedings | ✅ | ⚠️ |
-| ACM DL, IEEE Xplore, Elsevier, Springer, Wiley | Paywall | ✅ | ⚠️ |
-| Google Scholar, DBLP, Crossref, OpenAlex | Aggregator | ✅ | ❌ |
-| PubMed Central, Europe PMC, DOAJ | Repository | ✅ | ✅/⚠️ |
-
-### Environment variables
+## Environment variables
 
 | Variable | Effect |
 |----------|--------|

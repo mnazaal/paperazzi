@@ -28,14 +28,13 @@ paperazzi is NOT for those who need:
 ## Known limits
 
 Three things a new user meets early. None of them is a bug report — they are
-measured or observed behaviour that is not fixed yet.
+observed behaviour that is not fixed yet.
 
 - **Titles read out of a PDF are unreliable.** When you run `pzi add
-  <file>.pdf`, pzi extracts a title candidate from the file itself. Measured
-  against a 300-PDF sample of one real 22k-entry library, that candidate failed
-  to match the paper's actual title about a third of the time — usually
-  truncated to the title's first line, sometimes junk such as a report number or
-  "Under review as a conference paper at ICLR 2016". **Check the title on any
+  <file>.pdf`, pzi extracts a title candidate from the file itself. That
+  candidate can be wrong — truncated to the title's first line, or junk such as
+  a report number or "Under review as a conference paper at ICLR 2016". How
+  often is not measured by anything in this repository. **Check the title on any
   entry added from a bare PDF.** Capturing by DOI or URL never uses this path.
 
 - **The Zotero translation-server path has seen little real use.** pzi installs
@@ -238,8 +237,9 @@ journalctl --user -u pzi -f           # follow logs (no terminal held open)
 The translation-server runs as a child of `pzi server`, so this one unit covers both. Add `--log-requests` to the `ExecStart` line if you want one journald line per HTTP request (method, path, status, duration) — it is off by default, and the query string is never logged. Don't add `--stop-after` here — the unit uses `Restart=on-failure`, and an idle-exit would just churn-restart.
 
 Socket activation (a `pzi.socket` unit that starts the server on the first
-request and lets `--stop-after` reclaim the idle footprint — measured at ~31 MB
-RSS for `pzi server` alone; the node translation-server child and any persistent
+request and lets `--stop-after` reclaim the idle footprint — measured at about 35 MiB
+RSS for an idle `pzi server` alone by `scripts/measure_server_rss.py` (Linux, Python
+3.13, no translation-server child); the node translation-server child and any persistent
 browser session sit on top of that and have not been measured) is
 **not supported**: `pzi server` always opens its own socket and does not accept
 an inherited fd from systemd (`LISTEN_FDS`). The always-on user service above is
