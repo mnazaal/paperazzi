@@ -402,3 +402,49 @@ def test_copying_a_tilde_source_pdf_expands_it(tmp_path: Path, monkeypatch) -> N
     )
 
     assert error is None and path is not None and Path(path).is_file()
+
+
+def test_a_local_pdf_batch_previews_what_the_real_run_does(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Local PDFs did not receive the batch's preview state.
+
+    `add_local_pdf` called the writer without it, so a second local PDF naming
+    the paper of the first previewed as an insert where the real run, having
+    written the first, updates.
+    """
+    import pzi.capture_local_pdf as clp
+    from pzi.add_planning import BatchPreviewState
+    from pzi.add_service import add_input_to_bib
+
+    first = tmp_path / "first.pdf"
+    second = tmp_path / "second.pdf"
+    first.write_bytes(b"%PDF-1.4\nfirst\n")
+    second.write_bytes(b"%PDF-1.4\nsecond\n")
+    monkeypatch.setattr(clp, "extract_pdf_metadata", lambda _p: {})
+    monkeypatch.setattr(
+        clp,
+        "local_pdf_base_record",
+        lambda **_kw: {
+            "title": "Graph Parsers", "doi": "10.1000/paper",
+            "authors": ["Smith, Jane"], "year": 2024,
+        },
+    )
+    config = _add_config(tmp_path)
+    state = BatchPreviewState()
+
+    def capture(path: Path, *, dry_run: bool):
+        return add_input_to_bib(
+            config_path=config, home_dir=str(tmp_path), value=str(path),
+            record_overrides={}, bib_selector=None, dry_run=dry_run,
+            batch_preview=state if dry_run else None,
+            fetch_search=lambda *_a, **_k: [],
+        )
+
+    predicted = [capture(p, dry_run=True) for p in (first, second)]
+    assert not (tmp_path / "library.bib").exists() or not (tmp_path / "library.bib").read_text()
+    actual = [capture(p, dry_run=False) for p in (first, second)]
+
+    assert [r["status"] for r in predicted + actual] == ["ok"] * 4
+    assert [r["action"] for r in actual] == ["insert", "update"]
+    assert [r["action"] for r in predicted] == [r["action"] for r in actual]

@@ -25,6 +25,7 @@ item 560's decision, 2026-08-23.
 
 from __future__ import annotations
 
+import functools
 import os
 import urllib.error
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -326,7 +327,9 @@ def add_input_to_bib(
             server_url=config["translation_server_url"],
             fetch_search=fetch_search,
             ensure_citekey=ensure_citekey_for_write,
-            add_record=add_record_with_bib,
+            # The batch's preview state rides along, so a local PDF previews
+            # against the same planned state every other input kind does.
+            add_record=functools.partial(add_record_with_bib, batch_preview=batch_preview),
             fetch_crossref=fetch_crossref,
             fetch_openalex=fetch_openalex,
             fetch_s2=fetch_s2,
