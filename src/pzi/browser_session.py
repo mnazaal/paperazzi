@@ -105,7 +105,14 @@ def _discard_profile_clone(clone: Path) -> None:
 
 def _clone_has_live_owner(clone: Path) -> bool:
     """True when some process still holds `clone`'s owner lock.
+
+    A clone this process owns is live by definition and is never probed: on NFS
+    Linux emulates flock with per-process POSIX locks, so the LOCK_SH probe
+    would not conflict with our own owner lock and its `os.close` would drop it.
+    The probe is therefore only meaningful across processes.
     """
+    if clone in _OWNED_CLONE_FDS:
+        return True
     try:
         import fcntl
 

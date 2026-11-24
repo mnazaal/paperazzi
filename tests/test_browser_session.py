@@ -543,3 +543,24 @@ def test_failed_profile_copy_leaves_no_clone_and_no_lock(tmp_path, monkeypatch) 
     assert sorted(p.name for p in tmp_path.glob("pzi-chrome-*")) == []
     assert set(module._OWNED_CLONE_FDS) == owned_before
 
+
+def test_sweep_never_probes_a_clone_this_process_owns(tmp_path, monkeypatch) -> None:
+    """flock on NFS is a per-process POSIX lock: probing our own clone would drop it."""
+    import fcntl
+    import os
+
+    from pzi import browser_session as module
+
+    monkeypatch.setattr(module.tempfile, "tempdir", str(tmp_path))
+    profile = tmp_path / "profile"
+    profile.mkdir()
+    clone = module._clone_chrome_profile(profile)
+    os.utime(clone, (1_000, 1_000))
+    calls: list[int] = []
+    real_flock = fcntl.flock
+    monkeypatch.setattr(fcntl, "flock", lambda fd, op: (calls.append(op), real_flock(fd, op))[1])
+
+    assert module._sweep_stale_profile_clones(temp_root=tmp_path) == []
+    assert calls == []
+    assert clone in module._OWNED_CLONE_FDS
+    module._discard_profile_clone(clone)
