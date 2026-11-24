@@ -335,3 +335,70 @@ def test_every_write_path_prepares_a_record_the_same_way(tmp_path: Path, path: s
 
     assert result["status"] == "ok", result
     assert result["pdf_path"] == str(planted), result
+
+
+def test_a_quoted_tilde_path_is_captured_like_the_absolute_path(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """`~` was expanded by the validator and by nothing downstream.
+
+    The shell does not expand a quoted `~/x.pdf`, a `--from-file` line, or an
+    API value. The validator accepted them, then extraction and the copy opened
+    the literal path, failed, and the capture wrote an empty placeholder entry.
+    """
+    import pzi.capture_local_pdf as clp
+    from pzi.add_service import add_input_to_bib
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    source = home / "paper.pdf"
+    source.write_bytes(b"%PDF-1.4\ntilde-paper\n")
+    seen: list[str] = []
+
+    def extract(path):
+        seen.append(path)
+        return {"title": "Graph Parsers"}
+
+    monkeypatch.setattr(clp, "extract_pdf_metadata", extract)
+    monkeypatch.setattr(
+        clp,
+        "local_pdf_base_record",
+        lambda **_kw: {"title": "Graph Parsers", "authors": ["Smith, Jane"], "year": 2024},
+    )
+    config = _add_config(tmp_path)
+
+    result = add_input_to_bib(
+        config_path=config,
+        home_dir=str(home),
+        value="~/paper.pdf",
+        record_overrides={},
+        bib_selector=None,
+        dry_run=False,
+        fetch_search=lambda *_a, **_k: [],
+    )
+
+    assert result["status"] == "ok", result
+    assert seen == [str(source)]
+    stored = list((tmp_path / "papers").iterdir())
+    assert len(stored) == 1 and stored[0].read_bytes() == source.read_bytes()
+    library = (tmp_path / "library.bib").read_text()
+    assert library.count("@") == 1 and "unknown" not in library
+    assert "Graph Parsers" in library and stored[0].name in library
+
+
+def test_copying_a_tilde_source_pdf_expands_it(tmp_path: Path, monkeypatch) -> None:
+    from pzi.pdf_download import copy_pdf_to_papers_dir
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    (home / "paper.pdf").write_bytes(b"%PDF-1.4\nx\n")
+    papers = tmp_path / "papers"
+    papers.mkdir()
+
+    path, error = copy_pdf_to_papers_dir(
+        source_path="~/paper.pdf", papers_dir=str(papers), citekey="test"
+    )
+
+    assert error is None and path is not None and Path(path).is_file()

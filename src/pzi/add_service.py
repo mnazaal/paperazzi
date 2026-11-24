@@ -91,6 +91,7 @@ from pzi.pdf_discovery import (
     apply_pdf_discovery,
     web_attachment_step,
 )
+from pzi.pdf_download import normalize_local_path
 from pzi.pdf_planning import PdfFallbackSettings, is_pdf_bytes, plan_pdf_path
 from pzi.pdf_service import rollback_new_pdfs
 from pzi.protocols import (
@@ -130,7 +131,7 @@ def describe_invalid_add_input(value: str) -> str | None:
     if classified["kind"] == "unknown":
         return f"{value!r} is not a DOI, URL, or local PDF path"
     if classified["kind"] == "local_pdf":
-        path = Path(value).expanduser()
+        path = Path(normalize_local_path(value))
         if not path.is_file():
             return f"PDF file not found: {value}"
         # Extension and existence were the whole check, and this function
@@ -221,6 +222,9 @@ def add_input_to_bib(
             # plainly a usage error.
             reason=REASON_USAGE,
         )
+    if classified["kind"] == "local_pdf":
+        # Normalized once, here, before extraction and the copy see the value.
+        value = normalize_local_path(value)
     metadata_diagnostics: list[str] = []
     metadata_warnings: list[str] = []
     fallback_for_diagnostics = fallback_record_for_input(

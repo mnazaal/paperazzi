@@ -23,7 +23,7 @@ from pzi.pdf import (
     fetch_and_store_pdf_trying_sources,
     snapshot_pdf_paths,
 )
-from pzi.pdf_download import copy_pdf_to_papers_dir
+from pzi.pdf_download import copy_pdf_to_papers_dir, normalize_local_path
 from pzi.pdf_planning import PdfFallbackSettings, plan_pdf_path
 from pzi.pdf_service import extract_pdf_metadata, rollback_new_pdfs
 from pzi.protocols import (
@@ -256,6 +256,7 @@ def add_local_pdf(
     force_new: bool = False,
     file_path_style: str = DEFAULT_PDF_FILE_PATH_STYLE,
 ) -> AddRecordResult:
+    raw_value = normalize_local_path(raw_value)
     read_result = read_bib_file(bib["path"])
     existing_records = [
         cast(NormalizedRecord, r) for r in read_result["records"]

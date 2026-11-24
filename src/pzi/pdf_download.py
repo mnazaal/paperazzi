@@ -42,6 +42,17 @@ def _ezproxy_url(url: str, proxy_host: str) -> str:
     return f"{base}?{parsed.query}" if parsed.query else base
 
 
+def normalize_local_path(value: str) -> str:
+    """The filesystem path a literal local-PDF argument names.
+
+    The one place `~` is expanded for local input. The shell does not expand a
+    quoted `~/x.pdf`, a `--from-file` line or an API value, and only the
+    validator used to, so extraction and the copy opened the literal string.
+    Idempotent: callers that receive an already-normalized path may call it again.
+    """
+    return str(Path(value.strip()).expanduser())
+
+
 def copy_pdf_to_papers_dir(
     *,
     source_path: str,
@@ -51,6 +62,7 @@ def copy_pdf_to_papers_dir(
     filename_format: str | None = None,
 ) -> tuple[str | None, str | None]:
     """Copy a local PDF into the papers directory with citekey naming."""
+    source_path = normalize_local_path(source_path)
     src = Path(source_path)
     if not src.exists():
         return None, f"source PDF not found: {source_path}"
