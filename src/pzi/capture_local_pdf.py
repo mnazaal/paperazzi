@@ -137,6 +137,11 @@ def local_pdf_base_record(
     return {}
 
 
+#: The fields that identify a paper (`has_minimum_metadata`'s inputs). Only an
+#: override that supplies one of these is user-supplied metadata for strict mode.
+_IDENTIFYING_FIELDS = frozenset({"title", "doi", "authors", "year"})
+
+
 def _provider_added_to_extraction(
     base_record: Mapping[str, object], extracted: Mapping[str, object]
 ) -> bool:
@@ -384,8 +389,10 @@ def add_local_pdf(
         # so it is refused too (owner decision 2026-11-25: strict means a
         # provider verified the record, and nothing did). Metadata the user
         # supplied with `--metadata-json` is not PDF text; that decision was
-        # about records resting on the PDF alone, so overrides keep the
-        # earlier behaviour and are judged by `strict_metadata_failure` below.
+        # about records resting on the PDF alone, so supplied identifying
+        # fields keep the earlier behaviour and are judged by
+        # `strict_metadata_failure` below. `--tags` and `--citekey` also land
+        # in the overrides but identify nothing, so they do not exempt.
         if not _provider_added_to_extraction(base_record, extracted):
             if metadata_errors:
                 return _add_planning.error_result(
@@ -395,7 +402,7 @@ def add_local_pdf(
                     warnings=[],
                     bib=bib,
                 )
-            if not record_overrides:
+            if not _IDENTIFYING_FIELDS & record_overrides.keys():
                 return _add_planning.error_result(
                     message="no metadata provider found this PDF (--strict-metadata)",
                     errors=[
