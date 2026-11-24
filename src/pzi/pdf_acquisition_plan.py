@@ -13,7 +13,7 @@ directly — no HTTP request, body parsing, or auth in the way. Inlining it
 would bury ~230 lines of matching rules in an 860-line routing module and
 turn each new publisher into a route-level test.
 
-Tiered CORE (see ``tests/test_layer_boundaries.py``) because it imports
+Tiered BASE_LAYER (see ``tests/test_layer_boundaries.py``) because it imports
 nothing from pzi at all; that its only consumer today is a front-end module
 does not make it front-end code.
 """
@@ -141,7 +141,7 @@ def build_pdf_acquisition_plan(
 def _unique_nonempty(urls: Iterable[str]) -> tuple[str, ...]:
     """Deliberately *not* shared with :func:`pzi.url_safety.unique_nonempty`.
 
-    That is the copy every other caller uses. This module is tiered CORE
+    That is the copy every other caller uses. This module is tiered BASE_LAYER
     precisely because it imports nothing from pzi (see the module docstring and
     ``tests/test_layer_boundaries.py``), so importing the shared one to save
     nine lines would trade a documented architectural property for a

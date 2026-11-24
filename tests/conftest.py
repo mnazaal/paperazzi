@@ -189,7 +189,11 @@ def _sockaddr_ip(address) -> str | None:
 
 @pytest.fixture(autouse=True)
 def _block_non_loopback_sockets(request, monkeypatch):
-    """Prevent any test from making a real outbound (non-loopback) connection.
+    """Prevent any test in this process from making a real outbound connection.
+
+    Loopback stays allowed. This patches the pytest process only: a subprocess a
+    test spawns (`tests/test_cli_end_to_end.py`) inherits neither this nor
+    ``_hermetic_dns``, as README says.
 
     ``_hermetic_dns`` above makes hostname resolution deterministic by
     resolving public hostnames to a fixed public IP (93.184.216.34) instead

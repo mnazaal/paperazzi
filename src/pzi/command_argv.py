@@ -10,11 +10,11 @@ string into argv and expand ``~`` per token, because all three run
 control-character stripper for forwarded subprocess stderr.
 
 This is the lowest tier all three can import without a layering violation:
-``capture_context`` and ``page_metadata_cmd`` are CORE, ``browser_pdf`` is
+``capture_context`` and ``page_metadata_cmd`` are BASE_LAYER, ``browser_pdf`` is
 BROWSER, and the architectural guard (``tests/test_layer_boundaries.py``)
-forbids CORE from reaching BROWSER, not the reverse — so a BROWSER-tier
-module importing a CORE-tier one is unrestricted. This module is itself
-CORE: stdlib only, no pzi imports of its own.
+forbids BASE_LAYER from reaching BROWSER, not the reverse — so a BROWSER-tier
+module importing a BASE_LAYER-tier one is unrestricted. This module is itself
+BASE_LAYER: stdlib only, no pzi imports of its own.
 
 What this deliberately does *not* unify: ``capture_context.run_shell_command``
 also screens its command for shell metacharacters
