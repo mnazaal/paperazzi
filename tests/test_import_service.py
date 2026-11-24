@@ -576,3 +576,103 @@ def test_import_from_bibtex_batch_write_failure_is_unavailable(monkeypatch) -> N
     from pzi.errors import REASON_UNAVAILABLE
 
     assert result["reason"] == REASON_UNAVAILABLE
+
+
+# ── a source entry's attachments survive the copy into the library ────────────
+
+
+def _import_dual_attachment(
+    td: str, file_value: str, *, existing: str = ""
+) -> tuple[dict, str]:
+    """Import one entry whose `file` is *file_value*; return (result, written file field)."""
+    from pzi.bib_repository import read_bib_file
+
+    cp, bp, _pd = _setup_config(td)
+    Path(bp).write_text(existing)
+    src = os.path.join(td, "src", "export.bib")
+    Path(src).write_text(
+        "@article{dual, title = {Two Attachments}, author = {Doe, Jane},\n"
+        "  year = {2020}, doi = {10.1000/dual},\n"
+        "  file = {" + file_value + "}}\n"
+    )
+    result = import_from_bibtex(config_path=cp, home_dir=td, source_path=src)
+    entries = read_bib_file(bp)["entries"]
+    assert len(entries) == 1, entries
+    return dict(result), entries[0]["fields"].get("file", "")
+
+
+def _two_source_pdfs(td: str) -> tuple[str, str]:
+    source_dir = os.path.join(td, "src")
+    os.makedirs(source_dir)
+    first = os.path.join(source_dir, "a.pdf")
+    second = os.path.join(source_dir, "b.pdf")
+    Path(first).write_bytes(b"%PDF-1.4\n")
+    Path(second).write_bytes(b"%PDF-1.4\nsecond")
+    return first, second
+
+
+def test_import_keeps_every_attachment_of_an_inserted_entry() -> None:
+    """`file = {a.pdf;b.pdf}` was imported as `file = {a.pdf}`, reported ok.
+
+    `file` is record-owned and the record carries only the primary path, so the
+    projection merged onto the source entry replaced the whole field with it.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        first, second = _two_source_pdfs(td)
+
+        result, written = _import_dual_attachment(td, f"{first};{second}")
+
+        assert result["imported"] == 1, result
+        assert written == f"{first};{second}", written
+
+
+def test_import_keeps_a_zotero_composite_verbatim() -> None:
+    """The description, mimetype and second attachment are the source's, not pzi's."""
+    with tempfile.TemporaryDirectory() as td:
+        first, second = _two_source_pdfs(td)
+        composite = (
+            f"Full Text PDF:{first}:application/pdf;"
+            f"Supplement:{second}:application/pdf"
+        )
+
+        result, written = _import_dual_attachment(td, composite)
+
+        assert result["imported"] == 1, result
+        assert written == composite, written
+
+
+def test_import_merged_into_an_entry_without_a_file_keeps_every_attachment() -> None:
+    """The update path: the incoming record supplies the attachment the entry lacked."""
+    with tempfile.TemporaryDirectory() as td:
+        first, second = _two_source_pdfs(td)
+        existing = (
+            "@article{dual, title = {Two Attachments}, author = {Doe, Jane},\n"
+            "  year = {2020}, doi = {10.1000/dual}}\n"
+        )
+
+        result, written = _import_dual_attachment(
+            td, f"{first};{second}", existing=existing
+        )
+
+        assert result.get("updated") == 1, result
+        assert written == f"{first};{second}", written
+
+
+def test_import_merged_into_an_entry_with_its_own_file_keeps_that_file() -> None:
+    """An entry that already names its attachment is not re-pointed by an import."""
+    with tempfile.TemporaryDirectory() as td:
+        first, second = _two_source_pdfs(td)
+        own = os.path.join(td, "papers", "own.pdf")
+        os.makedirs(os.path.dirname(own))
+        Path(own).write_bytes(b"%PDF-1.4\nown")
+        existing = (
+            "@article{dual, title = {Two Attachments}, author = {Doe, Jane},\n"
+            "  year = {2020}, doi = {10.1000/dual},\n"
+            "  file = {" + own + "}}\n"
+        )
+
+        _result, written = _import_dual_attachment(
+            td, f"{first};{second}", existing=existing
+        )
+
+        assert written == own, written

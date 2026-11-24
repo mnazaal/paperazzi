@@ -17,6 +17,7 @@ from pzi.bibtex import (
     BibtexEntry,
     NormalizedRecord,
     merge_projected_entry,
+    primary_pdf_path,
     record_to_bibtex_entry,
 )
 from pzi.identifiers import detect_preprint_source
@@ -272,6 +273,34 @@ def _reported_changed_fields(record: NormalizedRecord) -> list[str]:
     return sorted(key for key in record if key != "item_type")
 
 
+def _with_source_attachments(entry: BibtexEntry, source_entry: BibtexEntry) -> BibtexEntry:
+    """*entry* with *source_entry*'s whole ``file`` field, when it names that primary.
+
+    ``file`` is record-owned and the record carries only the primary path, so a
+    projection merged onto an imported entry replaced ``{a.pdf;b.pdf}`` with
+    ``{a.pdf}`` and a Zotero composite with its bare path — dropping every
+    secondary attachment, description and mimetype. On an update the writer's
+    ``_file_field_still_points_at`` keeps the on-disk text, but an insert (or an
+    entry gaining its first attachment) has no on-disk text to keep.
+
+    The source text wins only while the planned primary is the source's primary:
+    a plan that kept the existing entry's own attachment, or acquired a
+    different file, is left exactly as planned.
+    """
+    source_file = source_entry["fields"].get("file")
+    planned_file = entry["fields"].get("file")
+    if not source_file or not planned_file or source_file == planned_file:
+        return entry
+    source_primary = primary_pdf_path(source_file)
+    if source_primary is None or source_primary != primary_pdf_path(planned_file):
+        return entry
+    return {
+        "entry_type": entry["entry_type"],
+        "citekey": entry["citekey"],
+        "fields": {**entry["fields"], "file": source_file},
+    }
+
+
 def plan_bib_write(
     incoming_record: NormalizedRecord,
     existing_records: list[NormalizedRecord],
@@ -310,7 +339,9 @@ def plan_bib_write(
         projection = record_to_bibtex_entry(incoming_record, entry_type=entry_type)
         if source_entry is None:
             return projection
-        return merge_projected_entry(source_entry, projection)
+        return _with_source_attachments(
+            merge_projected_entry(source_entry, projection), source_entry
+        )
 
     if force_new:
         return {
@@ -350,6 +381,8 @@ def plan_bib_write(
     ):
         base_entry = existing_entries[match_index]
         entry = merge_projected_entry(base_entry, entry)
+    if source_entry is not None:
+        entry = _with_source_attachments(entry, source_entry)
     plan: WritePlan = {
         "action": "update",
         "index": match_index,
