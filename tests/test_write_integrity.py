@@ -1160,3 +1160,40 @@ def test_merge_takes_the_dropped_entrys_quality_report_with_it(tmp_path) -> None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+
+
+def test_bib_write_fsyncs_the_temp_file_before_replace_and_the_directory_after(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The `.bib` write path flushes the new bytes before the rename.
+
+    Without the file fsync a crash after `os.replace` can leave an empty bib.
+    Patches `os.fsync` and `os.replace` as `bib_repository` calls them and
+    records the order, plus what the fsynced descriptor held at that moment.
+    """
+    import pzi.bib_repository as repo
+
+    bib = tmp_path / "ml.bib"
+    bib.write_text("@article{a,\n title={x},\n year={2020}\n}\n\n"
+                   "@article{b,\n title={y},\n year={2021}\n}\n")
+    events: list[tuple[str, int]] = []
+    real_fsync, real_replace = os.fsync, os.replace
+
+    def recording_fsync(fd: int) -> None:
+        events.append(("fsync", os.fstat(fd).st_size))
+        real_fsync(fd)
+
+    def recording_replace(src, dst, *a, **k):
+        events.append(("replace", 0))
+        return real_replace(src, dst, *a, **k)
+
+    monkeypatch.setattr(repo.os, "fsync", recording_fsync)
+    monkeypatch.setattr(repo.os, "replace", recording_replace)
+
+    delete_bib_entry(str(bib), "a")
+
+    written = bib.stat().st_size
+    kinds = [kind for kind, _ in events]
+    assert kinds == ["fsync", "replace", "fsync"], events
+    # First fsync saw the complete new content; the last is the directory.
+    assert events[0][1] == written

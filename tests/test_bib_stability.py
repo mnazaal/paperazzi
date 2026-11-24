@@ -113,7 +113,7 @@ def test_parse_library_serialize_roundtrip_stable() -> None:
 
 
 def test_serialize_bibtex_deterministic() -> None:
-    """serialize_bibtex produces consistent output for same input."""
+    """serialize_bibtex output is a fixed string, not merely self-consistent."""
     entries = [
         {
             "entry_type": "article",
@@ -121,7 +121,13 @@ def test_serialize_bibtex_deterministic() -> None:
             "fields": {"author": "John Smith", "title": "Test", "year": "2024"},
         },
     ]
-    assert serialize_bibtex(entries) == serialize_bibtex(entries)
+    assert serialize_bibtex(entries) == (
+        "@article{smith2024,\n"
+        "  author = {John Smith},\n"
+        "  title = {Test},\n"
+        "  year = {2024}\n"
+        "}\n"
+    )
 
 
 # ── Insert preserves extras ───────────────────────────────────────────

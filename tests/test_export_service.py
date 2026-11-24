@@ -52,8 +52,9 @@ def test_export_bibtex_content() -> None:
         result = export_bibtex(bib)
         assert result["status"] == "ok"
         assert result["total_entries"] == 1
-        assert "smith2024" in result["content"]
-        assert "Deep Learning" in result["content"]
+        # Byte-for-byte: a substring check passes for an export that dropped
+        # or reordered fields, which is the loss an export must not have.
+        assert result["content"] == SIMPLE_BIB
 
 
 def test_export_json_empty() -> None:

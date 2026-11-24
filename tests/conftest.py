@@ -136,6 +136,13 @@ def _dump_app_config(config: AppConfig) -> str:
 def _hermetic_dns(request, monkeypatch):
     """Make hostname resolution deterministic and offline for the unit suite.
 
+    Scope: this fixture, ``_block_non_loopback_sockets`` and ``_clear_xdg_env``
+    patch only the pytest process (``monkeypatch`` on in-process objects). A
+    test that spawns a child process (the ``pzi`` console script, ``python -m``)
+    gets none of them: the child is offline only if the test's inherited
+    environment keeps it so, and it resolves and connects for real otherwise.
+    Such tests must set their own environment explicitly.
+
     The SSRF guard (``safe_public_http_url``) resolves real hostnames with a
     0.25s timeout; under network jitter that race intermittently rejects a
     public host, which made capture/discovery tests flaky (e.g. a 200 path
