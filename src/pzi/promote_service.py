@@ -51,6 +51,7 @@ from pzi.identifiers import (
 from pzi.pdf import NextPdfCandidate, fetch_and_store_pdf_trying_sources, stored_pdf_paths
 from pzi.pdf import remove_new_pdf as _remove_new_pdf
 from pzi.pdf import snapshot_pdf_paths as _snapshot_pdf_paths
+from pzi.pdf_discovery import stored_credential_warnings
 from pzi.pdf_planning import PdfFallbackSettings
 from pzi.pdf_service import rollback_new_pdfs
 from pzi.promote_planning import (
@@ -105,6 +106,9 @@ class PromoteResult(TypedDict):
     items: list[PromoteItem]
     errors: list[str]
     summary: NotRequired[dict[str, Any]]
+    #: Credential commands that failed during the PDF fallback, by config key
+    #: only — present only when one did.
+    warnings: NotRequired[list[str]]
     #: Structured failure reason (`pzi.errors.REASON_*`) — present only on
     #: failure. Both the exit-code and HTTP-status mappers read it.
     reason: NotRequired[str]
@@ -720,6 +724,10 @@ def promote_bib(
         # run in which every promotion raised reported no errors at all.
         "errors": errors,
     }
+    # Read after the run: the fallback resolves credentials on first need, so
+    # the memo only holds a failure once a download has actually failed.
+    if credential_notes := stored_credential_warnings(config):
+        result["warnings"] = credential_notes
     if all_failed:
         # `unavailable`, not `config`: the library was read and the preprints
         # were there — the promotions were not writable. Both

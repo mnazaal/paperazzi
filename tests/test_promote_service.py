@@ -2861,3 +2861,42 @@ def test_promotion_forwards_pdf_settings(tmp_path, monkeypatch, handler_name):
     handler(**kwargs)
 
     assert len(seen) == 1 and seen[0] is settings
+
+
+def test_promote_names_a_failing_credential_command_in_its_warnings(tmp_path, monkeypatch):
+    """A failing `unpaywall_email_cmd` must not vanish when the download fails.
+
+    The fallback records the failure in a memo only; before it ran, the same
+    failure raised and named the key. `promote` must keep going and report it,
+    by key only: the command text is never part of the result.
+    """
+    import pzi.add_planning as add_planning
+    import pzi.pdf_discovery as pdf_discovery
+
+    monkeypatch.setattr(add_planning, "DEFAULT_DISCOVERY_STEPS", [])
+    pdf_discovery._EMAILS_MEMO.clear()
+    bib_path = tmp_path / "ml.bib"
+    config_path = _write_config(
+        tmp_path, bib_path, unpaywall_email_cmd="false SECRETCMD_TOKEN"
+    )
+    _seed_bib_with_preprint(tmp_path, bib_path, config_path)
+
+    def failing_fetch_binary(url):
+        raise ConnectionError("no")
+
+    result = promote_bib(
+        config_path=str(config_path),
+        home_dir=str(tmp_path),
+        bib_selector=None,
+        keep_preprint=False,
+        dry_run=False,
+        fetch_search=_fake_search_with_venue,
+        fetch_binary=failing_fetch_binary,
+    )
+
+    assert result["status"] == "ok"
+    assert result["items"][0]["action"] == "update"
+    assert result["items"][0]["pdf_attached"] is False
+    warnings = result.get("warnings") or []
+    assert any("unpaywall_email_cmd" in w for w in warnings), result
+    assert "SECRETCMD_TOKEN" not in repr(result)
