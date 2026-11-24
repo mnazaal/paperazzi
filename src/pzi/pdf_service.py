@@ -40,7 +40,7 @@ from pzi.pdf import (
 )
 from pzi.pdf import remove_new_pdf as _remove_new_pdf
 from pzi.pdf import snapshot_pdf_paths as _snapshot_pdf_paths
-from pzi.pdf_discovery import discover_pdf_url_for_record
+from pzi.pdf_discovery import discover_pdf_url_for_record, stored_credential_warnings
 from pzi.pdf_download import copy_pdf_to_papers_dir
 from pzi.pdf_planning import PdfFallbackSettings, pdf_file_present
 from pzi.protocols import BinaryFetcher
@@ -232,6 +232,10 @@ def retry_pdf(
         }
     config, bib = resolved
     discovered_from: str | None = None
+    # Credential commands that failed during discovery or the fallback, by
+    # config key only. Read at each return, after the work that may resolve them.
+    def credential_notes() -> list[str]:
+        return stored_credential_warnings(config)
 
     read_result = read_bib_file(bib["path"])
     entries = read_result["entries"]
@@ -291,7 +295,7 @@ def retry_pdf(
             # With --discover already passed there is no flag left to suggest
             # and nothing the user did wrong: the search came up empty.
             "reason": REASON_NOT_FOUND if deep else REASON_USAGE,
-            "warnings": [],
+            "warnings": credential_notes(),
             "errors": [
                 "no PDF URL found on entry, even with --discover — attach a file "
                 "with `pzi pdf attach`"
@@ -335,7 +339,7 @@ def retry_pdf(
             # unavailable, not a bad request or missing resource — the same
             # class of failure as `discover_via_server_api`'s "not reachable".
             "reason": REASON_UNAVAILABLE,
-            "warnings": [],
+            "warnings": credential_notes(),
             "errors": _pdf_failure_errors(warning, "failed to fetch PDF"),
         }
 
@@ -383,6 +387,7 @@ def retry_pdf(
             note
             for note in (
                 *discovery_notes,
+                *credential_notes(),
                 warning,
                 _superseded_pdf_warning(_record_at(read_result, index), local_pdf_path),
             )
@@ -464,7 +469,7 @@ def retry_failed_pdfs(
         needs_retry.append((i, citekey, pdf_url))
 
     if not needs_retry:
-        return {
+        early: PdfRetryResult = {
             "status": "ok",
             "bib_name": bib["name"],
             "total": 0,
@@ -473,6 +478,10 @@ def retry_failed_pdfs(
             "skipped_no_url": skipped_no_url,
             "failures": [],
         }
+        # Only when a credential command failed: the key is otherwise absent.
+        if notes := stored_credential_warnings(config):
+            early["warnings"] = notes
+        return early
 
     succeeded = 0
     failures: list[dict[str, Any]] = []
@@ -553,7 +562,7 @@ def retry_failed_pdfs(
         "failures": failures,
         # Per-entry chain warnings — the FlareSolverr terms-of-service notice
         # above all. `pzi add` has always surfaced these; this path dropped them.
-        "warnings": warnings,
+        "warnings": [*stored_credential_warnings(config), *warnings],
     }
 
 

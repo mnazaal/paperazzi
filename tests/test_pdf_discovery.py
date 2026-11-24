@@ -1429,3 +1429,33 @@ def test_failed_download_fallback_does_not_abort_on_failing_s2_command(
     assert result["status"] == "ok"
     assert "semantic_scholar_api_key_cmd" not in calls
     assert calls.count("unpaywall_email_cmd") <= 1
+
+
+def test_failing_credential_command_is_reported_by_key_in_both_retry_results(
+    monkeypatch,
+) -> None:
+    import pzi.capture_context as cc
+    import pzi.pdf_discovery as module
+    from pzi.config import _normalize_app_config
+    from pzi.errors import PziError
+
+    def fake_run(command, *, config_key=None):
+        raise PziError(f"the {config_key} command exited with code 1")
+
+    monkeypatch.setattr(cc, "run_shell_command", fake_run)
+    monkeypatch.setattr(module, "DEFAULT_DISCOVERY_STEPS", [])
+    config = _normalize_app_config({"unpaywall_email_cmd": "pass SECRETWORD"}, [], home_dir="/h")
+    records = [{"citekey": "k0", "title": "T", "doi": "10.1000/0"}]
+    pdf_service = _stub_stored_bib(monkeypatch, config, records)
+
+    single = pdf_service.retry_pdf(
+        config_path="/f", home_dir="/h", bib_selector=None, citekey="k0", deep=True
+    )
+    batch = pdf_service.retry_failed_pdfs(
+        config_path="/f", home_dir="/h", bib_selector=None, deep=True
+    )
+
+    for result in (single, batch):
+        text = " ".join([*result.get("errors", []), *result.get("warnings", [])])
+        assert "unpaywall_email_cmd" in text, result
+        assert "SECRETWORD" not in repr(result)
