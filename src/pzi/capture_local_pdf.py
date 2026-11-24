@@ -288,16 +288,6 @@ def add_local_pdf(
     # under this module's name) already splits them; this branch had its own
     # unsplit copy.
     merged = merge_fetched_record_with_overrides(base_record, record_overrides)
-    # Strict mode judges the merged record, as the DOI/URL branch does, and
-    # before anything is copied or written: reporting the failure after the
-    # entry and its PDF had landed would leave the half-verified record the
-    # flag exists to prevent.
-    if strict_metadata:
-        strict_failure = _add_planning.strict_metadata_failure(
-            merged, metadata_errors, dry_run=dry_run, bib=bib
-        )
-        if strict_failure is not None:
-            return strict_failure
     # A provider error on this path used to be dropped on the floor unless
     # `--strict-metadata` was set, so a capture degraded by a Crossref 429 was
     # reported exactly like a clean one. Carried as warnings from here on, the
@@ -333,6 +323,17 @@ def add_local_pdf(
             ],
             bib=bib,
         )
+    # After the acceptance gate, so a PDF that identifies nothing keeps its
+    # `--metadata-json` guidance in strict mode too. Strict mode judges the
+    # merged record, as the DOI/URL branch does, and before anything is copied or written: reporting the failure after the
+    # entry and its PDF had landed would leave the half-verified record the
+    # flag exists to prevent.
+    if strict_metadata:
+        strict_failure = _add_planning.strict_metadata_failure(
+            merged, metadata_errors, dry_run=dry_run, bib=bib
+        )
+        if strict_failure is not None:
+            return strict_failure
     record_with_ck = ensure_citekey(
         merged,
         existing_records,
