@@ -21,11 +21,18 @@ class _ConfiguredHome(NamedTuple):
 
     *spelled* is the value as the user wrote it (``~/x`` stays ``~/x``), or
     ``None`` when the key is absent or not a usable string. *unreadable* is the
-    parse error when the file is not TOML at all.
+    parse error when the file is not TOML at all. *token_settings* holds the
+    token source keys the file sets (`api_auth_token_cmd`, `api_auth_token`),
+    which decide the token the server resolves ahead of the data home's file.
     """
 
     spelled: str | None
     unreadable: str | None
+    token_settings: tuple[tuple[str, str], ...] = ()
+
+
+#: Config keys that name the API token, in `resolve_api_auth_token` precedence order.
+_TOKEN_SOURCE_KEYS = ("api_auth_token_cmd", "api_auth_token")
 
 
 def _existing_data_home(config_path: Path) -> _ConfiguredHome:
@@ -44,9 +51,13 @@ def _existing_data_home(config_path: Path) -> _ConfiguredHome:
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
         return _ConfiguredHome(None, str(exc))
     configured = raw.get("pzi_data_home")
-    if isinstance(configured, str) and configured.strip():
-        return _ConfiguredHome(configured, None)
-    return _ConfiguredHome(None, None)
+    tokens = tuple(
+        (key, raw[key])
+        for key in _TOKEN_SOURCE_KEYS
+        if isinstance(raw.get(key), str) and raw[key].strip()
+    )
+    spelled = configured if isinstance(configured, str) and configured.strip() else None
+    return _ConfiguredHome(spelled, None, tokens)
 
 
 def _data_home_path(config_path: Path, home: _ConfiguredHome, home_dir: str) -> Path:
@@ -58,15 +69,22 @@ def _data_home_path(config_path: Path, home: _ConfiguredHome, home_dir: str) -> 
     )
 
 
-def _pin_data_home(content: str, data_home: str) -> str:
-    """Prefix *content* with the data home the reused token lives under.
+def _carry_over(content: str, existing: _ConfiguredHome) -> str:
+    """Prefix *content* with the settings that decide which API token is read.
 
     A replacement config that omits `pzi_data_home` makes the reader look in the
-    XDG default, where the token provisioned from the old config is not.
+    XDG default, where the token provisioned from the old config is not. One that
+    omits `api_auth_token_cmd` or `api_auth_token` swaps the token the server
+    resolves for the data home's file, un-pairing the extension.
     """
-    quoted = f'"{escape_toml_string(data_home)}"'
-    note = "# kept from the replaced config: the API token is stored here"
-    return f"{note}\npzi_data_home = {quoted}\n\n{content}"
+    lines: list[str] = []
+    if existing.spelled is not None:
+        lines.append(f'pzi_data_home = "{escape_toml_string(existing.spelled)}"')
+    lines.extend(f'{key} = "{escape_toml_string(value)}"' for key, value in existing.token_settings)
+    if not lines:
+        return content
+    note = "# kept from the replaced config: where the API token comes from"
+    return f"{note}\n" + "\n".join(lines) + f"\n\n{content}"
 
 
 def _rotate_token_only(
@@ -246,8 +264,7 @@ def run_init_command(
         template = importlib.resources.files("pzi").joinpath("config.template.toml")
         with importlib.resources.as_file(template) as src:
             content = Path(src).read_text()
-    if existing.spelled is not None:
-        content = _pin_data_home(content, existing.spelled)
+    content = _carry_over(content, existing)
     # Owner-only from creation: config.toml may carry an api_auth_token in
     # plaintext and *_cmd hooks that pzi executes, so it should never be briefly
     # group/world-readable. chmod after the write also tightens a pre-existing

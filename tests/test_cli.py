@@ -2571,3 +2571,35 @@ def test_init_rotate_token_refuses_a_config_that_does_not_parse(tmp_path: Path) 
     assert (default_home / "api_token").read_text() == "SYNTHETIC-TEST-TOKEN\n"
     assert config_path.read_text() == broken
     assert not (tmp_path / "custom").exists()
+
+
+def test_init_force_carries_a_token_command_through_and_stays_silent_about_it(
+    tmp_path: Path,
+) -> None:
+    """`api_auth_token_cmd` decides the token the server uses; dropping it from the
+    replacement config changed that token while stdout said the extension stayed
+    paired."""
+    import tomllib
+
+    code, out, err, config_path = _force_init(
+        tmp_path, 'api_auth_token_cmd = "echo SYNTHETIC-CMD-TOKEN"\n'
+    )
+
+    assert code == exit_codes.OK, err
+    written = tomllib.loads(config_path.read_text())
+    assert written["api_auth_token_cmd"] == "echo SYNTHETIC-CMD-TOKEN"
+    assert "SYNTHETIC-CMD-TOKEN" not in out + err
+
+
+def test_init_force_carries_a_plaintext_token_through_without_printing_it(
+    tmp_path: Path,
+) -> None:
+    import tomllib
+
+    code, out, err, config_path = _force_init(
+        tmp_path, 'api_auth_token = "SYNTHETIC-PLAIN-TOKEN"\n'
+    )
+
+    assert code == exit_codes.OK, err
+    assert tomllib.loads(config_path.read_text())["api_auth_token"] == "SYNTHETIC-PLAIN-TOKEN"
+    assert "SYNTHETIC-PLAIN-TOKEN" not in out + err
