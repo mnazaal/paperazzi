@@ -317,6 +317,7 @@ def _run_batch(
 
     interrupted = False
     outstanding = 0  # inputs an interrupt left unfinished
+    interrupted_in_capture = False
     for index, value in enumerate(values):
         if index > 0 and delay > 0:
             try:
@@ -349,6 +350,7 @@ def _run_batch(
                 service_kwargs=service_kwargs,
             )
         except KeyboardInterrupt:
+            interrupted_in_capture = True
             # Mid-capture. Same reasoning as the delay above: report what has
             # already happened rather than unwinding through it.
             interrupted = True
@@ -374,9 +376,12 @@ def _run_batch(
                 "warnings": [],
             }
         bucket = _classify(result)
-        counts[bucket] += 1
-        if bucket == "failed":
-            failures.append(value)
+        if not interrupted:
+            # The interrupted input is outstanding, counted once there: it was
+            # neither captured nor a failure of the input itself.
+            counts[bucket] += 1
+            if bucket == "failed":
+                failures.append(value)
         _stream_line(
             index, total, value, result, bucket, stderr,
             dry_run=getattr(args, "dry_run", False),
@@ -390,8 +395,8 @@ def _run_batch(
         items.append({"value": value, "status": result["status"], "result": result})
         if interrupted:
             # The retry file must list everything outstanding: the interrupted
-            # input (already in `failures`) and every input after it.
-            failures.extend(values[index + 1:])
+            # input and every input after it.
+            failures.extend(values[index:])
             break
 
     # `--dry-run` announces "nothing will be written" above, and the failures
@@ -425,7 +430,12 @@ def _run_batch(
         captured = counts["added"] + counts["exists"]
         cli_json.emit_result(
             {
-                "status": "error" if counts["failed"] and not captured else "ok",
+                # An interrupted batch exits 130, so it is never `ok`.
+                "status": (
+                    "error"
+                    if interrupted or (counts["failed"] and not captured)
+                    else "ok"
+                ),
                 "total": total,
                 "counts": counts,
                 "failures_file": str(failures_path) if failures_path else None,
@@ -438,7 +448,7 @@ def _run_batch(
                     # string "failed" for every item. Text mode has always read
                     # `message` first and fallen back to the list; do the same.
                     f"{item['value']}: {_failure_reason(item['result'])}"
-                    for item in items
+                    for item in (items[:-1] if interrupted_in_capture else items)
                     if _classify(item["result"]) == "failed"
                 ]
                 + (
