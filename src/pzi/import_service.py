@@ -344,9 +344,12 @@ def import_from_bibtex(
     }
 
 
-# A URL (`https://`, `file://`, JabRef's `https\\://`, once unescaped) or a
-# Windows drive path is not relative to the source directory: keep it as spelled.
-_NOT_A_LOCAL_PATH_RE = re.compile(r"^(?:[A-Za-z][A-Za-z0-9+.-]+:|[A-Za-z]:[\\/])")
+# A URL (`https://`, `file:///`, JabRef's escaped `https\\://`) or a Windows
+# drive path (`C:\\`, `C:/`) is not relative to the source directory: keep it as
+# spelled. Both are a scheme or drive letter, a colon (escaped or not), then a
+# slash. A colon NOT followed by a slash is part of a filename
+# (`arXiv\\:2101.00001.pdf`, `doi:10.1000/x.pdf`) and that path is resolved.
+_NOT_A_LOCAL_PATH_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*\\?:[\\/]")
 
 
 def _resolve_like_the_kernel(source_dir: str, path: str) -> str:
@@ -357,6 +360,11 @@ def _resolve_like_the_kernel(source_dir: str, path: str) -> str:
     `realpath` (symlinks first, then `..`); the last component is left as spelled.
     """
     joined = os.path.join(source_dir, path)
+    # Only a `..` makes lexical and kernel resolution differ. Resolving symlinks
+    # for every path rewrote `~/src/papers/x.pdf` under a symlinked HOME as the
+    # link's target, outside `~`, so the configured home style no longer applied.
+    if ".." not in Path(path).parts:
+        return os.path.normpath(joined)
     head, tail = os.path.split(joined)
     if tail in ("", ".", ".."):
         return os.path.realpath(joined)

@@ -1162,3 +1162,44 @@ def test_import_resolves_dotdot_as_the_kernel_does_through_a_symlinked_source() 
             td, "../papers/x.pdf", via_symlink=True
         )
         assert [p.exists() for p in located] == [True], located
+
+
+@pytest.mark.parametrize(
+    "value",
+    [r"arXiv\:2101.00001.pdf", "ab:c.pdf", "a:b.pdf", r"doi\:10.1000/paper.pdf"],
+)
+def test_a_colon_in_a_relative_filename_is_not_read_as_a_url(value: str) -> None:
+    """Only a scheme or drive letter followed by a colon AND a slash is not local.
+
+    `[A-Za-z][A-Za-z0-9+.-]+:` matched `arXiv\\:2101.00001.pdf`, so a real file
+    beside the source was left relative and resolved against the library.
+    """
+    from pzi.bibtex import parse_file_field
+
+    with tempfile.TemporaryDirectory() as raw:
+        td = str(Path(raw).resolve())
+        name = parse_file_field(value)[0]
+        _, located = _import_source_file_value(td, value, (name,))
+        assert [p.exists() for p in located] == [True], located
+
+
+def test_a_plain_relative_attachment_keeps_a_symlinked_source_dir_spelling(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Symlinks are resolved only for `..`; otherwise the spelling is kept.
+
+    Resolving every path rewrote `~/src/papers/x.pdf` under a symlinked HOME as
+    the link's target, outside `~`, so the home style no longer applied.
+    """
+    real = tmp_path / "realhome"
+    (real / "src" / "papers").mkdir(parents=True)
+    (real / "src" / "papers" / "x.pdf").write_bytes(b"%PDF-1.4\nx")
+    home = tmp_path / "home"
+    home.symlink_to(real)
+    monkeypatch.setenv("HOME", str(home))
+    from pzi.import_service import _resolve_like_the_kernel
+
+    resolved = _resolve_like_the_kernel(str(home / "src"), "papers/x.pdf")
+
+    assert resolved == str(home / "src" / "papers" / "x.pdf")
+    assert Path(resolved).exists()
