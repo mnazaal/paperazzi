@@ -380,6 +380,83 @@ def test_post_slow_trickle_exceeding_body_deadline_answers_408(
     assert elapsed < 3.0, f"expected the 0.3s deadline to fire quickly, took {elapsed:.2f}s"
 
 
+def _raw_get(port: int, path: str) -> bytes:
+    sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+    try:
+        sock.sendall(f"GET {path} HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n".encode("ascii"))
+        chunks = []
+        while chunk := sock.recv(65536):
+            chunks.append(chunk)
+        return b"".join(chunks)
+    finally:
+        sock.close()
+
+
+def test_handler_failure_before_any_response_answers_one_500(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Pins `_response_started` False: the 500 guard answers when nothing was sent."""
+    import pzi.http_api as http_api
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("before any response")
+
+    monkeypatch.setattr(http_api, "_handle_get", _boom)
+    config_path, _ = _seed(tmp_path)
+    port, _thread, server = _serve_once(config_path, tmp_path)
+    try:
+        raw = _raw_get(port, "/health")
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert raw.startswith(b"HTTP/1.0 500 "), raw[:80]
+    assert raw.count(b"HTTP/1.0 ") == 1
+
+
+def test_handler_failure_after_a_response_sends_no_second_response(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Pins `_response_started` True: a failure after `_respond` must not append a 500."""
+    import pzi.http_api as http_api
+
+    def _respond_then_fail(request, *_args, **_kwargs):
+        http_api._respond(request, 200, {"status": "ok"}, build_http_security_config())
+        raise RuntimeError("after the response")
+
+    monkeypatch.setattr(http_api, "_handle_get", _respond_then_fail)
+    config_path, _ = _seed(tmp_path)
+    port, _thread, server = _serve_once(config_path, tmp_path)
+    try:
+        raw = _raw_get(port, "/health")
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert raw.startswith(b"HTTP/1.0 200 "), raw[:80]
+    assert raw.count(b"HTTP/1.0 ") == 1
+    assert b"internal server error" not in raw
+
+
+def test_send_error_marks_the_response_started(tmp_path: Path) -> None:
+    """Pins the flag `_send_error_as_json` sets: an unsupported verb gets one JSON answer."""
+    config_path, _ = _seed(tmp_path)
+    port, _thread, server = _serve_once(config_path, tmp_path)
+    try:
+        sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+        try:
+            sock.sendall(b"PUT /bibs HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n")
+            chunks = []
+            while chunk := sock.recv(65536):
+                chunks.append(chunk)
+        finally:
+            sock.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+    raw = b"".join(chunks)
+    assert raw.startswith(b"HTTP/1.0 501 "), raw[:80]
+    assert raw.count(b"HTTP/1.0 ") == 1
+
+
 def test_get_bibs_returns_bib_list(tmp_path: Path) -> None:
     config_path, _ = _seed(tmp_path)
     port, _thread, server = _serve_once(config_path, tmp_path)
