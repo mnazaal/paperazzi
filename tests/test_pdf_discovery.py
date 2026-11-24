@@ -1257,3 +1257,83 @@ def test_retry_discover_finds_pdf_from_landing_page_alone(public_urls, monkeypat
 
     assert result["status"] == "ok", result
     assert captured["url"] == _GOOD
+
+
+def _retry_three_entries(monkeypatch, fake_run):
+    """Run `retry_failed_pdfs(deep=True)` over 3 URL-less entries, no network."""
+    import pzi.capture_context as cc
+    import pzi.pdf_discovery as module
+    from pzi import pdf_service
+    from pzi.config import _normalize_app_config
+
+    monkeypatch.setattr(cc, "run_shell_command", fake_run)
+    monkeypatch.setattr(module, "DEFAULT_DISCOVERY_STEPS", [])
+    config = _normalize_app_config(
+        {"semantic_scholar_api_key_cmd": "pass s2", "unpaywall_email_cmd": "pass email"},
+        [],
+        home_dir="/h",
+    )
+    records = [{"citekey": f"k{i}", "title": "T", "doi": f"10.1000/{i}"} for i in range(3)]
+    monkeypatch.setattr(
+        pdf_service, "load_bib_target",
+        lambda **kw: (config, {"name": "ml", "path": "/b", "papers_dir": "/nonexistent-papers"}),
+    )
+    monkeypatch.setattr(
+        pdf_service, "read_bib_file",
+        lambda path: {
+            "entries": [{"citekey": r["citekey"], "fields": {}} for r in records],
+            "records": records,
+        },
+    )
+    monkeypatch.setattr(pdf_service, "_snapshot_pdf_paths", lambda d: set())
+    return pdf_service.retry_failed_pdfs(
+        config_path="/f", home_dir="/h", bib_selector=None, deep=True
+    )
+
+
+def test_deep_batch_runs_each_credential_command_at_most_once(monkeypatch) -> None:
+    calls: list[str | None] = []
+
+    def fake_run(command, *, config_key=None):
+        calls.append(config_key)
+        return "value"
+
+    result = _retry_three_entries(monkeypatch, fake_run)
+
+    assert result["status"] == "ok"
+    assert calls.count("unpaywall_email_cmd") <= 1
+    # No discovery step uses the Semantic Scholar key, so its command never runs.
+    assert "semantic_scholar_api_key_cmd" not in calls
+
+
+def test_a_failing_credential_command_does_not_abort_the_batch(monkeypatch) -> None:
+    from pzi.errors import PziError
+
+    def fake_run(command, *, config_key=None):
+        raise PziError(f"{config_key} failed")
+
+    result = _retry_three_entries(monkeypatch, fake_run)
+
+    assert result["status"] == "ok"
+
+
+def test_a_failing_credential_command_is_a_step_diagnostic_by_name_only(
+    public_urls, monkeypatch
+) -> None:
+    import pzi.capture_context as cc
+    import pzi.pdf_discovery as module
+    from pzi.config import _normalize_app_config
+    from pzi.errors import PziError
+
+    def fake_run(command, *, config_key=None):
+        raise PziError(f"the {config_key} command exited with code 1")
+
+    monkeypatch.setattr(cc, "run_shell_command", fake_run)
+    monkeypatch.setattr(module, "DEFAULT_DISCOVERY_STEPS", [])
+    config = _normalize_app_config({"unpaywall_email_cmd": "pass SECRETWORD"}, [], home_dir="/h")
+    result = module.discover_pdf_url_for_record(
+        {"canonical_url": "https://example.org/a"}, config=config, deep=True
+    )
+    text = " ".join(result.get("pdf_discovery_diagnostics", []))
+    assert "unpaywall_email_cmd" in text
+    assert "SECRETWORD" not in text

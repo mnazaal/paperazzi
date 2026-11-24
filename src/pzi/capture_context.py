@@ -275,6 +275,40 @@ def resolve_discovery_credentials(
     return DiscoveryCredentials(contact_email, unpaywall_email, s2_api_key)
 
 
+class DiscoveryEmails(NamedTuple):
+    contact_email: str | None
+    unpaywall_email: str | None
+    failed_keys: tuple[str, ...]
+
+
+def resolve_discovery_emails(config: AppConfig) -> DiscoveryEmails:
+    """Resolve only the two e-mail values the PDF discovery steps read.
+
+    Stored-entry discovery needs no Semantic Scholar key, so its command is
+    never run. A failing `*_cmd` is reported by config key in *failed_keys*
+    (never its text or output) and leaves that value unset, so one broken
+    command cannot abort a batch.
+    """
+    failed: list[str] = []
+
+    def _resolve(cmd_key: str, value_key: str) -> str | None:
+        command = config.get(cmd_key)
+        fallback = config.get(value_key)
+        try:
+            return resolve_optional_value(
+                command=command if isinstance(command, str) else None,
+                fallback=fallback if isinstance(fallback, str) else None,
+                config_key=cmd_key,
+            )
+        except PziError:
+            failed.append(cmd_key)
+            return None
+
+    contact_email = _resolve("contact_email_cmd", "contact_email")
+    unpaywall_email = _resolve("unpaywall_email_cmd", "unpaywall_email") or contact_email
+    return DiscoveryEmails(contact_email, unpaywall_email, tuple(failed))
+
+
 def build_capture_context(
     *,
     config: AppConfig,

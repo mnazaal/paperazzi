@@ -880,7 +880,6 @@ def _stored_record_context(
     """
     # Imported here: `add_planning` and `capture_context` import this module.
     from pzi.add_planning import build_discovery_context
-    from pzi.capture_context import resolve_discovery_credentials
     from pzi.fetch_helpers import build_metadata_fetch_text
     from pzi.translation_server import fetch_web_translations
 
@@ -890,14 +889,34 @@ def _stored_record_context(
     server_url = str(config.get("translation_server_url") or "")
     if not deep:
         return build_discovery_context(raw_value=raw_value, server_url=server_url)
-    credentials = resolve_discovery_credentials(cast(Any, config))
-    return build_discovery_context(
+    emails = _stored_discovery_emails(config)
+    context = build_discovery_context(
         raw_value=raw_value,
         server_url=server_url,
-        unpaywall_email=credentials.unpaywall_email,
-        contact_email=credentials.contact_email,
-        s2_api_key=credentials.s2_api_key,
+        unpaywall_email=emails.unpaywall_email,
+        contact_email=emails.contact_email,
         flaresolverr_url=config.get("flaresolverr_url"),
         fetch_web=fetch_web_translations,
-        metadata_fetch_text=build_metadata_fetch_text(config, api_key=credentials.s2_api_key),
+        metadata_fetch_text=build_metadata_fetch_text(config),
     )
+    # A failed credential command is a diagnostic for this entry, by key only.
+    for key in emails.failed_keys:
+        cast(list[str], context.setdefault("discovery_diagnostics", [])).append(
+            f"credential: {key} failed; continuing without it"
+        )
+    return context
+
+
+# The last (config, result) pair: a batch passes one config object for every
+# entry, and each credential command must run once per run, not once per entry.
+_EMAILS_MEMO: list[Any] = []
+
+
+def _stored_discovery_emails(config: Mapping[str, Any]) -> Any:
+    from pzi.capture_context import resolve_discovery_emails
+
+    if _EMAILS_MEMO and _EMAILS_MEMO[0] is config:
+        return _EMAILS_MEMO[1]
+    emails = resolve_discovery_emails(cast(Any, config))
+    _EMAILS_MEMO[:] = [config, emails]
+    return emails
