@@ -7,7 +7,8 @@ from typing import Any, NotRequired, TypedDict
 
 from pzi.add_planning import batch_status
 from pzi.add_service import add_records_to_bib_batch
-from pzi.bib_serialize import parse_bibtex_for_import
+from pzi.bib_repository import read_bib_file
+from pzi.bib_serialize import parse_bibtex_for_import, resolved_attachment_paths
 from pzi.bibtex import bibtex_entry_to_record
 from pzi.config import DEFAULT_PDF_FILE_PATH_STYLE, BibResolutionFailure, load_bib_target
 from pzi.errors import REASON_CONFIG, REASON_UNAVAILABLE, REASON_USAGE
@@ -214,7 +215,10 @@ def import_from_bibtex(
             "results": [],
         }
 
-    for record, result in zip(records, batch_results):
+    #: Source entries merged into an existing entry, checked after the loop for
+    #: attachments the entry's own `file` field did not take.
+    merged_sources: list[tuple[str | None, Any]] = []
+    for record, source_entry, result in zip(records, record_source_entries, batch_results):
         citekey = result.get("citekey", record.get("citekey", "?"))
         status = result.get("status", "unknown")
         # The writer reports a near-duplicate as a warning, not an error, and
@@ -236,6 +240,8 @@ def import_from_bibtex(
             # duplicates" — the one number a preview exists to get right, wrong
             # in the direction that makes the user proceed.
             previewing = bool(result.get("dry_run", False) or dry_run)
+            if action == "update":
+                merged_sources.append((citekey, source_entry))
             if action == "update" and not result.get("changed_fields"):
                 # Merged into an existing entry and changed nothing about it —
                 # a re-import of a record the library already has.
@@ -278,6 +284,10 @@ def import_from_bibtex(
             })
             errors.append(f"{citekey}: {result.get('message', 'unknown error')}")
 
+    warnings.extend(
+        _unmerged_attachment_warnings(bib["path"], source_path, merged_sources)
+    )
+
     prefix = "DRY RUN: " if dry_run else ""
     return {
         # Derived, not hardcoded — see `batch_status`. A skipped duplicate
@@ -309,3 +319,40 @@ def import_from_bibtex(
         "skipped_errors": skipped_errors,
         "results": results,
     }
+
+
+def _unmerged_attachment_warnings(
+    bib_path: str, source_path: str, merged_sources: list[tuple[str | None, Any]]
+) -> list[str]:
+    """Say which source attachments a merge left out, instead of dropping them silently.
+
+    An incoming record merged into an entry that already names a file keeps the
+    entry's own `file` field: pzi does not re-compose one field out of two
+    producers' syntaxes (bare `;` lists, Zotero/JabRef composites). The source's
+    other attachments were therefore lost with nothing said — the run reported
+    a skipped duplicate. Compared by resolved location, so a `~/` or relative
+    spelling of the same file is not reported.
+    """
+    if not merged_sources:
+        return []
+    by_key = {
+        entry.get("citekey"): entry for entry in read_bib_file(bib_path)["entries"]
+    }
+
+    def located(paths: list[str]) -> set[str]:
+        return {str(Path(path).expanduser().resolve()) for path in paths}
+
+    warnings: list[str] = []
+    for citekey, source_entry in merged_sources:
+        entry = by_key.get(citekey)
+        if entry is None or not (entry["fields"].get("file") or "").strip():
+            continue
+        kept = located(resolved_attachment_paths(entry, bib_path))
+        offered = resolved_attachment_paths(source_entry, source_path)
+        left_out = [path for path in offered if located([path]).isdisjoint(kept)]
+        if left_out:
+            warnings.append(
+                f"{citekey}: kept the library entry's own file field; not merged "
+                f"from the source: {', '.join(left_out)}"
+            )
+    return warnings

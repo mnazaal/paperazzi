@@ -128,8 +128,9 @@ def test_every_documented_exit_code_is_reachable(tmp_path: Path) -> None:
              tmp_path),
         "pzi entries against a --target that is not there",
     )
-    # PARTIAL has one offline single-invocation route: `delete` with one
-    # citekey that exists and one that does not. (`batch_exit_code` itself is
+    # PARTIAL is reachable offline in one invocation — here by `delete` with one
+    # citekey that exists and one that does not (an `import` of one good and one
+    # unparseable block is another route). (`batch_exit_code` itself is
     # still pinned below, since the other five batch commands answer through it.)
     (tmp_path / "partial").mkdir()
     partial_config = _library(tmp_path / "partial", ONE_ENTRY)
