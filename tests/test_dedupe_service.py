@@ -346,3 +346,72 @@ def test_fuzzy_candidates_come_most_similar_first() -> None:
         assert {candidates[0]["citekey"], candidates[0]["hint"]} == {
             "smith2024graph", "smith2024graphnets",
         }
+
+
+def _merge_with_attachment_change_between_reads(
+    tmp_path, monkeypatch, *, alpha_before: str, alpha_after: str, beta: str
+):
+    """Merge alpha into beta; alpha's `file =` changes after the unlocked read."""
+    import pzi.dedupe_service as dedupe
+
+    bib = tmp_path / "lib.bib"
+
+    def text(alpha_file: str) -> str:
+        return (
+            f"@article{{alpha,\n  title = {{A Paper}},\n  author = {{Smith, Jane}},\n"
+            f"  file = {{{alpha_file}}},\n}}\n\n"
+            f"@article{{beta,\n  title = {{A Paper}},\n  author = {{Smith, Jane}},\n"
+            f"  file = {{{beta}}},\n}}\n"
+        )
+
+    bib.write_text(text(alpha_before))
+    real_read = dedupe.read_bib_file
+    calls = {"n": 0}
+
+    def read_then_change(path):
+        result = real_read(path)
+        calls["n"] += 1
+        if calls["n"] == 1:
+            bib.write_text(text(alpha_after))
+        return result
+
+    monkeypatch.setattr(dedupe, "read_bib_file", read_then_change)
+    return dedupe.merge_duplicates(
+        bib_path=str(bib), citekey_a="alpha", citekey_b="beta", dry_run=False
+    )
+
+
+def test_merge_orphaned_pdf_comes_from_the_locked_merge(tmp_path, monkeypatch) -> None:
+    """The applied `orphaned_pdf` named the pre-lock attachment, not the one merged.
+
+    alpha's file changes from old.pdf to new.pdf between the unlocked read and
+    the locked merge; the locked merge drops new.pdf, so that is what the
+    report must name.
+    """
+    result = _merge_with_attachment_change_between_reads(
+        tmp_path,
+        monkeypatch,
+        alpha_before=str(tmp_path / "old.pdf"),
+        alpha_after=str(tmp_path / "new.pdf"),
+        beta=str(tmp_path / "kept.pdf"),
+    )
+
+    assert result["status"] == "ok"
+    assert result.get("orphaned_pdf") == str(tmp_path / "new.pdf")
+
+
+def test_merge_reports_no_orphan_when_the_locked_merge_has_none(
+    tmp_path, monkeypatch
+) -> None:
+    """A preview-time orphan that the locked merge no longer produces is not reported."""
+    shared = str(tmp_path / "kept.pdf")
+    result = _merge_with_attachment_change_between_reads(
+        tmp_path,
+        monkeypatch,
+        alpha_before=str(tmp_path / "old.pdf"),
+        alpha_after=shared,
+        beta=shared,
+    )
+
+    assert result["status"] == "ok"
+    assert "orphaned_pdf" not in result

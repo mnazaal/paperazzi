@@ -390,6 +390,9 @@ def merge_duplicates(
     # is not a path.
     if backup_path is not None:
         applied["backup_path"] = str(backup_path)
-    if orphaned_pdf:
-        applied["orphaned_pdf"] = orphaned_pdf
+    # From the locked summary, present or absent: the pre-lock `orphaned_pdf`
+    # could name a file the locked merge did not drop, or one it kept.
+    locked_orphan = applied_summary["orphaned_pdf"]
+    if locked_orphan:
+        applied["orphaned_pdf"] = locked_orphan
     return applied
