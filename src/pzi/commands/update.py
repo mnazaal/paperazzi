@@ -158,6 +158,11 @@ def run_update_command(
         if as_json:
             continue
 
+        # Run-level warnings, such as a credential command that failed and was
+        # skipped: named by config key, never by value. Printed whatever the
+        # status, since a failed run is when the user most needs the cause.
+        for line in result.get("warnings") or []:
+            print(f"warning: {line}", file=stderr)
         if result["status"] == "ok":
             print_lines(render(result), stdout)
             remaining = (result.get("summary") or {}).get("remaining") or 0
@@ -172,10 +177,6 @@ def run_update_command(
             if args.dry_run:
                 print_result_item_diffs(result, stdout)
             print_metadata_warnings(result, stderr)
-            # Run-level warnings, such as a credential command that failed and
-            # was skipped: named by config key, never by value.
-            for line in result.get("warnings") or []:
-                print(f"warning: {line}", file=stderr)
             if args.verbose:
                 print_metadata_diagnostics(result, stdout)
         else:

@@ -2401,3 +2401,30 @@ def test_cli_update_promote_prints_run_level_warnings(tmp_path: Path) -> None:
     )
     assert exit_code == 0
     assert "warning: credential: unpaywall_email_cmd failed" in stderr.getvalue()
+
+
+def test_cli_update_promote_prints_run_level_warnings_when_it_fails(tmp_path: Path) -> None:
+    def fake_promote_bib(**kwargs):
+        return {
+            "status": "error",
+            "bib_name": "ml",
+            "dry_run": kwargs["dry_run"],
+            "items": [],
+            "warnings": ["credential: unpaywall_email_cmd failed; continuing without it"],
+            "errors": ["write failed"],
+        }
+
+    stderr = StringIO()
+    args = Namespace(
+        target=None, dry_run=False, keep_preprint=False, verbose=False, promote=True,
+    )
+    exit_code = run_update_command(
+        args,
+        home_dir=str(tmp_path),
+        config_path=str(tmp_path / "config.toml"),
+        stdout=StringIO(),
+        stderr=stderr,
+        promote_bib_fn=fake_promote_bib,
+    )
+    assert exit_code != 0
+    assert "warning: credential: unpaywall_email_cmd failed" in stderr.getvalue()
