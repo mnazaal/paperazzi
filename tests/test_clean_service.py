@@ -1087,3 +1087,50 @@ def test_batch_disposal_keeps_pdf_of_a_not_yet_removed_batch_entry(
     assert pdf.read_bytes() == _SHARED_PDF
     assert action is not None and action["status"] == "kept"
 
+
+@pytest.mark.parametrize("kind", ["readonly-dir", "absent-dir"])
+def test_unlockable_or_absent_sibling_keeps_pdf_without_creating_anything(
+    tmp_path: Path, kind: str
+) -> None:
+    """A sibling that cannot be locked cannot prove the PDF unreferenced: keep it."""
+    from pzi.clean_service import plan_pdf_disposal
+    from pzi.config import load_config_file
+
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    pdf = papers / "x.pdf"
+    pdf.write_bytes(_SHARED_PDF)
+    bib = tmp_path / "main.bib"
+    bib.write_text("")
+    if kind == "readonly-dir":
+        sib_dir = tmp_path / "rodir"
+        sib_dir.mkdir()
+        sib = sib_dir / "sibling.bib"
+        sib.write_text("")
+        sib_dir.chmod(0o555)
+    else:
+        sib_dir = tmp_path / "typo" / "dir"
+        sib = sib_dir / "sibling.bib"
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        "browser_hook=false\ndesktop_fallback_hosts=[]\n"
+        f'[[bibs]]\nname="main"\npath="{bib}"\npapers_dir="{papers}"\ndefault=true\n'
+        f'[[bibs]]\nname="sibling"\npath="{sib}"\npapers_dir="{papers}"\n'
+    )
+    config = load_config_file(str(cfg), home_dir=str(tmp_path))["config"]
+    try:
+        action = plan_pdf_disposal(
+            result={"citekey": "x", "pdf_path": str(pdf)},
+            config=config, target=config["bibs"][0], keep_pdf=False, dry_run=False,
+        )
+    finally:
+        if kind == "readonly-dir":
+            sib_dir.chmod(0o755)
+
+    assert action is not None and action["status"] == "kept"
+    assert "sibling" in action["reason"]
+    assert pdf.read_bytes() == _SHARED_PDF
+    if kind == "absent-dir":
+        assert not (tmp_path / "typo").exists()
+    else:
+        assert not (sib_dir / "sibling.bib.lock").exists()

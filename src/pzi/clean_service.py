@@ -579,6 +579,10 @@ def quarantine_pdf(
     that read: on a real run the entry being removed is already gone, so an
     exclusion could only hide a live reference (a writer re-adding the same
     citekey, or a batch sibling entry that is not yet removed).
+
+    A bib that is absent or cannot be locked cannot be re-read, so the file is
+    kept with a reason. The lock is never taken on an absent bib: that would
+    create directories and a lock file at a configured path that may be a typo.
     """
     source = Path(str(pdf_path)).expanduser()
     if not pdf_file_present(str(source)):
@@ -606,7 +610,24 @@ def quarantine_pdf(
     lock_targets = sorted({bib_path, *recheck_bibs})
     with ExitStack() as locks:
         for path in lock_targets:
-            locks.enter_context(with_bib_lock(path, shared=False))
+            if recheck_bibs and not Path(path).exists():
+                return {
+                    "status": "kept",
+                    "source": str(source),
+                    "reason": f"could not verify references: {Path(path).name} "
+                    "does not exist",
+                }
+            try:
+                locks.enter_context(with_bib_lock(path, shared=False))
+            except OSError as exc:
+                if not recheck_bibs:
+                    raise
+                return {
+                    "status": "kept",
+                    "source": str(source),
+                    "reason": f"could not verify references: cannot lock "
+                    f"{Path(path).name}: {exc}",
+                }
         if recheck_bibs:
             # The caller's check ran before this lock, so a writer may have
             # committed a reference to this file in the gap. Decide on what the
