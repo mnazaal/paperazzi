@@ -379,14 +379,28 @@ def add_local_pdf(
         # (`_metadata_cascade_failure`); a provider that errored and was then
         # followed by one that supplied more than the PDF text is a recovery
         # and stays a warning.
-        if metadata_errors and not _provider_added_to_extraction(
-            base_record, extracted
-        ):
+        #
+        # A lookup that answered "not found" leaves the same unverified record,
+        # so it is refused too (owner decision 2026-11-25: strict means a
+        # provider verified the record, and nothing did).
+        if not _provider_added_to_extraction(base_record, extracted):
+            if metadata_errors:
+                return _add_planning.error_result(
+                    message="metadata provider error (--strict-metadata)",
+                    errors=list(metadata_errors),
+                    dry_run=dry_run,
+                    warnings=[],
+                    bib=bib,
+                )
             return _add_planning.error_result(
-                message="metadata provider error (--strict-metadata)",
-                errors=list(metadata_errors),
+                message="no metadata provider found this PDF (--strict-metadata)",
+                errors=[
+                    "every lookup answered but none found this paper; the record "
+                    "holds only text read from the PDF itself"
+                ],
                 dry_run=dry_run,
-                warnings=[],
+                warnings=["nothing was written: add it without --strict-metadata "
+                          "to keep the PDF's own metadata"],
                 bib=bib,
             )
         strict_failure = _add_planning.strict_metadata_failure(

@@ -796,3 +796,53 @@ def test_local_pdf_result_does_not_report_the_provider_name_as_a_field(
 
     assert len(added) == 1
     assert "metadata_provider" not in added[0]
+
+
+def test_local_pdf_strict_refuses_when_no_provider_found_it(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Strict mode refuses a record only the PDF's own text supports.
+
+    Every lookup answers cleanly with "not found"; the scraped title, DOI and
+    authors still pass the minimum-metadata check, but no provider verified any
+    of them (owner decision 2026-11-25).
+    """
+    import pzi.capture_local_pdf as clp
+
+    source_pdf = tmp_path / "paper.pdf"
+    source_pdf.write_bytes(b"%PDF-1.4\n")
+    papers_dir = tmp_path / "papers"
+    papers_dir.mkdir()
+    bib_path = tmp_path / "library.bib"
+    bib_path.write_text("")
+    scraped = {
+        "title": "Graph Parsers",
+        "doi": "10.1000/scraped",
+        "authors": ["Smith, Jane"],
+    }
+    monkeypatch.setattr(clp, "extract_pdf_metadata", lambda _p: dict(scraped))
+    monkeypatch.setattr(clp, "local_pdf_base_record", lambda **_kw: dict(scraped))
+    writes: list[dict] = []
+
+    def run(strict: bool) -> dict:
+        return clp.add_local_pdf(
+            bib={"name": "main", "path": str(bib_path),
+                 "papers_dir": str(papers_dir), "default": True},
+            raw_value=str(source_pdf),
+            record_overrides={},
+            dry_run=True,
+            server_url="http://127.0.0.1:1",
+            fetch_search=lambda *a, **kw: [],
+            ensure_citekey=lambda record, *a, **kw: {**record, "citekey": "key"},
+            add_record=lambda **kw: writes.append(kw) or {"status": "ok", "warnings": []},
+            strict_metadata=strict,
+        )
+
+    strict = run(True)
+    assert strict["status"] == "error"
+    assert "no metadata provider found this PDF" in strict["message"]
+    assert writes == []
+
+    lenient = run(False)
+    assert lenient["status"] == "ok"
+    assert len(writes) == 1
