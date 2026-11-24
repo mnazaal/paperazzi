@@ -531,6 +531,26 @@ def parse_file_field(value: str | None) -> list[str]:
     value is one path. (Zotero escapes a literal ``;`` in composites as
     a backslash-escaped ``;``, so composite values never reach this heuristic.)
     """
+    paths: list[str] = []
+    for parts, index in split_file_field(value):
+        component = parts[index] if index is not None else ":".join(parts)
+        cleaned = _unescape_file_component(component).strip()
+        if cleaned:
+            paths.append(cleaned)
+    return paths
+
+
+def split_file_field(value: str | None) -> list[tuple[list[str], int | None]]:
+    """The attachments of a ``file`` field as ``(components, path_index)``.
+
+    The one place that decides how a value splits, shared by
+    :func:`parse_file_field` and by callers that rewrite a path in place: the
+    ``;`` records (merged back into one when the split strands extensionless
+    fragments, see :func:`parse_file_field`), each record's ``:`` components,
+    and which component holds the path. ``path_index`` is ``None`` when the whole
+    record is the path (a bare path that itself contains a colon); components are
+    returned escaped, exactly as written.
+    """
     if not value or not value.strip():
         return []
     records = [r for r in _split_unescaped(value.strip(), ";") if r.strip()]
@@ -541,32 +561,35 @@ def parse_file_field(value: str | None) -> list[str]:
             not _FILE_EXTENSION_RE.search(record.strip()) for record in records
         ):
             records = [value.strip()]
-    paths: list[str] = []
+    out: list[tuple[list[str], int | None]] = []
     for record in records:
         if not record.strip():
             continue
         parts = _split_unescaped(record, ":")
+        index: int | None
         if len(parts) >= 3:
-            candidate = parts[1]
+            index = 1
         elif len(parts) == 2:
             # `:x.pdf` and `x.pdf:` are the degenerate forms JabRef collapses to
             # a bare link; anything else with one colon is a path containing one.
-            candidate = parts[1] if not parts[0].strip() else record
+            index = 1 if not parts[0].strip() else None
         else:
-            candidate = parts[0]
-        cleaned = _unescape_file_component(candidate).strip()
-        if not cleaned:
+            index = 0
+        component = parts[index] if index is not None else record
+        if not _unescape_file_component(component).strip():
             # `file.pdf::` — a producer wrote the separators but only filled the
             # description. JabRef collapses this to a bare link, so fall back to
             # the first component that has anything in it.
-            for part in parts:
-                fallback = _unescape_file_component(part).strip()
-                if fallback:
-                    cleaned = fallback
-                    break
-        if cleaned:
-            paths.append(cleaned)
-    return paths
+            index = next(
+                (
+                    i
+                    for i, part in enumerate(parts)
+                    if _unescape_file_component(part).strip()
+                ),
+                index,
+            )
+        out.append((parts, index))
+    return out
 
 
 def primary_pdf_path(value: str | None) -> str | None:

@@ -1068,3 +1068,97 @@ def test_a_duplicate_import_that_adds_a_file_is_still_written() -> None:
         before, after = _duplicate_import_bytes(td, None, f"{td}/lib/papers/x.pdf")
         assert after != before
         assert "x.pdf" in after.decode()
+
+
+def _import_source_file_value(
+    td: str, file_value: str, files: tuple[str, ...] = (), *, via_symlink: bool = False
+) -> tuple[str, list[Path]]:
+    """Import one entry carrying *file_value* from `td/real/inner/export.bib`.
+
+    *files* are created relative to `td/real/inner`. With *via_symlink* the source
+    path is given through a symlink `td/link` -> `td/real/inner`. Returns the
+    written `file` field and where each of its attachments lies on disk.
+    """
+    from pzi.bib_repository import read_bib_file
+    from pzi.bib_serialize import resolved_attachment_paths
+
+    lib = os.path.join(td, "lib")
+    papers = os.path.join(lib, "papers")
+    os.makedirs(papers)
+    bp = os.path.join(lib, "library.bib")
+    Path(bp).write_text("")
+    cp = os.path.join(td, "config.toml")
+    Path(cp).write_text(
+        MINIMAL_CONFIG_TOML.format(bib_path=bp, papers_dir=papers)
+        + 'pdf_file_path_style = "home"\n'
+    )
+    inner = Path(td, "real", "inner")
+    inner.mkdir(parents=True)
+    for name in files:
+        target = inner / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"%PDF-1.4\n")
+    (inner / "export.bib").write_text(
+        "@article{rel, title = {Relative}, author = {Doe, Jane},\n"
+        "  year = {2020}, doi = {10.1000/rel},\n"
+        "  file = {" + file_value + "}}\n"
+    )
+    source = inner / "export.bib"
+    if via_symlink:
+        Path(td, "link").symlink_to(inner)
+        source = Path(td, "link", "export.bib")
+    import_from_bibtex(config_path=cp, home_dir=td, source_path=str(source))
+    entry = read_bib_file(bp)["entries"][0]
+    located = [
+        Path(p).expanduser() for p in resolved_attachment_paths(entry, bp)
+    ]
+    return entry["fields"].get("file", ""), located
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        r":https\://example.com/x.pdf:PDF",
+        "https://example.com/x.pdf",
+        "Online:https\\://example.com/x.pdf:URL",
+        "file:///home/me/x.pdf",
+        r"C:\Users\me\x.pdf",
+        r"Full Text:C\:\\Users\\me\\x.pdf:application/pdf",
+    ],
+)
+def test_import_keeps_a_url_or_drive_path_attachment_byte_identical(value: str) -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        td = str(Path(raw).resolve())
+        written, _ = _import_source_file_value(td, value)
+        assert written == value
+
+
+def test_import_rewrites_the_path_component_not_an_equal_description() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        td = str(Path(raw).resolve())
+        written, located = _import_source_file_value(
+            td, "x.pdf:x.pdf:application/pdf", ("x.pdf",)
+        )
+        assert written.startswith("x.pdf:"), written
+        assert written.endswith(":application/pdf"), written
+        assert located == [Path(td, "real", "inner", "x.pdf")]
+        assert located[0].exists()
+
+
+def test_import_resolves_a_semicolon_bearing_filename_at_the_source() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        td = str(Path(raw).resolve())
+        name = "papers/Metric Elicitation; Moving.pdf"
+        _, located = _import_source_file_value(td, name, (name,))
+        assert [p.exists() for p in located] == [True], located
+
+
+def test_import_resolves_dotdot_as_the_kernel_does_through_a_symlinked_source() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        td = str(Path(raw).resolve())
+        Path(td, "real", "papers").mkdir(parents=True)
+        Path(td, "real", "papers", "x.pdf").write_bytes(b"%PDF-1.4\n")
+        _, located = _import_source_file_value(
+            td, "../papers/x.pdf", via_symlink=True
+        )
+        assert [p.exists() for p in located] == [True], located

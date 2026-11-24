@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict
 
@@ -11,11 +12,10 @@ from pzi.add_service import add_records_to_bib_batch
 from pzi.bib_repository import read_bib_file
 from pzi.bib_serialize import parse_bibtex_for_import, resolved_attachment_paths
 from pzi.bibtex import (
-    _split_unescaped,
     _unescape_file_component,
     bibtex_entry_to_record,
     escape_file_component,
-    parse_file_field,
+    split_file_field,
 )
 from pzi.config import DEFAULT_PDF_FILE_PATH_STYLE, BibResolutionFailure, load_bib_target
 from pzi.errors import REASON_CONFIG, REASON_UNAVAILABLE, REASON_USAGE, PziError
@@ -344,6 +344,25 @@ def import_from_bibtex(
     }
 
 
+# A URL (`https://`, `file://`, JabRef's `https\\://`, once unescaped) or a
+# Windows drive path is not relative to the source directory: keep it as spelled.
+_NOT_A_LOCAL_PATH_RE = re.compile(r"^(?:[A-Za-z][A-Za-z0-9+.-]+:|[A-Za-z]:[\\/])")
+
+
+def _resolve_like_the_kernel(source_dir: str, path: str) -> str:
+    """*path* made absolute against *source_dir*, resolving `..` as the kernel does.
+
+    `normpath` folds `..` lexically, which differs from the kernel when a
+    directory on the way is a symlink. The directory part is resolved with
+    `realpath` (symlinks first, then `..`); the last component is left as spelled.
+    """
+    joined = os.path.join(source_dir, path)
+    head, tail = os.path.split(joined)
+    if tail in ("", ".", ".."):
+        return os.path.realpath(joined)
+    return os.path.join(os.path.realpath(head), tail)
+
+
 def _with_source_resolved_attachments(entry: Any, source_dir: str) -> Any:
     """*entry* with each relative attachment path of its `file` field made absolute.
 
@@ -354,30 +373,30 @@ def _with_source_resolved_attachments(entry: Any, source_dir: str) -> Any:
     writer then formats a single path by `pdf_file_path_style`; a multi-attachment
     field stays as the source spelled it, now resolved.
 
-    A field this cannot split unambiguously (the count of records differs from
-    the count of paths) is returned untouched rather than guessed at.
+    The field is split by `split_file_field`, the same rule `parse_file_field`
+    reads it by, so the component rewritten is the one that is read as the path.
+    URLs, `file://` URIs and Windows drive paths are not relative paths and are
+    kept as spelled; a field with nothing to rewrite is returned untouched.
     """
     value = entry["fields"].get("file")
     if not value or not value.strip():
         return entry
-    records = [r for r in _split_unescaped(value.strip(), ";") if r.strip()]
-    paths = parse_file_field(value)
-    if len(records) != len(paths):
-        return entry
     rewritten: list[str] = []
-    for record, path in zip(records, paths):
-        if path.startswith(("/", "~")):
-            rewritten.append(record)
+    changed = False
+    for parts, index in split_file_field(value):
+        path = _unescape_file_component(
+            parts[index] if index is not None else ":".join(parts)
+        ).strip()
+        if not path or path.startswith(("/", "~")) or _NOT_A_LOCAL_PATH_RE.match(path):
+            rewritten.append(":".join(parts))
             continue
-        absolute = escape_file_component(os.path.normpath(os.path.join(source_dir, path)))
-        parts = _split_unescaped(record, ":")
-        for i, part in enumerate(parts):
-            if _unescape_file_component(part).strip() == path:
-                parts[i] = absolute
-                break
-        else:
-            parts = [absolute]  # a bare path that itself contains a colon
-        rewritten.append(":".join(parts))
+        changed = True
+        absolute = escape_file_component(_resolve_like_the_kernel(source_dir, path))
+        rewritten.append(absolute if index is None else ":".join(
+            absolute if i == index else part for i, part in enumerate(parts)
+        ))
+    if not changed:
+        return entry
     return {**entry, "fields": {**entry["fields"], "file": ";".join(rewritten)}}
 
 
