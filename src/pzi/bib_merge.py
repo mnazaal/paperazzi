@@ -381,8 +381,13 @@ def plan_bib_write(
     ):
         base_entry = existing_entries[match_index]
         entry = merge_projected_entry(base_entry, entry)
-    if source_entry is not None:
-        entry = _with_source_attachments(entry, source_entry)
+        # Only an entry gaining its *first* attachment takes the source's text.
+        # One that already names a file owns that field: swapping in the source
+        # text because the primaries matched destroyed the entry's own extra
+        # attachments, descriptions and relative spelling, and the plan still
+        # reported a duplicate with no changed fields.
+        if source_entry is not None and not (base_entry["fields"].get("file") or "").strip():
+            entry = _with_source_attachments(entry, source_entry)
     plan: WritePlan = {
         "action": "update",
         "index": match_index,

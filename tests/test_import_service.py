@@ -676,3 +676,73 @@ def test_import_merged_into_an_entry_with_its_own_file_keeps_that_file() -> None
         )
 
         assert written == own, written
+
+
+def test_import_onto_an_entry_with_a_composite_keeps_its_own_attachments() -> None:
+    """Matching primaries must not hand the entry's `file` field to the source.
+
+    The entry's Notes attachment, descriptions and mimetypes were replaced by
+    the source's `a.pdf;b.pdf`, and the run reported a skipped duplicate.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        first, second = _two_source_pdfs(td)
+        notes = os.path.join(td, "src", "n.txt")
+        Path(notes).write_text("notes")
+        own = f"Full Text PDF:{first}:application/pdf;Notes:{notes}:text/plain"
+        existing = (
+            "@article{dual, title = {Two Attachments}, author = {Doe, Jane},\n"
+            "  year = {2020}, doi = {10.1000/dual},\n"
+            "  file = {" + own + "}}\n"
+        )
+
+        _result, written = _import_dual_attachment(
+            td, f"{first};{second}", existing=existing
+        )
+
+        assert written == own, written
+
+
+def test_import_onto_an_entry_naming_the_same_primary_changes_nothing() -> None:
+    """A duplicate must not rewrite the entry, and the preview must agree."""
+    for dry_run in (True, False):
+        with tempfile.TemporaryDirectory() as td:
+            first, second = _two_source_pdfs(td)
+            existing = (
+                "@article{dual, title = {Two Attachments}, author = {Doe, Jane},\n"
+                "  year = {2020}, doi = {10.1000/dual},\n"
+                "  file = {" + first + "}}\n"
+            )
+            cp, bp, _pd = _setup_config(td)
+            Path(bp).write_text(existing)
+            src = os.path.join(td, "src", "export.bib")
+            Path(src).write_text(
+                existing.replace("{" + first + "}", "{" + f"{first};{second}" + "}")
+            )
+
+            result = import_from_bibtex(
+                config_path=cp, home_dir=td, source_path=src, dry_run=dry_run
+            )
+
+            assert result["skipped_duplicates"] == 1, (dry_run, result)
+            # The `file` field, not the bytes: a duplicate import re-lays-out the
+            # entry on the real run (pre-existing, recorded separately in PLAN).
+            from pzi.bib_repository import read_bib_file
+
+            written = read_bib_file(bp)["entries"][0]["fields"]["file"]
+            assert written == first, (dry_run, written)
+
+
+def test_import_keeps_a_multi_attachment_field_in_the_source_spelling() -> None:
+    """`pdf_file_path_style` folds a single path only; a composite stays verbatim.
+
+    Folding each component would mean rewriting another producer's escaping
+    (`plan_file_field_fold` refuses composites as lossy). So a two-attachment
+    entry under HOME keeps its absolute spelling while a one-attachment entry
+    is folded to `~/` — a deliberate, pinned difference.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        first, second = _two_source_pdfs(td)
+
+        _result, written = _import_dual_attachment(td, f"{first};{second}")
+
+        assert written == f"{first};{second}", written
