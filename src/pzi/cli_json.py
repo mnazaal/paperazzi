@@ -258,6 +258,7 @@ def merge_target_results(
     names: list[str] = []
     items: list[Any] = []
     extras: dict[str, Any] = {}
+    per_target: list[dict[str, Any]] = []
     multiple = len(results) > 1
 
     for selector, result in results:
@@ -300,8 +301,29 @@ def merge_target_results(
                 # /KeyError/RuntimeError, not AttributeError). The scalar-wins
                 # rule matches the branch below: the first result to report a
                 # key decides its shape.
+            elif key == "total" and _is_count(value) and _is_count(extras.get(key, 0)):
+                # Each library's match count; taking the first left `total`
+                # smaller than the items beside it.
+                extras[key] = extras.get(key, 0) + value
+            elif key == "summary" and isinstance(value, dict) and isinstance(
+                extras.get(key, {}), dict
+            ):
+                extras[key] = _merge_summaries(extras.get(key), value)
             else:
                 extras.setdefault(key, value)
+
+        if multiple:
+            # Where summing loses the split, keep it.
+            per_target.append(
+                {
+                    "bib_name": label,
+                    "status": result.get("status"),
+                    **{k: result[k] for k in ("total", "summary") if k in result},
+                }
+            )
+
+    if multiple and isinstance(extras.get("summary"), dict):
+        _rederive_summary_ratios(extras["summary"])
 
     return {
         "status": "ok" if ok else "error",
@@ -309,5 +331,44 @@ def merge_target_results(
         "items": items,
         "searched_bibs": names,
         **{k: v for k, v in extras.items() if k != "searched_bibs"},
+        **({"per_target": per_target} if multiple else {}),
         "command": command,
     }
+
+
+def _is_count(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _merge_summaries(
+    earlier: dict[str, Any] | None, later: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Add numeric counters; a non-numeric field keeps the first value seen.
+
+    The ratio fields (`resolve_rate`, `seconds_per_candidate`) are added here
+    too and recomputed from the summed counters afterwards, so the interim
+    value is never reported.
+    """
+    merged = dict(earlier) if earlier is not None else {}
+    for key, value in later.items():
+        if key not in merged:
+            merged[key] = value
+        elif _is_count(value) and _is_count(merged[key]):
+            merged[key] = merged[key] + value
+    return merged
+
+
+def _rederive_summary_ratios(summary: dict[str, Any]) -> None:
+    checked = summary.get("checked")
+    if not _is_count(checked) or not checked:
+        summary.pop("resolve_rate", None)
+        summary.pop("seconds_per_candidate", None)
+        return
+    if _is_count(summary.get("skipped_no_candidate")):
+        summary["resolve_rate"] = round(
+            (checked - summary["skipped_no_candidate"]) / checked, 3
+        )
+    if _is_count(summary.get("elapsed_seconds")):
+        summary["seconds_per_candidate"] = round(summary["elapsed_seconds"] / checked, 2)
+    if _is_count(summary.get("elapsed_seconds")):
+        summary["elapsed_seconds"] = round(summary["elapsed_seconds"], 1)
