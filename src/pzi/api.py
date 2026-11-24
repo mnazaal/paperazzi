@@ -262,6 +262,7 @@ class PromoteReport(TypedDict):
     keep_preprint: bool
     items: list[PromoteItem]
     summary: NotRequired[dict[str, Any]]
+    warnings: NotRequired[list[str]]
 
 
 class TagChangeReport(TypedDict):

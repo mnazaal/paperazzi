@@ -134,6 +134,7 @@ pzi.PromoteReport {
     items: list[PromoteItem]
     keep_preprint: bool
     summary: NotRequired[dict[str, Any]]
+    warnings: NotRequired[list[str]]
 }
 pzi.PziError(message: 'str', *, code: 'int' = 5, details: 'list[str] | None' = None, reason: 'str | None' = None) -> 'None'
 pzi.SearchMatch {

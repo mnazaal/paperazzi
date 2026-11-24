@@ -2371,3 +2371,33 @@ def test_reindex_passes_that_ignore_force_refuse_it(
     assert "--force applies to --rename-citekeys" in stdout.getvalue() + stderr.getvalue()
     assert bib_path.read_text() == before
     assert not list(tmp_path.glob("*.bak*"))
+
+
+def test_cli_update_promote_prints_run_level_warnings(tmp_path: Path) -> None:
+    """A failing credential command is named on stderr, not only in JSON."""
+
+    def fake_promote_bib(**kwargs):
+        return {
+            "status": "ok",
+            "bib_name": "ml",
+            "dry_run": kwargs["dry_run"],
+            "items": [],
+            "warnings": ["credential: unpaywall_email_cmd failed; continuing without it"],
+            "errors": [],
+        }
+
+    stdout = StringIO()
+    stderr = StringIO()
+    args = Namespace(
+        target=None, dry_run=False, keep_preprint=False, verbose=False, promote=True,
+    )
+    exit_code = run_update_command(
+        args,
+        home_dir=str(tmp_path),
+        config_path=str(tmp_path / "config.toml"),
+        stdout=stdout,
+        stderr=stderr,
+        promote_bib_fn=fake_promote_bib,
+    )
+    assert exit_code == 0
+    assert "warning: credential: unpaywall_email_cmd failed" in stderr.getvalue()
