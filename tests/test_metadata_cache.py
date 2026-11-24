@@ -115,3 +115,14 @@ def test_valid_json_of_the_wrong_shape_is_a_miss(tmp_path: Path, body: str) -> N
     path.write_text(body, encoding="utf-8")
 
     assert cache.get("https://example.org/paper") is None
+
+
+@pytest.mark.parametrize("sign", ["", "-"])
+def test_get_treats_an_integer_too_large_for_a_float_as_a_miss(tmp_path, sign: str) -> None:
+    """`math.isfinite` raises OverflowError on a huge JSON int; the file is a miss."""
+    cache = MetadataCache(tmp_path, 3600, clock=lambda: 1000.0)
+    cache._path_for("u", "").write_text(
+        '{"ts": ' + sign + "1" + "0" * 400 + ', "text": "x"}', encoding="utf-8"
+    )
+
+    assert cache.get("u") is None

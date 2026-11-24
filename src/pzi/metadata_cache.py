@@ -75,11 +75,18 @@ class MetadataCache:
         if (
             isinstance(ts, bool)
             or not isinstance(ts, (int, float))
-            or not math.isfinite(ts)
             or not isinstance(text, str)
         ):
             return None
-        if self._clock() - ts > self._ttl:
+        try:
+            # A JSON integer past the float range raises OverflowError here (and
+            # in the subtraction below); a corrupt cache file is a miss.
+            if not math.isfinite(ts):
+                return None
+            expired = self._clock() - ts > self._ttl
+        except OverflowError:
+            return None
+        if expired:
             with contextlib.suppress(OSError):
                 path.unlink()
             return None
