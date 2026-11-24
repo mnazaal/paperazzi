@@ -115,8 +115,11 @@ def test_redirect_names_dns_timeout_distinctly(monkeypatch) -> None:
     # and the operator both need to tell the two apart.
     monkeypatch.setattr(safe_http, "classify_public_http_url", lambda *a, **k: "dns-timeout")
     handler = safe_http._ValidatingRedirectHandler()
-    with pytest.raises(SsrfBlocked, match="DNS lookup timed out for slow.example"):
+    with pytest.raises(OSError, match="DNS lookup timed out for slow.example") as info:
         _redirect(handler, "https://slow.example/next")
+    # Retryable, like the connect-time timeout: a cold resolver on a doi.org ->
+    # publisher redirect must not end the fetch on its first attempt.
+    assert not isinstance(info.value, SsrfBlocked)
 
 
 def test_redirect_drops_api_key_when_host_changes(monkeypatch) -> None:

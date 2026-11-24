@@ -264,8 +264,10 @@ class _ValidatingRedirectHandler(urllib.request.HTTPRedirectHandler):
     ) -> urllib.request.Request | None:
         classification = classify_public_http_url(newurl, allow_host=self._allow_host)
         if classification == "dns-timeout":
+            # A slow resolver, not a blocked address: retryable, as the
+            # connect-time timeout in `_bounded_getaddrinfo` is.
             host = urllib.parse.urlsplit(newurl).hostname or newurl
-            raise SsrfBlocked(f"DNS lookup timed out for {host}")
+            raise socket.gaierror(socket.EAI_AGAIN, f"DNS lookup timed out for {host}")
         if classification != "public":
             raise SsrfBlocked(f"blocked redirect to non-public URL: {newurl}")
         new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
