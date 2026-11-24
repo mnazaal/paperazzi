@@ -328,6 +328,8 @@ def _run_batch(
                 # already captured was in the bib, and the user had no record of
                 # where to resume. Stop the loop, then report as usual.
                 interrupted = True
+                # This input was never attempted: it is outstanding too.
+                failures.extend(values[index:])
                 break
         try:
             result = capture_to_bib(
@@ -384,6 +386,9 @@ def _run_batch(
             print_metadata_diagnostics(result, stdout)
         items.append({"value": value, "status": result["status"], "result": result})
         if interrupted:
+            # The retry file must list everything outstanding: the interrupted
+            # input (already in `failures`) and every input after it.
+            failures.extend(values[index + 1:])
             break
 
     # `--dry-run` announces "nothing will be written" above, and the failures
