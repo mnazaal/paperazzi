@@ -122,8 +122,15 @@ def _output_alias_refusal(
     report_path: str | None,
     jsonl_path: str | None,
     libraries: list[tuple[str, str | None, bool]],
+    *,
+    after_audit: bool = False,
 ) -> str | None:
-    """Why an output may not be written, or None: it names a library or the other output."""
+    """Why an output may not be written, or None: it names a library or the other output.
+
+    *after_audit* is the late re-check, run once a target that did not resolve
+    before the audit does: by then `--jsonl -` has already streamed to stdout.
+    """
+    streamed = after_audit and jsonl_path == "-"
     for flag, path in (("--report", report_path), ("--jsonl", jsonl_path)):
         if not path:
             continue
@@ -136,9 +143,16 @@ def _output_alias_refusal(
             if path == "-":
                 # By the time pzi runs, a shell `>` has already truncated the
                 # file; "would overwrite" would tell the user it is intact.
+                # The late re-check runs after `--jsonl -` has streamed, so
+                # "nothing was written" would be false there.
+                written = (
+                    "the --jsonl stream was already written to it"
+                    if streamed
+                    else "nothing was written"
+                )
                 return (
                     f"{flag} - writes to stdout, which is the library"
-                    f"{f' {name}' if name else ''}; nothing was written — if stdout"
+                    f"{f' {name}' if name else ''}; {written} — if stdout"
                     " was redirected with `>`, the shell has already emptied that"
                     " file, so restore it from a backup"
                 )
@@ -374,7 +388,9 @@ def run_check_command(
         libraries, _resolved = _libraries_this_run_could_read(
             config_path=config_path, home_dir=home_dir, bib_selector=bib_selector
         )
-        refusal = _output_alias_refusal(report_path, jsonl_path, libraries)
+        refusal = _output_alias_refusal(
+            report_path, jsonl_path, libraries, after_audit=True
+        )
         if refusal is not None:
             return emit_usage_error(
                 args, refusal, command_path=("library", "check"),

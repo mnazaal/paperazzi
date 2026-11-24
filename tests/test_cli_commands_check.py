@@ -820,7 +820,16 @@ def test_stdout_is_compared_by_descriptor_not_by_dev_stdout(
             raise FileNotFoundError(path)
         return real_stat(path, *args, **kwargs)
 
+    real_realpath = os.path.realpath
+
+    def unresolved_dev_stdout(path, *args, **kwargs):
+        # A missing link cannot be resolved through /proc/self/fd/1 either.
+        if str(path) == "/dev/stdout":
+            return "/dev/stdout"
+        return real_realpath(path, *args, **kwargs)
+
     monkeypatch.setattr(os, "stat", no_dev_stdout)
+    monkeypatch.setattr(os.path, "realpath", unresolved_dev_stdout)
     saved = os.dup(1)
     fd = os.open(bib, os.O_WRONLY | os.O_APPEND)
     try:
@@ -836,3 +845,41 @@ def test_stdout_is_compared_by_descriptor_not_by_dev_stdout(
     assert code == exit_codes.USAGE, err
     assert "which is the library" in err
     assert bib.read_text(encoding="utf-8") == LIBRARY
+
+
+def test_a_late_stdout_refusal_says_the_stream_was_already_written(
+    tmp_path: Path,
+) -> None:
+    """After the audit, `--jsonl -` has streamed; "nothing was written" was false.
+
+    fd 1 is library `a` (as `>> a.bib`), no default exists until the audit
+    runs, so only the late re-check can see that stdout is a library.
+    """
+    import os
+
+    first, second = _two_libraries(tmp_path)
+    config = _write_config(tmp_path, [("a", first), ("b", second)])
+
+    def config_gains_a_default(**kw):
+        _write_config(tmp_path, [("a", first), ("b", second)], default="a")
+        result = _many(1)
+        result["bib_name"] = "a"
+        for index, item in enumerate(result["items"], start=1):
+            kw["on_item"](item, index, len(result["items"]))
+        return result
+
+    saved = os.dup(1)
+    fd = os.open(first, os.O_WRONLY | os.O_APPEND)
+    try:
+        os.dup2(fd, 1)
+        code, _out, err = _run_configured(
+            tmp_path, _args(jsonl="-"), config_gains_a_default, config=config
+        )
+    finally:
+        os.dup2(saved, 1)
+        os.close(saved)
+        os.close(fd)
+
+    assert code == exit_codes.USAGE, err
+    assert "already written" in err
+    assert "nothing was written" not in err
