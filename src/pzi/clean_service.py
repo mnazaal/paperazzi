@@ -823,8 +823,8 @@ def clean_library(
                 shown += f"; and {more} more"
             return _skip_quarantine(
                 validation,
-                f"{target_name} has {len(target_notes)} entr(ies) pzi cannot fully "
-                f"read ({shown}); fix them first",
+                f"{target_name} has {len(target_notes)} problem(s) pzi cannot fully "
+                f"read past ({shown}); fix them first",
             )
 
         # An other library that is not there cannot prove the PDF unreferenced,
