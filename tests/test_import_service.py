@@ -1203,3 +1203,32 @@ def test_a_plain_relative_attachment_keeps_a_symlinked_source_dir_spelling(
 
     assert resolved == str(home / "src" / "papers" / "x.pdf")
     assert Path(resolved).exists()
+
+
+@pytest.mark.parametrize(
+    "value",
+    [r":doi\:10.1000/xyz:URL", "mailto:a@b.org", r"PDF:mailto\:a@b.org:URL", "tel:+123"],
+)
+def test_a_uri_with_no_slash_is_kept_as_written(value: str) -> None:
+    """`doi:`/`mailto:` URIs look like colon filenames; no such file means a URI."""
+    with tempfile.TemporaryDirectory() as raw:
+        td = str(Path(raw).resolve())
+        written, _ = _import_source_file_value(td, value)
+        assert written == value
+
+
+def test_a_dotdot_attachment_keeps_a_symlinked_home_spelling(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """`..` resolved by the kernel, but spelled lexically when that is the same file."""
+    real = tmp_path / "realhome"
+    (real / "src").mkdir(parents=True)
+    (real / "pp").mkdir()
+    (real / "pp" / "x.pdf").write_bytes(b"%PDF-1.4\nx")
+    home = tmp_path / "home"
+    home.symlink_to(real)
+    from pzi.import_service import _resolve_like_the_kernel
+
+    resolved = _resolve_like_the_kernel(str(home / "src"), "../pp/x.pdf")
+
+    assert resolved == str(home / "pp" / "x.pdf")

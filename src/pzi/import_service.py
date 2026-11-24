@@ -350,6 +350,7 @@ def import_from_bibtex(
 # slash. A colon NOT followed by a slash is part of a filename
 # (`arXiv\\:2101.00001.pdf`, `doi:10.1000/x.pdf`) and that path is resolved.
 _NOT_A_LOCAL_PATH_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*\\?:[\\/]")
+_URI_LIKE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
 
 
 def _resolve_like_the_kernel(source_dir: str, path: str) -> str:
@@ -367,8 +368,19 @@ def _resolve_like_the_kernel(source_dir: str, path: str) -> str:
         return os.path.normpath(joined)
     head, tail = os.path.split(joined)
     if tail in ("", ".", ".."):
-        return os.path.realpath(joined)
-    return os.path.join(os.path.realpath(head), tail)
+        kernel = os.path.realpath(joined)
+    else:
+        kernel = os.path.join(os.path.realpath(head), tail)
+    # Keep the lexical spelling whenever it names the same file: `realpath`
+    # also expands a symlinked HOME, which put the path outside `~` and lost
+    # the configured home style.
+    lexical = os.path.normpath(joined)
+    try:
+        if os.path.samefile(lexical, kernel):
+            return lexical
+    except OSError:
+        pass
+    return kernel
 
 
 def _with_source_resolved_attachments(entry: Any, source_dir: str) -> Any:
@@ -398,8 +410,16 @@ def _with_source_resolved_attachments(entry: Any, source_dir: str) -> Any:
         if not path or path.startswith(("/", "~")) or _NOT_A_LOCAL_PATH_RE.match(path):
             rewritten.append(":".join(parts))
             continue
+        resolved = _resolve_like_the_kernel(source_dir, path)
+        # `scheme:rest` with no slash is either a URI (`mailto:`, `doi:10.1/x`)
+        # or a filename with a colon (`arXiv:2101.00001.pdf`). Spelling cannot
+        # tell them apart; the source directory can. Resolved only when that
+        # file is there, otherwise kept as written, as every URI was before.
+        if _URI_LIKE_RE.match(path) and not os.path.exists(resolved):
+            rewritten.append(":".join(parts))
+            continue
         changed = True
-        absolute = escape_file_component(_resolve_like_the_kernel(source_dir, path))
+        absolute = escape_file_component(resolved)
         rewritten.append(absolute if index is None else ":".join(
             absolute if i == index else part for i, part in enumerate(parts)
         ))
