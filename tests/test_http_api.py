@@ -1468,3 +1468,66 @@ def test_browser_download_crashed_session_is_503(tmp_path: Path) -> None:
     finally:
         server.shutdown()
         server.server_close()
+
+
+def _post_raw(port: int, path: str, raw: bytes) -> tuple[int, dict]:
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}{path}",
+        data=raw,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read().decode("utf-8"))
+
+
+_TWO_LIBRARY_ENTRY = "@article{shared,\n  title = {From %s},\n  year = {2024},\n}\n"
+
+
+def _serve_two_libraries(tmp_path: Path):
+    a, b = tmp_path / "a.bib", tmp_path / "b.bib"
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'[[bibs]]\nname = "a"\npath = "{a}"\ndefault = true\n'
+        f'[[bibs]]\nname = "b"\npath = "{b}"\n'
+    )
+    a.write_text(_TWO_LIBRARY_ENTRY % "A")
+    b.write_text(_TWO_LIBRARY_ENTRY % "B")
+    return a, b, _serve_once(config_path, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b'{"citekey":"shared","bib":"a","bib":"b","force":true}',
+        b'{"citekey":"shared","bib":"a","bib":"a","force":true}',
+        b'{"citekey":"shared","force":true,"extra":{"k":1,"k":2}}',
+        b'{"citekey":"shared","force":true,"extra":[{"k":1,"k":2}]}',
+    ],
+)
+def test_duplicate_json_key_is_400_and_deletes_nothing(tmp_path: Path, raw: bytes) -> None:
+    a, b, (port, _thread, server) = _serve_two_libraries(tmp_path)
+    try:
+        status, payload = _post_raw(port, "/delete", raw)
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert status == 400
+    assert "duplicate" in payload["error"].lower()
+    assert "shared" in a.read_text() and "shared" in b.read_text()
+
+
+def test_json_body_without_a_repeated_key_still_dispatches(tmp_path: Path) -> None:
+    a, b, (port, _thread, server) = _serve_two_libraries(tmp_path)
+    try:
+        status, _payload = _post_raw(
+            port, "/delete", b'{"citekey":"shared","bib":"b","force":true}'
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert status == 200
+    assert "shared" in a.read_text() and "shared" not in b.read_text()

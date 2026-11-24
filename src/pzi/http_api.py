@@ -722,6 +722,24 @@ def _read_body_with_deadline(
     return b"".join(chunks)
 
 
+class _DuplicateJsonKey(ValueError):
+    """A request object repeated a key; plain ``json.loads`` keeps the last."""
+
+
+def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """``object_pairs_hook`` refusing a repeated key at any depth.
+
+    Last-wins let ``{"bib":"a","bib":"b"}`` pass a check on one reading of the
+    body and act on the other.
+    """
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise _DuplicateJsonKey(key)
+        result[key] = value
+    return result
+
+
 def _handle_post(
     request: PziRequestHandler,
     config_path: str,
@@ -795,7 +813,14 @@ def _handle_post(
         _respond(request, status, response_body, security)
         return
     try:
-        body: Any = json.loads(raw.decode("utf-8")) if raw else {}
+        body: Any = (
+            json.loads(raw.decode("utf-8"), object_pairs_hook=_reject_duplicate_keys)
+            if raw
+            else {}
+        )
+    except _DuplicateJsonKey as exc:
+        _respond(request, 400, {"error": f"duplicate JSON key: {exc}"}, security)
+        return
     except (json.JSONDecodeError, UnicodeDecodeError):
         _respond(request, 400, {"error": "invalid JSON body"}, security)
         return
