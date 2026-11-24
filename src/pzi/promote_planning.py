@@ -124,7 +124,9 @@ def find_published_candidate_with_diagnostics(
         timings.append(("translation_server", time.monotonic() - _started))
     translation_candidates = _translation_candidates(results)
     candidate = _select_best_published_candidate(record, translation_candidates, gate)
-    if candidate is not None:
+    # A translator hit the gate would reject is not an answer: keep it for the
+    # final selection and diagnostics, but let the fallback providers run.
+    if candidate is not None and (gate is None or gate.accepts(record, candidate)):
         return {
             "candidate": candidate,
             "provider_errors": provider_errors,
@@ -152,7 +154,8 @@ def find_published_candidate_with_diagnostics(
     # `_select_best_published_candidate`), and DBLP/OpenReview still follow the
     # polite-pool providers as the CS-conference / ML-venue authorities that
     # confirm proceedings versions the DOI-based sources leave unresolved.
-    provider_candidates: list[NormalizedRecord] = []
+    #: Starts with the translator's candidates, which were rejected above.
+    provider_candidates: list[NormalizedRecord] = list(translation_candidates)
     # Overrides keyed by name so the shared cascade (`pzi.provider_cascade`)
     # decides order and membership; this function only decides which override,
     # if any, replaces a given provider's live fetcher.

@@ -227,3 +227,54 @@ def test_selection_falls_back_to_ranking_when_nothing_is_acceptable():
 
     assert chosen is not None
     assert chosen["title"] == _PUBLISHED["title"]
+
+
+def _run_with_translator(answers, *, translator, gate=_GATE):
+    asked: list[str] = []
+
+    def _provider(name):
+        def fn(title):
+            asked.append(name)
+            return answers.get(name)
+        return fn
+
+    result = find_published_candidate_with_diagnostics(
+        record=_PREPRINT,
+        server_url="http://localhost:1969",
+        fetch_search=lambda query, *, server_url: translator,
+        fetch_crossref=_provider("crossref"),
+        fetch_openalex=_provider("openalex"),
+        fetch_dblp=_provider("dblp"),
+        fetch_openreview=_provider("openreview"),
+        fetch_s2=lambda title: (asked.append("s2"), (None, None))[1],
+        s2_api_key=None,
+        best_of=1,
+        gate=gate,
+    )
+    return result, asked
+
+
+def test_promotion_falls_back_after_wrong_translator_answer():
+    """A translator hit the gate would reject must not end the search."""
+    result, asked = _run_with_translator(
+        {"crossref": _PUBLISHED}, translator=[{"record": _WRONG_PAPER}]
+    )
+
+    assert asked[0] == "crossref"
+    assert result["candidate"]["title"] == _PREPRINT["title"]
+
+
+def test_rejected_translator_candidate_stays_diagnosable_when_nothing_better_exists():
+    result, asked = _run_with_translator({}, translator=[{"record": _WRONG_PAPER}])
+
+    assert asked == list(_PROVIDER_ORDER)
+    assert result["candidate"]["title"] == _WRONG_PAPER["title"]
+
+
+def test_accepted_translator_hit_still_short_circuits():
+    result, asked = _run_with_translator(
+        {"crossref": _WRONG_PAPER}, translator=[{"record": _PUBLISHED}]
+    )
+
+    assert asked == []
+    assert result["candidate"]["venue"] == "Proceedings of ACL"
