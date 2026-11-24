@@ -926,3 +926,80 @@ def test_a_programming_error_in_the_warning_step_is_not_swallowed(monkeypatch) -
         )
         with pytest.raises(TypeError, match="a bug"):
             import_from_bibtex(config_path=cp, home_dir=td, source_path=src)
+
+
+def _import_with_relative_source(td: str, file_value: str, style: str) -> str:
+    """Import an entry whose `file` is relative to a source dir distinct from the library's.
+
+    Returns the written `file` field. The library sits in `td/lib`, the source
+    in `td/source`, so a field resolved at the destination points nowhere.
+    """
+    from pzi.bib_repository import read_bib_file
+
+    lib = os.path.join(td, "lib")
+    papers = os.path.join(lib, "papers")
+    os.makedirs(papers)
+    bp = os.path.join(lib, "library.bib")
+    Path(bp).write_text("")
+    cp = os.path.join(td, "config.toml")
+    Path(cp).write_text(
+        MINIMAL_CONFIG_TOML.format(bib_path=bp, papers_dir=papers)
+        + f'pdf_file_path_style = "{style}"\n'
+    )
+    src_dir = os.path.join(td, "source")
+    os.makedirs(os.path.join(src_dir, "papers"))
+    for name in ("original.pdf", "second.pdf"):
+        Path(src_dir, "papers", name).write_bytes(b"%PDF-1.4\n" + name.encode())
+    src = os.path.join(src_dir, "export.bib")
+    Path(src).write_text(
+        "@article{rel, title = {Relative}, author = {Doe, Jane},\n"
+        "  year = {2020}, doi = {10.1000/rel},\n"
+        "  file = {" + file_value + "}}\n"
+    )
+    import_from_bibtex(config_path=cp, home_dir=td, source_path=src)
+    return read_bib_file(bp)["entries"][0]["fields"].get("file", "")
+
+
+def _located(td: str, written: str, bib_dir: str) -> list[Path]:
+    from pzi.bibtex import parse_file_field
+
+    out = []
+    for p in parse_file_field(written):
+        p = p.replace("~", td, 1) if p.startswith("~") else p
+        out.append((Path(bib_dir) / p).resolve())
+    return out
+
+
+@pytest.mark.parametrize("style", ["home", "relative", "absolute"])
+def test_import_resolves_a_relative_attachment_at_the_source(style: str) -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        td = str(Path(raw).resolve())
+        written = _import_with_relative_source(td, "papers/original.pdf", style)
+        target = Path(td, "source", "papers", "original.pdf").resolve()
+        assert _located(td, written, os.path.join(td, "lib")) == [target], written
+
+
+def test_import_resolves_every_relative_component_of_a_composite_at_the_source() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        td = str(Path(raw).resolve())
+        written = _import_with_relative_source(
+            td,
+            "Full Text:papers/original.pdf:application/pdf;"
+            "Extra:papers/second.pdf:application/pdf",
+            "home",
+        )
+        base = Path(td, "source", "papers")
+        assert written == (
+            f"Full Text:{base}/original.pdf:application/pdf;"
+            f"Extra:{base}/second.pdf:application/pdf"
+        ), written
+
+
+def test_import_resolves_a_relative_multi_attachment_field_and_keeps_its_spelling() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        td = str(Path(raw).resolve())
+        written = _import_with_relative_source(
+            td, "papers/original.pdf;papers/second.pdf", "home"
+        )
+        base = Path(td, "source", "papers")
+        assert written == f"{base}/original.pdf;{base}/second.pdf", written

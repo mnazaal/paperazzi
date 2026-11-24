@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict
 
@@ -9,7 +10,13 @@ from pzi.add_planning import batch_status
 from pzi.add_service import add_records_to_bib_batch
 from pzi.bib_repository import read_bib_file
 from pzi.bib_serialize import parse_bibtex_for_import, resolved_attachment_paths
-from pzi.bibtex import bibtex_entry_to_record
+from pzi.bibtex import (
+    _split_unescaped,
+    _unescape_file_component,
+    bibtex_entry_to_record,
+    escape_file_component,
+    parse_file_field,
+)
 from pzi.config import DEFAULT_PDF_FILE_PATH_STYLE, BibResolutionFailure, load_bib_target
 from pzi.errors import REASON_CONFIG, REASON_UNAVAILABLE, REASON_USAGE, PziError
 from pzi.fileio import read_text_utf8
@@ -128,7 +135,13 @@ def import_from_bibtex(
     seen_citekeys: set[str] = set()
     skipped_in_source = 0
 
+    # Only a source file has a directory to resolve against; text read from
+    # stdin has none, and no base is documented for it, so it is left as written.
+    source_dir = os.path.dirname(os.path.abspath(source_path)) if source_text is None else None
+
     for entry in source_entries:
+        if source_dir is not None:
+            entry = _with_source_resolved_attachments(entry, source_dir)
         citekey = entry.get("citekey", "")
         if citekey in seen_citekeys:
             skipped_in_source += 1
@@ -329,6 +342,43 @@ def import_from_bibtex(
         "skipped_errors": skipped_errors,
         "results": results,
     }
+
+
+def _with_source_resolved_attachments(entry: Any, source_dir: str) -> Any:
+    """*entry* with each relative attachment path of its `file` field made absolute.
+
+    A relative path means "relative to the file it was written in", and the
+    destination library is somewhere else, so the path is resolved here, at the
+    source. Only the path component of each attachment is rewritten: Zotero and
+    JabRef descriptions, mimetypes and the `;` joins are kept as spelled. The
+    writer then formats a single path by `pdf_file_path_style`; a multi-attachment
+    field stays as the source spelled it, now resolved.
+
+    A field this cannot split unambiguously (the count of records differs from
+    the count of paths) is returned untouched rather than guessed at.
+    """
+    value = entry["fields"].get("file")
+    if not value or not value.strip():
+        return entry
+    records = [r for r in _split_unescaped(value.strip(), ";") if r.strip()]
+    paths = parse_file_field(value)
+    if len(records) != len(paths):
+        return entry
+    rewritten: list[str] = []
+    for record, path in zip(records, paths):
+        if path.startswith(("/", "~")):
+            rewritten.append(record)
+            continue
+        absolute = escape_file_component(os.path.normpath(os.path.join(source_dir, path)))
+        parts = _split_unescaped(record, ":")
+        for i, part in enumerate(parts):
+            if _unescape_file_component(part).strip() == path:
+                parts[i] = absolute
+                break
+        else:
+            parts = [absolute]  # a bare path that itself contains a colon
+        rewritten.append(":".join(parts))
+    return {**entry, "fields": {**entry["fields"], "file": ";".join(rewritten)}}
 
 
 def _unmerged_attachment_warnings(
