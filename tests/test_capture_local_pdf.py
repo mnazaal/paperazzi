@@ -687,3 +687,61 @@ def test_local_pdf_batch_preview_matches_real_run_on_citekey_collision(
     assert actual[0]["pdf_path"] != actual[1]["pdf_path"]
     assert Path(actual[0]["pdf_path"]).read_bytes().endswith(b"0")
     assert Path(actual[1]["pdf_path"]).read_bytes().endswith(b"1")
+
+
+def test_local_pdf_strict_accepts_a_title_search_that_confirms_the_pdf(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A provider that answered verified the record, even if it added nothing.
+
+    The DOI lookup failed; the title search then returned exactly the title, DOI
+    and authors the PDF's own text gave. That is a provider confirming the
+    metadata, and the DOI/URL branch accepts it. Judged by "did it add a key",
+    a hit with no item type looked like no answer at all and was refused.
+    """
+    import pzi.capture_local_pdf as clp
+
+    source_pdf = tmp_path / "paper.pdf"
+    source_pdf.write_bytes(b"%PDF-1.4\n")
+    papers_dir = tmp_path / "papers"
+    papers_dir.mkdir()
+    bib_path = tmp_path / "library.bib"
+    bib_path.write_text("")
+    same = {"title": "Graph Parsers", "doi": "10.1000/paper", "authors": ["Smith, Jane"]}
+    monkeypatch.setattr(clp, "extract_pdf_metadata", lambda _p: dict(same))
+
+    def down(*_a, **_k):
+        raise OSError("provider down")
+
+    original = clp.local_pdf_base_record
+    monkeypatch.setattr(
+        clp, "local_pdf_base_record",
+        lambda **kw: original(**{**kw, "fetch_record": down}),
+    )
+    added: list[dict] = []
+
+    def _add_record(**kw):
+        added.append(dict(kw["record"]))
+        return {"status": "ok", "action": "insert", "message": "insert entry",
+                "warnings": [], "errors": []}
+
+    def search(query, **_k):
+        assert query == "Graph Parsers"
+        return [{"record": dict(same)}]
+
+    result = clp.add_local_pdf(
+        bib={"name": "main", "path": str(bib_path),
+             "papers_dir": str(papers_dir), "default": True},
+        raw_value=str(source_pdf),
+        record_overrides={},
+        dry_run=False,
+        server_url="http://127.0.0.1:1",
+        fetch_search=search,
+        ensure_citekey=lambda record, existing, **_kw: {**record, "citekey": "k"},
+        add_record=_add_record,
+        strict_metadata=True,
+    )
+
+    assert result["status"] == "ok", result
+    assert len(added) == 1
+    assert added[0]["title"] == "Graph Parsers"

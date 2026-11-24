@@ -146,6 +146,10 @@ def _provider_added_to_extraction(
     the file when every lookup fails, so a record that holds only those values
     was verified by nothing.
     """
+    # A provider that answered names itself, even when its answer only confirms
+    # the PDF's own fields; only the scraped fallback carries no name.
+    if base_record.get("metadata_provider"):
+        return True
     raw_doi = extracted.get("doi")
     scraped: dict[str, object] = {}
     title = extracted.get("title")
@@ -197,6 +201,10 @@ def _adopt_title_search_hit(
     # As the DOI and URL paths already do: without it every conference paper
     # captured from a local PDF became `@article` with `journal = {proceedings}`.
     carry_item_type(record, selected)
+    # Named as `fetch_record_for_input` names its title-search winner. Strict
+    # mode reads it: a hit that only confirms what the PDF text said is still a
+    # provider's answer, and without the name it looked like no answer at all.
+    record["metadata_provider"] = "translation_server"
     return cast(NormalizedRecord, record)
 
 
