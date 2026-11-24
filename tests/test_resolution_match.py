@@ -44,12 +44,14 @@ def test_venue_mismatch_flagged() -> None:
 
 
 def test_multi_source_bonus_applied() -> None:
-    entry = _rec("Some Title Here", ["Smith, Jane"])
-    cand = _rec("Some Title Here", ["Smith, Jane"])
+    # A venue mismatch (-15) keeps the score below the 100 cap, so the +10
+    # bonus is visible; the oracle is the documented weight, not the code.
+    entry = _rec("Some Title Here", ["Smith, Jane"], venue="Nature")
+    cand = _rec("Some Title Here", ["Smith, Jane"], venue="Science")
     one = score_match(entry, cand, author_sources=1)["score"]
     two = score_match(entry, cand, author_sources=2)["score"]
-    # Bonus only matters when not already capped at 100.
-    assert two >= one
+    assert one == 85
+    assert two == one + 10
 
 
 def test_swapped_authors_flagged_not_chimeric() -> None:

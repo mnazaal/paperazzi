@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 
 import pzi.cli as cli
-import pzi.commands.export as export_command
 from pzi import exit_codes
 from pzi.capture_models import CaptureInput, CaptureOptions, PdfCandidate
 from pzi.cli import run_cli
@@ -109,13 +108,10 @@ def test_the_help_listing_names_every_command_and_no_others() -> None:
     )
 
 
-def test_pdf_runner_name_matches_command_scope() -> None:
-    assert hasattr(cli, "_run_pdf")
-    assert not hasattr(cli, "_run_pdf_retry")
-
-
-def test_export_runner_lives_in_command_module() -> None:
-    assert cli._run_export is export_command.run_export_command
+def test_pdf_is_one_command_with_retry_as_a_subcommand() -> None:
+    names = _parser_command_names(build_parser())
+    assert "pdf" in names
+    assert not {n for n in names if n.startswith("pdf") and n != "pdf"}
 
 
 def test_import_runner_lives_in_command_module() -> None:
