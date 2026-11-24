@@ -484,3 +484,147 @@ def test_unwritable_download_dir_keeps_the_earlier_stage_errors(
     assert "direct download: " in error
     assert "browser_pdf_cmd: no PDF returned" in error
     assert "desktop download dir unavailable: " in error
+
+
+# ── Characterization of the write-and-return step shared by three rungs ──
+#
+# The server-browser, browser_pdf_cmd and FlareSolverr rungs each validate the
+# bytes, record a stage error, and write the file. Pinned per rung so the
+# duplicated block can be shared without changing a message or a return value.
+
+_PDF_BYTES = b"%PDF-1.7\nfallback-stage-bytes"
+_URL = "https://publisher.example/paper.pdf"
+_FLARE_WARNING_PREFIX = "PDF downloaded via FlareSolverr"
+
+
+def _run_rung(monkeypatch, tmp_path: Path, rung: str, payload: bytes | None, *, server_errors=()):
+    """Run the chain with only *rung* able to answer, and everything else dead."""
+    import pzi.browser_pdf
+    import pzi.flaresolverr
+    import pzi.server_browser
+    from pzi.pdf_planning import PdfFallbackSettings
+
+    kwargs: dict = {}
+    hook_errors = list(server_errors)
+
+    def server(api_url, url, *, auth_token=None, errors=None):
+        if rung == "server":
+            if errors is not None:
+                errors.extend(hook_errors)
+            return payload
+        return None
+
+    def hook(*, command, pdf_url, errors=None):
+        if rung == "hook":
+            if errors is not None:
+                errors.extend(hook_errors)
+            return payload
+        return None
+
+    def flare(url, *, server_url):
+        return payload if rung == "flaresolverr" else None
+
+    monkeypatch.setattr(pzi.server_browser, "download_via_server_api", server)
+    monkeypatch.setattr(pzi.browser_pdf, "download_pdf_with_browser", hook)
+    monkeypatch.setattr(pzi.flaresolverr, "fetch_pdf_via_flaresolverr", flare)
+    kwargs["api_url"] = "http://127.0.0.1:1"
+    kwargs["browser_pdf_cmd"] = "stub-hook"
+    kwargs["flaresolverr_url"] = "http://flare.invalid"
+    return fetch_and_store_pdf_with_fallbacks(
+        url=_URL,
+        papers_dir=str(tmp_path / "papers"),
+        citekey="stage2024",
+        fetch_binary=lambda url: (b"<html>blocked</html>", "text/html"),
+        settings=PdfFallbackSettings(disable_desktop_browser=True),
+        desktop_fallback_hosts=set(),
+        **kwargs,
+    )
+
+
+@pytest.mark.parametrize("rung", ["server", "hook", "flaresolverr"])
+def test_fallback_rung_success_writes_exact_bytes(monkeypatch, tmp_path: Path, rung: str) -> None:
+    path, warning, error = _run_rung(monkeypatch, tmp_path, rung, _PDF_BYTES)
+
+    assert error is None
+    assert path == str(tmp_path / "papers" / "stage2024.pdf")
+    assert Path(path).read_bytes() == _PDF_BYTES
+    if rung == "flaresolverr":
+        assert warning is not None and warning.startswith(_FLARE_WARNING_PREFIX)
+    else:
+        assert warning is None
+
+
+@pytest.mark.parametrize(
+    ("rung", "label"),
+    [("server", "server browser"), ("hook", "browser_pdf_cmd"), ("flaresolverr", "FlareSolverr")],
+)
+def test_fallback_rung_rejects_non_pdf_bytes_and_writes_nothing(
+    monkeypatch, tmp_path: Path, rung: str, label: str
+) -> None:
+    path, warning, error = _run_rung(monkeypatch, tmp_path, rung, b"<html>not a pdf</html>")
+
+    assert path is None and warning is None
+    assert error is not None
+    assert f"{label}: response was not a PDF" in error
+    assert not (tmp_path / "papers" / "stage2024.pdf").exists()
+
+
+@pytest.mark.parametrize(
+    ("rung", "expected"),
+    [
+        ("server", "server browser: no PDF returned"),
+        ("hook", "browser_pdf_cmd: no PDF returned"),
+        ("flaresolverr", "FlareSolverr: no PDF returned"),
+    ],
+)
+def test_fallback_rung_empty_answer_names_the_stage(
+    monkeypatch, tmp_path: Path, rung: str, expected: str
+) -> None:
+    path, _warning, error = _run_rung(monkeypatch, tmp_path, rung, None)
+
+    assert path is None
+    assert error is not None and expected in error
+
+
+@pytest.mark.parametrize(
+    ("rung", "expected"),
+    [
+        ("server", "server browser: tls handshake failed"),
+        ("hook", "browser_pdf_cmd: could not start interpreter"),
+    ],
+)
+def test_fallback_rung_reports_its_own_error_detail(
+    monkeypatch, tmp_path: Path, rung: str, expected: str
+) -> None:
+    detail = expected.split(": ", 1)[1]
+    _path, _warning, error = _run_rung(monkeypatch, tmp_path, rung, None, server_errors=[detail])
+
+    assert error is not None and expected in error
+    assert f"{expected.split(': ', 1)[0]}: no PDF returned" not in error
+
+
+def test_fallback_rung_failure_falls_through_to_the_next_rung(monkeypatch, tmp_path: Path) -> None:
+    """A rejected server answer must not stop the chain: the hook still runs."""
+    import pzi.browser_pdf
+    import pzi.server_browser
+    from pzi.pdf_planning import PdfFallbackSettings
+
+    monkeypatch.setattr(
+        pzi.server_browser, "download_via_server_api", lambda *a, **kw: b"<html>x</html>"
+    )
+    monkeypatch.setattr(
+        pzi.browser_pdf, "download_pdf_with_browser", lambda *, command, pdf_url, errors=None: _PDF_BYTES
+    )
+
+    path, _warning, error = fetch_and_store_pdf_with_fallbacks(
+        url=_URL,
+        papers_dir=str(tmp_path / "papers"),
+        citekey="stage2024",
+        fetch_binary=lambda url: (b"<html>blocked</html>", "text/html"),
+        api_url="http://127.0.0.1:1",
+        browser_pdf_cmd="stub-hook",
+        settings=PdfFallbackSettings(disable_desktop_browser=True),
+    )
+
+    assert error is None
+    assert path is not None and Path(path).read_bytes() == _PDF_BYTES

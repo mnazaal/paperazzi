@@ -11,7 +11,7 @@ import urllib.error
 import webbrowser
 from collections.abc import Callable, Collection, Iterable, Mapping
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, NamedTuple, TypedDict
 from urllib.parse import quote, urlsplit
 
 from pzi.bibtex import NormalizedRecord
@@ -28,6 +28,11 @@ from pzi.pdf_planning import (
     normalized_hostname,
     parse_firefox_default_profile,
 )
+
+if TYPE_CHECKING:
+    # `typing.Unpack` is 3.12+; the project supports 3.11, and annotations are
+    # lazy here (`from __future__ import annotations`).
+    from typing import Unpack
 
 FetchBinary = Callable[[str], tuple[bytes, str | None]]
 FetchText = Callable[[str], str]
@@ -220,6 +225,30 @@ def fetch_pdf_via_desktop_browser_download(
 # Main PDF acquisition
 # ---------------------------------------------------------------------------
 
+def _store_stage_pdf(
+    pdf_bytes: bytes | None,
+    *,
+    label: str,
+    stage_errors: list[str],
+    empty_errors: list[str],
+    write: Callable[[bytes], str],
+) -> str | None:
+    """Validate one rung's answer and write it, or record why it was not used.
+
+    The rungs differ only in their label and in what they say when they return
+    nothing — each of those messages is a separate fix for an error that used to
+    be lost — so those are passed in; the order (empty, not a PDF, write) is the
+    same for all of them.
+    """
+    if not pdf_bytes:
+        stage_errors.extend(f"{label}: {detail}" for detail in empty_errors)
+        return None
+    if not is_pdf_bytes(pdf_bytes):
+        stage_errors.append(f"{label}: response was not a PDF")
+        return None
+    return write(pdf_bytes)
+
+
 def fetch_and_store_pdf_with_fallbacks(
     *,
     url: str,
@@ -278,6 +307,15 @@ def fetch_and_store_pdf_with_fallbacks(
     # itself via /attach-pdf-bytes using the live browser session.
     extension_capture = browser is not None and browser_pdf_cmd is None
 
+    def write_downloaded(data: bytes) -> str:
+        return write_pdf_bytes(
+            data=data,
+            papers_dir=papers_dir,
+            citekey=citekey,
+            record=record,
+            filename_format=filename_format,
+        )
+
     # Server-side persistent browser takes priority over subprocess hook.
     if api_url and browser_hook and not extension_capture:
         from pzi.server_browser import download_via_server_api
@@ -286,27 +324,20 @@ def fetch_and_store_pdf_with_fallbacks(
         pdf_bytes = download_via_server_api(
             api_url, url, auth_token=api_auth_token, errors=server_errors,
         )
-        if not pdf_bytes:
-            stage_errors.append(
-                "server browser: " + (server_errors[0] if server_errors else "no PDF returned")
-            )
-        elif not is_pdf_bytes(pdf_bytes):
-            # Unreachable today: `download_via_server_api` returns bytes only
-            # when they start with `%PDF-`, and the `browser_pdf_cmd` and
-            # FlareSolverr helpers below do the same. Kept rather than deleted
-            # (deleting all three has been proposed) because that is a
-            # property of three other modules, not a local invariant, and these
-            # bytes are about to be written to the user's papers directory. The
-            # check costs one comparison.
-            stage_errors.append("server browser: response was not a PDF")
-        if pdf_bytes and is_pdf_bytes(pdf_bytes):
-            local_path = write_pdf_bytes(
-                data=pdf_bytes,
-                papers_dir=papers_dir,
-                citekey=citekey,
-                record=record,
-                filename_format=filename_format,
-            )
+        # Unreachable "not a PDF" today: `download_via_server_api` returns bytes
+        # only when they start with `%PDF-`, and the `browser_pdf_cmd` and
+        # FlareSolverr helpers do the same. The check stays (deleting all three
+        # has been proposed) because that is a property of three other modules,
+        # not a local invariant, and these bytes are about to be written to the
+        # user's papers directory. The check costs one comparison.
+        local_path = _store_stage_pdf(
+            pdf_bytes,
+            label="server browser",
+            stage_errors=stage_errors,
+            empty_errors=[server_errors[0] if server_errors else "no PDF returned"],
+            write=write_downloaded,
+        )
+        if local_path is not None:
             return local_path, None, None
 
     if (
@@ -326,43 +357,32 @@ def fetch_and_store_pdf_with_fallbacks(
         pdf_bytes = download_pdf_with_browser(
             command=effective_browser_pdf_cmd, pdf_url=url, errors=hook_errors
         )
-        if not pdf_bytes:
-            if hook_errors:
-                stage_errors.extend(f"browser_pdf_cmd: {d}" for d in hook_errors)
-            else:
-                stage_errors.append("browser_pdf_cmd: no PDF returned")
-        elif not is_pdf_bytes(pdf_bytes):
-            stage_errors.append("browser_pdf_cmd: response was not a PDF")
-        if pdf_bytes and is_pdf_bytes(pdf_bytes):
-            local_path = write_pdf_bytes(
-                data=pdf_bytes,
-                papers_dir=papers_dir,
-                citekey=citekey,
-                record=record,
-                filename_format=filename_format,
-            )
+        local_path = _store_stage_pdf(
+            pdf_bytes,
+            label="browser_pdf_cmd",
+            stage_errors=stage_errors,
+            empty_errors=hook_errors or ["no PDF returned"],
+            write=write_downloaded,
+        )
+        if local_path is not None:
             return local_path, None, None
 
     if flaresolverr_url:
         from pzi.flaresolverr import fetch_pdf_via_flaresolverr
 
         pdf_bytes = fetch_pdf_via_flaresolverr(url, server_url=flaresolverr_url)
-        if not pdf_bytes:
-            stage_errors.append("FlareSolverr: no PDF returned")
-        elif not is_pdf_bytes(pdf_bytes):  # pragma: no cover — defensive
-            stage_errors.append("FlareSolverr: response was not a PDF")
-        if pdf_bytes and is_pdf_bytes(pdf_bytes):  # pragma: no branch
+        local_path = _store_stage_pdf(
+            pdf_bytes,
+            label="FlareSolverr",
+            stage_errors=stage_errors,
+            empty_errors=["no PDF returned"],
+            write=write_downloaded,
+        )
+        if local_path is not None:
             warning = (
                 "PDF downloaded via FlareSolverr (bypasses Cloudflare protection). "
                 "This may violate publisher terms of service. "
                 "Consider using browser_pdf_cmd with your institutional profile instead."
-            )
-            local_path = write_pdf_bytes(
-                data=pdf_bytes,
-                papers_dir=papers_dir,
-                citekey=citekey,
-                record=record,
-                filename_format=filename_format,
             )
             return local_path, warning, None
 
@@ -420,13 +440,37 @@ class PdfSourceOutcome(NamedTuple):
     record: NormalizedRecord
 
 
+class PdfFallbackKwargs(TypedDict, total=False):
+    """The keyword arguments :func:`fetch_and_store_pdf_trying_sources` hands on.
+
+    Everything :func:`fetch_and_store_pdf_with_fallbacks` takes except the two it
+    varies per attempt (``url`` and ``record``). Spelled out so a misspelt or
+    stale key fails type checking instead of surfacing as a ``TypeError`` from
+    the innermost call.
+    """
+
+    papers_dir: str
+    citekey: str
+    flaresolverr_url: str | None
+    browser_pdf_cmd: str | None
+    browser: str | None
+    browser_hook: bool
+    fetch_binary: FetchBinary | None
+    filename_format: str | None
+    api_url: str | None
+    api_auth_token: str | None
+    desktop_fallback_hosts: set[str] | None
+    ezproxy_host: str | None
+    settings: PdfFallbackSettings | None
+
+
 def fetch_and_store_pdf_trying_sources(
     *,
     url: str,
     record: NormalizedRecord,
     next_candidate: NextPdfCandidate | None = None,
     fetch_pdf: Callable[..., tuple[str | None, str | None, str | None]] | None = None,
-    **fallback_kwargs: Any,
+    **fallback_kwargs: Unpack[PdfFallbackKwargs],
 ) -> PdfSourceOutcome:
     """Download *url*, falling back to the next discovered source on failure.
 
