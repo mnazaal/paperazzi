@@ -694,6 +694,10 @@ class _FakePage:
     def __init__(self, route_error: Exception | None = None):
         self.handlers: list = []
         self.route_error = route_error
+        self.extra_headers: dict[str, str] = {}
+
+    def set_extra_http_headers(self, headers):
+        self.extra_headers = dict(headers)
 
     def route(self, pattern, handler):
         if self.route_error:

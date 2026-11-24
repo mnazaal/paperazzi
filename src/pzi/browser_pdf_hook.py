@@ -368,6 +368,14 @@ def discover_pdf_url(
             session.close()
 
 
+def _note_refusal(
+    result: FetchResult, errors: list[str] | None, url: str | None = None
+) -> None:
+    """Record why a response was refused before its body was read."""
+    if errors is not None and result.refused:
+        errors.append(f"{url}: {result.refused}" if url else result.refused)
+
+
 def download_pdf(
     pdf_url: str,
     *,
@@ -415,6 +423,7 @@ def download_pdf(
     try:
         # 1. Try direct request
         result = session.fetch_direct(pdf_url)
+        _note_refusal(result, errors)
         if result.is_pdf():
             return result.body
 
@@ -427,6 +436,7 @@ def download_pdf(
 
         if response is not None:
             navigated = FetchResult.from_response(response)
+            _note_refusal(navigated, errors)
             if navigated.is_pdf():
                 return navigated.body
 
@@ -459,6 +469,7 @@ def download_pdf(
                 # download worked while following a link never did.
                 try:
                     result = session.fetch_direct(candidate)
+                    _note_refusal(result, errors, candidate)
                     if result.is_pdf():
                         return result.body
                 except Exception:

@@ -65,6 +65,30 @@ PLAYWRIGHT_INSTALL_HINT = (
 )
 
 
+#: Asked of every browser-fallback body read. The pinning proxy caps wire bytes,
+#: and Chromium decodes after that, so an encoded body can inflate far past the
+#: cap before the driver hands it over. HTTPS is opaque to the proxy, so the
+#: decoded size cannot be bounded in flight: ask for none, refuse any that comes.
+_IDENTITY_HEADERS = {"Accept-Encoding": "identity"}
+
+
+def _declared_encoding(headers: Any) -> str | None:
+    """The response's non-identity `Content-Encoding`, from headers alone.
+
+    None when absent or every coding is `identity`. A stacked value
+    (`gzip, br`) is returned whole so the refusal names it.
+    """
+    raw = (headers.get("content-encoding", "") or "").strip()
+    codings = [c.strip().lower() for c in raw.split(",") if c.strip()]
+    if all(c == "identity" for c in codings):
+        return None
+    return raw
+
+
+def _encoding_refusal(encoding: str) -> str:
+    return f"response declares Content-Encoding: {encoding}; only identity is accepted"
+
+
 def _dispose_response(response: Any) -> None:
     """Release an API response's driver-side buffer; never raise."""
     try:
@@ -353,11 +377,24 @@ class BrowserSession:
                     return FetchResult(status=-1, content_type=None, body=b"")
                 cuts_before = self._cut_responses()
                 response = self.page.request.get(
-                    current, max_redirects=0, timeout=remaining_ms
+                    current,
+                    max_redirects=0,
+                    timeout=remaining_ms,
+                    headers=_IDENTITY_HEADERS,
                 )
                 try:
                     if response.status not in _REDIRECT_STATUSES:
                         ct = response.headers.get("content-type", "")
+                        encoding = _declared_encoding(response.headers)
+                        if encoding is not None:
+                            # Refused from the headers: `body()` would make the
+                            # driver buffer the decoded bytes, past the cap.
+                            return FetchResult(
+                                status=-1,
+                                content_type=None,
+                                body=b"",
+                                refused=_encoding_refusal(encoding),
+                            )
                         body = response.body() if response.status == 200 else b""
                         # The driver can report a cut body as a clean end, and with
                         # no framing that looks complete
@@ -476,6 +513,8 @@ class FetchResult:
     status: int
     content_type: str | None
     body: bytes
+    #: Why the response was refused before its body was read, else None.
+    refused: str | None = None
 
     def is_pdf(self) -> bool:
         """True if the response looks like a PDF."""
@@ -496,6 +535,14 @@ class FetchResult:
         round trip that can itself raise on a response that carries none.
         """
         content_type = response.headers.get("content-type", "")
+        encoding = _declared_encoding(response.headers)
+        if encoding is not None:
+            return cls(
+                status=-1,
+                content_type=None,
+                body=b"",
+                refused=_encoding_refusal(encoding),
+            )
         body = response.body() if "application/pdf" in content_type else b""
         return cls(
             status=getattr(response, "status", 200),
@@ -613,6 +660,7 @@ def launch_browser(
                     user_data_dir=str(profile), **options
                 )
             page = ctx.new_page()
+            page.set_extra_http_headers(_IDENTITY_HEADERS)
             install_request_guard(page, url_allowed)
         except BaseException:
             if temp_profile is not None:
@@ -645,6 +693,7 @@ def launch_browser(
             browser_instance = playwright.chromium.launch(**options)
             context = browser_instance.new_context()
         page = context.new_page()
+        page.set_extra_http_headers(_IDENTITY_HEADERS)
         install_request_guard(page, url_allowed)
     except BaseException:
         pinning.close()

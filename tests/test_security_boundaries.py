@@ -520,7 +520,7 @@ def test_fetch_direct_refuses_a_redirect_to_a_private_address() -> None:
         # Mirrors the real signature: `fetch_direct` passes `max_redirects`,
         # and a fake that omitted it raised TypeError, which `fetch_direct`
         # swallows into the same empty result a working guard returns.
-        def get(self, url, *, max_redirects=None, timeout=None):
+        def get(self, url, *, max_redirects=None, timeout=None, headers=None):
             assert max_redirects == 0
             requested.append(url)
             redirect_consumed.append(True)

@@ -419,3 +419,142 @@ def test_pdf_within_the_cap_still_downloads() -> None:
         server.close()
     assert result.status == 200 and result.is_pdf()
     assert len(result.body) == 1024 * 1024
+
+
+# --- Content-Encoding refusal: ask uncompressed, refuse anything else --------
+#
+# The cap counts wire bytes; Chromium inflates after it. HTTPS is opaque to the
+# pinning proxy, so the decoded size cannot be bounded in flight. Instead the
+# request asks for `identity` and a response that still declares an encoding is
+# refused from its headers, before the driver buffers a body.
+
+
+class _EncodingServer:
+    """Serves one PDF; gzip when `honour_identity` is False or gzip is allowed."""
+
+    def __init__(self, decoded: bytes, *, honour_identity: bool):
+        import gzip
+
+        self.seen: list[str | None] = []
+        outer = self
+        plain = decoded
+        packed = gzip.compress(decoded)
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                accept = self.headers.get("Accept-Encoding")
+                outer.seen.append(accept)
+                send_plain = honour_identity and (accept or "").strip() == "identity"
+                body = plain if send_plain else packed
+                self.send_response(200)
+                self.send_header("Content-Type", "application/pdf")
+                if not send_plain:
+                    self.send_header("Content-Encoding", "gzip")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self.server.server_address[1]
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+
+
+def _fetch_through_proxy(server: _EncodingServer):
+    from tests.browser_probe import require_browser
+
+    require_browser()
+
+    def connect(address, timeout=None):
+        return socket.create_connection(("127.0.0.1", server.port), timeout=timeout)
+
+    with bs.open_browser_session(
+        "chromium",
+        url_allowed=lambda u: True,
+        getaddrinfo=_answers(PUBLIC_IP),
+        connect=connect,
+    ) as session:
+        return session.fetch_direct("http://pub.test/x.pdf")
+
+
+@pytest.mark.browser
+def test_gzip_pdf_is_refused_not_inflated() -> None:
+    decoded = b"%PDF-1.4\n" + b"x" * (8 * 1024 * 1024)
+    server = _EncodingServer(decoded, honour_identity=False)  # ignores identity
+    try:
+        result = _fetch_through_proxy(server)
+    finally:
+        server.close()
+    assert result.body == b""
+    assert result.status == -1
+    assert result.refused is not None and "gzip" in result.refused
+
+
+@pytest.mark.browser
+def test_fetch_direct_asks_for_identity_and_accepts_the_plain_pdf() -> None:
+    decoded = b"%PDF-1.4\n" + b"x" * 4096
+    server = _EncodingServer(decoded, honour_identity=True)
+    try:
+        result = _fetch_through_proxy(server)
+    finally:
+        server.close()
+    assert server.seen == ["identity"]
+    assert result.status == 200 and result.is_pdf()
+    assert result.body == decoded
+
+
+class _FakeNavResponse:
+    status = 200
+
+    def __init__(self, headers):
+        self.headers = headers
+        self.body_calls = 0
+
+    def body(self):
+        self.body_calls += 1
+        return b"%PDF-1.4 inflated"
+
+
+def test_from_response_refuses_an_encoded_body_before_reading_it() -> None:
+    response = _FakeNavResponse(
+        {"content-type": "application/pdf", "content-encoding": "br"}
+    )
+    result = bs.FetchResult.from_response(response)
+    assert response.body_calls == 0
+    assert result.body == b"" and not result.is_pdf()
+    assert result.refused is not None and "br" in result.refused
+
+
+def test_from_response_reads_an_identity_body() -> None:
+    response = _FakeNavResponse(
+        {"content-type": "application/pdf", "content-encoding": "Identity"}
+    )
+    result = bs.FetchResult.from_response(response)
+    assert response.body_calls == 1 and result.is_pdf()
+
+
+def test_download_pdf_reports_a_refused_encoding() -> None:
+    from pzi.browser_pdf_hook import download_pdf
+    from tests.fake_session import FakeBrowserSession
+
+    class Session(FakeBrowserSession):
+        def fetch_direct(self, url):
+            return bs.FetchResult(
+                status=-1,
+                content_type=None,
+                body=b"",
+                refused="response declares Content-Encoding: gzip; only identity is accepted",
+            )
+
+    errors: list[str] = []
+    out = download_pdf(
+        "https://journal.test/a.pdf", _session=Session(), _dismiss=lambda page: None, errors=errors
+    )
+    assert out is None
+    assert any("gzip" in e for e in errors)
