@@ -2176,6 +2176,42 @@ def test_plain_init_writes_the_api_token_its_template_promises(tmp_path: Path) -
     assert "api_token" in stdout.getvalue()
 
 
+@pytest.mark.parametrize("setup", [False, True])
+def test_init_force_keeps_the_reused_token_resolvable(tmp_path: Path, setup: bool) -> None:
+    """`init --force` over a config with a custom `pzi_data_home` reuses the token
+    stored there, so the replacement config must still point at that data home;
+    otherwise the reader looks in the XDG default and auth silently turns off."""
+    from pzi.capture_context import resolve_api_auth_token
+    from pzi.config import load_config_file
+
+    custom = tmp_path / "custom"
+    custom.mkdir()
+    (custom / "api_token").write_text("SYNTHETIC-TEST-TOKEN\n")
+    config_path = tmp_path / "config.toml"
+    old_bib = tmp_path / "old.bib"
+    old_bib.write_text("")
+    config_path.write_text(
+        f'pzi_data_home = "{custom}"\n[[bibs]]\nname = "old"\npath = "{old_bib}"\n'
+        "default = true\n"
+    )
+    argv = ["init", "--force", "--config", str(config_path)]
+    if setup:
+        argv += ["--setup", "--bib", str(tmp_path / "lib.bib")]
+    stdout, stderr = StringIO(), StringIO()
+
+    exit_code = run_cli(argv, home_dir=str(tmp_path), stdout=stdout, stderr=stderr)
+
+    assert exit_code == exit_codes.OK, stderr.getvalue()
+    assert "SYNTHETIC-TEST-TOKEN" not in stdout.getvalue() + stderr.getvalue()
+    loaded = load_config_file(str(config_path), home_dir=str(tmp_path))
+    assert loaded["config"] is not None, loaded
+    assert resolve_api_auth_token(loaded["config"]) == "SYNTHETIC-TEST-TOKEN"
+    assert config_path.stat().st_mode & 0o777 == 0o600
+    backups = list((custom / "config-backups").iterdir())
+    assert len(backups) == 1
+    assert str(custom) in backups[0].read_text()
+
+
 def test_no_bibtexparser_warning_leaks_to_the_terminal(tmp_path: Path) -> None:
     """`Unknown block type <class '...DuplicateBlockKeyBlock'>` reached the user.
 
