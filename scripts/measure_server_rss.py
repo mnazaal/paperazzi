@@ -41,8 +41,10 @@ def _vmrss_kb(pid: int) -> int:
 
 def measure_once() -> int:
     with tempfile.TemporaryDirectory() as home:
+        # Drop every PZI_* variable: PZI_CONFIG would point the child at the
+        # caller's real config, contradicting "no config file".
         env = {
-            **os.environ,
+            **{k: v for k, v in os.environ.items() if not k.startswith("PZI_")},
             "HOME": home,
             "XDG_CONFIG_HOME": f"{home}/config",
             "XDG_DATA_HOME": f"{home}/data",
