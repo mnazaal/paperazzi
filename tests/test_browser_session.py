@@ -518,3 +518,28 @@ def test_sweep_removes_an_over_age_clone_whose_owner_died(tmp_path, monkeypatch)
 
     assert module._sweep_stale_profile_clones(temp_root=tmp_path) == [clone]
     assert not clone.exists()
+
+
+def test_failed_profile_copy_leaves_no_clone_and_no_lock(tmp_path, monkeypatch) -> None:
+    """A copytree that raises must not leak a locked partial copy of the cookie DB."""
+    import shutil
+
+    from pzi import browser_session as module
+
+    monkeypatch.setattr(module.tempfile, "tempdir", str(tmp_path))
+    profile = tmp_path / "profile"
+    profile.mkdir()
+    (profile / "Cookies").write_bytes(b"secrets")
+
+    def failing_copytree(src, dst, *args, **kwargs):
+        (dst / "Cookies").write_bytes(b"partial")
+        raise shutil.Error([("Cookies-journal", "x", "No such file or directory")])
+
+    monkeypatch.setattr(module.shutil, "copytree", failing_copytree)
+    owned_before = set(module._OWNED_CLONE_FDS)
+    with pytest.raises(shutil.Error):
+        module._clone_chrome_profile(profile)
+
+    assert sorted(p.name for p in tmp_path.glob("pzi-chrome-*")) == []
+    assert set(module._OWNED_CLONE_FDS) == owned_before
+

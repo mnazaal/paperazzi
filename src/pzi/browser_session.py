@@ -104,7 +104,8 @@ def _discard_profile_clone(clone: Path) -> None:
 
 
 def _clone_has_live_owner(clone: Path) -> bool:
-    """True when some process still holds `clone`'s owner lock."""
+    """True when some process still holds `clone`'s owner lock.
+    """
     try:
         import fcntl
 
@@ -187,7 +188,13 @@ def _clone_chrome_profile(profile: Path) -> Path:
             }
         ]
 
-    shutil.copytree(profile, temp_dir, dirs_exist_ok=True, ignore=_ignore)
+    try:
+        shutil.copytree(profile, temp_dir, dirs_exist_ok=True, ignore=_ignore)
+    except BaseException:
+        # The caller never receives `temp_dir`, so nothing else could remove
+        # the partial copy of the cookie database or release its owner lock.
+        _discard_profile_clone(temp_dir)
+        raise
     return temp_dir
 
 
