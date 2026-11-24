@@ -1228,3 +1228,33 @@ def test_verbatim_positions_must_hold_parser_blocks() -> None:
         _assert_verbatim_blocks_unmodified(
             library.blocks, new_library.blocks, {0, 1}
         )
+
+
+def test_every_block_update_runs_the_verbatim_guard(monkeypatch) -> None:
+    """The guard above is only worth something if the write path calls it.
+
+    Removing the call left every write test green (review of `ca32f21`); this
+    spies on it through `_update_library_blocks`, the one place it is called.
+    """
+    import pzi.bib_repository as repo
+
+    calls: list[set[int]] = []
+    real = repo._assert_verbatim_blocks_unmodified
+
+    def spy(old_blocks, new_blocks, verbatim):
+        calls.append(set(verbatim))
+        return real(old_blocks, new_blocks, verbatim)
+
+    monkeypatch.setattr(repo, "_assert_verbatim_blocks_unmodified", spy)
+    library = repo.parse_bib_library(
+        "@article{a,\n title={x},\n year={2020}\n}\n\n"
+        "@article{b,\n title={y},\n year={2021}\n}\n"
+    )
+    entries = [
+        {"entry_type": "article", "citekey": "a", "fields": {"title": "x", "year": "2020"}},
+        {"entry_type": "article", "citekey": "b", "fields": {"title": "CHANGED", "year": "2021"}},
+    ]
+
+    repo._update_library_blocks(library, entries, "", touched_indices={1})
+
+    assert calls == [{0}], calls
