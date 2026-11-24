@@ -20,7 +20,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from pathlib import Path
-from typing import Any, NamedTuple, TypeAlias, TypedDict, cast
+from typing import Any, NamedTuple, NotRequired, TypeAlias, TypedDict, cast
 
 import portalocker
 from bibtexparser.library import Library
@@ -66,6 +66,7 @@ from pzi.bibtex import (
     record_to_bibtex_entry,
     resolve_citekey_collision,
 )
+from pzi.config import DEFAULT_PDF_FILE_PATH_STYLE
 from pzi.errors import PziError
 from pzi.fileio import fsync_parent_dir, read_text_utf8, write_all
 from pzi.identifiers import normalize_arxiv_id
@@ -194,8 +195,21 @@ def with_bib_lock(
 ReadBibResult: TypeAlias = dict[str, Any]
 
 
+class UpdateBibEntryResult(TypedDict):
+    """Outcome of an update or delete of one entry under the lock.
 
-UpdateBibEntryResult: TypeAlias = dict[str, Any]
+    `entry` and `record` are the written values, `None` when `found` is false
+    or (for a delete) nothing remains to describe. `backup_path` is present only
+    on the paths that can take a backup.
+    """
+
+    found: bool
+    entries: list[BibtexEntry]
+    entry: BibtexEntry | None
+    record: NormalizedRecord | None
+    backup_path: NotRequired[Path | None]
+    #: The record as read, before the update; set by `update_bib_entry`.
+    previous_record: NotRequired[NormalizedRecord]
 
 
 
@@ -509,7 +523,7 @@ def _update_library_blocks(
     entries: list[BibtexEntry],
     bib_path: str,
     *,
-    file_path_style: str = "absolute",
+    file_path_style: str = DEFAULT_PDF_FILE_PATH_STYLE,
     touched_indices: Collection[int] | None = None,
 ) -> tuple[Library, frozenset[int]]:
     """Replace entry blocks in a Library with updated entries, preserving
@@ -654,7 +668,7 @@ def _render_updated_library(
     *,
     updated_index: int | None,
     source: str,
-    file_path_style: str = "absolute",
+    file_path_style: str = DEFAULT_PDF_FILE_PATH_STYLE,
 ) -> str:
     """Serialize *library* with *updated_entries* applied to it.
 
@@ -691,7 +705,7 @@ def _prepare_write(
     plan: WritePlan,
     *,
     shared: bool,
-    file_path_style: str = "absolute",
+    file_path_style: str = DEFAULT_PDF_FILE_PATH_STYLE,
 ) -> Iterator[tuple[str, str, list[BibtexEntry], WritePlan]]:
     """Read, gate, rebase and render one plan, holding the lock over the yield.
 
@@ -763,7 +777,7 @@ def execute_write_plan(
     path: str,
     plan: WritePlan,
     *,
-    file_path_style: str = "absolute",
+    file_path_style: str = DEFAULT_PDF_FILE_PATH_STYLE,
 ) -> AppliedWrite:
     """Read, apply a plan, and write a BibTeX file under an exclusive lock.
 
@@ -974,7 +988,7 @@ def _render_batch(
 def batch_write_session(
     path: str,
     *,
-    file_path_style: str = "absolute",
+    file_path_style: str = DEFAULT_PDF_FILE_PATH_STYLE,
     write: bool = True,
     backup_label: str | None = None,
 ) -> Iterator[BatchWriteSession]:
@@ -1024,7 +1038,7 @@ def preview_write_plan(
     path: str,
     plan: WritePlan,
     *,
-    file_path_style: str = "absolute",
+    file_path_style: str = DEFAULT_PDF_FILE_PATH_STYLE,
 ) -> dict[str, Any]:
     """Preview a write plan without mutating the BibTeX file.
 
@@ -1049,7 +1063,7 @@ def preview_batch_write(
     path: str,
     apply_plans: Callable[[BatchWriteSession], None],
     *,
-    file_path_style: str = "absolute",
+    file_path_style: str = DEFAULT_PDF_FILE_PATH_STYLE,
 ) -> dict[str, Any]:
     """Render the diff a *batch* of plans would produce, without writing.
 
@@ -1456,7 +1470,7 @@ def update_bib_entry(
     updater: Callable[[BibtexEntry, NormalizedRecord], BibtexEntry],
     *,
     expected_paper: Mapping[str, Any] | _AnyPaper,
-    file_path_style: str = "absolute",
+    file_path_style: str = DEFAULT_PDF_FILE_PATH_STYLE,
     backup_path: Path | None = None,
 ) -> UpdateBibEntryResult:
     """Update one BibTeX entry under lock using a citekey-scoped callback.
@@ -1740,7 +1754,7 @@ def merge_bib_entries(
     *,
     citekey_a: str,
     citekey_b: str,
-    file_path_style: str = "absolute",
+    file_path_style: str = DEFAULT_PDF_FILE_PATH_STYLE,
     backup_label: str | None = None,
 ) -> dict[str, Any]:
     """Merge entry A into B (keeping B's citekey) under one exclusive lock.

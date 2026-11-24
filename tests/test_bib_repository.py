@@ -1153,3 +1153,33 @@ def test_import_length_batch_refuses_rather_than_discarding_a_foreign_write(
 
     assert excinfo.value.code == exit_codes.ENVIRONMENT
     assert bib.read_text(encoding="utf-8") == foreign
+
+
+def test_file_path_style_defaults_match_the_configured_default() -> None:
+    """A caller omitting `file_path_style` must not write `/home/...` into a `.bib`.
+
+    `config.DEFAULT_PDF_FILE_PATH_STYLE` is what the loader promises to keep as
+    `~/...`; a signature default of "absolute" disagrees with it. The reindex
+    helper `rewrite_entries_in_order_locked` is owned by the reindex lane and
+    listed separately so it is not forgotten.
+    """
+    import inspect
+
+    import pzi.bib_repository as repo
+    from pzi.config import DEFAULT_PDF_FILE_PATH_STYLE
+
+    pending_elsewhere = {"rewrite_entries_in_order_locked"}
+    seen = 0
+    for name, fn in vars(repo).items():
+        if not inspect.isfunction(fn) or fn.__module__ != repo.__name__:
+            continue
+        param = inspect.signature(fn).parameters.get("file_path_style")
+        if (
+            param is None
+            or param.default is inspect.Parameter.empty
+            or name in pending_elsewhere
+        ):
+            continue
+        seen += 1
+        assert param.default == DEFAULT_PDF_FILE_PATH_STYLE, name
+    assert seen == 9
