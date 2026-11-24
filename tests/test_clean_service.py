@@ -1313,3 +1313,34 @@ def test_quarantine_pdf_keeps_the_file_when_a_recheck_lock_times_out(
     assert result["status"] == "kept"
     assert "other.bib" in result["reason"]
     assert pdf.read_bytes() == _SHARED_PDF
+
+
+@pytest.mark.parametrize("fix", [False, True])
+@pytest.mark.parametrize("state", ["latin1", "mode000", "locked"])
+def test_library_clean_reports_target_findings_when_another_library_is_unreadable(
+    state: str, fix: bool, _other_library_state, tmp_path: Path
+) -> None:
+    import json
+    from io import StringIO
+
+    from pzi.cli import run_cli
+
+    a_bib, _b_bib, pa, cfg = _other_library_state(state)
+    a_bib.write_text(_entry("x", pa / "x.pdf") + _entry("gone", pa / "gone.pdf"))
+    (pa / "orphan.pdf").write_bytes(_SHARED_PDF + b"orphan")
+    out, err = StringIO(), StringIO()
+    argv = ["library", "clean", "--target", "a", "--json", "--config", str(cfg)]
+    code = run_cli(
+        [*argv, "--fix"] if fix else argv,
+        home_dir=str(tmp_path / "home"), stdout=out, stderr=err,
+    )
+
+    assert code == 1, (out.getvalue(), err.getvalue())  # findings, never "could not run"
+    envelope = json.loads(out.getvalue())
+    data = envelope.get("data", envelope)
+    types = {issue["type"] for issue in data["issues"]}
+    assert "missing_pdf" in types, "the target's own findings must still be reported"
+    unreadable = [i for i in data["issues"] if "b.bib" in i["message"]]
+    assert unreadable, data["issues"]
+    assert (pa / "orphan.pdf").exists() and (pa / "x.pdf").exists()
+    assert not (pa / ".orphans").exists(), "no orphan may move while b is unreadable"
