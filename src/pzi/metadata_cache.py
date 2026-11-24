@@ -14,6 +14,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import math
 import os
 import tempfile
 import time
@@ -63,11 +64,20 @@ class MetadataCache:
         path = self._path_for(url, scope)
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
+            return None
+        # Valid JSON of another shape is as unusable as corrupt JSON: the cache
+        # is regenerable, so every such entry is a miss.
+        if not isinstance(payload, dict):
             return None
         ts = payload.get("ts")
         text = payload.get("text")
-        if not isinstance(ts, (int, float)) or not isinstance(text, str):
+        if (
+            isinstance(ts, bool)
+            or not isinstance(ts, (int, float))
+            or not math.isfinite(ts)
+            or not isinstance(text, str)
+        ):
             return None
         if self._clock() - ts > self._ttl:
             with contextlib.suppress(OSError):

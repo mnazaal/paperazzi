@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from pzi.metadata_cache import MetadataCache
 
 
@@ -95,3 +97,21 @@ def test_the_cache_is_bounded(tmp_path, monkeypatch) -> None:
         cache.set(f"https://example.org/{index}", "{}")
 
     assert len(list((tmp_path / "c").glob("*.json"))) <= 5
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "[]", "null", "7", '"text"', "{}", '{"ts": 1.0}', '{"text": "x"}',
+        '{"ts": "1", "text": "x"}', '{"ts": 1.0, "text": 5}',
+        '{"ts": true, "text": "x"}', '{"ts": NaN, "text": "x"}',
+        pytest.param("[" * 100000, id="nested-too-deep"),
+    ],
+)
+def test_valid_json_of_the_wrong_shape_is_a_miss(tmp_path: Path, body: str) -> None:
+    cache = MetadataCache(tmp_path / "cache", 3600)
+    path = cache._path_for("https://example.org/paper")
+    path.parent.mkdir()
+    path.write_text(body, encoding="utf-8")
+
+    assert cache.get("https://example.org/paper") is None
