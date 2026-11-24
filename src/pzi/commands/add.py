@@ -316,6 +316,7 @@ def _run_batch(
         print_dry_run_banner(total, stderr)
 
     interrupted = False
+    outstanding = 0  # inputs an interrupt left unfinished
     for index, value in enumerate(values):
         if index > 0 and delay > 0:
             try:
@@ -330,6 +331,7 @@ def _run_batch(
                 interrupted = True
                 # This input was never attempted: it is outstanding too.
                 failures.extend(values[index:])
+                outstanding = total - index
                 break
         try:
             result = capture_to_bib(
@@ -350,6 +352,7 @@ def _run_batch(
             # Mid-capture. Same reasoning as the delay above: report what has
             # already happened rather than unwinding through it.
             interrupted = True
+            outstanding = total - index
             result = {
                 "status": "error",
                 "citekey": None,
@@ -437,7 +440,12 @@ def _run_batch(
                     f"{item['value']}: {_failure_reason(item['result'])}"
                     for item in items
                     if _classify(item["result"]) == "failed"
-                ],
+                ]
+                + (
+                    [f"interrupted: {outstanding} input(s) outstanding"]
+                    if interrupted
+                    else []
+                ),
                 "items": items,
             },
             stdout,
@@ -445,7 +453,8 @@ def _run_batch(
         )
     else:
         print_capture_summary(
-            counts, dry_run=args.dry_run, stdout=stdout, failures_path=failures_path
+            counts, dry_run=args.dry_run, stdout=stdout, failures_path=failures_path,
+            written=len(failures), outstanding=outstanding,
         )
     if interrupted:
         # 130, the documented interrupted code, and only *after* the summary,

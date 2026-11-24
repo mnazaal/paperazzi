@@ -292,6 +292,8 @@ def print_capture_summary(
     dry_run: bool,
     stdout: TextIO,
     failures_path: Path | None = None,
+    written: int | None = None,
+    outstanding: int = 0,
 ) -> None:
     """Closing line for a bulk capture, shared by `add --from-file` and `inbox drain`.
 
@@ -304,8 +306,15 @@ def print_capture_summary(
         f"{counts['failed']} failed",
         file=stdout,
     )
+    if outstanding:
+        print(f"interrupted: {outstanding} input(s) outstanding", file=stdout)
     if failures_path is not None:
-        print(f"wrote {counts['failed']} failed item(s) to {failures_path}", file=stdout)
+        # *written* is the retry file's line count. After an interrupt it holds
+        # the failures plus every input not yet attempted, which `counts` does
+        # not describe.
+        lines = counts["failed"] if written is None else written
+        what = "failed or outstanding" if outstanding else "failed"
+        print(f"wrote {lines} {what} item(s) to {failures_path}", file=stdout)
         print(f"  retry with: pzi add --from-file {failures_path}", file=stdout)
 
 
