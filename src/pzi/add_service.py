@@ -677,8 +677,9 @@ def add_record_with_bib(
         # What earlier items in this batch planned counts as existing, or a
         # preview matches every item against a library that dry-run never
         # changes. See `BatchPreviewState`; only ever set in dry-run.
-        typed_existing_records = [*typed_existing_records, *batch_preview.records]
-        existing_entries = [*existing_entries, *batch_preview.entries]
+        typed_existing_records, existing_entries = batch_preview.overlay(
+            typed_existing_records, existing_entries
+        )
     # Build the identity index once and reuse it across the several exact-match
     # lookups this write performs, instead of rebuilding it per call.
     existing_index = build_identity_index(typed_existing_records)
@@ -783,7 +784,7 @@ def add_record_with_bib(
                 bib["path"], plan, file_path_style=file_path_style
             )["diff"]
         if batch_preview is not None:
-            batch_preview.remember(record_with_hint, plan["entry"])
+            batch_preview.remember(plan["record"], plan["entry"])
 
     return result
 

@@ -224,18 +224,57 @@ class BatchPreviewState:
     interrupted batch keeps what it captured. This carries the same information
     without the lock.
 
-    Passed to :func:`pzi.add_service.add_input_to_bib`, which appends to it.
+    Passed to :func:`pzi.add_service.add_input_to_bib`, which adds to it.
     Only ever populated in dry-run: in a real run the entries are on disk
     already, and adding them here as well would double them in the index.
     """
 
-    records: list[NormalizedRecord] = field(default_factory=list)
-    entries: list[Any] = field(default_factory=list)
+    #: Planned state keyed by citekey, in first-planned order. One slot per
+    #: paper: a later plan for the same citekey *replaces* the earlier one, so
+    #: the overlay is the merged current state, never a stack of versions.
+    planned: dict[str, tuple[NormalizedRecord, Any]] = field(default_factory=dict)
+
+    @property
+    def records(self) -> list[NormalizedRecord]:
+        return [record for record, _entry in self.planned.values()]
+
+    @property
+    def entries(self) -> list[Any]:
+        return [entry for _record, entry in self.planned.values()]
 
     def remember(self, record: NormalizedRecord, entry: Any) -> None:
-        """Record what one item planned, for the items after it."""
-        self.records.append(record)
-        self.entries.append(entry)
+        """Record what one item planned, for the items after it.
+
+        *record* and *entry* are the plan's merged result: for an update that is
+        the existing paper with this item folded in.
+        """
+        self.planned[str(entry["citekey"])] = (record, entry)
+
+    def overlay(
+        self,
+        records: Sequence[NormalizedRecord],
+        entries: Sequence[Any],
+    ) -> tuple[list[NormalizedRecord], list[Any]]:
+        """The library on disk with this batch's plans laid over it.
+
+        A planned citekey that is on disk replaces that record and entry in
+        place, so positions and the record/entry pairing are unchanged; one that
+        is not on disk is appended. Matching an earlier update against the
+        on-disk copy instead is what made a repeated update re-report changes
+        the previous item had already made.
+        """
+        on_disk = {str(entry["citekey"]) for entry in entries}
+        merged_records = list(records)
+        merged_entries = list(entries)
+        for position, entry in enumerate(entries):
+            planned = self.planned.get(str(entry["citekey"]))
+            if planned is not None:
+                merged_records[position], merged_entries[position] = planned
+        for citekey, (record, entry) in self.planned.items():
+            if citekey not in on_disk:
+                merged_records.append(record)
+                merged_entries.append(entry)
+        return merged_records, merged_entries
 
 
 def batch_status(*, succeeded: int, failed: int) -> str:

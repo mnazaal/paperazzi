@@ -1133,3 +1133,77 @@ def test_a_flaresolverr_capture_names_its_provider() -> None:
         flaresolverr_url="http://127.0.0.1:8191",
     )
     assert record2["metadata_provider"] == "flaresolverr"
+
+
+def _batch_target(tmp_path, text):
+    bib = tmp_path / "lib.bib"
+    bib.write_text(text)
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    return {"name": "main", "path": str(bib), "papers_dir": str(papers), "default": True}
+
+
+def test_a_batch_preview_predicts_repeated_updates_of_an_existing_entry(tmp_path) -> None:
+    """The preview overlay replaced nothing: it appended a second copy.
+
+    Item 2 of a batch naming an on-disk paper matched the on-disk record, not
+    the merged one item 1 planned, so it re-reported item 1's tag change where
+    the real run, writing each item before reading the next, changes nothing.
+    """
+    from pzi.add_planning import BatchPreviewState
+    from pzi.add_service import add_record_with_bib
+
+    target = _batch_target(
+        tmp_path,
+        "@article{smith2024,\n  title = {Graph Parsers},\n  author = {Smith, Jane},\n"
+        "  year = {2024},\n  doi = {10.1000/paper}\n}\n",
+    )
+    items = [
+        {"title": "Graph Parsers", "doi": "10.1000/paper", "tags": ["new"]},
+        {"title": "Graph Parsers", "doi": "10.1000/paper", "tags": ["new"]},
+        {"title": "Graph Parsers", "doi": "10.1000/paper", "tags": ["other"]},
+    ]
+    state = BatchPreviewState()
+    predicted = [
+        add_record_with_bib(
+            bib=target, record=dict(r), dry_run=True, browser_hook=False, batch_preview=state
+        )
+        for r in items
+    ]
+    actual = [
+        add_record_with_bib(bib=target, record=dict(r), dry_run=False, browser_hook=False)
+        for r in items
+    ]
+
+    assert [r["action"] for r in predicted] == [r["action"] for r in actual]
+    assert [r["changed_fields"] for r in predicted] == [r["changed_fields"] for r in actual]
+    assert [r["changed_fields"] for r in actual] == [["tags"], [], ["tags"]]
+
+
+def test_a_batch_preview_keeps_one_merged_copy_of_a_planned_insert(tmp_path) -> None:
+    from pzi.add_planning import BatchPreviewState
+    from pzi.add_service import add_record_with_bib
+
+    target = _batch_target(tmp_path, "")
+    items = [
+        {"title": "Graph Parsers", "doi": "10.1000/new", "authors": ["Smith, Jane"],
+         "year": 2024, "tags": ["a"]},
+        {"title": "Graph Parsers", "doi": "10.1000/new", "tags": ["b"]},
+        {"title": "Graph Parsers", "doi": "10.1000/new", "tags": ["b"]},
+    ]
+    state = BatchPreviewState()
+    predicted = [
+        add_record_with_bib(
+            bib=target, record=dict(r), dry_run=True, browser_hook=False, batch_preview=state
+        )
+        for r in items
+    ]
+    actual = [
+        add_record_with_bib(bib=target, record=dict(r), dry_run=False, browser_hook=False)
+        for r in items
+    ]
+
+    assert [r["action"] for r in actual] == ["insert", "update", "update"]
+    assert [r["action"] for r in predicted] == [r["action"] for r in actual]
+    assert [r["changed_fields"] for r in predicted] == [r["changed_fields"] for r in actual]
+    assert len(state.records) == len(state.entries) == 1
