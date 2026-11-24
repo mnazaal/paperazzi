@@ -116,6 +116,9 @@ def _rotate_token_only(
 ) -> int:
     """Replace the API token, leaving an existing config file untouched."""
     existing = _existing_data_home(dest)
+    refused = _refuse_rotation_behind_token_source(dest, existing, stderr=stderr)
+    if refused is not None:
+        return refused
     if existing.unreadable is not None:
         # The token lives under the config's `pzi_data_home`, which cannot be
         # read. Rotating the default home instead would retire nothing the
