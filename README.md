@@ -365,10 +365,12 @@ rm -rf dist/   # both steps below append; a stale wheel would pass twine check
 .venv/bin/twine check dist/*.tar.gz dist/*.whl
 ```
 
-The suite is hermetic: two autouse fixtures in `tests/conftest.py` pin DNS and
-refuse any non-loopback connection, so no test in the default run reaches the
-network. The exception is `tests/live/`, which is selected only by `PZI_LIVE=1`
-and deliberately does use it.
+Two autouse fixtures in `tests/conftest.py` pin DNS and refuse any
+non-loopback `connect()`, so a test that forgets to mock an outbound call fails
+fast instead of reaching the network. They patch the pytest process only: a
+subprocess a test spawns (as `tests/test_cli_end_to_end.py` does) does not
+inherit them, so the suite is not network-isolated in that case. `tests/live/`
+is selected only by `PZI_LIVE=1` and deliberately uses the network.
 
 `tests/test_cli_end_to_end.py` covers three behaviours that look untestable and
 are not. Each spawns a subprocess, so they are slower than the rest:
