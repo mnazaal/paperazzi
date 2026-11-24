@@ -1502,3 +1502,40 @@ def test_clean_fix_and_its_dry_run_keep_orphans_when_the_target_has_parser_notes
         assert any(i["type"] == "quarantine_skipped" for i in result["issues"])
     for pdf in (ref, other, orphan):
         assert pdf.exists(), pdf
+
+
+def test_clean_fix_skip_names_an_unreadable_target_and_caps_long_note_lists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The skip reason says what is wrong, and stays one readable line."""
+    from pzi import clean_service
+
+    pa = tmp_path / "pa"
+    pa.mkdir()
+    (pa / "orphan.pdf").write_bytes(b"%PDF-1.4\no")
+    a = tmp_path / "a.bib"
+    a.write_text(
+        "".join(
+            f"@article{{k{i},\n  title = {{x}},\n  Title = {{y}},\n  year = {{2020}},\n}}\n"
+            for i in range(50)
+        )
+    )
+    noted = clean_service.clean_library(
+        bib_path=str(a), papers_dir=str(pa), dry_run=True, sibling_bib_paths=[]
+    )
+    [skip] = [i["message"] for i in noted["issues"] if i["type"] == "quarantine_skipped"]
+    assert "and 47 more" in skip
+    assert len(skip) < 1000
+
+    a.write_text("@article{k,\n  title = {x},\n  year = {2020},\n}\n")
+
+    def stale(_path: str) -> object:
+        raise OSError(116, "Stale file handle")
+
+    monkeypatch.setattr(clean_service, "read_bib_file_raw_with_failures", stale)
+    unreadable = clean_service.clean_library(
+        bib_path=str(a), papers_dir=str(pa), dry_run=True, sibling_bib_paths=[]
+    )
+    messages = [i["message"] for i in unreadable["issues"] if i["type"] == "quarantine_skipped"]
+    assert any("cannot read a.bib" in m for m in messages), messages
+    assert (pa / "orphan.pdf").exists()

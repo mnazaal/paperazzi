@@ -811,15 +811,20 @@ def clean_library(
         # `file =`: two `file` keys differing in case keep only one. So any such
         # finding keeps every orphan, decided here so the dry run says what the
         # real run does; the recheck under the lock applies the same rule.
+        target_name = Path(bib_path).name
         try:
             _raw, target_notes = read_bib_file_raw_with_failures(bib_path)
         except _UNREADABLE as exc:
-            target_notes = [f"cannot read: {exc}"]
+            return _skip_quarantine(validation, f"cannot read {target_name}: {exc}")
         if target_notes:
+            shown = "; ".join(target_notes[:3])
+            more = len(target_notes) - 3
+            if more > 0:
+                shown += f"; and {more} more"
             return _skip_quarantine(
                 validation,
-                f"{Path(bib_path).name} has entries pzi cannot fully read "
-                f"({'; '.join(target_notes)}); fix them first",
+                f"{target_name} has {len(target_notes)} entr(ies) pzi cannot fully "
+                f"read ({shown}); fix them first",
             )
 
         # An other library that is not there cannot prove the PDF unreferenced,
