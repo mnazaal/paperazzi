@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from pzi.capture_local_pdf import attach_pdf_if_available
 
 
@@ -512,3 +514,61 @@ def test_the_best_search_hit_wins_not_the_first() -> None:
     )
 
     assert record["doi"] == "10.1109/CVPR.2016.90"
+
+
+@pytest.mark.parametrize("recovered", [False, True])
+def test_local_pdf_strict_gate_checks_merged_record(
+    tmp_path: Path, monkeypatch, recovered: bool
+) -> None:
+    """Strict mode judges the merged record, not whether a provider erred.
+
+    Title-only metadata fails strict mode with no provider error at all, and
+    complete metadata recovered after a provider error succeeds with that error
+    as a warning: the same predicate the DOI/URL branch applies.
+    """
+    import pzi.capture_local_pdf as clp
+
+    source_pdf = tmp_path / "paper.pdf"
+    source_pdf.write_bytes(b"%PDF-1.4\n")
+    papers_dir = tmp_path / "papers"
+    papers_dir.mkdir()
+    bib_path = tmp_path / "library.bib"
+    bib_path.write_text("")
+    monkeypatch.setattr(clp, "extract_pdf_metadata", lambda _p: {"title": "Graph Parsers"})
+
+    def base(**kw):
+        record: dict[str, object] = {"title": "Graph Parsers"}
+        if recovered:
+            kw["errors"].append("earlier provider temporarily failed")
+            record.update(authors=["Smith, Jane"], year=2024, doi="10.1000/recovered")
+        return record
+
+    monkeypatch.setattr(clp, "local_pdf_base_record", base)
+    writes: list[dict] = []
+
+    def writer(**kw):
+        writes.append(kw)
+        return {"status": "ok", "warnings": []}
+
+    result = clp.add_local_pdf(
+        bib={"name": "main", "path": str(bib_path),
+             "papers_dir": str(papers_dir), "default": True},
+        raw_value=str(source_pdf),
+        record_overrides={},
+        dry_run=True,
+        server_url="http://127.0.0.1:1",
+        fetch_search=lambda *a, **kw: [],
+        ensure_citekey=lambda record, *a, **kw: {**record, "citekey": "key"},
+        add_record=writer,
+        strict_metadata=True,
+    )
+
+    if recovered:
+        assert result["status"] == "ok"
+        assert "provider error (earlier provider temporarily failed)" in result["warnings"]
+        assert len(writes) == 1
+    else:
+        assert result["status"] == "error"
+        assert "strict-metadata" in result["message"]
+        assert writes == []
+    assert bib_path.read_text() == ""

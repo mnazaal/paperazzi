@@ -291,6 +291,34 @@ def identifies_a_paper(record: Mapping[str, object]) -> bool:
     return any(_has_value(key) for key in ("title", "doi", "authors", "year"))
 
 
+def strict_metadata_failure(
+    merged: Mapping[str, object],
+    provider_errors: Sequence[str],
+    *,
+    dry_run: bool,
+    bib: Mapping[str, Any] | None = None,
+) -> AddResult | None:
+    """The `--strict-metadata` verdict on a merged record, or ``None`` to go on.
+
+    One predicate for every input kind, applied after the fetched or extracted
+    record and the caller's overrides are merged: the record must satisfy
+    :func:`has_minimum_metadata`. Whether a provider errored on the way is not
+    the test. The local-PDF branch used to refuse on any provider error, so
+    title-only metadata passed when providers were quiet and complete recovered
+    metadata failed after a transient 429. A recovered error is reported as a
+    warning by the caller.
+    """
+    if has_minimum_metadata(merged):
+        return None
+    return error_result(
+        message="metadata is too incomplete to identify a paper (--strict-metadata)",
+        errors=[*minimum_metadata_diagnostics(merged), *provider_errors],
+        dry_run=dry_run,
+        warnings=[],
+        bib=bib,
+    )
+
+
 def minimum_metadata_diagnostics(record: Mapping[str, object]) -> list[str]:
     """Return human-readable lines explaining why metadata is insufficient."""
     lines: list[str] = []

@@ -278,17 +278,6 @@ def add_local_pdf(
         browser_pdf_cmd=browser_pdf_cmd,
         errors=metadata_errors,
     )
-    # Gate before anything is written: reporting the strict failure after the
-    # entry and its PDF had landed would leave exactly the half-verified record
-    # the flag exists to prevent.
-    if strict_metadata and metadata_errors:
-        return _add_planning.error_result(
-            message="metadata provider error (--strict-metadata)",
-            errors=list(metadata_errors),
-            dry_run=dry_run,
-            warnings=[],
-            bib=bib,
-        )
     # Splitting, not a plain merge: `merge_record_sources` does not know about
     # `fallback_*` keys, so a caller-supplied `fallback_title` never filled
     # anything and the capture was then refused below for identifying no
@@ -298,6 +287,16 @@ def add_local_pdf(
     # under this module's name) already splits them; this branch had its own
     # unsplit copy.
     merged = merge_fetched_record_with_overrides(base_record, record_overrides)
+    # Strict mode judges the merged record, as the DOI/URL branch does, and
+    # before anything is copied or written: reporting the failure after the
+    # entry and its PDF had landed would leave the half-verified record the
+    # flag exists to prevent.
+    if strict_metadata:
+        strict_failure = _add_planning.strict_metadata_failure(
+            merged, metadata_errors, dry_run=dry_run, bib=bib
+        )
+        if strict_failure is not None:
+            return strict_failure
     # A provider error on this path used to be dropped on the floor unless
     # `--strict-metadata` was set, so a capture degraded by a Crossref 429 was
     # reported exactly like a clean one. Carried as warnings from here on, the

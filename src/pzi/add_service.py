@@ -534,17 +534,11 @@ def add_input_to_bib(
             merged_for_check = _merge_fetched_record_with_overrides(
                 fetched_record, record_overrides
             )
-            if not has_minimum_metadata(merged_for_check):
-                return _error_result(
-                    message="metadata is too incomplete to identify a paper "
-                            "(--strict-metadata)",
-                    errors=[
-                        *minimum_metadata_diagnostics(merged_for_check),
-                        *provider_errors,
-                    ],
-                    dry_run=dry_run,
-                    warnings=[],
-                )
+            strict_failure = _add_planning.strict_metadata_failure(
+                merged_for_check, provider_errors, dry_run=dry_run
+            )
+            if strict_failure is not None:
+                return strict_failure
     except MetadataExhausted as exc:
         # Every source was tried and answered; none had this paper. It is a
         # `ValueError`, so it used to fall into the clause below and be
