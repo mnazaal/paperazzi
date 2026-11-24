@@ -137,7 +137,7 @@ citekey_format = 'auth.lower + "-" + shorttitle(1, 0).lower + "-" + year'
 
 ### CLI reference
 
-Shared flags: every command accepts `[--config PATH]` to point at a config file other than the default; most library commands also accept `[--target <name|path>]` (`search`/`update` accept multiple, by repeating the flag: `--target a.bib --target b.bib`); commands that report a result accept `[--json]` (see below).
+Shared flags: every command accepts `[--config PATH]` to point at a config file other than the default; most library commands also accept `[--target <name|path>]` (`search`/`update` accept several, by repeating the flag: `--target a.bib --target b.bib`; on every other command a repeated `--target` is refused with exit 2, `given more than once; this command takes a single library`); commands that report a result accept `[--json]` (see below).
 
 **Exit codes.** One meaning per code, so a script can branch on the status alone:
 
@@ -237,7 +237,7 @@ run would write, without creating it.
 
 Configured libraries live in your config file (`[[bibs]]` blocks). Choose the default by setting `default = true` on one of them, and inspect them with `pzi doctor`. Use `pzi --version` to print the installed version.
 
-Without `--target`, commands operate on the configured default library. `--target` may be a configured library name, configured bib path, or direct `.bib` path. A direct `.bib` path must **already exist** — pzi will not create one, so `pzi export --target a | pzi import - --target new.bib` needs `new.bib` to be there first (`: > new.bib`), or declared in `config.toml`, where a not-yet-created file does resolve. Direct `.bib` targets use `<bib-dir>/papers/` for PDFs. Multiple targets are supported only for `search` and `update` (including `update --promote`), and only by repeating the flag: `--target a.bib --target b.bib`. One `--target` never takes two values — on every other command a second bare word is the positional argument, so accepting it here would mean the same spelling meant different things depending on the command.
+Without `--target`, commands operate on the configured default library. `--target` may be a configured library name, configured bib path, or direct `.bib` path. A direct `.bib` path must **already exist** — pzi will not create one, so `pzi export --target a | pzi import - --target new.bib` needs `new.bib` to be there first (`: > new.bib`), or declared in `config.toml`, where a not-yet-created file does resolve. Direct `.bib` targets use `<bib-dir>/papers/` for PDFs. Multiple targets are supported only for `search` and `update` (including `update --promote`), and only by repeating the flag: `--target a.bib --target b.bib`. On every other command, repeating `--target` is a usage error (exit 2) rather than silently using the last one. One `--target` never takes two values — on every other command a second bare word is the positional argument, so accepting it here would mean the same spelling meant different things depending on the command.
 
 `--json` is accepted by the commands that report a result — including the mutating ones (`add`, `update`, `update --promote`, `tag`, `delete`, `import`, `inbox`, `pdf`, `library check|clean|dedupe|list|merge|reindex`) — and always emits one envelope. Three commands do not accept it: `export` (whose output *is* the document), `server`, and `init` (see the CLI reference above). For `search` and `update`, which accept several `--target` values at once, the run still produces a single document: each item carries the `bib_name` it came from rather than the output splitting per library.
 
@@ -466,6 +466,17 @@ it and compares it with what it read at the start. If they differ, another
 program wrote to the library in between, so pzi **refuses and writes nothing**
 (exit 5). The other program's write is left intact and pzi's own work is
 discarded, not the other way round. Re-run once the other writer has stopped.
+
+**Where that protection stops.** Two limits are worth knowing:
+
+- The lock is a `portalocker` lock — `flock` on Linux and macOS,
+  `LockFileEx` on Windows. How reliably it excludes another *pzi* process
+  across a network filesystem (NFS, SMB) depends on the mount and the server,
+  and pzi does not check. Keep the library, and its `.lock` file beside it, on
+  a local disk if more than one machine runs pzi against it.
+- The re-read and the `os.replace` are two steps, not one. A program that does
+  not take the lock and writes in the gap between them is overwritten. The
+  re-read narrows that gap to a few operations; it does not close it.
 
 **Which commands are exposed, and for how long.** The window is the time pzi
 holds the lock:
