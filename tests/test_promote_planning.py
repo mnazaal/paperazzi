@@ -278,3 +278,22 @@ def test_accepted_translator_hit_still_short_circuits():
 
     assert asked == []
     assert result["candidate"]["venue"] == "Proceedings of ACL"
+
+
+def test_rejected_translator_candidate_is_kept_when_the_record_has_no_title():
+    record = {"authors": ["Smith, Jane"], "year": 2024, "arxiv_id": "2401.00001"}
+    wrong = {"title": "Something Else Entirely", "venue": "Proceedings of X",
+             "doi": "10.1000/other", "authors": ["Smith, Jane"], "year": 2024}
+    nothing = lambda t: None  # noqa: E731
+    result = find_published_candidate_with_diagnostics(
+        record=record,
+        server_url="http://localhost:1969",
+        fetch_search=lambda query, *, server_url: [{"record": wrong}],
+        fetch_crossref=nothing, fetch_openalex=nothing, fetch_dblp=nothing,
+        fetch_openreview=nothing, fetch_s2=lambda t: (None, None),
+        s2_api_key=None,
+        gate=_GATE,
+    )
+
+    assert result["candidate"]["title"] == "Something Else Entirely"
+    assert any("Something Else Entirely" in d for d in result["metadata_diagnostics"])

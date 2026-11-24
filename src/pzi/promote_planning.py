@@ -139,10 +139,17 @@ def find_published_candidate_with_diagnostics(
     # 2. Fallback providers (title-based search for published version)
     title = record.get("title")
     if not isinstance(title, str) or not title.strip():
+        # No title, so no fallback search; but a translator hit the gate
+        # rejected is still reported, as before the fallback providers ran.
         return {
-            "candidate": None,
+            "candidate": candidate,
             "provider_errors": provider_errors,
-            "metadata_diagnostics": _with_timing([], timings),
+            "metadata_diagnostics": _with_timing(
+                _published_candidate_diagnostics(record, translation_candidates)
+                if candidate is not None
+                else [],
+                timings,
+            ),
         }
 
     # One loop, not five near-identical blocks. The blocks differed only in the
