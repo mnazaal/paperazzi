@@ -628,3 +628,62 @@ def test_local_pdf_strict_refuses_when_every_provider_fails(
     assert bib_path.read_text() == ""
     assert list(papers_dir.iterdir()) == []
 
+
+def test_local_pdf_batch_preview_matches_real_run_on_citekey_collision(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Two different papers that generate one citekey, previewed then run.
+
+    The preview chose the second item's citekey and PDF path from the on-disk
+    library alone, so it showed the first item's file as the second's and a
+    "requested citekey already taken" warning the real run never prints.
+    """
+    import pzi.capture_local_pdf as clp
+    from pzi.add_planning import BatchPreviewState
+    from pzi.add_service import add_input_to_bib
+
+    records = [
+        {"title": "Graph Parsers", "authors": ["Smith, Jane"], "year": 2024,
+         "doi": "10.1000/a"},
+        {"title": "Graph Parsers", "authors": ["Smith, Jane"], "year": 2024,
+         "doi": "10.1000/b"},
+    ]
+    inputs = []
+    for i in range(2):
+        pdf = tmp_path / f"in{i}.pdf"
+        pdf.write_bytes(b"%PDF-1.4\n" + str(i).encode())
+        inputs.append(pdf)
+    by_path = {str(p): r for p, r in zip(inputs, records)}
+    monkeypatch.setattr(clp, "extract_pdf_metadata", lambda _p: {})
+    monkeypatch.setattr(
+        clp, "local_pdf_base_record", lambda **kw: dict(by_path[kw["raw_value"]])
+    )
+    (tmp_path / "papers").mkdir()
+    config = tmp_path / "config.toml"
+    config.write_text(
+        f'translation_server_url = "http://127.0.0.1:1"\n\n[[bibs]]\nname = "ml"\n'
+        f'path = "{tmp_path / "library.bib"}"\npapers_dir = "{tmp_path / "papers"}"\n'
+        "default = true\n",
+        encoding="utf-8",
+    )
+    state = BatchPreviewState()
+
+    def run(pdf: Path, dry: bool):
+        return add_input_to_bib(
+            config_path=str(config), home_dir=str(tmp_path), value=str(pdf),
+            record_overrides={}, bib_selector=None, dry_run=dry,
+            batch_preview=state if dry else None, fetch_search=lambda *a, **k: [],
+        )
+
+    predicted = [run(p, True) for p in inputs]
+    actual = [run(p, False) for p in inputs]
+
+    keys = ("status", "action", "citekey", "pdf_path", "warnings", "changed_fields")
+    assert [{k: r.get(k) for k in keys} for r in predicted] == [
+        {k: r.get(k) for k in keys} for r in actual
+    ]
+    # Independent of the preview: two distinct entries and two distinct files.
+    assert actual[0]["citekey"] != actual[1]["citekey"]
+    assert actual[0]["pdf_path"] != actual[1]["pdf_path"]
+    assert Path(actual[0]["pdf_path"]).read_bytes().endswith(b"0")
+    assert Path(actual[1]["pdf_path"]).read_bytes().endswith(b"1")

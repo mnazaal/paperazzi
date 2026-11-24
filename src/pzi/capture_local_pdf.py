@@ -281,12 +281,22 @@ def add_local_pdf(
     # commonest reason to add one by path — never took effect.
     force_new: bool = False,
     file_path_style: str = DEFAULT_PDF_FILE_PATH_STYLE,
+    batch_preview: _add_planning.BatchPreviewState | None = None,
 ) -> AddRecordResult:
     raw_value = normalize_local_path(raw_value)
     read_result = read_bib_file(bib["path"])
     existing_records = [
         cast(NormalizedRecord, r) for r in read_result["records"]
     ]
+    if batch_preview is not None:
+        # The citekey and the planned PDF path are chosen below, before
+        # `add_record` sees the batch. Against the on-disk library alone, a
+        # second paper whose generated citekey equals an earlier item's planned
+        # one previewed that item's file as its own and warned of a rename the
+        # real run never makes. Same overlay `add_record_with_bib` applies.
+        existing_records, _entries = batch_preview.overlay(
+            existing_records, read_result["entries"]
+        )
     metadata_errors: list[str] = []
     extracted = extract_pdf_metadata(raw_value)
     base_record = local_pdf_base_record(

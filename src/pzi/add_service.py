@@ -350,6 +350,7 @@ def add_input_to_bib(
             strict_metadata=effective_strict,
             force_new=force_new,
             file_path_style=config.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE),
+            batch_preview=batch_preview,
         ))
 
     def _metadata_cascade_failure(exc: Exception, *, settled: bool) -> AddRecordResult:
