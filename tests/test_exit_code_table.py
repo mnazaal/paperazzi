@@ -5,7 +5,7 @@ real coverage of behaviour and says nothing about the table *as a whole*. The
 1.0 freeze is on the table: one meaning per code, so a script can branch on the
 status alone. That needs three claims checked, not more one-off cases:
 
-1. the README table and `pzi.exit_codes` agree, in both directions;
+1. the `docs/reference.md` table and `pzi.exit_codes` agree, in both directions;
 2. every documented code is actually reachable;
 3. the two signal codes are mapped where they are documented to be.
 """
@@ -39,7 +39,7 @@ ONE_ENTRY = """@article{smith2020,
 
 
 def _documented_codes() -> set[int]:
-    """The codes the README's exit-code table lists.
+    """The codes the exit-code table in `docs/reference.md` lists.
 
     The table has a combined `130 / 141` row, so a row can name more than one
     code — parsed rather than assumed, because that row is exactly the kind of
@@ -47,7 +47,7 @@ def _documented_codes() -> set[int]:
     """
     text = user_docs_text()
     table = re.search(r"\| Code \| Meaning \|\n\|[-| ]+\|\n((?:\|.*\n)+)", text)
-    assert table, "the exit-code table is missing from README.md"
+    assert table, "the exit-code table is missing from the user docs (docs/reference.md)"
     codes: set[int] = set()
     for row in table.group(1).strip().splitlines():
         first_cell = row.split("|")[1]
@@ -74,7 +74,7 @@ def test_the_readme_table_and_the_exit_codes_module_agree() -> None:
     defined = set(_defined_codes().values())
 
     assert documented == defined, (
-        "the README exit-code table and `pzi.exit_codes` disagree.\n"
+        "the `docs/reference.md` exit-code table and `pzi.exit_codes` disagree.\n"
         f"  documented but not defined: {sorted(documented - defined)}\n"
         f"  defined but not documented: {sorted(defined - documented)}\n"
         "Both are frozen at 1.0 — fix whichever is wrong and say so in "

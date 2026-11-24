@@ -1,12 +1,12 @@
 """The compatibility policy names its own mechanisms — item 430.
 
-`README.md`'s "Versioning and compatibility" section makes a promise per frozen
+`docs/reference.md`'s "Versioning and compatibility" section makes a promise per frozen
 surface and names the test that enforces it. That is the whole reason the
 promise is checkable rather than a claim, so a named mechanism that no longer
 exists is worse than naming none: the reader has a reference that looks solid
 and is not.
 
-The rest of the README points at files too — seven other lines name a
+The rest of the user docs point at files too — seven other lines name a
 `tests/...` path as evidence for something — so the check runs over the whole
 document. The `>= 7` floor stays scoped to the policy table, which is the part
 that promises one mechanism per frozen surface.
@@ -18,7 +18,6 @@ import re
 
 from docs_sources import REPO_ROOT, user_docs_text  # noqa: E402
 
-README = REPO_ROOT / "README.md"
 SECTION = "## Versioning and compatibility"
 
 #: Backticked paths in the policy table are the mechanisms it promises. Matched
@@ -53,7 +52,7 @@ def test_every_mechanism_the_policy_names_exists() -> None:
     missing = [path for path in named if not (REPO_ROOT / path).exists()]
     assert not missing, (
         f"the compatibility policy names mechanisms that do not exist: {missing}. "
-        "Either the file moved — update the README — or the surface is no longer "
+        "Either the file moved — update the docs — or the surface is no longer "
         "pinned, in which case the promise about it is no longer true."
     )
 
@@ -87,7 +86,7 @@ def test_every_test_path_the_readme_names_exists() -> None:
     named = sorted(set(_PATH.findall(text)))
     missing = [path for path in named if not (REPO_ROOT / path).exists()]
     assert not missing, (
-        f"the README points at files that do not exist: {missing}"
+        f"the user docs point at files that do not exist: {missing}"
     )
 
 

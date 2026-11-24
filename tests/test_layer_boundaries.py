@@ -5,17 +5,17 @@ pzi keeps core planning logic separate from the side-effecting front-ends
 enforced by review; this test makes it mechanical.
 
 Note: the tier names below describe import *layering*, not functional
-purity — CORE modules may still do real I/O (DNS resolution, HTTP fetches,
-disk reads for a single file). What CORE guarantees is narrower: no
+purity — BASE_LAYER modules may still do real I/O (DNS resolution, HTTP fetches,
+disk reads for a single file). What BASE_LAYER guarantees is narrower: no
 front-end or browser-hook module is anywhere in the dependency chain.
 
 Every pzi/*.py module is classified into exactly one of five tiers:
 
-  CORE      — no front-end AND no browser imports, even transitively.
-  PIPELINE  — may reach browser hooks (PDF/discovery), never front-end.
-  SERVICE   — service-layer modules; no *direct* front-end imports.
-  FRONTEND  — CLI, commands, HTTP API layers.
-  BROWSER   — browser/server-browser hook modules.
+  BASE_LAYER — no front-end AND no browser imports, even transitively.
+  PIPELINE   — may reach browser hooks (PDF/discovery), never front-end.
+  SERVICE    — service-layer modules; no *direct* front-end imports.
+  FRONTEND   — CLI, commands, HTTP API layers.
+  BROWSER    — browser/server-browser hook modules.
 
 Any module not in any tier fails test_all_modules_classified(), forcing an
 explicit decision when a new file is added (no silent drift).
@@ -23,7 +23,7 @@ explicit decision when a new file is added (no silent drift).
 The guard checks:
   • Relative imports (``from . import x``) are resolved within pzi, so a
     back-edge via a relative import is caught the same as an absolute one.
-  • CORE: transitive closure must not reach FRONTEND or BROWSER.
+  • BASE_LAYER: transitive closure must not reach FRONTEND or BROWSER.
   • PIPELINE: transitive closure must not reach FRONTEND.
   • SERVICE: direct imports must not include FRONTEND modules.
 """
@@ -44,7 +44,7 @@ _SRC = Path(pzi.__file__).parent
 # exhaustive-classification test.
 # ---------------------------------------------------------------------------
 
-CORE: frozenset[str] = frozenset(
+BASE_LAYER: frozenset[str] = frozenset(
     {
         # Core data / serialization / algorithm
         "bibtex",
@@ -77,21 +77,21 @@ CORE: frozenset[str] = frozenset(
         "capture_context",
         "html_metadata",
         "metadata_sources",
-        # The shared title-search provider cascade. CORE, not SERVICE: it is a
+        # The shared title-search provider cascade. BASE_LAYER, not SERVICE: it is a
         # table of `(name, fetcher)` pairs over `metadata_sources` with no logic
         # and no service imports, which is what lets both `check_service` and
         # `promote_planning` import it without a cycle.
         "provider_cascade",
         # The "already answered, do not re-ask" sidecar, shared by
-        # `update --promote` and `library check`. CORE like `config` and
+        # `update --promote` and `library check`. BASE_LAYER like `config` and
         # `metadata_cache`: it reads and writes one JSON file and imports
         # nothing but stdlib and `fileio`.
         "ledger",
-        # The read-path parse cache. CORE for the same reason as `ledger`:
+        # The read-path parse cache. BASE_LAYER for the same reason as `ledger`:
         # one JSON file, stdlib plus `config`.
         "parse_cache",
         # Promotion's candidate discovery, split out of `promote_service`.
-        # CORE rather than SERVICE beside the service it came from: it only
+        # BASE_LAYER rather than SERVICE beside the service it came from: it only
         # queries providers and scores what they return, so nothing it imports
         # reaches a front end or a browser hook, and this graph keeps it so.
         "promote_planning",
@@ -105,9 +105,9 @@ CORE: frozenset[str] = frozenset(
         "pdf_acquisition_plan",
         # Shared argv-splitting/stderr-sanitizing helpers for the three
         # `*_cmd` subprocess launchers (page_metadata_cmd, browser_pdf,
-        # capture_context). Stdlib only, no pzi imports — CORE is what lets a
+        # capture_context). Stdlib only, no pzi imports — BASE_LAYER is what lets a
         # BROWSER-tier module (browser_pdf) import it without a cycle, since
-        # CORE->BROWSER is the direction this guard forbids, not the reverse.
+        # BASE_LAYER->BROWSER is the direction this guard forbids, not the reverse.
         "command_argv",
     }
 )
@@ -434,7 +434,7 @@ def test_all_modules_classified() -> None:
     Fails when a new module is added without being classified — no silent drift.
     """
     all_modules = {_module_name(p) for p in _all_module_paths()}
-    all_tiers = CORE | PIPELINE | SERVICE | FRONTEND | BROWSER
+    all_tiers = BASE_LAYER | PIPELINE | SERVICE | FRONTEND | BROWSER
 
     unclassified = all_modules - all_tiers
     assert not unclassified, (
@@ -443,15 +443,15 @@ def test_all_modules_classified() -> None:
     )
 
     # Also assert no module appears in more than one tier (tiers are disjoint).
-    tier_list = [CORE, PIPELINE, SERVICE, FRONTEND, BROWSER]
+    tier_list = [BASE_LAYER, PIPELINE, SERVICE, FRONTEND, BROWSER]
     for i, tier_a in enumerate(tier_list):
         for tier_b in tier_list[i + 1 :]:
             overlap = tier_a & tier_b
             assert not overlap, f"module appears in multiple tiers: {sorted(overlap)}"
 
 
-def test_strict_pure_no_frontend_or_browser_transitively() -> None:
-    """CORE modules must not reach FRONTEND or BROWSER, even transitively.
+def test_base_layer_reaches_no_frontend_or_browser_transitively() -> None:
+    """BASE_LAYER modules must not reach FRONTEND or BROWSER, even transitively.
 
     A single-hop back-edge (``capture_core`` → some helper → ``http_api``) is
     caught here where the old direct-only check would have missed it.
@@ -459,12 +459,12 @@ def test_strict_pure_no_frontend_or_browser_transitively() -> None:
     graph = _build_import_graph()
     forbidden = FRONTEND | BROWSER
     offenders: dict[str, list[str]] = {}
-    for mod in CORE:
+    for mod in BASE_LAYER:
         reached = _transitive_deps(mod, graph) & forbidden
         if reached:
             offenders[mod] = sorted(reached)
     assert not offenders, (
-        "CORE modules transitively import FRONTEND or BROWSER:\n"
+        "BASE_LAYER modules transitively import FRONTEND or BROWSER:\n"
         + "\n".join(f"  {m} → {deps}" for m, deps in sorted(offenders.items()))
     )
 
@@ -533,8 +533,8 @@ def test_no_import_cycles() -> None:
 
 
 # ---------------------------------------------------------------------------
-# `bib_merge` is purer than its tier. CORE is a layering promise, not a purity
-# one — `config`, `fileio` and `safe_http` are all CORE and all touch the
+# `bib_merge` is purer than its tier. BASE_LAYER is a layering promise, not a purity
+# one — `config`, `fileio` and `safe_http` are all BASE_LAYER and all touch the
 # outside world — so membership above does not say what this module claims.
 # ---------------------------------------------------------------------------
 
