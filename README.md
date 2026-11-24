@@ -367,11 +367,13 @@ rm -rf dist/   # both steps below append; a stale wheel would pass twine check
 
 Two autouse fixtures in `tests/conftest.py` stub the SSRF guard's hostname
 lookup (`url_safety.resolve_host_with_timeout`) and refuse any non-loopback
-`connect()`, so a test that forgets to mock an outbound call fails at the
-connect instead of reaching the network. The stub does not cover connect-time
-resolution in `safe_http.resolve_pinned_ips`, which still calls the real
-`getaddrinfo`, so such a test can make a real DNS lookup before the connect is
-refused. They patch the pytest process only: a
+`connect()`, so a test that forgets to mock an outbound call cannot connect out.
+Every other lookup uses the real resolver: connect-time resolution in
+`safe_http.resolve_pinned_ips` (and the browser egress proxy), the plain
+`urlopen` calls in `server_browser`, `flaresolverr`, `ts_backend` and
+`translation_server`, and `cli_server`'s bind-address check. Such a test can
+therefore make a real DNS lookup, and whether it then fails at once or after
+retries depends on whether the resolver works. They patch the pytest process only: a
 subprocess a test spawns (as `tests/test_cli_end_to_end.py` does) does not
 inherit them, so the suite is not network-isolated in that case. `tests/live/`
 is selected only by `PZI_LIVE=1` and deliberately uses the network.

@@ -134,7 +134,7 @@ def _dump_app_config(config: AppConfig) -> str:
 
 @pytest.fixture(autouse=True)
 def _hermetic_dns(request, monkeypatch):
-    """Make hostname resolution deterministic and offline for the unit suite.
+    """Make the SSRF guard's hostname lookup deterministic and offline.
 
     Scope: this patches only ``url_safety.resolve_host_with_timeout``.
     Connect-time resolution in ``safe_http.resolve_pinned_ips`` still calls
@@ -207,8 +207,9 @@ def _block_non_loopback_sockets(request, monkeypatch):
     connecting to that IP over the network. This fixture is the safety net:
     it wraps ``socket.socket.connect``/``connect_ex`` and raises immediately
     for any destination that isn't loopback (127.0.0.0/8 or ::1), so a
-    missing mock fails fast and deterministically instead of hanging or
-    reaching out to the internet.
+    missing mock cannot connect out. It does not stop a real DNS lookup made
+    before the connect (see the README's testing notes for which lookups are
+    not stubbed), so such a test may fail at once or only after retries.
 
     Loopback connections (the ``http_server`` fixture, a config-seeded
     ``translation_server_url`` on 127.0.0.1, etc.) are left untouched — they
