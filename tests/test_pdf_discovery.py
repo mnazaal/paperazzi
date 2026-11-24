@@ -1159,3 +1159,101 @@ def test_discovery_still_refuses_unsafe_candidate_ahead_of_good_one(monkeypatch)
         {"pdf_url_candidates": ["http://169.254.169.254/x.pdf", "https://example.com/ok.pdf"]},
     )
     assert result.get("pdf_url") == "https://example.com/ok.pdf"
+
+
+# --- stored-entry discovery needs a complete runtime context ---
+
+
+def _no_credentials(monkeypatch):
+    import pzi.capture_context as cc
+
+    monkeypatch.setattr(cc, "resolve_optional_value", lambda **kw: None)
+
+
+def test_stored_record_deep_discovery_has_complete_context(public_urls, monkeypatch) -> None:
+    import pzi.pdf_discovery as module
+    from pzi.config import _normalize_app_config
+
+    _no_credentials(monkeypatch)
+    seen: dict = {}
+
+    def fetch_web(url, *, server_url):
+        seen["call"] = (url, server_url)
+        return [{"attachments": [{"url": _GOOD}]}]
+
+    monkeypatch.setattr("pzi.translation_server.fetch_web_translations", fetch_web)
+    monkeypatch.setattr(module, "DEFAULT_DISCOVERY_STEPS", [web_attachment_step])
+    config = _normalize_app_config({}, [], home_dir="/h")
+
+    result = module.discover_pdf_url_for_record(
+        {"canonical_url": "https://example.org/article"}, config=config, deep=True
+    )
+
+    assert result["pdf_url"] == _GOOD
+    assert seen["call"] == ("https://example.org/article", config["translation_server_url"])
+
+
+def test_stored_record_deep_discovery_reports_a_failed_step(public_urls, monkeypatch) -> None:
+    import pzi.pdf_discovery as module
+    from pzi.config import _normalize_app_config
+
+    _no_credentials(monkeypatch)
+
+    def fetch_web(url, *, server_url):
+        raise RuntimeError("translator exploded")
+
+    monkeypatch.setattr("pzi.translation_server.fetch_web_translations", fetch_web)
+    config = _normalize_app_config({}, [], home_dir="/h")
+    result = module.discover_pdf_url_for_record(
+        {"canonical_url": "https://example.org/article"}, config=config, deep=True
+    )
+
+    assert "pdf_url" not in result
+    assert any("translator exploded" in d for d in result["pdf_discovery_diagnostics"])
+
+
+def test_retry_discover_finds_pdf_from_landing_page_alone(public_urls, monkeypatch) -> None:
+    """Public command: an entry with only a landing page, `pdf retry --discover`."""
+    from pzi import pdf_service
+    from pzi.config import _normalize_app_config
+
+    _no_credentials(monkeypatch)
+    record = {"citekey": "smith2024", "title": "T", "canonical_url": "https://example.org/article"}
+    monkeypatch.setattr(
+        pdf_service, "load_bib_target",
+        lambda **kw: (
+            _normalize_app_config({}, [], home_dir="/h"),
+            {"name": "ml", "path": "/b", "papers_dir": "/p"},
+        ),
+    )
+    monkeypatch.setattr(
+        pdf_service, "read_bib_file",
+        lambda path: {"entries": [{"citekey": "smith2024", "fields": {}}], "records": [record]},
+    )
+    captured: dict = {}
+
+    class _Outcome:
+        local_pdf_path = "/p/smith2024.pdf"
+        warning = None
+        errors: list[str] = []
+
+        def __init__(self, url):
+            self.record = {"pdf_url": url}
+
+    def _fetch(*, url, **kw):
+        captured["url"] = url
+        return _Outcome(url)
+
+    monkeypatch.setattr(pdf_service, "fetch_and_store_pdf_trying_sources", _fetch)
+    monkeypatch.setattr(pdf_service, "update_bib_entry", lambda *a, **kw: {"found": True})
+    monkeypatch.setattr(
+        "pzi.translation_server.fetch_web_translations",
+        lambda url, *, server_url: [{"attachments": [{"url": _GOOD}]}],
+    )
+
+    result = pdf_service.retry_pdf(
+        config_path="/f", home_dir="/h", bib_selector=None, citekey="smith2024", deep=True
+    )
+
+    assert result["status"] == "ok", result
+    assert captured["url"] == _GOOD

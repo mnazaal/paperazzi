@@ -6,7 +6,7 @@ import subprocess
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from pzi import exit_codes
 from pzi.command_argv import parse_command_argv
@@ -228,15 +228,23 @@ def _reject_shell_metacharacters(command: str, *, config_key: str | None = None)
             )
 
 
-def build_capture_context(
-    *,
+class DiscoveryCredentials(NamedTuple):
+    contact_email: str | None
+    unpaywall_email: str | None
+    s2_api_key: str | None
+
+
+def resolve_discovery_credentials(
     config: AppConfig,
-    bib: BibConfig,
-    browser_pdf_cmd_override: str | None,
-    browser: str | None,
+    *,
     resolve_secret: Callable[[str | None, str | None], str | None] | None = None,
-) -> CaptureContext:
-    """Build runtime capture context from resolved config and bib selection."""
+) -> DiscoveryCredentials:
+    """Resolve the secrets PDF discovery and the metadata cascade need.
+
+    Shared by :func:`build_capture_context` and by callers that hold a config
+    but no bib (stored-entry discovery), so credential resolution keeps one
+    implementation.
+    """
     # Each secret resolves under its own key, so a failing `*_cmd` says which
     # config line to fix. `resolve_optional_value` takes `config_key` for
     # exactly this and was called without it, so one failure could have been any
@@ -259,6 +267,24 @@ def build_capture_context(
     unpaywall_email = _resolve(
         config["unpaywall_email_cmd"], config["unpaywall_email"], "unpaywall_email_cmd"
     ) or contact_email
+    s2_api_key = _resolve(
+        config["semantic_scholar_api_key_cmd"],
+        config["semantic_scholar_api_key"],
+        "semantic_scholar_api_key_cmd",
+    )
+    return DiscoveryCredentials(contact_email, unpaywall_email, s2_api_key)
+
+
+def build_capture_context(
+    *,
+    config: AppConfig,
+    bib: BibConfig,
+    browser_pdf_cmd_override: str | None,
+    browser: str | None,
+    resolve_secret: Callable[[str | None, str | None], str | None] | None = None,
+) -> CaptureContext:
+    """Build runtime capture context from resolved config and bib selection."""
+    credentials = resolve_discovery_credentials(config, resolve_secret=resolve_secret)
     # Derive api_url from configured host/port.
     api_url = config.get("api_url")
     if not api_url:
@@ -268,13 +294,9 @@ def build_capture_context(
     return CaptureContext(
         config=config,
         bib=bib,
-        contact_email=contact_email,
-        unpaywall_email=unpaywall_email,
-        s2_api_key=_resolve(
-            config["semantic_scholar_api_key_cmd"],
-            config["semantic_scholar_api_key"],
-            "semantic_scholar_api_key_cmd",
-        ),
+        contact_email=credentials.contact_email,
+        unpaywall_email=credentials.unpaywall_email,
+        s2_api_key=credentials.s2_api_key,
         browser_pdf_cmd=browser_pdf_cmd_override or config.get("browser_pdf_cmd"),
         settings=PdfFallbackSettings.from_config(config),
         browser=browser,

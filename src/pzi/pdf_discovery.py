@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import re as _re
 from collections.abc import Callable, Mapping
-from typing import Any, Literal, TypeAlias, cast
+from typing import Any, Literal, TypeAlias, TypedDict, cast
 from urllib.parse import urlsplit, urlunsplit
 
 from pzi.bibtex import NormalizedRecord
@@ -24,7 +24,43 @@ from pzi.identifiers import detect_preprint_source
 from pzi.protocols import accepts_keyword
 from pzi.url_safety import classify_public_http_url, origin_of, safe_public_http_url
 
-PdfDiscoveryContext: TypeAlias = dict[str, Any]
+
+class PdfDiscoveryContext(TypedDict, total=False):
+    """What the discovery steps read at run time.
+
+    A distinct type from ``AppConfig`` on purpose: the steps index ``fetch_web``,
+    ``raw_value`` and ``server_url`` directly, so a config dict standing in for
+    this made every landing-page lookup raise ``KeyError``. Built by
+    ``add_planning.build_discovery_context``; the fetchers are injectable seams.
+    """
+
+    raw_value: str
+    server_url: str
+    unpaywall_email: str | None
+    contact_email: str | None
+    s2_api_key: str | None
+    flaresolverr_url: str | None
+    browser_pdf_cmd: str | None
+    pdf_url_candidates: list[str] | None
+    cookies: str | None
+    cookie_origin: str | None
+    fetch_web: Callable[..., Any] | None
+    fetch_unpaywall: Callable[..., Any] | None
+    fetch_crossref: Callable[..., Any] | None
+    fetch_openalex: Callable[..., Any] | None
+    fetch_s2: Callable[..., Any] | None
+    fetch_flaresolverr: Callable[..., Any] | None
+    fetch_crossref_pdf: Callable[..., Any] | None
+    fetch_europepmc_pdf: Callable[..., Any] | None
+    fetch_doaj_pdf: Callable[..., Any] | None
+    translation_attachments: list[dict[str, object]] | None
+    api_url: str | None
+    api_auth_token: str | None
+    desktop_fallback_hosts: set[str] | None
+    pdf_discovery_parallel: bool
+    exclude_pdf_urls: frozenset[str] | set[str] | None
+    metadata_fetch_text: Callable[..., str] | None
+    discovery_diagnostics: list[str]
 
 PdfCandidate: TypeAlias = dict[str, Any]
 
@@ -397,8 +433,14 @@ def web_attachment_step(
     result provides them and the record currently lacks them.
     """
 
-    fetch_web = context["fetch_web"]
-    candidate_urls = landing_page_urls(base_record=record, raw_value=context["raw_value"])
+    fetch_web = context.get("fetch_web")
+    if fetch_web is None:
+        # Recorded as this step's failure by the scheduler, as a missing key was.
+        raise RuntimeError("discovery context has no fetch_web")
+    server_url = context.get("server_url", "")
+    candidate_urls = landing_page_urls(
+        base_record=record, raw_value=context.get("raw_value", "")
+    )
 
     for url in candidate_urls:
         # The translation-server *fetches* whatever URL it is handed, so an
@@ -416,9 +458,9 @@ def web_attachment_step(
         try:
             cookies = cookies_for_url(context, url)
             if cookies is not None:
-                results = fetch_web(url, server_url=context["server_url"], cookies=cookies)
+                results = fetch_web(url, server_url=server_url, cookies=cookies)
             else:
-                results = fetch_web(url, server_url=context["server_url"])
+                results = fetch_web(url, server_url=server_url)
         except (OSError, ValueError):
             continue
 
@@ -470,7 +512,9 @@ def browser_pdf_step(
 
     doi = record.get("doi") if isinstance(record.get("doi"), str) else None
 
-    for url in landing_page_urls(base_record=record, raw_value=context["raw_value"]):
+    for url in landing_page_urls(
+        base_record=record, raw_value=context.get("raw_value", "")
+    ):
         # Same defect as `web_attachment_step` above: this URL comes from
         # provider metadata / captured pages and is handed to the server API
         # or a browser hook that will fetch it, so an unvalidated
@@ -811,5 +855,49 @@ def discover_pdf_url_for_record(
         for step in DEFAULT_DISCOVERY_STEPS
         if phase_of(step) == "pure" or (deep and phase_of(step) == "http")
     ]
-    context: PdfDiscoveryContext = dict(config or {})
-    return apply_pdf_discovery(record, steps, context)
+    context = _stored_record_context(record, config or {}, deep=deep)
+    found = apply_pdf_discovery(record, steps, context)
+    # A raising step is swallowed as "no result"; without this, a permanently
+    # broken provider reads like a paper with no open-access copy. Same
+    # convention as the add path, and only when nothing was found.
+    if not found.get("pdf_url"):
+        failures = discovery_diagnostics(context)
+        if failures:
+            found = cast(NormalizedRecord, {**found, "pdf_discovery_diagnostics": failures})
+    return found
+
+
+def _stored_record_context(
+    record: NormalizedRecord, config: Mapping[str, Any], *, deep: bool
+) -> PdfDiscoveryContext:
+    """The runtime context the discovery steps read, built for a stored entry.
+
+    Config keys are not context keys: the HTTP steps index ``fetch_web``,
+    ``raw_value`` and ``server_url`` directly, so a bare copy of the config made
+    every landing-page lookup raise ``KeyError`` and be swallowed. The pure
+    steps need none of this, so credentials (which may run a ``*_cmd``) and the
+    composed fetcher are resolved only for *deep*.
+    """
+    # Imported here: `add_planning` and `capture_context` import this module.
+    from pzi.add_planning import build_discovery_context
+    from pzi.capture_context import resolve_discovery_credentials
+    from pzi.fetch_helpers import build_metadata_fetch_text
+    from pzi.translation_server import fetch_web_translations
+
+    raw_value = str(
+        record.get("source_url") or record.get("canonical_url") or record.get("doi") or ""
+    )
+    server_url = str(config.get("translation_server_url") or "")
+    if not deep:
+        return build_discovery_context(raw_value=raw_value, server_url=server_url)
+    credentials = resolve_discovery_credentials(cast(Any, config))
+    return build_discovery_context(
+        raw_value=raw_value,
+        server_url=server_url,
+        unpaywall_email=credentials.unpaywall_email,
+        contact_email=credentials.contact_email,
+        s2_api_key=credentials.s2_api_key,
+        flaresolverr_url=config.get("flaresolverr_url"),
+        fetch_web=fetch_web_translations,
+        metadata_fetch_text=build_metadata_fetch_text(config, api_key=credentials.s2_api_key),
+    )
