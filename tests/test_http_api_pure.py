@@ -1492,3 +1492,44 @@ def test_every_route_that_resolves_a_library_reports_a_failure_identically(
         assert body["status"] == "error", name
         assert body["errors"], name
     assert len({repr(answer) for answer in answers.values()}) == 1, answers
+
+
+@pytest.mark.parametrize("bad", [["b", "b"], 7, {"name": "b"}, True, 1.5])
+def test_http_refuses_a_non_string_bib_before_any_write(tmp_path: Path, bad: object) -> None:
+    """A non-string `bib` is a 400, not a silent fall-back to the default library.
+
+    A list-valued `bib` used to mean "the default library", so a delete naming
+    library b removed the entry from a, which nobody named.
+    """
+    entry = "@article{shared,\n  title = {From %s},\n  year = {2024},\n}\n"
+    a, b = tmp_path / "a.bib", tmp_path / "b.bib"
+    a.write_text(entry % "A")
+    b.write_text(entry % "B")
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        f'[[bibs]]\nname = "a"\npath = "{a}"\ndefault = true\n'
+        f'[[bibs]]\nname = "b"\npath = "{b}"\n'
+    )
+
+    status, body = http_post_routes.process_post_request(
+        "/delete", {"citekey": "shared", "bib": bad, "force": True}, str(cfg), str(tmp_path)
+    )
+
+    assert status == 400
+    assert "bib" in body["error"]
+    assert a.read_text() == entry % "A"
+    assert b.read_text() == entry % "B"
+
+
+def test_http_accepts_an_absent_or_null_bib_as_the_default(tmp_path: Path) -> None:
+    a = tmp_path / "a.bib"
+    a.write_text("@article{k,\n  title = {T},\n  year = {2024},\n}\n")
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(f'[[bibs]]\nname = "a"\npath = "{a}"\ndefault = true\n')
+
+    for body in ({"citekey": "k"}, {"citekey": "k", "bib": None}):
+        status, _ = http_post_routes.process_post_request(
+            "/delete", {**body, "force": True}, str(cfg), str(tmp_path)
+        )
+        assert status != 400
+        a.write_text("@article{k,\n  title = {T},\n  year = {2024},\n}\n")

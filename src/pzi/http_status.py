@@ -71,6 +71,8 @@ def reject_unconfigured_bib_selector(
     """
     from pzi.config import is_configured_selector
 
+    if selector is not None and not isinstance(selector, str):
+        return 400, {"error": "bib must be a string naming a configured library"}
     if not isinstance(selector, str) or not selector.strip():
         return None
     if config is None:
@@ -108,9 +110,9 @@ def require_object(body: Any) -> tuple[int, dict[str, Any]] | None:
 def bib_selector_of(body: Mapping[str, Any]) -> str | None:
     """The ``bib`` selector from a request body, or ``None`` if it is not a string.
 
-    A non-string ``bib`` means "the default library" rather than an error: the
-    confinement check (`reject_unconfigured_bib_selector`) is what refuses a
-    library the config does not declare, and it runs before any route handler.
+    ``None`` means "the default library". A non-string, non-null ``bib`` never
+    reaches here: `reject_unconfigured_bib_selector` answers 400 before any
+    route handler runs, so it cannot silently become the default.
     """
     selector = body.get("bib")
     return selector if isinstance(selector, str) else None
