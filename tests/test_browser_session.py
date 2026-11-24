@@ -170,6 +170,110 @@ def test_session_fetch_direct_follows_a_safe_redirect_chain() -> None:
     assert result.body == b"%PDF-1.4 mirrored"
 
 
+class _DisposableResponse:
+    def __init__(self, status, headers, body_bytes=b"", body_error=None):
+        self.status = status
+        self.headers = headers
+        self._body = body_bytes
+        self._body_error = body_error
+        self.disposed = 0
+
+    def body(self):
+        if self._body_error is not None:
+            raise self._body_error
+        return self._body
+
+    def dispose(self):
+        self.disposed += 1
+
+
+def _fetch_with(responses_by_call, *, allowed=lambda u: True):
+    """Run fetch_direct against scripted responses; return result and responses."""
+    issued = []
+    calls = iter(responses_by_call)
+
+    class FakeRequest:
+        def get(self, url, **kwargs):
+            response = next(calls)
+            issued.append(response)
+            return response
+
+    class FakePage:
+        request = FakeRequest()
+
+    s = BrowserSession(
+        playwright="pw", browser_ref="br", page=FakePage(), url_allowed=allowed
+    )
+    return s.fetch_direct("https://example.com/paper.pdf"), issued
+
+
+def test_fetch_direct_disposes_success_response_and_keeps_bytes() -> None:
+    ok = _DisposableResponse(200, {"content-type": "application/pdf"}, b"%PDF-1.4 ok")
+    result, issued = _fetch_with([ok])
+    assert result.body == b"%PDF-1.4 ok"
+    assert [r.disposed for r in issued] == [1]
+
+
+def test_fetch_direct_disposes_non_200_response() -> None:
+    nf = _DisposableResponse(404, {"content-type": "text/html"}, b"nope")
+    result, issued = _fetch_with([nf])
+    assert result.status == 404
+    assert [r.disposed for r in issued] == [1]
+
+
+def test_fetch_direct_disposes_every_redirect_hop() -> None:
+    hop = _DisposableResponse(302, {"location": "https://mirror.example/p.pdf"})
+    ok = _DisposableResponse(200, {"content-type": "application/pdf"}, b"%PDF-1.4 m")
+    result, issued = _fetch_with([hop, ok])
+    assert result.body == b"%PDF-1.4 m"
+    assert [r.disposed for r in issued] == [1, 1]
+
+
+def test_fetch_direct_disposes_rejected_redirect_hop() -> None:
+    hop = _DisposableResponse(302, {"location": "http://127.0.0.1/admin"})
+    result, issued = _fetch_with([hop], allowed=lambda u: "127.0.0.1" not in u)
+    assert result.status == -1
+    assert [r.disposed for r in issued] == [1]
+
+
+def test_fetch_direct_disposes_redirect_without_location() -> None:
+    hop = _DisposableResponse(302, {})
+    result, issued = _fetch_with([hop])
+    assert result.status == -1
+    assert [r.disposed for r in issued] == [1]
+
+
+def test_fetch_direct_disposes_when_body_raises() -> None:
+    bad = _DisposableResponse(200, {}, body_error=RuntimeError("boom"))
+    result, issued = _fetch_with([bad])
+    assert result.status == -1
+    assert [r.disposed for r in issued] == [1]
+
+
+def test_fetch_direct_disposes_every_response_on_exhausted_hops() -> None:
+    from pzi.browser_session import _MAX_FETCH_DIRECT_REDIRECTS
+
+    hops = [
+        _DisposableResponse(302, {"location": f"https://h{i}.example/p"})
+        for i in range(_MAX_FETCH_DIRECT_REDIRECTS + 1)
+    ]
+    result, issued = _fetch_with(hops)
+    assert result.status == -1
+    assert len(issued) == _MAX_FETCH_DIRECT_REDIRECTS + 1
+    assert all(r.disposed == 1 for r in issued)
+
+
+def test_fetch_direct_survives_a_dispose_that_raises() -> None:
+    ok = _DisposableResponse(200, {"content-type": "application/pdf"}, b"%PDF-1.4 ok")
+
+    def boom():
+        raise RuntimeError("driver gone")
+
+    ok.dispose = boom  # type: ignore[method-assign]
+    result, _ = _fetch_with([ok])
+    assert result.body == b"%PDF-1.4 ok"
+
+
 def test_session_wait_network_idle() -> None:
     class FakePage:
         def wait_for_load_state(self, state, timeout=None):

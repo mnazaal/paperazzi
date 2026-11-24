@@ -55,6 +55,14 @@ PLAYWRIGHT_INSTALL_HINT = (
 )
 
 
+def _dispose_response(response: Any) -> None:
+    """Release an API response's driver-side buffer; never raise."""
+    try:
+        response.dispose()
+    except Exception:
+        pass
+
+
 def _sweep_stale_profile_clones(
     *, now: float | None = None, temp_root: Path | None = None
 ) -> list[Path]:
@@ -272,29 +280,37 @@ class BrowserSession:
                 response = self.page.request.get(
                     current, max_redirects=0, timeout=remaining_ms
                 )
-                if response.status not in _REDIRECT_STATUSES:
-                    ct = response.headers.get("content-type", "")
-                    body = response.body() if response.status == 200 else b""
-                    # The driver can report a cut body as a clean end, and with no
-                    # framing that looks complete (`PinningProxy.cut_responses`).
-                    # The count covers every connection, so another one's cut can
-                    # fail this fetch too. That is why framed responses, which the
-                    # driver rejects by itself, do not consult it.
-                    if (
-                        _is_close_delimited(response.headers)
-                        and self._cut_responses() != cuts_before
-                    ):
+                try:
+                    if response.status not in _REDIRECT_STATUSES:
+                        ct = response.headers.get("content-type", "")
+                        body = response.body() if response.status == 200 else b""
+                        # The driver can report a cut body as a clean end, and with
+                        # no framing that looks complete
+                        # (`PinningProxy.cut_responses`). The count covers every
+                        # connection, so another one's cut can fail this fetch too.
+                        # That is why framed responses, which the driver rejects by
+                        # itself, do not consult it.
+                        if (
+                            _is_close_delimited(response.headers)
+                            and self._cut_responses() != cuts_before
+                        ):
+                            return FetchResult(status=-1, content_type=None, body=b"")
+                        return FetchResult(
+                            status=response.status, content_type=ct, body=body
+                        )
+                    location = response.headers.get("location")
+                    if not location:
                         return FetchResult(status=-1, content_type=None, body=b"")
-                    return FetchResult(status=response.status, content_type=ct, body=body)
-                location = response.headers.get("location")
-                if not location:
-                    return FetchResult(status=-1, content_type=None, body=b"")
-                next_url = urljoin(current, location)
-                if not self.url_allowed(next_url):
-                    # Refused before the hop is ever requested — the point of
-                    # following redirects manually instead of letting
-                    # `request.get` do it.
-                    return FetchResult(status=-1, content_type=None, body=b"")
+                    next_url = urljoin(current, location)
+                    if not self.url_allowed(next_url):
+                        # Refused before the hop is ever requested — the point of
+                        # following redirects manually instead of letting
+                        # `request.get` do it.
+                        return FetchResult(status=-1, content_type=None, body=b"")
+                finally:
+                    # Playwright keeps an API response's body in the driver until
+                    # it is disposed; `body` above is already a copy.
+                    _dispose_response(response)
                 current = next_url
             # Exhausted the hop budget without a non-redirect response.
             return FetchResult(status=-1, content_type=None, body=b"")
