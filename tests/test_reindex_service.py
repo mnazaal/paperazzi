@@ -1157,3 +1157,90 @@ def test_reindex_dry_run_previews_the_sibling_hold(tmp_path) -> None:
     first = next(c for c in result["changed"] if c["old_citekey"] == "old")
     assert not first["renamed_pdf"]
     assert any("another library" in e for e in result["errors"])
+
+
+# ── source identity: an external writer that ignores the lock ─────────────────
+
+_TWO_ENTRIES = (
+    "@article{old1,\n  title = {First Paper},\n  author = {Smith, Jane},\n"
+    "  year = {2020},\n  file = {PDF1},\n}\n\n"
+    "@article{old2,\n  title = {Second Paper},\n  author = {Jones, Ann},\n"
+    "  year = {2021},\n}\n"
+)
+
+
+def _drift_field_edit(text: str) -> str:
+    return text.replace("title = {First", "note = {EXTERNAL},\n  title = {First")
+
+
+def _drift_same_count_replacement(text: str) -> str:
+    return text.replace("old2", "foreign").replace("Second Paper", "Foreign Paper")
+
+
+def _drift_reorder(text: str) -> str:
+    first, second = text.split("\n\n", 1)
+    return second.rstrip("\n") + "\n\n" + first + "\n"
+
+
+@pytest.mark.parametrize(
+    "drift", [_drift_field_edit, _drift_same_count_replacement, _drift_reorder],
+    ids=["field-edit", "same-count-replacement", "reorder"],
+)
+def test_reindex_refuses_to_overwrite_drift_from_the_source_it_planned_on(
+    tmp_path, monkeypatch, drift
+) -> None:
+    """Another writer that does not take pzi's lock changes the bib after the PDF
+    renames: the write must refuse, keep the external text and put the PDF back."""
+    from pzi import reindex_service
+    from pzi.errors import PziError
+
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    pdf = papers / "orig.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    bib = tmp_path / "lib.bib"
+    bib.write_text(_TWO_ENTRIES.replace("PDF1", str(pdf)))
+    real = reindex_service._rename_planned_pdfs
+    drifted: list[str] = []
+
+    def rename_then_drift(*args, **kwargs):
+        renamed = real(*args, **kwargs)
+        assert renamed, "the scenario must move a PDF"
+        bib.write_text(drift(bib.read_text()))
+        drifted.append(bib.read_text())
+        return renamed
+
+    monkeypatch.setattr(reindex_service, "_rename_planned_pdfs", rename_then_drift)
+
+    with pytest.raises(PziError):
+        reindex_library(bib_path=str(bib), papers_dir=str(papers), dry_run=False)
+
+    assert bib.read_text() == drifted[0]
+    assert pdf.read_bytes() == b"%PDF-1.4\n", "PDF rename was not rolled back"
+    assert not list(tmp_path.glob("lib.bib.*.bak*")), "left a backup of a write that did not happen"
+
+
+def test_convert_file_paths_refuses_to_overwrite_drift_from_its_source(
+    tmp_path, monkeypatch
+) -> None:
+    from pzi import reindex_service
+    from pzi.errors import PziError
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    bib = tmp_path / "lib.bib"
+    bib.write_text(f"@article{{a2024,\n  title = {{A}},\n  file = {{{home}/x.pdf}},\n}}\n")
+    real = reindex_service.rewrite_entries_in_order_locked
+
+    def drift_then_write(path, entries, **kwargs):
+        bib.write_text(bib.read_text().replace("title = {A}", "note = {EXTERNAL},\n  title = {A}"))
+        return real(path, entries, **kwargs)
+
+    monkeypatch.setattr(reindex_service, "rewrite_entries_in_order_locked", drift_then_write)
+
+    with pytest.raises(PziError):
+        convert_file_paths(bib_path=str(bib), file_path_style="home", dry_run=False)
+
+    assert "EXTERNAL" in bib.read_text()
+    assert f"{home}/x.pdf" in bib.read_text()

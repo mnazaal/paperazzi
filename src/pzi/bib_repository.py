@@ -1921,7 +1921,8 @@ def rewrite_entries_in_order_locked(
     path: str,
     entries: list[BibtexEntry],
     *,
-    file_path_style: str = "absolute",
+    expected_source: str,
+    file_path_style: str = DEFAULT_PDF_FILE_PATH_STYLE,
 ) -> list[BibtexEntry]:
     """Rewrite all entries in their existing order, preserving non-entry blocks.
 
@@ -1932,8 +1933,21 @@ def rewrite_entries_in_order_locked(
     Requires *entries* to be in the same order and count as the on-disk entry
     blocks (positional replace, which also supports citekey renames).  Comment
     positions, ``@string``, and ``@preamble`` are preserved.
+
+    *expected_source* is the text *entries* were read from.  A writer that does
+    not honor the lock can change the file while the caller plans: entry count
+    alone cannot see a same-count replacement, an edited field or a reorder, and
+    adopting the newer text as the baseline would render the older entries over
+    it.  Any difference refuses the write.
     """
     source = read_bib_source(path)
+    if source != expected_source:
+        raise PziError(
+            f"the bib changed while the reindex was being prepared: {path} no "
+            "longer matches the text the plan was made from — nothing was "
+            "rewritten; retry the command",
+            code=exit_codes.ENVIRONMENT,
+        )
     library = parse_bib_library(source)
     validate_library_parseable(library)
     existing_entries, _records = library_to_entries_records(library, path)

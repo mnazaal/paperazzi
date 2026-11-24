@@ -484,6 +484,11 @@ def reindex_library(
     run cannot rewrite that library's ``file`` field.
     """
     with with_bib_lock(bib_path, shared=dry_run):
+        # Read the text first: a writer that ignores the lock can change the file
+        # between the two reads, and a baseline read *after* the entries would
+        # bless text the entries did not come from. Read first, a change shows
+        # up as a mismatch at write time.
+        source = read_bib_source(bib_path)
         raw, dropped = read_bib_file_raw_with_failures(bib_path)
         entries: list[BibtexEntry] = raw["entries"]
         records: list[NormalizedRecord] = raw["records"]
@@ -606,7 +611,8 @@ def reindex_library(
                     bib_dir=os.path.dirname(os.path.abspath(bib_path)),
                 )
                 rewrite_entries_in_order_locked(
-                    bib_path, entries, file_path_style=file_path_style
+                    bib_path, entries, expected_source=source,
+                    file_path_style=file_path_style,
                 )
             except BaseException:
                 for old_pdf, new_pdf in reversed(renamed):
@@ -669,6 +675,7 @@ def rename_files_to_policy(
     # `read_bib_file` acquires the lock itself, so calling it here deadlocks
     # against the lock this function already holds.
     with with_bib_lock(bib_path, shared=dry_run):
+        source = read_bib_source(bib_path)
         raw, _dropped = read_bib_file_raw_with_failures(bib_path)
         entries = raw["entries"]
         records = raw["records"]
@@ -786,7 +793,8 @@ def rename_files_to_policy(
                         ):
                             entry.setdefault("fields", {})["file"] = change["new_pdf"]
                 rewrite_entries_in_order_locked(
-                    bib_path, entries, file_path_style=file_path_style
+                    bib_path, entries, expected_source=source,
+                    file_path_style=file_path_style,
                 )
             except BaseException:
                 for old_pdf, new_pdf in reversed(moved):
@@ -854,6 +862,7 @@ def convert_file_paths(
     attachment) is left exactly as it is.
     """
     with with_bib_lock(bib_path, shared=dry_run):
+        source = read_bib_source(bib_path)
         raw, dropped = read_bib_file_raw_with_failures(bib_path)
         entries: list[BibtexEntry] = raw["entries"]
         warnings = [*read_bib_notices(bib_path), *dropped]
@@ -913,7 +922,8 @@ def convert_file_paths(
             shutil.copy2(bib_path, backup_path)
             try:
                 rewrite_entries_in_order_locked(
-                    bib_path, entries, file_path_style=file_path_style,
+                    bib_path, entries, expected_source=source,
+                    file_path_style=file_path_style,
                 )
             except BaseException:
                 backup_path.unlink(missing_ok=True)
