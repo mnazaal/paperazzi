@@ -1454,3 +1454,38 @@ def test_clean_fix_keeps_orphans_when_a_library_turns_unreadable_under_the_lock(
     assert orphan.read_bytes() == b"%PDF-1.4\nb"
     assert result["actions"] == []
     assert any(i["type"] == "quarantine_skipped" for i in result["issues"])
+
+
+def test_clean_fix_is_not_blocked_by_the_targets_own_non_blocking_findings(
+    tmp_path: Path,
+) -> None:
+    """The under-lock recheck blocks the target on the scan's rule, not on every note.
+
+    A `#`-concatenated title is reported by the parser but drops nothing; the
+    scan does not block on it and `--dry-run` previews the move, so `--fix`
+    must make it.
+    """
+    from pzi import clean_service
+
+    pa = tmp_path / "pa"
+    pa.mkdir()
+    (pa / "x.pdf").write_bytes(b"%PDF-1.4\nx")
+    orphan = pa / "orphan.pdf"
+    orphan.write_bytes(b"%PDF-1.4\no")
+    a = tmp_path / "a.bib"
+    a.write_text(
+        "@article{h,\n  title = {a} # {b},\n  author = {Smith, J},\n"
+        f"  year = {{2020}},\n  file = {{{pa / 'x.pdf'}}},\n}}\n"
+    )
+
+    dry = clean_service.clean_library(
+        bib_path=str(a), papers_dir=str(pa), dry_run=True, sibling_bib_paths=[]
+    )
+    real = clean_service.clean_library(
+        bib_path=str(a), papers_dir=str(pa), dry_run=False, sibling_bib_paths=[]
+    )
+
+    assert [Path(x["source"]).name for x in dry["actions"]] == ["orphan.pdf"]
+    assert [Path(x["source"]).name for x in real["actions"]] == ["orphan.pdf"]
+    assert not orphan.exists()
+    assert (pa / "x.pdf").exists()
