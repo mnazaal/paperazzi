@@ -851,3 +851,27 @@ def test_a_failed_re_read_does_not_fail_a_committed_import(monkeypatch) -> None:
         assert result["status"] == "ok", result
         assert result["imported"] == 1, result
         assert any("could not re-read the library" in w for w in result["warnings"])
+
+
+def test_an_unresolvable_home_in_a_library_file_field_does_not_fail_the_import() -> None:
+    """`~unknownuser/` makes `expanduser` raise after the commit; that is a warning."""
+    with tempfile.TemporaryDirectory() as td:
+        first, second = _two_source_pdfs(td)
+        cp, bp, _pd = _setup_config(td)
+        Path(bp).write_text(
+            "@article{dual, title = {Two}, author = {Doe, Jane}, year = {2020},\n"
+            "  doi = {10.1000/dual}, file = {~nosuchuser_pzi_zz/x.pdf}}\n"
+        )
+        src = os.path.join(td, "src", "export.bib")
+        Path(src).write_text(
+            "@article{dual, title = {Two}, author = {Doe, Jane}, year = {2020},\n"
+            "  doi = {10.1000/dual}, file = {" + f"{first};{second}" + "}}\n"
+            "@article{new1, title = {New}, author = {Roe, R}, year = {2021},\n"
+            "  doi = {10.1000/new1}}\n"
+        )
+
+        result = import_from_bibtex(config_path=cp, home_dir=td, source_path=src)
+
+        assert result["status"] == "ok", result
+        assert result["imported"] == 1, result
+        assert any("could not re-read the library" in w for w in result["warnings"])

@@ -11,7 +11,7 @@ from pzi.bib_repository import read_bib_file
 from pzi.bib_serialize import parse_bibtex_for_import, resolved_attachment_paths
 from pzi.bibtex import bibtex_entry_to_record
 from pzi.config import DEFAULT_PDF_FILE_PATH_STYLE, BibResolutionFailure, load_bib_target
-from pzi.errors import REASON_CONFIG, REASON_UNAVAILABLE, REASON_USAGE
+from pzi.errors import REASON_CONFIG, REASON_UNAVAILABLE, REASON_USAGE, PziError
 from pzi.fileio import read_text_utf8
 
 
@@ -284,9 +284,19 @@ def import_from_bibtex(
             })
             errors.append(f"{citekey}: {result.get('message', 'unknown error')}")
 
-    warnings.extend(
-        _unmerged_attachment_warnings(bib["path"], source_path, merged_sources)
-    )
+    try:
+        warnings.extend(
+            _unmerged_attachment_warnings(bib["path"], source_path, merged_sources)
+        )
+    except (PziError, OSError, ValueError, RuntimeError) as exc:
+        # Reported, not raised: the import already committed. A second writer
+        # holding the lock past its timeout (PziError), an unreadable file
+        # (OSError), or `~unknownuser/` in a `file` field (RuntimeError from
+        # `expanduser`) must not turn a committed import into a failure.
+        warnings.append(
+            "could not re-read the library to check for source attachments a "
+            f"merge left out: {exc}"
+        )
 
     prefix = "DRY RUN: " if dry_run else ""
     return {
@@ -341,15 +351,7 @@ def _unmerged_attachment_warnings(
     """
     if not merged_sources:
         return []
-    try:
-        entries = read_bib_file(bib_path)["entries"]
-    except Exception as exc:  # reported, not raised: the import already committed
-        # A second writer holding the lock past its timeout, or the file going
-        # away, must not turn a committed import into a reported failure.
-        return [
-            "could not re-read the library to check for source attachments a "
-            f"merge left out: {exc}"
-        ]
+    entries = read_bib_file(bib_path)["entries"]
     by_key = {entry.get("citekey"): entry for entry in entries}
 
     def located(paths: list[str]) -> set[str]:

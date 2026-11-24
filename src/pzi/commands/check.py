@@ -56,17 +56,29 @@ def _canonical_path(path: str) -> str:
     return os.path.realpath(os.path.expanduser(path))
 
 
+def _stat_output(name: str) -> os.stat_result:
+    """`os.stat` of *name*, where `-` means this process's stdout (fd 1).
+
+    `os.fstat(1)`, not the path `/dev/stdout`: a minimal `/dev` without that
+    link made the comparison fail open, so `--report - >> <library>` appended
+    the report to the library again.
+    """
+    return os.fstat(1) if name == "-" else os.stat(name)
+
+
 def _same_file(left: str, right: str) -> bool:
     """True when the two names reach the same file, by name or by inode.
+
+    `-` names stdout and is compared by inode only.
 
     The inode half is not redundant: two hard links are different paths that
     `realpath` cannot join, and writing through one truncates the other.
     """
-    if _canonical_path(left) == _canonical_path(right):
+    if "-" not in (left, right) and _canonical_path(left) == _canonical_path(right):
         return True
     try:
-        left_stat = os.stat(left)
-        right_stat = os.stat(right)
+        left_stat = _stat_output(left)
+        right_stat = _stat_output(right)
     except OSError:
         return False
     return (left_stat.st_dev, left_stat.st_ino) == (
@@ -115,12 +127,11 @@ def _output_alias_refusal(
     for flag, path in (("--report", report_path), ("--jsonl", jsonl_path)):
         if not path:
             continue
-        # `-` is stdout, compared as `/dev/stdout`: `--report - >> <library>`
+        # `-` is stdout (fd 1), compared by inode: `--report - >> <library>`
         # appended the report to the library and exited 0, while the same
         # command spelled `--report /dev/stdout` was refused.
-        compared = "/dev/stdout" if path == "-" else path
         for library_path, name, selected in libraries:
-            if not _same_file(compared, library_path):
+            if not _same_file(path, library_path):
                 continue
             if selected:
                 return (
@@ -135,15 +146,12 @@ def _output_alias_refusal(
             )
     if (
         report_path and jsonl_path
-        # `-` is stdout, so compare it as `/dev/stdout`: `--jsonl /dev/stdout
+        # `-` is stdout (fd 1), compared by inode: `--jsonl /dev/stdout
         # --report -` printed the stream and then the report on one stdout,
         # and so did `--report - > out.jsonl --jsonl out.jsonl` (same inode).
         # The `-`/`-` pair is refused earlier with its own message.
         and not (report_path == "-" and jsonl_path == "-")
-        and _same_file(
-            "/dev/stdout" if report_path == "-" else report_path,
-            "/dev/stdout" if jsonl_path == "-" else jsonl_path,
-        )
+        and _same_file(report_path, jsonl_path)
     ):
         # Both writers accepted these two flags and the last one won: the NDJSON
         # streamed during the audit was replaced by the final report, so the

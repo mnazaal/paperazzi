@@ -771,6 +771,8 @@ def test_report_to_stdout_appended_into_the_library_is_refused(tmp_path: Path) -
     import subprocess
     import sys
 
+    import pzi
+
     bib = tmp_path / "main.bib"
     bib.write_text("% comment-only library\n", encoding="utf-8")
     config = _write_config(tmp_path, [("main", bib)], default="main")
@@ -783,6 +785,9 @@ def test_report_to_stdout_appended_into_the_library_is_refused(tmp_path: Path) -
         "XDG_DATA_HOME": str(home / ".local" / "share"),
         "XDG_CACHE_HOME": str(home / ".cache"),
         "PZI_SKIP_AUTO_START": "1",
+        # The tree under test, not whatever `pzi` the venv's editable install
+        # points at: without this the child imports the main checkout.
+        "PYTHONPATH": str(Path(pzi.__file__).parents[1]),
     }
     with bib.open("a", encoding="utf-8") as appended:
         proc = subprocess.run(
