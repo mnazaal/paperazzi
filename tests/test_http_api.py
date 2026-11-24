@@ -196,6 +196,86 @@ def test_read_body_with_deadline_returns_the_body_when_fast_enough() -> None:
     assert result == body
 
 
+def test_read_body_with_deadline_rejects_eof_before_declared_length() -> None:
+    """EOF with declared bytes outstanding is an incomplete body, not a short one."""
+    import pzi.http_api as http_api
+
+    class _Rfile:
+        def __init__(self, data: bytes) -> None:
+            self._data = data
+
+        def read1(self, n: int) -> bytes:
+            chunk, self._data = self._data[:n], self._data[n:]
+            return chunk
+
+    class _Request:
+        def __init__(self, data: bytes) -> None:
+            self.rfile = _Rfile(data)
+
+    body = b"%PDF-1.4\nAUDIT\n"
+    assert http_api._read_body_with_deadline(_Request(body), len(body) + 100) is None
+    assert http_api._read_body_with_deadline(_Request(body), len(body)) == body
+
+
+@pytest.mark.parametrize(
+    ("request_line", "content_type", "body"),
+    [
+        ("POST /capture", "application/json", b'{"url": "https://example.org/'),
+        (
+            "POST /attach-pdf-raw?request_id=r1&citekey=k1",
+            "application/pdf",
+            b"%PDF-1.4\nAUDIT\n",
+        ),
+    ],
+)
+def test_post_half_closed_before_content_length_is_408_and_never_dispatched(
+    tmp_path: Path, monkeypatch, request_line: str, content_type: str, body: bytes
+) -> None:
+    """A real socket: send fewer bytes than declared, then half-close (FIN).
+
+    The server must answer 408 and must not hand the partial body to the
+    router, which would run a capture or consume an attach session.
+    """
+    import pzi.http_api as http_api
+
+    dispatched: list[str] = []
+
+    def _record(path, *_args, **_kwargs):
+        dispatched.append(path)
+        return 200, {"status": "ok"}
+
+    monkeypatch.setattr(http_api, "process_post_request", _record)
+    config_path, _ = _seed(tmp_path)
+    port, _thread, server = _serve_once(config_path, tmp_path)
+    try:
+        sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+        try:
+            sock.sendall(
+                f"{request_line} HTTP/1.1\r\n"
+                f"Host: 127.0.0.1\r\n"
+                f"Content-Type: {content_type}\r\n"
+                f"Content-Length: {len(body) + 100}\r\n"
+                f"\r\n".encode("ascii")
+                + body
+            )
+            sock.shutdown(socket.SHUT_WR)
+            chunks = []
+            while True:
+                chunk = sock.recv(65536)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+        finally:
+            sock.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    raw = b"".join(chunks)
+    assert raw.startswith(b"HTTP/1.0 408 "), raw[:120]
+    assert dispatched == []
+
+
 def test_server_bind_makes_no_reverse_dns_lookup(monkeypatch) -> None:
     """`HTTPServer.server_bind` names the server with `socket.getfqdn(host)`,
     a reverse lookup made after `bind()` and before `listen()`. On the

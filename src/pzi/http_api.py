@@ -666,11 +666,9 @@ def _read_body_with_deadline(
     is actually rechecked after every byte (or batch of bytes) the client
     sends, regardless of how small each send is.
 
-    Returns the body, or `None` if the deadline was reached before all
-    `length` bytes arrived (the caller answers 408). A peer that closes the
-    connection early gets a short read here, same as `rfile.read(length)`
-    always returned on EOF -- unchanged from before this function existed,
-    and out of scope for the deadline this function adds.
+    Returns the body, or `None` if the deadline was reached, or the peer
+    closed the connection, before all `length` bytes arrived (the caller
+    answers 408). A short body is never returned as if it were complete.
 
     `deadline_seconds` defaults to the current `BODY_READ_DEADLINE_SECONDS`
     looked up at call time (not bound as a parameter default), so tests can
@@ -689,7 +687,9 @@ def _read_body_with_deadline(
             return None
         chunk = request.rfile.read1(min(_BODY_READ_CHUNK_BYTES, remaining))
         if not chunk:
-            break
+            # EOF with declared bytes outstanding: the client closed (or
+            # half-closed) early, so what arrived is not the request it sent.
+            return None
         chunks.append(chunk)
         remaining -= len(chunk)
     return b"".join(chunks)
