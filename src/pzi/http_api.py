@@ -49,7 +49,7 @@ class BinaryGetHandler(Protocol):
 
     def __call__(
         self,
-        request: BaseHTTPRequestHandler,
+        request: PziRequestHandler,
         config_path: str,
         home_dir: str,
         security: HttpSecurityConfig,
@@ -128,16 +128,41 @@ def server_exposure_error(host: str, security: HttpSecurityConfig) -> str | None
     )
 
 
+class PziRequestHandler(BaseHTTPRequestHandler):
+    """The request handler's per-request and per-server state, declared.
+
+    `build_handler_class` builds the concrete class from this one. Every
+    attribute below is set on the instance (or, for the three server-wide
+    ones, on the built class) and the defaults are what a request that never
+    set them reads.
+    """
+
+    #: Status of the response `send_response` last sent, for `--log-requests`.
+    _pzi_status: int | None = None
+    #: True once headers went out, so a late failure cannot append a second
+    #: response (`_guarded`). Reset at the start of every guarded request.
+    _response_started: bool = False
+    #: Header-deadline state (`_handle_one_request_with_header_deadline`).
+    _header_done: threading.Event | None = None
+    _header_guard: threading.Lock | None = None
+    _header_expired: bool = False
+    _header_timer: threading.Timer | None = None
+    #: Server-wide, set on the built class.
+    _idle_state: dict[str, float] | None = None
+    _browser_session_manager: object | None = None
+    _attach_session_store: AttachSessionStore | None = None
+
+
 def _recording_send_response(
-    request: BaseHTTPRequestHandler, code: int, message: str | None = None
+    request: PziRequestHandler, code: int, message: str | None = None
 ) -> None:
     """`send_response` that remembers the status it sent."""
-    request._pzi_status = code  # type: ignore[attr-defined]
+    request._pzi_status = code
     BaseHTTPRequestHandler.send_response(request, code, message)
 
 
 def _log_request(
-    request: BaseHTTPRequestHandler, started_at: float, log_to: TextIO
+    request: PziRequestHandler, started_at: float, log_to: TextIO
 ) -> None:
     """One line per request: method, path, status, milliseconds.
 
@@ -180,11 +205,11 @@ def build_handler_class(
     browser_manager: object | None = None,
     attach_session_store: AttachSessionStore | None = None,
     log_requests_to: TextIO | None = None,
-) -> type[BaseHTTPRequestHandler]:
+) -> type[PziRequestHandler]:
     security_config = security or build_http_security_config()
     store = attach_session_store or AttachSessionStore()
 
-    def _timed(handler: Callable[[], None], request: BaseHTTPRequestHandler) -> None:
+    def _timed(handler: Callable[[], None], request: PziRequestHandler) -> None:
         """Run a guarded handler, logging it afterwards when asked.
 
         Wraps `_guarded` rather than replacing it: the 500 guard must still run
@@ -201,7 +226,7 @@ def build_handler_class(
             _log_request(request, started_at, log_requests_to)
 
     def _error_response(
-        request: BaseHTTPRequestHandler, code: int, message: str | None
+        request: PziRequestHandler, code: int, message: str | None
     ) -> None:
         """`send_error`, logged like any other response.
 
@@ -220,7 +245,7 @@ def build_handler_class(
 
     return type(
         "PziHandler",
-        (BaseHTTPRequestHandler,),
+        (PziRequestHandler,),
         {
             # No version on either half. `Server: pzi/0.1 Python/3.12.3` named
             # the exact interpreter patch level to any caller, before the token
@@ -263,7 +288,7 @@ def build_handler_class(
     )
 
 
-def _handle_one_request_with_header_deadline(request: BaseHTTPRequestHandler) -> None:
+def _handle_one_request_with_header_deadline(request: PziRequestHandler) -> None:
     """`handle_one_request`, with a wall-clock cap on reading the headers.
 
     A timer shuts the socket down if `parse_request` has not finished by then;
@@ -280,7 +305,7 @@ def _handle_one_request_with_header_deadline(request: BaseHTTPRequestHandler) ->
                 return
             # Marked before the shutdown, under the lock `parse_request` takes
             # to finish, so the parser can tell this EOF from a client's.
-            request._header_expired = True  # type: ignore[attr-defined]
+            request._header_expired = True
             try:
                 request.connection.shutdown(socket.SHUT_RDWR)
             except OSError:
@@ -288,10 +313,10 @@ def _handle_one_request_with_header_deadline(request: BaseHTTPRequestHandler) ->
 
     timer = threading.Timer(HEADER_READ_DEADLINE_SECONDS, _expire)
     timer.daemon = True
-    request._header_done = done  # type: ignore[attr-defined]
-    request._header_guard = guard  # type: ignore[attr-defined]
-    request._header_expired = False  # type: ignore[attr-defined]
-    request._header_timer = timer  # type: ignore[attr-defined]
+    request._header_done = done
+    request._header_guard = guard
+    request._header_expired = False
+    request._header_timer = timer
     timer.start()
     try:
         BaseHTTPRequestHandler.handle_one_request(request)
@@ -300,7 +325,7 @@ def _handle_one_request_with_header_deadline(request: BaseHTTPRequestHandler) ->
         timer.cancel()
 
 
-def _parse_request_ending_header_deadline(request: BaseHTTPRequestHandler) -> bool:
+def _parse_request_ending_header_deadline(request: PziRequestHandler) -> bool:
     """`parse_request`, refusing to treat the deadline's forced EOF as complete headers.
 
     `parse_headers` reads until a blank line *or EOF*, so the socket shutdown
@@ -313,12 +338,14 @@ def _parse_request_ending_header_deadline(request: BaseHTTPRequestHandler) -> bo
         if not expired:
             parsed = BaseHTTPRequestHandler.parse_request(request)
     finally:
-        done = getattr(request, "_header_done", None)
-        if done is not None:
-            with request._header_guard:  # type: ignore[attr-defined]
+        done = request._header_done
+        guard = request._header_guard
+        timer = request._header_timer
+        if done is not None and guard is not None and timer is not None:
+            with guard:
                 done.set()
-                expired = request._header_expired  # type: ignore[attr-defined]
-            request._header_timer.cancel()  # type: ignore[attr-defined]
+                expired = request._header_expired
+            timer.cancel()
     if expired:
         request.close_connection = True
         return False
@@ -326,7 +353,7 @@ def _parse_request_ending_header_deadline(request: BaseHTTPRequestHandler) -> bo
 
 
 def _send_error_as_json(
-    request: BaseHTTPRequestHandler,
+    request: PziRequestHandler,
     code: int,
     security: HttpSecurityConfig,
     message: str | None = None,
@@ -348,7 +375,7 @@ def _send_error_as_json(
     """
     phrase = request.responses.get(code, ("", ""))[0] if code in request.responses else ""
     body = json.dumps({"error": message or phrase or f"HTTP {code}"}).encode("utf-8")
-    request._response_started = True  # type: ignore[attr-defined]
+    request._response_started = True
     request.send_response(code, message)
     request.send_header("Content-Type", "application/json")
     request.send_header("Content-Length", str(len(body)))
@@ -364,7 +391,7 @@ def _send_error_as_json(
 
 
 def _request_gate(
-    request: BaseHTTPRequestHandler, method: str, security: HttpSecurityConfig
+    request: PziRequestHandler, method: str, security: HttpSecurityConfig
 ) -> tuple[int, str] | None:
     """The one gate all three handlers go through.
 
@@ -382,7 +409,7 @@ def _request_gate(
 
 def _guarded(
     handler: Callable[[], None],
-    request: BaseHTTPRequestHandler,
+    request: PziRequestHandler,
     security: HttpSecurityConfig,
 ) -> None:
     """Run a request handler, turning an unexpected failure into a 500.
@@ -405,7 +432,7 @@ def _guarded(
     #
     # Reset per request rather than per connection anyway: it costs one
     # assignment and it is what makes the 500 guard correct if that ever changes.
-    request._response_started = False  # type: ignore[attr-defined]
+    request._response_started = False
     try:
         handler()
     except PziError as exc:
@@ -435,7 +462,7 @@ def _guarded(
         raise
 
 
-def _handle_options(request: BaseHTTPRequestHandler, security: HttpSecurityConfig) -> None:
+def _handle_options(request: PziRequestHandler, security: HttpSecurityConfig) -> None:
     error = _request_gate(request, "OPTIONS", security)
     if error is not None:
         _respond(request, error[0], {"error": error[1]}, security)
@@ -446,7 +473,7 @@ def _handle_options(request: BaseHTTPRequestHandler, security: HttpSecurityConfi
 
 
 def _serve_pdf(
-    request: BaseHTTPRequestHandler,
+    request: PziRequestHandler,
     config_path: str,
     home_dir: str,
     citekey: str,
@@ -477,7 +504,7 @@ def _serve_pdf(
         )
         return
 
-    request._response_started = True  # type: ignore[attr-defined]
+    request._response_started = True
     request.send_response(200)
     request.send_header("Content-Type", response.content_type)
     request.send_header("Content-Length", str(size))
@@ -497,7 +524,7 @@ def _serve_pdf(
 
 
 def _serve_export_raw(
-    request: BaseHTTPRequestHandler,
+    request: PziRequestHandler,
     config_path: str,
     home_dir: str,
     fmt: str,
@@ -519,7 +546,7 @@ def _serve_export_raw(
         )
         return
 
-    request._response_started = True  # type: ignore[attr-defined]
+    request._response_started = True
     request.send_response(200)
     request.send_header("Content-Type", response.content_type)
     request.send_header("Content-Length", str(len(response.content)))
@@ -537,7 +564,7 @@ def _serve_export_raw(
 
 
 def _serve_pdf_route(
-    request: BaseHTTPRequestHandler,
+    request: PziRequestHandler,
     config_path: str,
     home_dir: str,
     security: HttpSecurityConfig,
@@ -556,7 +583,7 @@ def _serve_pdf_route(
 
 
 def _serve_export_raw_route(
-    request: BaseHTTPRequestHandler,
+    request: PziRequestHandler,
     config_path: str,
     home_dir: str,
     security: HttpSecurityConfig,
@@ -586,7 +613,7 @@ BINARY_GET_HANDLERS: dict[str, BinaryGetHandler] = {
 
 
 def _handle_get(
-    request: BaseHTTPRequestHandler,
+    request: PziRequestHandler,
     config_path: str,
     home_dir: str,
     security: HttpSecurityConfig,
@@ -639,7 +666,7 @@ def _handle_get(
 
 
 def _read_body_with_deadline(
-    request: BaseHTTPRequestHandler,
+    request: PziRequestHandler,
     length: int,
     deadline_seconds: float | None = None,
 ) -> bytes | None:
@@ -696,7 +723,7 @@ def _read_body_with_deadline(
 
 
 def _handle_post(
-    request: BaseHTTPRequestHandler,
+    request: PziRequestHandler,
     config_path: str,
     home_dir: str,
     security: HttpSecurityConfig,
@@ -787,7 +814,7 @@ def _handle_post(
     _respond(request, status, response_body, security)
 
 
-def _send_cors_headers(request: BaseHTTPRequestHandler, security: HttpSecurityConfig) -> None:
+def _send_cors_headers(request: PziRequestHandler, security: HttpSecurityConfig) -> None:
     # `headers` is unset when the request line itself failed to parse, and
     # `send_error` answers that case. There is no Origin to echo then; the
     # static headers still go out.
@@ -804,10 +831,10 @@ def _send_cors_headers(request: BaseHTTPRequestHandler, security: HttpSecurityCo
 
 
 def _respond(
-    request: BaseHTTPRequestHandler, status: int, data: Any, security: HttpSecurityConfig,
+    request: PziRequestHandler, status: int, data: Any, security: HttpSecurityConfig,
 ) -> None:
     body = json.dumps(data, sort_keys=True, default=str).encode("utf-8")
-    request._response_started = True  # type: ignore[attr-defined]
+    request._response_started = True
     request.send_response(status)
     request.send_header("Content-Type", "application/json")
     request.send_header("Content-Length", str(len(body)))
@@ -874,7 +901,7 @@ def run_server(
     idle_state: dict[str, float] | None = None
     if idle_minutes is not None:
         idle_state = {"_last_request": time.monotonic()}
-        handler._idle_state = idle_state  # type: ignore[attr-defined]
+        handler._idle_state = idle_state
 
     server = server_class((host, port), handler)
     server.socket.settimeout(30)

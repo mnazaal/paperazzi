@@ -1159,7 +1159,7 @@ def test_rejected_requests_do_not_keep_an_auto_stop_server_alive(
         config_path=str(config_path), home_dir=str(tmp_path), security=security
     )
     idle_state = {"_last_request": 0.0}
-    handler._idle_state = idle_state  # type: ignore[attr-defined]
+    handler._idle_state = idle_state
 
     port = _free_port()
     server = HTTPServer(("127.0.0.1", port), handler)
