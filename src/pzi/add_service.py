@@ -750,6 +750,13 @@ def add_record_with_bib(
     record_with_hint, plan = _build_plan(typed_existing_records, existing_entries)
 
     if not dry_run:
+        # One commit per item is deliberate, not an oversight: `add --from-file`
+        # and `inbox` fetch over the network between items, so a batch-wide
+        # write session would hold the bib's exclusive lock for the whole run,
+        # and an interrupted batch keeps what it already captured. The cost is
+        # a cold parse and a whole-file write per item (about 1.5 s at 22k
+        # entries); `add_records_to_bib_batch` is the single-session path for
+        # callers that need no network between items (`import`).
         record_with_hint, plan = _execute_plan_with_retry(
             bib=bib,
             build_plan=_build_plan,
@@ -1192,6 +1199,10 @@ def reuse_existing_pdf_fields_for_exact_match(
     return cast(NormalizedRecord, updated)
 
 
+#: Enough to hold the `%PDF-` signature `is_pdf_bytes` checks.
+_PDF_SIGNATURE_BYTES = 1024
+
+
 def reuse_orphan_pdf_for_planned_path(
     record: NormalizedRecord,
     *,
@@ -1213,10 +1224,13 @@ def reuse_orphan_pdf_for_planned_path(
         filename_format=pdf_filename_format,
     )
     try:
-        data = Path(planned).read_bytes()
+        # A prefix is all the signature check needs; reading the whole file
+        # allocated its full size for a PDF that is then merely referenced.
+        with open(planned, "rb") as handle:
+            prefix = handle.read(_PDF_SIGNATURE_BYTES)
     except OSError:
         return record
-    if not is_pdf_bytes(data):
+    if not is_pdf_bytes(prefix):
         return record
 
     updated = dict(record)

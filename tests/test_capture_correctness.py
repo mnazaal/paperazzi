@@ -448,3 +448,48 @@ def test_a_local_pdf_batch_previews_what_the_real_run_does(
     assert [r["status"] for r in predicted + actual] == ["ok"] * 4
     assert [r["action"] for r in actual] == ["insert", "update"]
     assert [r["action"] for r in predicted] == [r["action"] for r in actual]
+
+
+def test_orphan_pdf_reuse_reads_a_prefix_not_the_whole_file(tmp_path: Path) -> None:
+    """Checking the signature of a reused PDF allocated the file's whole size."""
+    import tracemalloc
+
+    from pzi.add_service import reuse_orphan_pdf_for_planned_path
+    from pzi.pdf_planning import plan_pdf_path
+
+    record = {"citekey": "measured", "title": "Probe", "pdf_url": "https://example.org/a.pdf"}
+    planned = Path(plan_pdf_path(papers_dir=str(tmp_path), citekey="measured", record=record))
+    size = 16 * 1024 * 1024
+    with planned.open("wb") as handle:
+        handle.write(b"%PDF-1.4\n")
+        handle.truncate(size)
+
+    tracemalloc.start()
+    try:
+        result = reuse_orphan_pdf_for_planned_path(record, papers_dir=str(tmp_path))
+        _current, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert result["local_pdf_path"] == str(planned)
+    assert peak < 1024 * 1024, peak
+    assert planned.stat().st_size == size
+
+
+def test_orphan_file_without_a_pdf_header_is_not_reused(tmp_path: Path) -> None:
+    from pzi.add_service import reuse_orphan_pdf_for_planned_path
+    from pzi.pdf_planning import plan_pdf_path
+
+    record = {"citekey": "measured", "title": "Probe", "pdf_url": "https://example.org/a.pdf"}
+    planned = Path(plan_pdf_path(papers_dir=str(tmp_path), citekey="measured", record=record))
+    planned.write_bytes(b"<html>not a pdf</html>" * 1000)
+
+    assert "local_pdf_path" not in reuse_orphan_pdf_for_planned_path(
+        record, papers_dir=str(tmp_path)
+    )
+    # A directory at the planned path is an I/O error, kept as "not reusable".
+    planned.unlink()
+    planned.mkdir()
+    assert "local_pdf_path" not in reuse_orphan_pdf_for_planned_path(
+        record, papers_dir=str(tmp_path)
+    )
