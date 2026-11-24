@@ -150,3 +150,60 @@ def test_library_reindex_on_a_malformed_bib_refuses_with_environment(
 ) -> None:
     exit_code = _run(["library", "reindex", "--config", str(duplicate_config)], tmp_path)
     assert exit_code == exit_codes.ENVIRONMENT
+
+
+@pytest.mark.parametrize("dry_run", [True, False], ids=["dry-run", "apply"])
+def test_convert_file_paths_reports_a_partial_read_even_with_nothing_to_convert(
+    duplicate_config: Path, tmp_path: Path, dry_run: bool
+) -> None:
+    """The conversion branch used to drop `warnings`: a duplicate block was
+    silently skipped and the run exited 0 for a library it had read in part."""
+    argv = ["library", "reindex", "--convert-file-paths", "--config", str(duplicate_config)]
+    if dry_run:
+        argv.append("--dry-run")
+    bib = tmp_path / "ml.bib"
+    before = bib.read_text(encoding="utf-8")
+    out, err = StringIO(), StringIO()
+
+    exit_code = run_cli(argv, home_dir=str(tmp_path), stdout=out, stderr=err)
+
+    assert exit_code == exit_codes.FINDINGS
+    assert "duplicate" in err.getvalue().lower(), err.getvalue()
+    assert bib.read_text(encoding="utf-8") == before
+
+
+def test_convert_file_paths_json_carries_the_partial_read_warning(
+    duplicate_config: Path, tmp_path: Path
+) -> None:
+    out = StringIO()
+    exit_code = run_cli(
+        ["library", "reindex", "--convert-file-paths", "--json", "--config", str(duplicate_config)],
+        home_dir=str(tmp_path), stdout=out, stderr=StringIO(),
+    )
+
+    assert exit_code == exit_codes.FINDINGS
+    assert any("duplicate" in w.lower() for w in json.loads(out.getvalue())["warnings"])
+
+
+def test_convert_file_paths_still_refuses_to_write_a_partly_read_library(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PZI_SKIP_AUTO_START", "1")
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    bib = tmp_path / "ml.bib"
+    text = (
+        f"@article{{a,\n  title={{x}},\n  file={{{home}/x.pdf}},\n}}\n"
+        "@article{a,\n  title={y},\n}\n"
+    )
+    bib.write_text(text, encoding="utf-8")
+    config = tmp_path / "config.toml"
+    config.write_text(
+        MINIMAL_CONFIG.format(bib_path=bib) + 'pdf_file_path_style = "home"\n', encoding="utf-8"
+    )
+
+    exit_code = _run(["library", "reindex", "--convert-file-paths", "--config", str(config)], tmp_path)
+
+    assert exit_code == exit_codes.ENVIRONMENT
+    assert bib.read_text(encoding="utf-8") == text

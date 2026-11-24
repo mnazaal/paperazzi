@@ -42,6 +42,19 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
             stdout=stdout,
             stderr=stderr,
         )
+    if getattr(args, "force", False) and (rename_files or convert_paths):
+        # `--force` confirms the citekey rewrite and nothing else. Accepted and
+        # ignored here, it reads as a safety these passes do not have, so the
+        # refusal matches the bare audit's.
+        return emit_usage_error(
+            args,
+            "--force applies to --rename-citekeys; "
+            + ("--rename-files" if rename_files else "--convert-file-paths")
+            + " does not use it",
+            command_path=("library", "reindex"),
+            stdout=stdout,
+            stderr=stderr,
+        )
     if convert_paths:
         # A one-time pass, distinct from the two above: it does not touch
         # citekeys or filenames, only folds an already-written `file =`
@@ -61,6 +74,7 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
                 items=result.get("converted") or [], bib_name=target["name"],
             )
         else:
+            print_read_warnings(result, stderr)
             verb = "would convert" if getattr(args, "dry_run", False) else "converted"
             print(
                 f"{verb} {result['to_convert']} file field(s) to {style!r}",
@@ -81,7 +95,7 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
                 print(f"backup saved to {backup}", file=stderr)
         return (
             exit_codes.FINDINGS
-            if result["to_convert"] or result["errors"]
+            if result["to_convert"] or result["errors"] or has_read_warnings(result)
             else exit_codes.OK
         )
     if rename_files:

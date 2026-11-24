@@ -2349,3 +2349,25 @@ def test_library_clean_exits_findings_for_a_duplicate_citekey(tmp_path: Path) ->
     )
 
     assert exit_code == exit_codes.FINDINGS
+
+
+@pytest.mark.parametrize("flag", ["--convert-file-paths", "--rename-files"])
+@pytest.mark.parametrize("as_json", [False, True], ids=["text", "json"])
+def test_reindex_passes_that_ignore_force_refuse_it(
+    tmp_path: Path, flag: str, as_json: bool
+) -> None:
+    """`--force` only confirms `--rename-citekeys`; accepting it elsewhere reads
+    as a safety the run does not have."""
+    config_path, bib_path = _reindex_config(tmp_path)
+    before = bib_path.read_text()
+    stdout, stderr = StringIO(), StringIO()
+    argv = ["library", "reindex", flag, "--force", "--config", str(config_path)]
+    if as_json:
+        argv.append("--json")
+
+    exit_code = run_cli(argv, home_dir=str(tmp_path), stdout=stdout, stderr=stderr)
+
+    assert exit_code == 2
+    assert "--force applies to --rename-citekeys" in stdout.getvalue() + stderr.getvalue()
+    assert bib_path.read_text() == before
+    assert not list(tmp_path.glob("*.bak*"))
