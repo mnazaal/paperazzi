@@ -694,10 +694,10 @@ class _FakePage:
     def __init__(self, route_error: Exception | None = None):
         self.handlers: list = []
         self.route_error = route_error
-        self.extra_headers: dict[str, str] = {}
+        self.extra_header_calls: list[dict[str, str]] = []
 
     def set_extra_http_headers(self, headers):
-        self.extra_headers = dict(headers)
+        self.extra_header_calls.append(dict(headers))
 
     def route(self, pattern, handler):
         if self.route_error:
@@ -768,6 +768,20 @@ def test_every_launch_branch_installs_a_request_guard_that_refuses_private_urls(
             handler(route, MagicMock(url=url))
             verdicts.append("abort" if route.abort.called and not route.continue_.called else "go")
         assert verdicts == ["abort", "abort"]
+    finally:
+        session.close()
+
+
+@pytest.mark.parametrize("browser", ["chromium", "chrome", "firefox"])
+@pytest.mark.parametrize("profile", [True, False], ids=["persistent-profile", "no-profile"])
+def test_launch_sets_no_extra_headers_so_navigations_keep_browser_defaults(
+    monkeypatch, tmp_path: Path, browser: str, profile: bool
+) -> None:
+    """Only direct PDF reads ask for `identity`; page navigations do not."""
+    page = _FakePage()
+    _, session = _launch(monkeypatch, tmp_path, browser, profile, page)
+    try:
+        assert page.extra_header_calls == []
     finally:
         session.close()
 

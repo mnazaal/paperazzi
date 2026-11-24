@@ -65,10 +65,10 @@ PLAYWRIGHT_INSTALL_HINT = (
 )
 
 
-#: Asked of every browser-fallback body read. The pinning proxy caps wire bytes,
-#: and Chromium decodes after that, so an encoded body can inflate far past the
-#: cap before the driver hands it over. HTTPS is opaque to the proxy, so the
-#: decoded size cannot be bounded in flight: ask for none, refuse any that comes.
+#: Sent on direct PDF reads (`fetch_direct`) only; navigations keep the
+#: browser's default headers. The pinning proxy caps wire bytes, and the driver
+#: decodes after that, so an encoded body can inflate past the cap. HTTPS is
+#: opaque to the proxy, so ask for none and refuse any body that still declares one.
 _IDENTITY_HEADERS = {"Accept-Encoding": "identity"}
 
 
@@ -660,7 +660,6 @@ def launch_browser(
                     user_data_dir=str(profile), **options
                 )
             page = ctx.new_page()
-            page.set_extra_http_headers(_IDENTITY_HEADERS)
             install_request_guard(page, url_allowed)
         except BaseException:
             if temp_profile is not None:
@@ -693,7 +692,6 @@ def launch_browser(
             browser_instance = playwright.chromium.launch(**options)
             context = browser_instance.new_context()
         page = context.new_page()
-        page.set_extra_http_headers(_IDENTITY_HEADERS)
         install_request_guard(page, url_allowed)
     except BaseException:
         pinning.close()
