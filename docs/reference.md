@@ -219,7 +219,9 @@ pzi server [--host H --port P] [--stop-after N] [--no-auth] [--log-requests]
 ```
 `--strict-metadata` refuses a capture whose metadata does not identify a paper —
 a title plus at least one of DOI, author or year — and fails when no provider
-answered at all. A provider error that a later provider recovered from is a
+answered at all. For a local PDF it also fails when the lookups answered but none
+found the paper, since the record would rest only on text read from the PDF; metadata
+you supply with `--metadata-json` is accepted as before. A provider error that a later provider recovered from is a
 warning, not a failure: a Crossref 429 does not fail an add that OpenAlex
 completed.
 

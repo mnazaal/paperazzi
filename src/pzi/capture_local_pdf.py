@@ -382,7 +382,10 @@ def add_local_pdf(
         #
         # A lookup that answered "not found" leaves the same unverified record,
         # so it is refused too (owner decision 2026-11-25: strict means a
-        # provider verified the record, and nothing did).
+        # provider verified the record, and nothing did). Metadata the user
+        # supplied with `--metadata-json` is not PDF text; that decision was
+        # about records resting on the PDF alone, so overrides keep the
+        # earlier behaviour and are judged by `strict_metadata_failure` below.
         if not _provider_added_to_extraction(base_record, extracted):
             if metadata_errors:
                 return _add_planning.error_result(
@@ -392,17 +395,18 @@ def add_local_pdf(
                     warnings=[],
                     bib=bib,
                 )
-            return _add_planning.error_result(
-                message="no metadata provider found this PDF (--strict-metadata)",
-                errors=[
-                    "every lookup answered but none found this paper; the record "
-                    "holds only text read from the PDF itself"
-                ],
-                dry_run=dry_run,
-                warnings=["nothing was written: add it without --strict-metadata "
-                          "to keep the PDF's own metadata"],
-                bib=bib,
-            )
+            if not record_overrides:
+                return _add_planning.error_result(
+                    message="no metadata provider found this PDF (--strict-metadata)",
+                    errors=[
+                        "every lookup answered but none found this paper; the record "
+                        "holds only text read from the PDF itself"
+                    ],
+                    dry_run=dry_run,
+                    warnings=["nothing was written: add it without --strict-metadata "
+                              "to keep the PDF's own metadata"],
+                    bib=bib,
+                )
         strict_failure = _add_planning.strict_metadata_failure(
             merged, metadata_errors, dry_run=dry_run, bib=bib
         )

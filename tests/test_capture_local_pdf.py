@@ -846,3 +846,40 @@ def test_local_pdf_strict_refuses_when_no_provider_found_it(
     lenient = run(False)
     assert lenient["status"] == "ok"
     assert len(writes) == 1
+
+
+def test_local_pdf_strict_accepts_user_supplied_metadata_with_no_provider_hit(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """`--metadata-json` is not PDF text: strict keeps accepting it.
+
+    The 2026-11-25 decision refuses records resting only on the PDF's own text;
+    a user who supplies the metadata keeps the earlier behaviour.
+    """
+    import pzi.capture_local_pdf as clp
+
+    source_pdf = tmp_path / "paper.pdf"
+    source_pdf.write_bytes(b"%PDF-1.4\n")
+    papers_dir = tmp_path / "papers"
+    papers_dir.mkdir()
+    bib_path = tmp_path / "library.bib"
+    bib_path.write_text("")
+    monkeypatch.setattr(clp, "extract_pdf_metadata", lambda _p: {})
+    monkeypatch.setattr(clp, "local_pdf_base_record", lambda **_kw: {})
+    writes: list[dict] = []
+
+    result = clp.add_local_pdf(
+        bib={"name": "main", "path": str(bib_path),
+             "papers_dir": str(papers_dir), "default": True},
+        raw_value=str(source_pdf),
+        record_overrides={"title": "Graph Parsers", "authors": ["Smith, Jane"], "year": 2024},
+        dry_run=True,
+        server_url="http://127.0.0.1:1",
+        fetch_search=lambda *a, **kw: [],
+        ensure_citekey=lambda record, *a, **kw: {**record, "citekey": "key"},
+        add_record=lambda **kw: writes.append(kw) or {"status": "ok", "warnings": []},
+        strict_metadata=True,
+    )
+
+    assert result["status"] == "ok", result
+    assert len(writes) == 1
