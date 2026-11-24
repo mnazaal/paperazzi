@@ -987,3 +987,47 @@ def test_batch_delete_preview_still_excludes_every_removed_entry_of_the_target(
 
     assert action is not None
     assert action["status"] == "moved"
+
+
+@pytest.mark.parametrize("writer", ["main", "sibling"])
+def test_targeted_quarantine_rechecks_new_reference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, writer: str
+) -> None:
+    """A reference committed after the planner's check must veto the move.
+
+    Controlled interleaving, not a race: the seam runs the committing write
+    after `plan_pdf_disposal` has finished its reference check and before the
+    move takes its lock. Parametrized over a writer to the target bib and to a
+    sibling bib sharing the papers directory.
+    """
+    from pzi.clean_service import plan_pdf_disposal
+    from pzi.config import load_config_file
+
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    pdf = papers / "candidate.pdf"
+    pdf.write_bytes(_SHARED_PDF)
+    bib, sibling, _papers, cfg = _two_library_config(tmp_path, sibling_text="")
+    bib.write_text("")
+    config = load_config_file(str(cfg), home_dir=str(tmp_path))["config"]
+    committing = bib if writer == "main" else sibling
+
+    real_quarantine = clean_service.quarantine_pdf
+
+    def commit_then_quarantine(*args, **kwargs):
+        committing.write_text(_entry("survivor", pdf))
+        return real_quarantine(*args, **kwargs)
+
+    monkeypatch.setattr(clean_service, "quarantine_pdf", commit_then_quarantine)
+
+    action = plan_pdf_disposal(
+        result={"citekey": "deleted", "pdf_path": str(pdf)},
+        config=config,
+        target=config["bibs"][0],
+        keep_pdf=False,
+        dry_run=False,
+    )
+
+    assert pdf.read_bytes() == _SHARED_PDF, f"moved a PDF a {writer} entry references"
+    assert action is not None
+    assert action["status"] == "kept"

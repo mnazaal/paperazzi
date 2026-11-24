@@ -549,6 +549,8 @@ def quarantine_pdf(
     papers_dir: str,
     bib_path: str,
     dry_run: bool = False,
+    recheck_bibs: Sequence[str] = (),
+    excluding: Mapping[str, Sequence[str]] | None = None,
 ) -> QuarantineResult:
     """File one orphaned PDF into ``papers_dir/.orphans/``.
 
@@ -568,6 +570,14 @@ def quarantine_pdf(
     move the PDF only after the entry is gone), so without a lock here this
     move can still interleave with a concurrent `clean_library --fix` sweep
     reading the same directory.
+
+    *recheck_bibs* names the libraries whose references must veto the move. When
+    given, the move takes the exclusive lock on *bib_path* and on each of them
+    (in sorted path order, as :func:`clean_library` does, so two such callers
+    cannot deadlock) and re-reads every `file =` reference under those locks. A
+    reference that a writer committed after the caller's earlier, unlocked check
+    is then seen, and the file is left in place. *excluding* is the per-bib
+    citekey exclusion of :func:`referenced_pdf_paths`.
     """
     source = Path(str(pdf_path)).expanduser()
     if not pdf_file_present(str(source)):
@@ -592,7 +602,30 @@ def quarantine_pdf(
             "dry_run": True,
         }
 
-    with with_bib_lock(bib_path, shared=False):
+    lock_targets = sorted({bib_path, *recheck_bibs})
+    with ExitStack() as locks:
+        for path in lock_targets:
+            locks.enter_context(with_bib_lock(path, shared=False))
+        if recheck_bibs:
+            # The caller's check ran before this lock, so a writer may have
+            # committed a reference to this file in the gap. Decide on what the
+            # bibs say now, under the locks that writer needs.
+            read_errors: list[str] = []
+            still_referenced = _referenced_under_held_lock(
+                lock_targets, excluding=excluding, errors=read_errors
+            )
+            if read_errors:
+                return {
+                    "status": "kept",
+                    "source": str(source),
+                    "reason": f"could not verify references: {read_errors[0]}",
+                }
+            if os.path.realpath(str(source)) in still_referenced:
+                return {
+                    "status": "kept",
+                    "source": str(source),
+                    "reason": "still referenced by another entry",
+                }
         # The name is chosen and the move performed under the same lock a
         # concurrent sweep holds across its own read-scan-move, so the two
         # can no longer interleave: whichever gets the lock first sees a
@@ -910,5 +943,7 @@ def plan_pdf_disposal(
             papers_dir=papers_dir,
             bib_path=target["path"],
             dry_run=dry_run,
+            recheck_bibs=owners,
+            excluding=excluding,
         )
     )
