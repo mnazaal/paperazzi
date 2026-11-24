@@ -137,6 +137,32 @@ def local_pdf_base_record(
     return {}
 
 
+def _provider_added_to_extraction(
+    base_record: Mapping[str, object], extracted: Mapping[str, object]
+) -> bool:
+    """Whether a provider supplied anything the PDF's own text did not.
+
+    `local_pdf_base_record` falls back to the title, DOI and authors scraped from
+    the file when every lookup fails, so a record that holds only those values
+    was verified by nothing.
+    """
+    raw_doi = extracted.get("doi")
+    scraped: dict[str, object] = {}
+    title = extracted.get("title")
+    if isinstance(title, str) and title.strip():
+        scraped["title"] = title.strip()
+    doi = normalize_doi(raw_doi) if isinstance(raw_doi, str) else None
+    if doi is not None:
+        scraped["doi"] = doi
+    authors = extracted.get("authors")
+    if isinstance(authors, list) and authors:
+        scraped["authors"] = authors
+    return any(
+        value not in (None, "", [], {}) and scraped.get(key) != value
+        for key, value in base_record.items()
+    )
+
+
 def _adopt_title_search_hit(
     results: Sequence[Mapping[str, object]],
     fallback: NormalizedRecord,
@@ -325,10 +351,26 @@ def add_local_pdf(
         )
     # After the acceptance gate, so a PDF that identifies nothing keeps its
     # `--metadata-json` guidance in strict mode too. Strict mode judges the
-    # merged record, as the DOI/URL branch does, and before anything is copied or written: reporting the failure after the
-    # entry and its PDF had landed would leave the half-verified record the
-    # flag exists to prevent.
+    # merged record, as the DOI/URL branch does, and before anything is copied
+    # or written: reporting the failure after the entry and its PDF had landed
+    # would leave the half-verified record the flag exists to prevent.
     if strict_metadata:
+        # Total provider failure first: the merged record can still pass
+        # `has_minimum_metadata` on a title and DOI scraped out of the PDF's own
+        # text, which no provider verified. The DOI/URL branch refuses that case
+        # (`_metadata_cascade_failure`); a provider that errored and was then
+        # followed by one that supplied more than the PDF text is a recovery
+        # and stays a warning.
+        if metadata_errors and not _provider_added_to_extraction(
+            base_record, extracted
+        ):
+            return _add_planning.error_result(
+                message="metadata provider error (--strict-metadata)",
+                errors=list(metadata_errors),
+                dry_run=dry_run,
+                warnings=[],
+                bib=bib,
+            )
         strict_failure = _add_planning.strict_metadata_failure(
             merged, metadata_errors, dry_run=dry_run, bib=bib
         )

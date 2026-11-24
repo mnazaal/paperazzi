@@ -572,3 +572,59 @@ def test_local_pdf_strict_gate_checks_merged_record(
         assert "strict-metadata" in result["message"]
         assert writes == []
     assert bib_path.read_text() == ""
+
+
+def test_local_pdf_strict_refuses_when_every_provider_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A PDF whose own text names a title and a DOI is still unverified.
+
+    Every provider raised, so the record is nothing but what was scraped out of
+    the file. `--strict-metadata` exists to refuse that, as the DOI/URL branch
+    does; passing `has_minimum_metadata` on the scraped text must not stand in
+    for a provider having answered.
+    """
+    import pzi.capture_local_pdf as clp
+
+    source_pdf = tmp_path / "paper.pdf"
+    source_pdf.write_bytes(b"%PDF-1.4\n")
+    papers_dir = tmp_path / "papers"
+    papers_dir.mkdir()
+    bib_path = tmp_path / "library.bib"
+    bib_path.write_text("")
+    monkeypatch.setattr(
+        clp, "extract_pdf_metadata",
+        lambda _p: {"title": "Graph Parsers", "doi": "10.1000/paper"},
+    )
+
+    def down(*_a, **_k):
+        raise OSError("provider down")
+
+    original = clp.local_pdf_base_record
+    monkeypatch.setattr(
+        clp, "local_pdf_base_record",
+        lambda **kw: original(**{**kw, "fetch_record": down}),
+    )
+
+    def _unused_add_record(**_kw):  # pragma: no cover — must not be reached
+        raise AssertionError("strict gate must run before anything is written")
+
+    result = clp.add_local_pdf(
+        bib={"name": "main", "path": str(bib_path),
+             "papers_dir": str(papers_dir), "default": True},
+        raw_value=str(source_pdf),
+        record_overrides={},
+        dry_run=False,
+        server_url="http://127.0.0.1:1",
+        fetch_search=down,
+        ensure_citekey=lambda record, existing, **_kw: record,
+        add_record=_unused_add_record,
+        strict_metadata=True,
+    )
+
+    assert result["status"] == "error"
+    assert result["message"] == "metadata provider error (--strict-metadata)"
+    assert "provider down" in result["errors"]
+    assert bib_path.read_text() == ""
+    assert list(papers_dir.iterdir()) == []
+
