@@ -253,7 +253,7 @@ Everything below the quickstart lives in **[docs/reference.md](docs/reference.md
 what pzi writes to disk, recovering from an interrupted write, the config keys,
 the full CLI reference, external services and rate limits, citekeys and
 promotion, `pzi library check`, the HTTP API, the Python API, the architecture,
-the versioning promise, and source coverage.
+the versioning promise.
 
 ## PDF download for paywalled papers
 
@@ -365,9 +365,13 @@ rm -rf dist/   # both steps below append; a stale wheel would pass twine check
 .venv/bin/twine check dist/*.tar.gz dist/*.whl
 ```
 
-Two autouse fixtures in `tests/conftest.py` pin DNS and refuse any
-non-loopback `connect()`, so a test that forgets to mock an outbound call fails
-fast instead of reaching the network. They patch the pytest process only: a
+Two autouse fixtures in `tests/conftest.py` stub the SSRF guard's hostname
+lookup (`url_safety.resolve_host_with_timeout`) and refuse any non-loopback
+`connect()`, so a test that forgets to mock an outbound call fails at the
+connect instead of reaching the network. The stub does not cover connect-time
+resolution in `safe_http.resolve_pinned_ips`, which still calls the real
+`getaddrinfo`, so such a test can make a real DNS lookup before the connect is
+refused. They patch the pytest process only: a
 subprocess a test spawns (as `tests/test_cli_end_to_end.py` does) does not
 inherit them, so the suite is not network-isolated in that case. `tests/live/`
 is selected only by `PZI_LIVE=1` and deliberately uses the network.

@@ -136,6 +136,10 @@ def _dump_app_config(config: AppConfig) -> str:
 def _hermetic_dns(request, monkeypatch):
     """Make hostname resolution deterministic and offline for the unit suite.
 
+    Scope: this patches only ``url_safety.resolve_host_with_timeout``.
+    Connect-time resolution in ``safe_http.resolve_pinned_ips`` still calls
+    the real ``getaddrinfo``, so it is not offline.
+
     Scope: this fixture, ``_block_non_loopback_sockets`` and ``_clear_xdg_env``
     patch only the pytest process (``monkeypatch`` on in-process objects). A
     test that spawns a child process (the ``pzi`` console script, ``python -m``)
@@ -195,9 +199,10 @@ def _block_non_loopback_sockets(request, monkeypatch):
     test spawns (`tests/test_cli_end_to_end.py`) inherits neither this nor
     ``_hermetic_dns``, as README says.
 
-    ``_hermetic_dns`` above makes hostname resolution deterministic by
-    resolving public hostnames to a fixed public IP (93.184.216.34) instead
-    of hitting real DNS. That alone doesn't stop a test that forgot to mock
+    ``_hermetic_dns`` above makes the SSRF guard's hostname lookup
+    deterministic by resolving public hostnames to a fixed public IP
+    (93.184.216.34); connect-time resolution in ``safe_http`` is not stubbed.
+    That alone doesn't stop a test that forgot to mock
     an outbound call (metadata API, PDF download, etc.) from actually
     connecting to that IP over the network. This fixture is the safety net:
     it wraps ``socket.socket.connect``/``connect_ex`` and raises immediately
@@ -227,8 +232,9 @@ def _block_non_loopback_sockets(request, monkeypatch):
             ip = ipaddress.ip_address(ip_str)
         except ValueError:
             # Not a plain IP literal (e.g. an unresolved hostname somehow
-            # reached connect()). Real DNS is already blocked by
-            # ``_hermetic_dns``, so this shouldn't happen; fail closed.
+            # reached connect()). ``_hermetic_dns`` stubs the guard's lookup
+            # only, but ``safe_http`` resolves to IP literals first, so this
+            # shouldn't happen; fail closed.
             raise _NonLoopbackConnectError(
                 f"blocked connect() to unresolved host {ip_str!r} in test suite "
                 "(non-loopback sockets are disabled; see _block_non_loopback_sockets)"
