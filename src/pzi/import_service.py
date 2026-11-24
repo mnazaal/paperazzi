@@ -140,15 +140,14 @@ def import_from_bibtex(
     # warning (owner decision 2026-11-25: warn and document, no guessed base).
     source_dir = os.path.dirname(os.path.abspath(source_path)) if source_text is None else None
 
-    # Citekeys whose relative attachment paths stdin left as written; named in a
-    # warning below so the import does not quietly store paths that resolve
-    # against the target library's folder instead of the source's.
-    unresolved_from_stdin: list[str] = []
+    # Per record, positionally aligned with `records`: whether stdin left a
+    # relative attachment path as written. Only the records whose path was then
+    # written are named in the warning below, so the import does not quietly
+    # store paths that resolve against the target library's folder.
+    record_relative_from_stdin: list[bool] = []
     for entry in source_entries:
         if source_dir is not None:
             entry = _with_source_resolved_attachments(entry, source_dir)
-        elif _relative_attachment_paths(entry):
-            unresolved_from_stdin.append(entry.get("citekey", ""))
         citekey = entry.get("citekey", "")
         if citekey in seen_citekeys:
             skipped_in_source += 1
@@ -158,6 +157,9 @@ def import_from_bibtex(
         record["entry_type"] = entry.get("entry_type", "article")
         records.append(record)  # type: ignore[arg-type]
         record_source_entries.append(entry)
+        record_relative_from_stdin.append(
+            source_dir is None and bool(_relative_attachment_paths(entry))
+        )
 
     # Resolve config + target once, then plan/write every record under a single
     # lock with one atomic write (see add_records_to_bib_batch) instead of
@@ -176,17 +178,6 @@ def import_from_bibtex(
     skipped_errors = len(dropped_blocks)
     errors: list[str] = list(dropped_blocks)
     warnings: list[str] = []
-    if unresolved_from_stdin:
-        shown = ", ".join(unresolved_from_stdin[:5])
-        more = len(unresolved_from_stdin) - 5
-        if more > 0:
-            shown += f" and {more} more"
-        warnings.append(
-            f"{len(unresolved_from_stdin)} entr(ies) read from stdin have relative "
-            f"attachment paths, kept as written ({shown}): stdin has no folder to "
-            "resolve them against. Import the .bib file by path to resolve them."
-        )
-
     if isinstance(resolved, BibResolutionFailure):
         # Nothing ran: an unloadable config or an unknown `--target` is not a
         # batch that partly failed. Fanning it out into one error per record
@@ -248,9 +239,19 @@ def import_from_bibtex(
     #: Source entries merged into an existing entry, checked after the loop for
     #: attachments the entry's own `file` field did not take.
     merged_sources: list[tuple[str | None, Any]] = []
-    for record, source_entry, result in zip(records, record_source_entries, batch_results):
+    unresolved_from_stdin: list[str] = []
+    for record, source_entry, relative_from_stdin, result in zip(
+        records, record_source_entries, record_relative_from_stdin, batch_results
+    ):
         citekey = result.get("citekey", record.get("citekey", "?"))
         status = result.get("status", "unknown")
+        # Named only when the relative path was written: a new entry, or a merge
+        # that changed the `file` field. A duplicate or a failed write stored nothing.
+        if relative_from_stdin and status == "ok" and (
+            result.get("action", "insert") != "update"
+            or "file" in (result.get("changed_fields") or [])
+        ):
+            unresolved_from_stdin.append(citekey or "?")
         # The writer reports a near-duplicate as a warning, not an error, and
         # this module never read them — the string `warnings` did not occur in
         # it. So re-importing a file inserted `good1-2` beside `good1` and said
@@ -313,6 +314,17 @@ def import_from_bibtex(
                 "message": result.get("message", str(result.get("errors", ""))),
             })
             errors.append(f"{citekey}: {result.get('message', 'unknown error')}")
+
+    if unresolved_from_stdin:
+        shown = ", ".join(unresolved_from_stdin[:5])
+        more = len(unresolved_from_stdin) - 5
+        if more > 0:
+            shown += f" and {more} more"
+        warnings.append(
+            f"{len(unresolved_from_stdin)} entr(ies) read from stdin have relative "
+            f"attachment paths, kept as written ({shown}): stdin has no folder to "
+            "resolve them against. Import the .bib file by path to resolve them."
+        )
 
     try:
         warnings.extend(

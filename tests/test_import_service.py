@@ -1271,5 +1271,32 @@ def test_stdin_import_warns_naming_entries_with_relative_attachments(
 
 
 def test_file_import_does_not_give_the_stdin_warning(tmp_path: Path) -> None:
-    written = _import_with_relative_source(str(tmp_path), "papers/original.pdf", "absolute")
-    assert os.path.isabs(written)
+    cp, bp, _papers = _setup_config(str(tmp_path))
+    Path(bp).write_text("")
+    src = tmp_path / "export.bib"
+    src.write_text(
+        "@article{rel1, title = {A}, author = {Doe, J}, year = {2020}, doi = {10.1/a},\n"
+        "  file = {papers/a.pdf}}\n"
+    )
+    result = import_from_bibtex(config_path=cp, home_dir=str(tmp_path), source_path=str(src))
+    assert result["status"] == "ok", result
+    assert not [w for w in result.get("warnings", []) if "stdin" in w]
+
+
+def test_stdin_warning_skips_an_entry_whose_path_was_not_written(tmp_path: Path) -> None:
+    """A re-import that is a duplicate stores nothing, so it is not named."""
+    cp, bp, _papers = _setup_config(str(tmp_path))
+    Path(bp).write_text("")
+    text = (
+        "@article{r1, title = {A}, author = {Doe, J}, year = {2020}, doi = {10.1000/abc},\n"
+        "  file = {papers/a.pdf}}\n"
+    )
+    first = import_from_bibtex(
+        config_path=cp, home_dir=str(tmp_path), source_path="<stdin>", source_text=text
+    )
+    second = import_from_bibtex(
+        config_path=cp, home_dir=str(tmp_path), source_path="<stdin>", source_text=text
+    )
+    assert [w for w in first.get("warnings", []) if "stdin" in w]
+    assert second["skipped_duplicates"] == 1
+    assert not [w for w in second.get("warnings", []) if "stdin" in w], second["warnings"]
