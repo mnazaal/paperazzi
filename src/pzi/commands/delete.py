@@ -65,17 +65,23 @@ def run_delete_command(args, *, home_dir, config_path, stdout, stderr, bib_selec
                 print("cancelled", file=stderr)
             return exit_codes.OK
 
-    # One entry at a time, each with its own `.bak` and its own PDF disposal.
+    # One entry at a time, each with its own PDF disposal and per-item status.
     # Deleting them in one rewrite would make a single unparseable block cost
-    # the whole batch, and would leave one backup standing for several removals.
+    # the whole batch. The backup is one per run, though: a `.bak` copies the
+    # whole library, so one per key cost N full copies. The first removal that
+    # lands takes it, so it holds the pre-batch library and restores every
+    # removal; a key that was not found writes none and leaves it to the next.
     items: list[dict] = []
+    want_backup = not getattr(args, "no_backup", False)
     for citekey in citekeys:
         result = dict(delete_entry(
             bib_path=target["path"],
             citekey=citekey,
             dry_run=args.dry_run,
-            backup=not getattr(args, "no_backup", False),
+            backup=want_backup,
         ))
+        if isinstance(result.get("backup_path"), str):
+            want_backup = False
         if result["status"] == "ok":
             # The bib write is the commit point; the PDF moves after it. A move
             # that fails therefore degrades to exactly the old behaviour — an

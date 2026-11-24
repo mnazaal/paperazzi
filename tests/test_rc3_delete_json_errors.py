@@ -54,3 +54,47 @@ def test_fully_successful_batch_has_no_errors(tmp_path, monkeypatch) -> None:
     code, doc = _delete(tmp_path, monkeypatch, "existing")
     assert code == exit_codes.OK
     assert doc["errors"] == []
+
+
+def _delete_many(tmp_path: Path, monkeypatch, bib_text: str, *keys: str, extra=()):
+    monkeypatch.setenv("PZI_SKIP_AUTO_START", "1")
+    bib = tmp_path / "l.bib"
+    bib.write_text(bib_text)
+    config = tmp_path / "c.toml"
+    config.write_text(f'[[bibs]]\nname = "ml"\npath = "{bib}"\ndefault = true\n')
+    out = StringIO()
+    code = run_cli(
+        ["delete", *keys, "--force", "--json", "--config", str(config), *extra],
+        home_dir=str(tmp_path), stdout=out, stderr=StringIO(),
+    )
+    return code, json.loads(out.getvalue()), bib
+
+
+_THREE = "".join(
+    f"@article{{k{i},\n title={{t{i}}},\n year={{2020}}\n}}\n\n" for i in range(3)
+)
+
+
+def test_batch_delete_takes_one_backup_holding_the_pre_batch_library(
+    tmp_path, monkeypatch
+) -> None:
+    code, doc, bib = _delete_many(tmp_path, monkeypatch, _THREE, "k0", "k1", "k2")
+    assert code == exit_codes.OK
+    backups = sorted(tmp_path.glob("l.bib.*.bak*"))
+    assert len(backups) == 1
+    assert backups[0].read_text() == _THREE  # restores every removal, not just one
+    assert doc["deleted"] == 3
+    assert [i["status"] for i in doc["items"]] == ["ok"] * 3
+
+
+def test_batch_delete_backup_waits_for_the_first_real_removal(
+    tmp_path, monkeypatch
+) -> None:
+    _, doc, _ = _delete_many(tmp_path, monkeypatch, _THREE, "nope", "k0", "k1")
+    backups = sorted(tmp_path.glob("l.bib.*.bak*"))
+    assert len(backups) == 1 and backups[0].read_text() == _THREE
+
+
+def test_batch_delete_no_backup_still_takes_none(tmp_path, monkeypatch) -> None:
+    _delete_many(tmp_path, monkeypatch, _THREE, "k0", "k1", extra=["--no-backup"])
+    assert list(tmp_path.glob("*.bak*")) == []
