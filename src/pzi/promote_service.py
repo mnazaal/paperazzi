@@ -968,6 +968,7 @@ def _handle_keep_preprint(
         pdf_filename_format,
         browser_hook=browser_hook,
         next_candidate=next_candidate,
+        settings=settings,
     )
 
     # Diffed against the *preprint*, which is what the promotion changes — not
@@ -1351,6 +1352,7 @@ def _handle_update_in_place(
             pdf_filename_format,
             browser_hook=browser_hook,
             next_candidate=next_candidate,
+            settings=settings,
         )
 
         pending = _PendingWrite(

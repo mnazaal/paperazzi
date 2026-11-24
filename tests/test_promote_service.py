@@ -2794,3 +2794,56 @@ def test_a_fork_whose_second_plan_fails_inserts_nothing(tmp_path):
     written = bib_path.read_text()
     assert "Journal of Parsing" not in written
     assert written.count("@") == 1
+
+
+# ── Resolved PDF settings reach acquisition in both promotion modes ──────
+
+
+@pytest.mark.parametrize("handler_name", ["_handle_keep_preprint", "_handle_update_in_place"])
+def test_promotion_forwards_pdf_settings(tmp_path, monkeypatch, handler_name):
+    import inspect
+
+    from pzi.pdf_planning import PdfFallbackSettings
+
+    bib = tmp_path / "lib.bib"
+    bib.write_text(
+        "@article{key,title={Graph Parsers},author={Smith, Jane},year={2024},"
+        "eprint={2401.12345},archiveprefix={arXiv}}\n"
+    )
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    settings = PdfFallbackSettings.from_config({"browser_profile_path": "/synthetic/profile"})
+    seen: list[object] = []
+
+    def _acquire(**kwargs):
+        seen.append(kwargs.get("settings"))
+        return PdfSourceOutcome(
+            local_pdf_path=None, warning=None, errors=[], record=kwargs["record"]
+        )
+
+    monkeypatch.setattr(promote_service, "fetch_and_store_pdf_trying_sources", _acquire)
+    handler = getattr(promote_service, handler_name)
+    kwargs = dict(
+        bib_path=str(bib),
+        preprint_record={
+            "citekey": "key", "title": "Graph Parsers", "arxiv_id": "2401.12345",
+            "year": 2024, "authors": ["Smith, Jane"],
+        },
+        candidate={
+            "title": "Graph Parsers", "venue": "Journal", "doi": "10.1000/published",
+            "year": 2024, "authors": ["Smith, Jane"],
+            "pdf_url": "https://example.org/paper.pdf",
+        },
+        existing_citekeys={"key"},
+        dry_run=False,
+        papers_dir=str(papers),
+        fetch_binary=None,
+        flaresolverr_url=None,
+        browser_pdf_cmd=None,
+        settings=settings,
+    )
+    kwargs = {k: v for k, v in kwargs.items() if k in inspect.signature(handler).parameters}
+
+    handler(**kwargs)
+
+    assert len(seen) == 1 and seen[0] is settings
