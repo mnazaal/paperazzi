@@ -316,9 +316,15 @@ def build_capture_context(
     browser_pdf_cmd_override: str | None,
     browser: str | None,
     resolve_secret: Callable[[str | None, str | None], str | None] | None = None,
+    credentials: DiscoveryCredentials | None = None,
 ) -> CaptureContext:
-    """Build runtime capture context from resolved config and bib selection."""
-    credentials = resolve_discovery_credentials(config, resolve_secret=resolve_secret)
+    """Build runtime capture context from resolved config and bib selection.
+
+    A caller that has already resolved the credentials it needs passes them as
+    *credentials*, so no `*_cmd` runs a second time here.
+    """
+    if credentials is None:
+        credentials = resolve_discovery_credentials(config, resolve_secret=resolve_secret)
     # Derive api_url from configured host/port.
     api_url = config.get("api_url")
     if not api_url:

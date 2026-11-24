@@ -889,7 +889,7 @@ def _stored_record_context(
     server_url = str(config.get("translation_server_url") or "")
     if not deep:
         return build_discovery_context(raw_value=raw_value, server_url=server_url)
-    emails = _stored_discovery_emails(config)
+    emails = stored_discovery_emails(config)
     context = build_discovery_context(
         raw_value=raw_value,
         server_url=server_url,
@@ -912,7 +912,7 @@ def _stored_record_context(
 _EMAILS_MEMO: list[Any] = []
 
 
-def _stored_discovery_emails(config: Mapping[str, Any]) -> Any:
+def stored_discovery_emails(config: Mapping[str, Any]) -> Any:
     from pzi.capture_context import resolve_discovery_emails
 
     if _EMAILS_MEMO and _EMAILS_MEMO[0] is config:
@@ -920,3 +920,17 @@ def _stored_discovery_emails(config: Mapping[str, Any]) -> Any:
     emails = resolve_discovery_emails(cast(Any, config))
     _EMAILS_MEMO[:] = [config, emails]
     return emails
+
+
+def stored_credential_warnings(config: Mapping[str, Any]) -> list[str]:
+    """One warning per credential command that failed for *config*, by key only.
+
+    Reads the memo without resolving anything, so a run that never needed a
+    credential reports none and runs no command for the sake of reporting.
+    """
+    if not _EMAILS_MEMO or _EMAILS_MEMO[0] is not config:
+        return []
+    return [
+        f"credential: {key} failed; continuing without it"
+        for key in _EMAILS_MEMO[1].failed_keys
+    ]

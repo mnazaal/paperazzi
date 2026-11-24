@@ -1362,3 +1362,70 @@ def test_doi_resolver_skips_an_unsafe_first_answer_for_a_good_second(
     result = scheduler({"doi": "10.1/x"}, [module.doi_pdf_step], context)
 
     assert result.get("pdf_url") == _GOOD
+
+
+def _stub_stored_bib(monkeypatch, config, records):
+    from pzi import pdf_service
+
+    monkeypatch.setattr(
+        pdf_service, "load_bib_target",
+        lambda **kw: (config, {"name": "ml", "path": "/b", "papers_dir": "/nonexistent-papers"}),
+    )
+    monkeypatch.setattr(
+        pdf_service, "read_bib_file",
+        lambda path: {
+            "entries": [{"citekey": r["citekey"], "fields": {}} for r in records],
+            "records": records,
+        },
+    )
+    monkeypatch.setattr(pdf_service, "_snapshot_pdf_paths", lambda d: set())
+    return pdf_service
+
+
+def test_failed_download_fallback_does_not_abort_on_failing_s2_command(
+    public_urls, monkeypatch
+) -> None:
+    import pzi.add_planning as ap
+    import pzi.capture_context as cc
+    import pzi.pdf as pdfmod
+    import pzi.pdf_discovery as module
+    from pzi.config import _normalize_app_config
+    from pzi.errors import PziError
+
+    calls: list[str | None] = []
+
+    def fake_run(command, *, config_key=None):
+        calls.append(config_key)
+        if config_key == "semantic_scholar_api_key_cmd":
+            raise PziError(f"the {config_key} command exited with code 1")
+        return "value"
+
+    monkeypatch.setattr(cc, "run_shell_command", fake_run)
+    monkeypatch.setattr(
+        module, "DEFAULT_DISCOVERY_STEPS",
+        [s for s in module.DEFAULT_DISCOVERY_STEPS if module.phase_of(s) == "pure"],
+    )
+    monkeypatch.setattr(ap, "DEFAULT_DISCOVERY_STEPS", [])
+    monkeypatch.setattr(
+        pdfmod, "fetch_and_store_pdf_with_fallbacks",
+        lambda **kw: (None, None, "download failed"),
+    )
+    config = _normalize_app_config(
+        {"semantic_scholar_api_key_cmd": "pass s2", "unpaywall_email_cmd": "pass email"},
+        [],
+        home_dir="/h",
+    )
+    records = [
+        {"citekey": f"k{i}", "title": "T", "eprint": f"2401.0000{i}",
+         "archiveprefix": "arXiv", "arxiv_id": f"2401.0000{i}"}
+        for i in range(3)
+    ]
+    pdf_service = _stub_stored_bib(monkeypatch, config, records)
+
+    result = pdf_service.retry_failed_pdfs(
+        config_path="/f", home_dir="/h", bib_selector=None, deep=True
+    )
+
+    assert result["status"] == "ok"
+    assert "semantic_scholar_api_key_cmd" not in calls
+    assert calls.count("unpaywall_email_cmd") <= 1

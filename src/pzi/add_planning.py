@@ -21,7 +21,7 @@ from typing import Any, NotRequired, TypedDict, cast
 from urllib.parse import urlsplit
 
 from pzi.bibtex import NormalizedRecord
-from pzi.capture_context import CaptureContext, build_capture_context
+from pzi.capture_context import CaptureContext, DiscoveryCredentials, build_capture_context
 from pzi.config import AppConfig, BibConfig
 from pzi.flaresolverr import fetch_html_via_flaresolverr
 from pzi.html_metadata import extract_metadata_from_html
@@ -37,6 +37,7 @@ from pzi.pdf_discovery import (
     PdfDiscoveryContext,
     apply_pdf_discovery,
     discovery_diagnostics,
+    stored_discovery_emails,
 )
 from pzi.protocols import (
     HtmlFetcher,
@@ -656,8 +657,8 @@ def next_pdf_candidate_for_config(config: AppConfig, bib: BibConfig) -> NextPdfC
     and gave up — leaving the entry in exactly the state that made the user run
     the command.
 
-    Credentials come from `build_capture_context` rather than being re-read from
-    config here, so their resolution keeps one implementation. Note that
+    The two e-mail credentials come from `stored_discovery_emails`, the same
+    memoised resolver stored-entry discovery uses. Note that
     `pdf_service._fallback_kwargs` skips that builder on the grounds that these
     credentials "play no part in fetching a PDF"; that stopped being true when
     the open-access fallback became part of fetching a PDF.
@@ -667,7 +668,7 @@ def next_pdf_candidate_for_config(config: AppConfig, bib: BibConfig) -> NextPdfC
     than can be reconstructed from config.
 
     The capture context is built on first use, not here. Building it resolves
-    credentials, and `unpaywall_email_cmd` / `semantic_scholar_api_key_cmd`
+    credentials, and `unpaywall_email_cmd` / `contact_email_cmd`
     resolve by *running a shell command* — so doing it eagerly would charge
     every `pdf retry` for secrets it needs only when a download has already
     failed, which is the eager cost this whole fallback is designed to avoid.
@@ -676,9 +677,19 @@ def next_pdf_candidate_for_config(config: AppConfig, bib: BibConfig) -> NextPdfC
 
     def _context() -> CaptureContext:
         if not cached:
+            # Only the two e-mail values the steps read, memoised per config
+            # and shared with stored-entry discovery: a failing S2 command
+            # cannot abort the batch, and no command runs twice.
+            emails = stored_discovery_emails(config)
             cached.append(
                 build_capture_context(
-                    config=config, bib=bib, browser_pdf_cmd_override=None, browser=None
+                    config=config,
+                    bib=bib,
+                    browser_pdf_cmd_override=None,
+                    browser=None,
+                    credentials=DiscoveryCredentials(
+                        emails.contact_email, emails.unpaywall_email, None
+                    ),
                 )
             )
         return cached[0]
