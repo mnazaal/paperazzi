@@ -1348,3 +1348,29 @@ def test_reindex_reports_a_partial_sibling_only_when_it_held_a_move(tmp_path) ->
         bib_path=str(bib), papers_dir=str(papers), dry_run=True, sibling_bib_paths=[str(sib2)]
     )
     assert any("sib.bib" in e for e in held["errors"]), held["errors"]
+
+
+# ── convert --dry-run applies the write's own refusal ─────────────────────────
+
+def test_convert_file_paths_dry_run_refuses_what_the_real_run_refuses(
+    tmp_path, monkeypatch
+) -> None:
+    from pzi.errors import PziError
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    bib = tmp_path / "ml.bib"
+    text = (
+        f"@article{{a,\n  title={{x}},\n  file={{{home}/x.pdf}},\n}}\n"
+        "@article{a,\n  title={y},\n}\n"
+    )
+    bib.write_text(text)
+
+    with pytest.raises(PziError) as real:
+        convert_file_paths(bib_path=str(bib), file_path_style="home", dry_run=False)
+    with pytest.raises(PziError) as preview:
+        convert_file_paths(bib_path=str(bib), file_path_style="home", dry_run=True)
+
+    assert str(preview.value) == str(real.value)
+    assert bib.read_text() == text

@@ -948,6 +948,10 @@ def convert_file_paths(
 
         errors: list[str] = []
         backup_path: Path | None = None
+        if dry_run and converted:
+            # The write refuses a library that cannot be rewritten; the preview
+            # raises the same error rather than offering a fold the run declines.
+            validate_library_parseable(parse_bib_library(read_bib_source(bib_path)))
         if not dry_run and converted:
             backup_path = backup_path_for(bib_path, "convert-file-paths")
             backup_path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
