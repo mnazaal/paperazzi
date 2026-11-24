@@ -428,6 +428,17 @@ def test_promote_keep_preprint_creates_new_entry(tmp_path):
     assert "Preprint version:" in text
 
 
+# Title-search providers that answer nothing, so a test that injects only
+# `fetch_search` makes no outbound attempt to the real fetchers.
+_NULL_PROVIDERS = {
+    "fetch_crossref": lambda title: None,
+    "fetch_openalex": lambda title: None,
+    "fetch_dblp": lambda title: None,
+    "fetch_openreview": lambda title: None,
+    "fetch_s2": lambda title: (None, None),
+}
+
+
 def test_promote_skips_when_published_already_exists(tmp_path):
     bib_path = tmp_path / "ml.bib"
     config_path = _write_config(tmp_path, bib_path)
@@ -484,6 +495,7 @@ def test_promote_skips_low_confidence(tmp_path):
         bib_selector=None,
         dry_run=False,
         fetch_search=fake_search,
+        **_NULL_PROVIDERS,
     )
 
     assert len(result["items"]) == 1
@@ -1207,6 +1219,7 @@ def test_promote_rejects_a_candidate_matching_on_authors_alone(tmp_path):
         keep_preprint=False,
         dry_run=False,
         fetch_search=fake_search,
+        **_NULL_PROVIDERS,
     )
 
     assert result["items"][0]["action"] == "skip"
@@ -1252,6 +1265,7 @@ def test_promote_applies_the_configured_default_threshold(tmp_path):
         bib_selector=None,
         dry_run=False,
         fetch_search=fake_search,
+        **_NULL_PROVIDERS,
     )
 
     assert result["items"][0]["action"] == "skip"
