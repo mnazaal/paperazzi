@@ -716,3 +716,46 @@ def test_outputs_spelled_through_a_symlinked_parent_are_one_file(
 
     assert code == exit_codes.USAGE, err
     assert "--report and --jsonl" in err
+
+
+def test_a_zero_entry_audit_after_a_late_resolution_is_still_guarded(
+    tmp_path: Path,
+) -> None:
+    """The post-audit guard was keyed on items, so an empty audit skipped it.
+
+    The config gains a default between the guard and the audit; the audit
+    succeeds with zero entries; `--report <that library>` then replaced the
+    comment-only library with the JSON report and exited 0.
+    """
+    first, second = _two_libraries(tmp_path)
+    first.write_text("% comment-only library\n", encoding="utf-8")
+    config = _write_config(tmp_path, [("a", first), ("b", second)])
+
+    def config_gains_a_default(**_kw):
+        _write_config(tmp_path, [("a", first), ("b", second)], default="a")
+        empty = _many(0)
+        empty["bib_name"] = "a"
+        return empty
+
+    code, _out, err = _run_configured(
+        tmp_path, _args(report=str(first), force=True), config_gains_a_default,
+        config=config,
+    )
+
+    assert code == exit_codes.USAGE, err
+    assert first.read_text(encoding="utf-8") == "% comment-only library\n"
+
+
+def test_jsonl_to_dev_stdout_with_report_to_dash_is_one_stream(tmp_path: Path) -> None:
+    """`-` is stdout; `/dev/stdout` is the same file under another name."""
+    bib = tmp_path / "main.bib"
+    bib.write_text(LIBRARY, encoding="utf-8")
+    config = _write_config(tmp_path, [("main", bib)], default="main")
+
+    code, _out, err = _run_configured(
+        tmp_path, _args(report="-", jsonl="/dev/stdout", force=True),
+        _never_ran, config=config,
+    )
+
+    assert code == exit_codes.USAGE, err
+    assert "--report and --jsonl" in err

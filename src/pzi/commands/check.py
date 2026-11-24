@@ -131,8 +131,15 @@ def _output_alias_refusal(
             )
     if (
         report_path and jsonl_path
-        and report_path != "-" and jsonl_path != "-"
-        and _same_file(report_path, jsonl_path)
+        # `-` is stdout, so compare it as `/dev/stdout`: `--jsonl /dev/stdout
+        # --report -` printed the stream and then the report on one stdout,
+        # and so did `--report - > out.jsonl --jsonl out.jsonl` (same inode).
+        # The `-`/`-` pair is refused earlier with its own message.
+        and not (report_path == "-" and jsonl_path == "-")
+        and _same_file(
+            "/dev/stdout" if report_path == "-" else report_path,
+            "/dev/stdout" if jsonl_path == "-" else jsonl_path,
+        )
     ):
         # Both writers accepted these two flags and the last one won: the NDJSON
         # streamed during the audit was replaced by the final report, so the
@@ -331,11 +338,18 @@ def run_check_command(
             for item in result["items"][streamed:]:
                 print(json.dumps(item, default=str), file=jsonl_stream)
 
-    if not target_resolved and result["items"]:
-        # The audit produced items although the guard could not resolve the
-        # target (the configuration changed in between, or an injected
-        # `check_bib_fn`). Nothing has been written yet; re-run the guard on a
-        # fresh resolution — every library it can now name — before writing.
+    audit_ran = result["status"] == "ok" or bool(result["items"])
+    if not target_resolved and audit_ran:
+        # The audit ran although the guard could not resolve the target (the
+        # configuration changed in between, or an injected `check_bib_fn`), so
+        # outputs are about to be written. Nothing has been written yet; re-run
+        # the guard on a fresh resolution — every library it can now name.
+        # Keyed on "the audit ran", not on items: a zero-entry audit still
+        # writes `--report`, and keying on items let that write skip the guard.
+        #
+        # Known limit: if this second resolution also fails, the list is still
+        # incomplete. The real `check_bib` cannot run in that state, so it needs
+        # the configuration to change twice during startup.
         libraries, _resolved = _libraries_this_run_could_read(
             config_path=config_path, home_dir=home_dir, bib_selector=bib_selector
         )
