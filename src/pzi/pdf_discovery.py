@@ -622,7 +622,7 @@ def doi_pdf_step(
         )
         for detail in provider_errors[before:]:
             context.setdefault("discovery_diagnostics", []).append(f"{name}: {detail}")
-        if pdf_url and pdf_url not in excluded_pdf_urls(context):
+        if pdf_url and _is_usable_pdf_url(pdf_url, context):
             updated = dict(record)
             updated["pdf_url"] = pdf_url
             updated["pdf_source"] = "doi"

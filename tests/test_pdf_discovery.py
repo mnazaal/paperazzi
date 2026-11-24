@@ -1337,3 +1337,28 @@ def test_a_failing_credential_command_is_a_step_diagnostic_by_name_only(
     text = " ".join(result.get("pdf_discovery_diagnostics", []))
     assert "unpaywall_email_cmd" in text
     assert "SECRETWORD" not in text
+
+
+@pytest.mark.parametrize("scheduler", [apply_pdf_discovery, apply_pdf_discovery_parallel])
+def test_doi_resolver_skips_an_unsafe_first_answer_for_a_good_second(
+    monkeypatch, scheduler
+) -> None:
+    import pzi.pdf_discovery as module
+
+    unsafe = "http://169.254.169.254/latest/x.pdf"
+    real_safe = module.safe_public_http_url
+    monkeypatch.setattr(
+        module, "safe_public_http_url", lambda u: u == _GOOD or (u != unsafe and real_safe(u))
+    )
+    monkeypatch.setattr(
+        module, "classify_public_http_url", lambda u: "public" if u == _GOOD else "private"
+    )
+    context = {
+        "fetch_crossref_pdf": lambda doi: unsafe,
+        "fetch_europepmc_pdf": lambda doi: _GOOD,
+        "fetch_doaj_pdf": lambda doi: None,
+    }
+
+    result = scheduler({"doi": "10.1/x"}, [module.doi_pdf_step], context)
+
+    assert result.get("pdf_url") == _GOOD
