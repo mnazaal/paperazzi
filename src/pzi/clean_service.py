@@ -767,6 +767,19 @@ def clean_library(
         redundant = set(validation.get("duplicate_orphan_pdfs") or [])
         unclaimed = [p for p in validation["orphan_pdfs"] if p not in redundant]
 
+        # An other library that is not there cannot prove the PDF unreferenced,
+        # and locking it would create its directory and a lock file — pzi never
+        # writes at another library's path. Same policy as `quarantine_pdf`.
+        missing_others = [
+            Path(p).name for p in sibling_bib_paths if not Path(p).exists()
+        ]
+        if missing_others:
+            return _skip_quarantine(
+                validation,
+                f"{', '.join(sorted(missing_others))} does not exist, so its "
+                "references cannot be checked",
+            )
+
         if dry_run:
             # Nothing moves, so there is nothing an outer lock would protect —
             # `validate_library`'s own shared lock already covered the read.
@@ -784,7 +797,15 @@ def clean_library(
             lock_targets = sorted({bib_path, *sibling_bib_paths})
             with ExitStack() as locks:
                 for path in lock_targets:
-                    locks.enter_context(with_bib_lock(path, shared=False))
+                    try:
+                        locks.enter_context(with_bib_lock(path, shared=False))
+                    except OSError as exc:
+                        if path == bib_path:
+                            raise
+                        return _skip_quarantine(
+                            validation,
+                            f"cannot lock {Path(path).name}: {exc}",
+                        )
                 # The orphan list above came from a read that released its
                 # lock. A PDF writer stores the file *before* taking the lock
                 # that records it, so one may have committed its `file =` in
@@ -856,20 +877,35 @@ def clean_library(
     return validation
 
 
-def siblings_sharing_papers_dir(config: AppConfig, target: BibConfig) -> list[str]:
-    """The other configured libraries storing PDFs in *target*'s papers directory.
+def _skip_quarantine(validation: CleanResult, reason: str) -> CleanResult:
+    """Report that no orphan was moved because another library could not be checked."""
+    validation["issues"].append({
+        "severity": "warning",
+        "type": "quarantine_skipped",
+        "message": f"not quarantining any orphan PDF: {reason}",
+    })
+    validation["actions"] = []
+    return validation
 
-    The default layout gives every bib the same `papers_dir`, so without this a
-    check of one library reported the others' PDFs as orphans — and `--fix`
-    quarantined them, breaking `file =` fields in a library the user never named.
+
+def other_library_paths(config: AppConfig, target: BibConfig) -> list[str]:
+    """Every other configured library, whatever its papers directory.
+
+    Any of them may name a PDF inside *target*'s papers directory: the default
+    layout shares one `papers_dir`, and `pzi export --target a | pzi import -
+    --target b` gives `b` references into `a`'s even when `b` has its own. A
+    check that consulted only same-directory libraries quarantined, or deleted
+    the PDF of, an entry in another library the user never named.
     """
-    shared = os.path.realpath(target["papers_dir"])
     return [
-        bib["path"]
-        for bib in config.get("bibs", [])
-        if bib["path"] != target["path"]
-        and os.path.realpath(bib["papers_dir"]) == shared
+        bib["path"] for bib in config.get("bibs", []) if bib["path"] != target["path"]
     ]
+
+
+# Former name, from when only libraries sharing the target's `papers_dir` were
+# consulted. The meaning is now strictly wider; kept so callers that pass the
+# result as `sibling_bib_paths` (reindex) pick up the fix unchanged.
+siblings_sharing_papers_dir = other_library_paths
 
 
 def plan_pdf_disposal(
@@ -924,7 +960,7 @@ def plan_pdf_disposal(
     # match — so the duplicate pair this command exists to reconcile is exactly
     # where one path ends up in two entries. An imported `.bib` can carry the
     # same sharing outright.
-    owners = [target["path"], *siblings_sharing_papers_dir(config, target)]
+    owners = [target["path"], *other_library_paths(config, target)]
     # Only the target's entries are on their way out. A sibling library's entry
     # with the same citekey is a different entry and still names the file.
     # On a real run these entries are already gone and this is a no-op; on a

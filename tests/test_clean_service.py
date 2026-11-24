@@ -1134,3 +1134,64 @@ def test_unlockable_or_absent_sibling_keeps_pdf_without_creating_anything(
         assert not (tmp_path / "typo").exists()
     else:
         assert not (sib_dir / "sibling.bib.lock").exists()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# A library with its OWN papers_dir can still name a PDF inside the target's
+# (`pzi export --target a | pzi import - --target b` writes exactly that).
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _cross_dir_config(tmp_path: Path, *, other_text: str | None) -> tuple[Path, Path, Path, Path, Path]:
+    """Libraries `a` (papers pa) and `b` (papers pb); returns a.bib, b.bib, pa, pb, config."""
+    pa, pb = tmp_path / "pa", tmp_path / "pb"
+    pa.mkdir()
+    pb.mkdir()
+    a_bib, b_bib, cfg = tmp_path / "a.bib", tmp_path / "b.bib", tmp_path / "config.toml"
+    cfg.write_text(
+        "browser_hook=false\ndesktop_fallback_hosts=[]\n"
+        f'[[bibs]]\nname="a"\npath="{a_bib}"\npapers_dir="{pa}"\ndefault=true\n'
+        f'[[bibs]]\nname="b"\npath="{b_bib}"\npapers_dir="{pb}"\n'
+    )
+    if other_text is not None:
+        b_bib.write_text(other_text)
+    return a_bib, b_bib, pa, pb, cfg
+
+
+def test_delete_keeps_a_pdf_named_by_a_library_with_another_papers_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import pzi
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("PZI_SKIP_AUTO_START", "1")
+    pdf = tmp_path / "pa" / "x.pdf"
+    a_bib, b_bib, _pa, _pb, cfg = _cross_dir_config(tmp_path, other_text=_entry("bx", pdf))
+    pdf.write_bytes(_SHARED_PDF)
+    a_bib.write_text(_entry("x", pdf))
+
+    pzi.delete("x", dry_run=False, config_path=str(cfg), library="a")
+
+    assert "x," not in a_bib.read_text()
+    assert pdf.read_bytes() == _SHARED_PDF, "b's attachment was moved out of pa"
+    assert str(pdf) in b_bib.read_text()
+
+
+def test_delete_keeps_the_pdf_when_another_library_cannot_be_read_or_is_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An other library that cannot prove the PDF unreferenced vetoes the move, never aborts."""
+    import pzi
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("PZI_SKIP_AUTO_START", "1")
+    a_bib, b_bib, pa, pb, cfg = _cross_dir_config(tmp_path, other_text=None)
+    pdf = pa / "x.pdf"
+    pdf.write_bytes(_SHARED_PDF)
+    a_bib.write_text(_entry("x", pdf))
+
+    pzi.delete("x", dry_run=False, config_path=str(cfg), library="a")
+
+    assert pdf.read_bytes() == _SHARED_PDF
+    assert not b_bib.exists() and not Path(str(b_bib) + ".lock").exists()
+    assert list(pb.iterdir()) == []

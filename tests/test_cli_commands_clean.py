@@ -110,3 +110,61 @@ def test_clean_dry_run_help_says_it_needs_fix(capsys) -> None:
         build_parser().parse_args(["library", "clean", "--help"])
     help_text = " ".join(capsys.readouterr().out.split())
     assert "with --fix, preview" in help_text
+
+
+def test_clean_fix_leaves_a_pdf_named_by_a_library_with_another_papers_dir(
+    tmp_path: Path,
+) -> None:
+    """`export --target a | import - --target b` makes b name files in a's papers_dir."""
+    from pzi.cli import run_cli
+
+    pa, pb = tmp_path / "pa", tmp_path / "pb"
+    pa.mkdir()
+    pb.mkdir()
+    for name in ("kept", "orphan"):
+        (pa / f"{name}.pdf").write_bytes(b"%PDF-1.4\n" + name.encode())
+    entry = "@article{{{k},\n  title = {{T}},\n  author = {{Smith, J}},\n  year = {{2020}},\n  file = {{{f}}},\n}}\n"
+    (tmp_path / "a.bib").write_text("")
+    (tmp_path / "b.bib").write_text(entry.format(k="bk", f=pa / "kept.pdf"))
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        f'[[bibs]]\nname = "a"\npath = "{tmp_path / "a.bib"}"\npapers_dir = "{pa}"\ndefault = true\n'
+        f'[[bibs]]\nname = "b"\npath = "{tmp_path / "b.bib"}"\npapers_dir = "{pb}"\n'
+    )
+
+    out, err = StringIO(), StringIO()
+    run_cli(
+        ["library", "clean", "--fix", "--target", "a", "--config", str(cfg)],
+        home_dir=str(tmp_path), stdout=out, stderr=err,
+    )
+
+    assert (pa / "kept.pdf").read_bytes() == b"%PDF-1.4\nkept", "b's PDF was quarantined"
+    # The target's own orphan is still found and filed away.
+    assert not (pa / "orphan.pdf").exists()
+    assert (pa / ".orphans" / "orphan.pdf").exists()
+
+
+def test_clean_fix_keeps_orphans_and_creates_nothing_when_another_library_is_absent(
+    tmp_path: Path,
+) -> None:
+    from pzi.cli import run_cli
+
+    pa = tmp_path / "pa"
+    pa.mkdir()
+    (pa / "orphan.pdf").write_bytes(b"%PDF-1.4\norphan")
+    (tmp_path / "a.bib").write_text("")
+    ghost = tmp_path / "ghost" / "b.bib"
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        f'[[bibs]]\nname = "a"\npath = "{tmp_path / "a.bib"}"\npapers_dir = "{pa}"\ndefault = true\n'
+        f'[[bibs]]\nname = "b"\npath = "{ghost}"\npapers_dir = "{tmp_path / "pb"}"\n'
+    )
+
+    out, err = StringIO(), StringIO()
+    run_cli(
+        ["library", "clean", "--fix", "--target", "a", "--config", str(cfg)],
+        home_dir=str(tmp_path), stdout=out, stderr=err,
+    )
+
+    assert (pa / "orphan.pdf").exists(), "an unverifiable other library must keep the PDF"
+    assert not ghost.parent.exists(), "pzi created files at another library's path"

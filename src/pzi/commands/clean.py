@@ -5,7 +5,7 @@ from __future__ import annotations
 from pzi import cli_json, exit_codes
 from pzi.clean_service import (
     clean_library,
-    siblings_sharing_papers_dir,
+    other_library_paths,
     validate_library,
 )
 from pzi.cli_render import error_lines, render_clean_result
@@ -34,7 +34,7 @@ def run_clean_command(args, *, home_dir, config_path, stdout, stderr, bib_select
             stderr=stderr,
         )
 
-    siblings = siblings_sharing_papers_dir(_config, target)
+    siblings = other_library_paths(_config, target)
     if args.fix:
         result = clean_library(
             bib_path=target["path"], papers_dir=target["papers_dir"],
