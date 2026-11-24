@@ -751,13 +751,13 @@ def add_record_with_bib(
     record_with_hint, plan = _build_plan(typed_existing_records, existing_entries)
 
     if not dry_run:
-        # One commit per item is deliberate, not an oversight: `add --from-file`
-        # and `inbox` fetch over the network between items, so a batch-wide
-        # write session would hold the bib's exclusive lock for the whole run,
-        # and an interrupted batch keeps what it already captured. The cost is
-        # a cold parse and a whole-file write per item (about 1.5 s at 22k
-        # entries); `add_records_to_bib_batch` is the single-session path for
-        # callers that need no network between items (`import`).
+        # One commit per item is deliberate, not an oversight: an interrupted
+        # `add --from-file` or `inbox` run keeps what it already captured. The
+        # lock does not force this, since lookups can run outside it and writes
+        # be chunked, as `update_service` does. The cost is a cold parse and a
+        # whole-file write per item (about 1.5 s at 22k entries);
+        # `add_records_to_bib_batch` is the single-session path for callers that
+        # need no network between items (`import`).
         record_with_hint, plan = _execute_plan_with_retry(
             bib=bib,
             build_plan=_build_plan,
