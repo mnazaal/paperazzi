@@ -1344,3 +1344,56 @@ def test_library_clean_reports_target_findings_when_another_library_is_unreadabl
     assert unreadable, data["issues"]
     assert (pa / "orphan.pdf").exists() and (pa / "x.pdf").exists()
     assert not (pa / ".orphans").exists(), "no orphan may move while b is unreadable"
+
+
+@pytest.mark.parametrize("kind", ["readonly-dir", "absent-dir"])
+def test_dry_run_disposal_previews_what_the_real_run_does(
+    tmp_path: Path, kind: str
+) -> None:
+    """A preview must not say 'moved' for a PDF the real run keeps."""
+    from pzi.clean_service import plan_pdf_disposal
+    from pzi.config import load_config_file
+
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    pdf = papers / "x.pdf"
+    pdf.write_bytes(_SHARED_PDF)
+    bib = tmp_path / "main.bib"
+    bib.write_text("")
+    if kind == "readonly-dir":
+        sib_dir = tmp_path / "rodir"
+        sib_dir.mkdir()
+        sib = sib_dir / "sibling.bib"
+        sib.write_text("")
+        sib_dir.chmod(0o555)
+        if os.access(sib_dir, os.W_OK):
+            pytest.skip("root ignores directory modes")
+    else:
+        sib_dir = tmp_path / "typo" / "dir"
+        sib = sib_dir / "sibling.bib"
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        "browser_hook=false\ndesktop_fallback_hosts=[]\n"
+        f'[[bibs]]\nname="main"\npath="{bib}"\npapers_dir="{papers}"\ndefault=true\n'
+        f'[[bibs]]\nname="sibling"\npath="{sib}"\npapers_dir="{papers}"\n'
+    )
+    config = load_config_file(str(cfg), home_dir=str(tmp_path))["config"]
+    try:
+        actions = {
+            dry: plan_pdf_disposal(
+                result={"citekey": "x", "pdf_path": str(pdf)},
+                config=config, target=config["bibs"][0], keep_pdf=False, dry_run=dry,
+            )
+            for dry in (True, False)
+        }
+    finally:
+        if kind == "readonly-dir":
+            sib_dir.chmod(0o755)
+
+    dry_action, real_action = actions[True], actions[False]
+    assert real_action is not None and real_action["status"] == "kept"
+    assert dry_action is not None and dry_action["status"] == "kept", dry_action
+    assert "sibling" in dry_action["reason"]
+    assert pdf.read_bytes() == _SHARED_PDF
+    assert not (tmp_path / "typo").exists()
+    assert not (sib_dir / "sibling.bib.lock").exists()

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, NotRequired, TypedDict
 
 from pzi.bib_repository import (
+    _resolve_write_target,
     read_bib_file,
     read_bib_file_raw_with_failures,
     read_bib_file_with_failures,
@@ -557,6 +558,19 @@ class QuarantineResult(TypedDict):
     dry_run: NotRequired[bool]
 
 
+def _lock_blocker(bib_path: str) -> str | None:
+    """Why the exclusive lock on *bib_path* could not be taken, judged without taking it."""
+    name = Path(bib_path).name
+    if not Path(bib_path).exists():
+        return f"{name} does not exist"
+    lock_path = Path(str(_resolve_write_target(bib_path)) + ".lock")
+    if lock_path.exists():
+        usable = os.access(lock_path, os.W_OK)
+    else:
+        usable = os.access(lock_path.parent, os.W_OK | os.X_OK)
+    return None if usable else f"cannot lock {name}: permission denied"
+
+
 def quarantine_pdf(
     *,
     pdf_path: str,
@@ -604,6 +618,17 @@ def quarantine_pdf(
 
     orphan_dir = Path(papers_dir) / QUARANTINE_DIRNAME
     if dry_run:
+        # The real run keeps the file when a bib it must re-read is absent or
+        # cannot be locked; a preview that said "moved" there contradicted it.
+        # Nothing is created or locked here, only looked at.
+        for path in sorted({bib_path, *recheck_bibs}) if recheck_bibs else ():
+            blocker = _lock_blocker(path)
+            if blocker:
+                return {
+                    "status": "kept",
+                    "source": str(source),
+                    "reason": f"could not verify references: {blocker}",
+                }
         planned = plan_orphan_quarantine(
             orphan_pdfs=[str(source)],
             orphan_dir=str(orphan_dir),
