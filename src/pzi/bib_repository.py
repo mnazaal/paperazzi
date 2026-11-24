@@ -596,7 +596,27 @@ def _update_library_blocks(
             new_blocks.append(block)
     # Append any remaining new entries (inserts beyond original count).
     new_blocks.extend(rebuild(entry) for entry in remaining_entries)
+    if __debug__:
+        _assert_verbatim_blocks_unmodified(library.blocks, new_blocks, verbatim)
     return build_library(new_blocks), frozenset(verbatim)
+
+
+def _assert_verbatim_blocks_unmodified(
+    original_blocks: list, new_blocks: list, verbatim: set[int]
+) -> None:
+    """Every position listed as verbatim holds a block the parser produced.
+
+    `serialize_library` writes a verbatim block's `raw` text back, and `raw`
+    goes stale the moment a block is rebuilt or merged. A rebuilt block listed
+    here would therefore be written as its pre-edit bytes — a silent lost
+    update. One identity set over the originals; skipped under ``python -O``.
+    """
+    original_ids = {id(block) for block in original_blocks}
+    for position in verbatim:
+        assert id(new_blocks[position]) in original_ids, (
+            f"position {position} is marked verbatim but holds a block the "
+            "parser did not produce; its `raw` text would be stale"
+        )
 
 
 def _written_entries(

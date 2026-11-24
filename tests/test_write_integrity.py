@@ -1197,3 +1197,34 @@ def test_bib_write_fsyncs_the_temp_file_before_replace_and_the_directory_after(
     assert kinds == ["fsync", "replace", "fsync"], events
     # First fsync saw the complete new content; the last is the directory.
     assert events[0][1] == written
+
+
+def test_verbatim_positions_must_hold_parser_blocks() -> None:
+    """A rebuilt block listed as verbatim would be written back as stale `raw`."""
+    from pzi.bib_repository import (
+        _assert_verbatim_blocks_unmodified,
+        _update_library_blocks,
+        parse_bib_library,
+    )
+
+    source = (
+        "@article{a,\n title={x},\n year={2020}\n}\n\n"
+        "@article{b,\n title={y},\n year={2021}\n}\n"
+    )
+    library = parse_bib_library(source)
+    entries = [
+        {"entry_type": "article", "citekey": "a", "fields": {"title": "x", "year": "2020"}},
+        {"entry_type": "article", "citekey": "b", "fields": {"title": "CHANGED", "year": "2021"}},
+    ]
+    new_library, verbatim = _update_library_blocks(
+        library, entries, "", touched_indices={1}
+    )
+    # Untouched entry 0 is the parser's own object; the touched one is not listed.
+    assert verbatim == {0}
+    assert new_library.blocks[0] is library.blocks[0]
+    # The guard accepts that, and rejects listing the rebuilt block.
+    _assert_verbatim_blocks_unmodified(library.blocks, new_library.blocks, set(verbatim))
+    with pytest.raises(AssertionError, match="stale"):
+        _assert_verbatim_blocks_unmodified(
+            library.blocks, new_library.blocks, {0, 1}
+        )
