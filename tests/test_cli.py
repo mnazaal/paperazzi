@@ -2667,3 +2667,88 @@ def test_init_without_a_plaintext_token_still_says_the_config_is_safe_to_commit(
 
     assert code == exit_codes.OK, err
     assert "safe to commit" in out
+
+
+_CMD_SOURCE = 'api_auth_token_cmd = "echo SYNTHETIC-CMD-TOKEN"\n'
+_PLAIN_SOURCE = 'api_auth_token = "SYNTHETIC-PLAIN-TOKEN"\n'
+
+
+@pytest.mark.parametrize("file_exists", [False, True])
+@pytest.mark.parametrize(
+    ("source_line", "key"),
+    [(_CMD_SOURCE, "api_auth_token_cmd"), (_PLAIN_SOURCE, "api_auth_token")],
+)
+def test_init_force_with_a_token_source_writes_no_unread_token_file_and_names_the_source(
+    tmp_path: Path, source_line: str, key: str, file_exists: bool
+) -> None:
+    """The server reads the configured source ahead of `<data_home>/api_token`, so
+    init must not write that file or announce it as the token in use."""
+    data_home = tmp_path / "data"
+    data_home.mkdir()
+    if file_exists:
+        (data_home / "api_token").write_text("SYNTHETIC-FILE-TOKEN\n")
+    code, out, err, _config = _force_init(tmp_path, f'pzi_data_home = "{data_home}"\n{source_line}')
+
+    assert code == exit_codes.OK, err
+    if file_exists:
+        assert (data_home / "api_token").read_text() == "SYNTHETIC-FILE-TOKEN\n"
+    else:
+        assert not (data_home / "api_token").exists()
+    assert f"`{key}`" in out
+    for claim in ("auto-reads", "safe to commit", "stays paired", "written to", "reusing"):
+        assert claim not in out
+    for secret in ("SYNTHETIC-CMD-TOKEN", "SYNTHETIC-PLAIN-TOKEN", "SYNTHETIC-FILE-TOKEN"):
+        assert secret not in out + err
+
+
+@pytest.mark.parametrize("file_exists", [False, True])
+@pytest.mark.parametrize(
+    "old_config",
+    [_PLAIN_SOURCE, 'api_auth_token_cmd = ""\n' + _PLAIN_SOURCE],
+)
+def test_init_force_setup_never_says_nothing_secret_when_it_carries_a_plaintext_token(
+    tmp_path: Path, old_config: str, file_exists: bool
+) -> None:
+    data_home = tmp_path / "data"
+    data_home.mkdir()
+    if file_exists:
+        (data_home / "api_token").write_text("SYNTHETIC-FILE-TOKEN\n")
+    code, out, err, config_path = _force_init(
+        tmp_path, f'pzi_data_home = "{data_home}"\n{old_config}', "--setup"
+    )
+
+    assert code == exit_codes.OK, err
+    written = config_path.read_text()
+    assert 'api_auth_token = "SYNTHETIC-PLAIN-TOKEN"' in written
+    assert "nothing secret" not in written
+    assert "secret-free" not in written
+    assert "not be committed" in out
+    assert "safe to commit" not in out
+
+
+def test_init_force_rotate_token_says_the_extension_is_unpaired(tmp_path: Path) -> None:
+    code, out, err, _config = _force_init(tmp_path, "", "--rotate-token")
+
+    assert code == exit_codes.OK, err
+    assert "now unpaired" in out
+    assert "paste the new token" in out
+
+
+def test_init_rotate_token_without_force_refuses_setup_only_flags(tmp_path: Path) -> None:
+    data_home = tmp_path / "data"
+    data_home.mkdir()
+    (data_home / "api_token").write_text("SYNTHETIC-FILE-TOKEN\n")
+    config_path = tmp_path / "config.toml"
+    original = f'pzi_data_home = "{data_home}"\n'
+    config_path.write_text(original)
+    stdout, stderr = StringIO(), StringIO()
+
+    code = run_cli(
+        ["init", "--rotate-token", "--bib", str(tmp_path / "x.bib"), "--config", str(config_path)],
+        home_dir=str(tmp_path), stdout=stdout, stderr=stderr,
+    )
+
+    assert code == exit_codes.USAGE
+    assert "--bib requires --setup" in stderr.getvalue()
+    assert (data_home / "api_token").read_text() == "SYNTHETIC-FILE-TOKEN\n"
+    assert config_path.read_text() == original

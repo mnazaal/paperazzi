@@ -31,6 +31,10 @@ class _ConfiguredHome(NamedTuple):
     token_settings: tuple[tuple[str, str], ...] = ()
 
 
+_UNPAIRED_NOTICE = (
+    "Any paired browser extension is now unpaired — paste the new token into it."
+)
+
 #: Config keys that name the API token, in `resolve_api_auth_token` precedence order.
 _TOKEN_SOURCE_KEYS = ("api_auth_token_cmd", "api_auth_token")
 
@@ -84,6 +88,8 @@ def _carry_over(content: str, existing: _ConfiguredHome) -> str:
     if not lines:
         return content
     note = "# kept from the replaced config: where the API token comes from"
+    if any(key == "api_auth_token" for key, _value in existing.token_settings):
+        note += "\n# api_auth_token below is a plaintext secret: do not commit this file"
     return f"{note}\n" + "\n".join(lines) + f"\n\n{content}"
 
 
@@ -133,9 +139,8 @@ def _rotate_token_only(
     data_home = _data_home_path(dest, existing, home_dir)
     token_path, _created = setup_service.provision_api_token(data_home, rotate=True)
     print(
-        f"API auth token replaced at {token_path} (mode 0600). Any paired "
-        "browser extension is now unpaired — paste the new token into it. "
-        f"{dest} was not modified.",
+        f"API auth token replaced at {token_path} (mode 0600). "
+        f"{_UNPAIRED_NOTICE} {dest} was not modified.",
         file=stdout,
     )
     return exit_codes.OK
@@ -216,21 +221,6 @@ def run_init_command(
 ) -> int:
     dest = Path(config_path)
     rotate_token = bool(getattr(args, "rotate_token", False))
-    if dest.exists() and not args.force:
-        if rotate_token:
-            # Rotation is about the token, not the config, and this refusal
-            # fired first — so `--rotate-token` exited 2 on every real
-            # installation and rotated nothing. The only way through was
-            # `--force`, which also replaces the config with the shipped
-            # template: the flag documented as replacing a token could only be
-            # used by discarding the user's configuration.
-            return _rotate_token_only(
-                dest, home_dir=home_dir, stdout=stdout, stderr=stderr,
-            )
-        print(f"config already exists: {dest} (use --force to overwrite)", file=stderr)
-        # USAGE: refused before doing anything, not a finding.
-        return exit_codes.USAGE
-
     setup_only_flags = [
         name
         for name, value in (
@@ -252,6 +242,21 @@ def run_init_command(
             "(plain `pzi init` writes the commented template unchanged)",
             file=stderr,
         )
+        return exit_codes.USAGE
+
+    if dest.exists() and not args.force:
+        if rotate_token:
+            # Rotation is about the token, not the config, and this refusal
+            # fired first — so `--rotate-token` exited 2 on every real
+            # installation and rotated nothing. The only way through was
+            # `--force`, which also replaces the config with the shipped
+            # template: the flag documented as replacing a token could only be
+            # used by discarding the user's configuration.
+            return _rotate_token_only(
+                dest, home_dir=home_dir, stdout=stdout, stderr=stderr,
+            )
+        print(f"config already exists: {dest} (use --force to overwrite)", file=stderr)
+        # USAGE: refused before doing anything, not a finding.
         return exit_codes.USAGE
 
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -279,9 +284,14 @@ def run_init_command(
             f"up under the default data home {data_home}",
             file=stderr,
         )
-    token_path, token_created = setup_service.provision_api_token(
-        data_home, rotate=getattr(args, "rotate_token", False)
-    )
+    # A configured token source outranks the data home's file, so writing or
+    # reusing that file would report a token the server never reads.
+    token_path: Path | None = None
+    token_created = False
+    if not existing.token_settings:
+        token_path, token_created = setup_service.provision_api_token(
+            data_home, rotate=rotate_token
+        )
     if args.setup:
         content = setup_service.render_config(
             bib_name=args.name or "main",
@@ -313,23 +323,30 @@ def run_init_command(
     else:
         print(f"created {dest} (mode 0600)", file=stdout)
 
-    if token_created:
-        # The carried-over plaintext token lives in the config just written, so
-        # the "safe to commit" claim holds only when none was carried.
-        print(f"API auth token written to {token_path} (mode 0600).", file=stdout)
+    if existing.token_settings:
+        in_use = existing.token_settings[0][0]
+        print(
+            f"the API auth token comes from `{in_use}` in {dest}; no api_token "
+            "file was created or reused, and one under the data home is ignored "
+            "while that key is set.",
+            file=stdout,
+        )
         if any(key == "api_auth_token" for key, _value in existing.token_settings):
             print(
                 "config.toml holds your plaintext api_auth_token and must not be "
                 "committed.",
                 file=stdout,
             )
-        else:
-            print(
-                "pzi auto-reads it at runtime, so config.toml holds no secret or "
-                "path and is safe to commit. To use a manager instead, set "
-                "`api_auth_token_cmd`.",
-                file=stdout,
-            )
+    elif token_created:
+        print(f"API auth token written to {token_path} (mode 0600).", file=stdout)
+        if rotate_token:
+            print(_UNPAIRED_NOTICE, file=stdout)
+        print(
+            "pzi auto-reads it at runtime, so config.toml holds no secret or "
+            "path and is safe to commit. To use a manager instead, set "
+            "`api_auth_token_cmd`.",
+            file=stdout,
+        )
     elif existing.unreadable is not None:
         print(f"found an API auth token at {token_path} (mode 0600).", file=stdout)
     else:
