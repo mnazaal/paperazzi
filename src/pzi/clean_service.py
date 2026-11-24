@@ -409,19 +409,38 @@ def validate_library(
     }
 
 
-def _referenced_under_held_lock(bib_paths: Sequence[str]) -> set[str]:
+def _excluded_keys(
+    excluding: Mapping[str, Sequence[str]] | None, bib_path: str
+) -> set[str]:
+    """Citekeys on their way out of *bib_path*, and of no other library."""
+    return set((excluding or {}).get(bib_path, ()))
+
+
+def _referenced_under_held_lock(
+    bib_paths: Sequence[str],
+    *,
+    excluding: Mapping[str, Sequence[str]] | None = None,
+    errors: list[str] | None = None,
+) -> set[str]:
     """Resolved PDF paths the given bibs reference, read without taking a lock.
 
     For a caller that already holds the exclusive lock on every one of
     *bib_paths*: :func:`referenced_pdf_paths` takes a shared lock per bib, which
     would block behind this process's own exclusive one.
+
+    *excluding* and *errors* mean what they do in :func:`referenced_pdf_paths`.
     """
     referenced: set[str] = set()
     for path in bib_paths:
         if not Path(path).exists():
             continue
-        raw, _failures = read_bib_file_raw_with_failures(path)
+        dropped = _excluded_keys(excluding, path)
+        raw, failures = read_bib_file_raw_with_failures(path)
+        if errors is not None:
+            errors.extend(f"{Path(path).name}: {message}" for message in failures)
         for record, entry in zip(raw["records"], raw["entries"], strict=True):
+            if record.get("citekey") in dropped:
+                continue
             for pdf in attachment_paths_of(entry, record, path):
                 referenced.add(
                     os.path.realpath(str(Path(str(pdf)).expanduser()))
@@ -432,7 +451,7 @@ def _referenced_under_held_lock(bib_paths: Sequence[str]) -> set[str]:
 def referenced_pdf_paths(
     bib_paths: Sequence[str],
     *,
-    excluding_citekeys: Sequence[str] = (),
+    excluding: Mapping[str, Sequence[str]] | None = None,
 ) -> tuple[set[str], list[str]]:
     """Resolved PDF paths the given libraries reference, and any that would not read.
 
@@ -441,18 +460,20 @@ def referenced_pdf_paths(
     and "references we could not see" are indistinguishable from here and only
     one of them is safe to quarantine against.
 
-    *excluding_citekeys* drops entries that are on their way out. A `--dry-run`
-    disposal asks this question *before* the write, so the entry being removed is
-    still in the file and still names its own PDF: without the exclusion the
-    preview reported "still referenced by another entry" for a file the real run
-    quarantines — a preview contradicting the run it previews.
+    *excluding* maps a bib path to the citekeys of entries that are on their way
+    out of *that* bib. A `--dry-run` disposal asks this question *before* the
+    write, so the entry being removed is still in the file and still names its
+    own PDF: without the exclusion the preview reported "still referenced by
+    another entry" for a file the real run quarantines — a preview contradicting
+    the run it previews. The exclusion is per bib because a sibling library's
+    entry with the same citekey is not being removed and still owns the file.
     """
-    dropped = set(excluding_citekeys)
     referenced: set[str] = set()
     errors: list[str] = []
     for sibling in bib_paths:
         if not Path(sibling).exists():
             continue
+        dropped = _excluded_keys(excluding, sibling)
         raw, failures = read_bib_file_with_failures(sibling)
         for message in failures:
             errors.append(f"{Path(sibling).name}: {message}")
@@ -848,11 +869,13 @@ def plan_pdf_disposal(
     # match — so the duplicate pair this command exists to reconcile is exactly
     # where one path ends up in two entries. An imported `.bib` can carry the
     # same sharing outright.
-    still_referenced, read_errors = referenced_pdf_paths(
-        [target["path"], *siblings_sharing_papers_dir(config, target)],
-        # On a real run these entries are already gone and this is a no-op; on a
-        # preview they are still in the file and would match their own PDF.
-        excluding_citekeys=[
+    owners = [target["path"], *siblings_sharing_papers_dir(config, target)]
+    # Only the target's entries are on their way out. A sibling library's entry
+    # with the same citekey is a different entry and still names the file.
+    # On a real run these entries are already gone and this is a no-op; on a
+    # preview they are still in the file and would match their own PDF.
+    excluding = {
+        target["path"]: [
             key
             for key in (
                 result.get("citekey"),
@@ -860,8 +883,9 @@ def plan_pdf_disposal(
                 *removed_citekeys,
             )
             if isinstance(key, str)
-        ],
-    )
+        ]
+    }
+    still_referenced, read_errors = referenced_pdf_paths(owners, excluding=excluding)
     # An unreadable block contributes no referenced path, so "not in the set"
     # over an incomplete set proves nothing — the same reasoning that makes
     # `clean_library` refuse to sweep on a partial parse. The audit reproduced

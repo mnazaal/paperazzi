@@ -871,3 +871,119 @@ def test_the_lock_held_reference_set_counts_every_attachment() -> None:
 
         expected = {os.path.realpath(first), os.path.realpath(second)}
         assert expected <= referenced, f"missing from {referenced}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Targeted disposal: exclusions and reference checks belong to the owning library
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_SHARED_PDF = b"%PDF-1.4\nSHARED\n"
+
+
+def _two_library_config(tmp_path: Path, *, sibling_text: str) -> tuple[Path, Path, Path, Path]:
+    """A `main` and a `sibling` bib sharing one papers dir; returns bib, sibling, papers, config."""
+    papers = tmp_path / "papers"
+    papers.mkdir(exist_ok=True)
+    bib = tmp_path / "main.bib"
+    sibling = tmp_path / "sibling.bib"
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        "browser_hook=false\ndesktop_fallback_hosts=[]\n"
+        f'[[bibs]]\nname="main"\npath="{bib}"\npapers_dir="{papers}"\ndefault=true\n'
+        f'[[bibs]]\nname="sibling"\npath="{sibling}"\npapers_dir="{papers}"\n'
+    )
+    sibling.write_text(sibling_text)
+    return bib, sibling, papers, cfg
+
+
+def _entry(key: str, pdf: Path) -> str:
+    return (
+        f"@article{{{key},title={{Graph Parsers}},author={{Smith, Jane}},"
+        f"year={{2024}},file={{{pdf}}}}}\n"
+    )
+
+
+def test_delete_preserves_sibling_same_citekey_pdf(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Deleting `key` from one library must not excuse a sibling's `key`.
+
+    The exclusion was a bare citekey set applied to every library read, so a
+    sibling entry with the same key stopped counting as a reference and the PDF
+    it still names was quarantined.
+    """
+    import pzi
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("PZI_SKIP_AUTO_START", "1")
+    papers = tmp_path / "papers"
+    pdf = papers / "shared.pdf"
+    papers.mkdir()
+    pdf.write_bytes(_SHARED_PDF)
+    bib, sibling, papers, cfg = _two_library_config(
+        tmp_path, sibling_text=_entry("key", pdf)
+    )
+    bib.write_text(_entry("key", pdf))
+
+    pzi.delete("key", dry_run=False, config_path=str(cfg), library="main")
+
+    assert pdf.read_bytes() == _SHARED_PDF, "the sibling's attachment was moved"
+    assert "key" not in bib.read_text()
+    assert str(pdf) in sibling.read_text()
+
+
+def test_delete_preview_keeps_sibling_same_citekey_pdf(tmp_path: Path) -> None:
+    """The preview and the run must agree: the sibling still references the file."""
+    from pzi.clean_service import plan_pdf_disposal
+    from pzi.config import load_config_file
+
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    pdf = papers / "shared.pdf"
+    pdf.write_bytes(_SHARED_PDF)
+    bib, _sibling, _papers, cfg = _two_library_config(
+        tmp_path, sibling_text=_entry("key", pdf)
+    )
+    bib.write_text(_entry("key", pdf))
+    config = load_config_file(str(cfg), home_dir=str(tmp_path))["config"]
+
+    action = plan_pdf_disposal(
+        result={"citekey": "key", "pdf_path": str(pdf)},
+        config=config,
+        target=config["bibs"][0],
+        keep_pdf=False,
+        dry_run=True,
+        removed_citekeys=["key"],
+    )
+
+    assert action is not None
+    assert action["status"] == "kept"
+    assert pdf.exists()
+
+
+def test_batch_delete_preview_still_excludes_every_removed_entry_of_the_target(
+    tmp_path: Path,
+) -> None:
+    """Scoping must not undo the batch fix: both doomed target entries are excluded."""
+    from pzi.clean_service import plan_pdf_disposal
+    from pzi.config import load_config_file
+
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    pdf = papers / "shared.pdf"
+    pdf.write_bytes(_SHARED_PDF)
+    bib, _sibling, _papers, cfg = _two_library_config(tmp_path, sibling_text="")
+    bib.write_text(_entry("one", pdf) + _entry("two", pdf))
+    config = load_config_file(str(cfg), home_dir=str(tmp_path))["config"]
+
+    action = plan_pdf_disposal(
+        result={"citekey": "one", "pdf_path": str(pdf)},
+        config=config,
+        target=config["bibs"][0],
+        keep_pdf=False,
+        dry_run=True,
+        removed_citekeys=["one", "two"],
+    )
+
+    assert action is not None
+    assert action["status"] == "moved"
