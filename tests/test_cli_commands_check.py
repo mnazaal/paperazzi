@@ -759,3 +759,37 @@ def test_jsonl_to_dev_stdout_with_report_to_dash_is_one_stream(tmp_path: Path) -
 
     assert code == exit_codes.USAGE, err
     assert "--report and --jsonl" in err
+
+
+def test_report_to_stdout_appended_into_the_library_is_refused(tmp_path: Path) -> None:
+    """`--report - >> <library>` appended the JSON report to the library, exit 0.
+
+    Only a real process shows this: the redirect is the process's fd 1, which a
+    test's StringIO stdout is not.
+    """
+    import os
+    import subprocess
+    import sys
+
+    bib = tmp_path / "main.bib"
+    bib.write_text("% comment-only library\n", encoding="utf-8")
+    config = _write_config(tmp_path, [("main", bib)], default="main")
+    home = tmp_path / "home"
+    home.mkdir()
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "XDG_CONFIG_HOME": str(home / ".config"),
+        "XDG_DATA_HOME": str(home / ".local" / "share"),
+        "XDG_CACHE_HOME": str(home / ".cache"),
+        "PZI_SKIP_AUTO_START": "1",
+    }
+    with bib.open("a", encoding="utf-8") as appended:
+        proc = subprocess.run(
+            [sys.executable, "-m", "pzi", "library", "check", "--report", "-",
+             "--config", str(config)],
+            stdout=appended, stderr=subprocess.PIPE, text=True, env=env, timeout=120,
+        )
+
+    assert proc.returncode == exit_codes.USAGE, proc.stderr
+    assert bib.read_text(encoding="utf-8") == "% comment-only library\n"

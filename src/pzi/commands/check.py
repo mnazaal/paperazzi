@@ -113,10 +113,14 @@ def _output_alias_refusal(
 ) -> str | None:
     """Why an output may not be written, or None: it names a library or the other output."""
     for flag, path in (("--report", report_path), ("--jsonl", jsonl_path)):
-        if not path or path == "-":
+        if not path:
             continue
+        # `-` is stdout, compared as `/dev/stdout`: `--report - >> <library>`
+        # appended the report to the library and exited 0, while the same
+        # command spelled `--report /dev/stdout` was refused.
+        compared = "/dev/stdout" if path == "-" else path
         for library_path, name, selected in libraries:
-            if not _same_file(path, library_path):
+            if not _same_file(compared, library_path):
                 continue
             if selected:
                 return (

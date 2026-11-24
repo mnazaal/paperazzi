@@ -332,12 +332,25 @@ def _unmerged_attachment_warnings(
     other attachments were therefore lost with nothing said — the run reported
     a skipped duplicate. Compared by resolved location, so a `~/` or relative
     spelling of the same file is not reported.
+
+    Known limit: it reads the library after the batch, so a dry run cannot see
+    an entry inserted earlier in the same batch and stays silent where the real
+    run warns. Building the warning from the batch's own plans fixes that; it
+    needs the batch writer (`add_service`), so it is queued with the import
+    lane rather than done here.
     """
     if not merged_sources:
         return []
-    by_key = {
-        entry.get("citekey"): entry for entry in read_bib_file(bib_path)["entries"]
-    }
+    try:
+        entries = read_bib_file(bib_path)["entries"]
+    except Exception as exc:  # reported, not raised: the import already committed
+        # A second writer holding the lock past its timeout, or the file going
+        # away, must not turn a committed import into a reported failure.
+        return [
+            "could not re-read the library to check for source attachments a "
+            f"merge left out: {exc}"
+        ]
+    by_key = {entry.get("citekey"): entry for entry in entries}
 
     def located(paths: list[str]) -> set[str]:
         return {str(Path(path).expanduser().resolve()) for path in paths}

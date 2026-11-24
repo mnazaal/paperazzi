@@ -782,3 +782,72 @@ def test_import_keeps_a_multi_attachment_field_in_the_source_spelling() -> None:
         first, _second = _two_source_pdfs(td)
         _result, single = _import_dual_attachment(td, first, home_dir=str(home))
         assert single == "~/" + os.path.relpath(first, home), single
+
+
+def test_import_warns_about_source_attachments_a_merge_left_out() -> None:
+    """Real run, outside HOME (no `~/` fold involved): the warning is present."""
+    with tempfile.TemporaryDirectory() as td:
+        first, second = _two_source_pdfs(td)
+        existing = (
+            "@article{dual, title = {Two Attachments}, author = {Doe, Jane},\n"
+            "  year = {2020}, doi = {10.1000/dual},\n"
+            "  file = {" + first + "}}\n"
+        )
+
+        result, written = _import_dual_attachment(
+            td, f"{first};{second}", existing=existing
+        )
+
+        assert written == first, written
+        assert [w for w in result["warnings"] if "not merged" in w] == [
+            f"dual: kept the library entry's own file field; not merged from the "
+            f"source: {second}"
+        ], result["warnings"]
+
+
+def test_import_is_silent_when_the_merge_left_nothing_out() -> None:
+    """The same file under another spelling is not 'left out'."""
+    with tempfile.TemporaryDirectory() as td:
+        first, _second = _two_source_pdfs(td)
+        existing = (
+            "@article{dual, title = {Two Attachments}, author = {Doe, Jane},\n"
+            "  year = {2020}, doi = {10.1000/dual},\n"
+            "  file = {Full Text PDF:" + first + ":application/pdf}}\n"
+        )
+
+        result, _written = _import_dual_attachment(td, first, existing=existing)
+
+        assert [w for w in result["warnings"] if "not merged" in w] == [], result[
+            "warnings"
+        ]
+
+
+def test_a_failed_re_read_does_not_fail_a_committed_import(monkeypatch) -> None:
+    """The warning step runs after the commit; its failure is a warning, not an error."""
+    from pzi import import_service
+    from pzi.errors import PziError
+
+    def locked(_path):
+        raise PziError("timed out after 1s waiting for the lock")
+
+    monkeypatch.setattr(import_service, "read_bib_file", locked)
+    with tempfile.TemporaryDirectory() as td:
+        first, second = _two_source_pdfs(td)
+        cp, bp, _pd = _setup_config(td)
+        Path(bp).write_text(
+            "@article{dual, title = {Two}, author = {Doe, Jane}, year = {2020},\n"
+            "  doi = {10.1000/dual}, file = {" + first + "}}\n"
+        )
+        src = os.path.join(td, "src", "export.bib")
+        Path(src).write_text(
+            "@article{dual, title = {Two}, author = {Doe, Jane}, year = {2020},\n"
+            "  doi = {10.1000/dual}, file = {" + f"{first};{second}" + "}}\n"
+            "@article{new1, title = {New}, author = {Roe, R}, year = {2021},\n"
+            "  doi = {10.1000/new1}}\n"
+        )
+
+        result = import_from_bibtex(config_path=cp, home_dir=td, source_path=src)
+
+        assert result["status"] == "ok", result
+        assert result["imported"] == 1, result
+        assert any("could not re-read the library" in w for w in result["warnings"])
