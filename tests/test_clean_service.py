@@ -1397,3 +1397,60 @@ def test_dry_run_disposal_previews_what_the_real_run_does(
     assert pdf.read_bytes() == _SHARED_PDF
     assert not (tmp_path / "typo").exists()
     assert not (sib_dir / "sibling.bib.lock").exists()
+
+
+@pytest.mark.parametrize("state", ["mode000", "latin1"])
+def test_clean_fix_keeps_orphans_when_a_library_turns_unreadable_under_the_lock(
+    tmp_path: Path, monkeypatch, state: str
+) -> None:
+    """The under-lock recheck must not skip a library it cannot read.
+
+    Between the scan and the exclusive lock, library b gains a reference to
+    `borphan.pdf` and becomes unreadable. Skipping b in the recheck moved a PDF
+    that b names; nothing may be moved when any library cannot be checked.
+    """
+    import contextlib
+
+    if state == "mode000" and os.geteuid() == 0:
+        pytest.skip("root reads mode-000 files")
+    from pzi import clean_service
+
+    entry = (
+        "@article{{{k},\n  title = {{T {k}}},\n  author = {{Smith, J}},\n"
+        "  year = {{2020}},\n  file = {{{f}}},\n}}\n"
+    )
+    pa = tmp_path / "pa"
+    pa.mkdir()
+    (pa / "x.pdf").write_bytes(b"%PDF-1.4\nx")
+    orphan = pa / "borphan.pdf"
+    orphan.write_bytes(b"%PDF-1.4\nb")
+    a = tmp_path / "a.bib"
+    b = tmp_path / "b.bib"
+    a.write_text(entry.format(k="x", f=pa / "x.pdf"))
+    b.write_text(entry.format(k="bz", f=pa / "nothing.pdf"))
+    body = entry.format(k="bo", f=orphan)
+    real = clean_service.with_bib_lock
+
+    @contextlib.contextmanager
+    def b_changes_as_it_is_locked(path, shared=False, **kw):
+        if not shared and Path(path) == b:
+            if state == "mode000":
+                b.write_text(body)
+                b.chmod(0)
+            else:
+                b.write_bytes(body.replace("T bo", "T café bo").encode("latin-1"))
+        with real(path, shared=shared, **kw):
+            yield
+
+    monkeypatch.setattr(clean_service, "with_bib_lock", b_changes_as_it_is_locked)
+    try:
+        result = clean_service.clean_library(
+            bib_path=str(a), papers_dir=str(pa), dry_run=False,
+            sibling_bib_paths=[str(b)],
+        )
+    finally:
+        b.chmod(0o644)
+
+    assert orphan.read_bytes() == b"%PDF-1.4\nb"
+    assert result["actions"] == []
+    assert any(i["type"] == "quarantine_skipped" for i in result["issues"])

@@ -850,7 +850,20 @@ def clean_library(
                 # that records it, so one may have committed its `file =` in
                 # that gap. Decide the move on what the bibs say now, under
                 # the lock the writer needs, not on the earlier read.
-                still_referenced = _referenced_under_held_lock(lock_targets)
+                # A library that cannot be read now (it may have become
+                # unreadable since the scan) or that fails to parse could name
+                # any of these PDFs: keep them all, as the scan does, rather
+                # than move on what the readable libraries alone say.
+                recheck_errors: list[str] = []
+                still_referenced = _referenced_under_held_lock(
+                    lock_targets, errors=recheck_errors
+                )
+                if recheck_errors:
+                    return _skip_quarantine(
+                        validation,
+                        "could not verify references under the lock: "
+                        + "; ".join(recheck_errors),
+                    )
                 unclaimed = [
                     p for p in unclaimed
                     if os.path.realpath(p) not in still_referenced
