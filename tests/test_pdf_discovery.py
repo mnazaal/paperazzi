@@ -1074,3 +1074,88 @@ def test_doi_pdf_step_without_a_composed_fetcher_passes_none() -> None:
     )
 
     assert doi_pdf_step(record, context) == record
+
+
+# --- an excluded URL must not hide the usable one behind it in the same step ---
+
+_DEAD = "https://example.org/dead.pdf"
+_GOOD = "https://example.org/good.pdf"
+
+
+@pytest.fixture
+def public_urls(monkeypatch):
+    import pzi.pdf_discovery as module
+
+    monkeypatch.setattr(module, "safe_public_http_url", lambda url: True)
+    monkeypatch.setattr(module, "classify_public_http_url", lambda url: "public")
+
+
+@pytest.mark.parametrize("scheduler", [apply_pdf_discovery, apply_pdf_discovery_parallel])
+def test_discovery_skips_failed_url_within_candidate_list(public_urls, scheduler) -> None:
+    result = scheduler(
+        {},
+        [pdf_url_candidates_step],
+        {"pdf_url_candidates": [_DEAD, _GOOD], "exclude_pdf_urls": {_DEAD}},
+    )
+    assert result.get("pdf_url") == _GOOD
+
+
+@pytest.mark.parametrize("scheduler", [apply_pdf_discovery, apply_pdf_discovery_parallel])
+def test_discovery_skips_failed_translation_attachment(public_urls, scheduler) -> None:
+    result = scheduler(
+        {},
+        [translation_attachment_step],
+        {
+            "translation_attachments": [{"url": _DEAD}, {"url": _GOOD}],
+            "exclude_pdf_urls": {_DEAD},
+        },
+    )
+    assert result.get("pdf_url") == _GOOD
+    assert result.get("pdf_source") == "translation_attachment"
+
+
+@pytest.mark.parametrize("scheduler", [apply_pdf_discovery, apply_pdf_discovery_parallel])
+def test_discovery_skips_failed_web_attachment(public_urls, scheduler) -> None:
+    def fetch_web(url, *, server_url):
+        return [{"attachments": [{"url": _DEAD}, {"url": _GOOD}]}]
+
+    result = scheduler(
+        {"canonical_url": "https://example.org/article"},
+        [web_attachment_step],
+        {
+            "raw_value": "https://example.org/article",
+            "server_url": "http://ts:1969",
+            "fetch_web": fetch_web,
+            "exclude_pdf_urls": {_DEAD},
+        },
+    )
+    assert result.get("pdf_url") == _GOOD
+
+
+@pytest.mark.parametrize("scheduler", [apply_pdf_discovery, apply_pdf_discovery_parallel])
+def test_discovery_doi_resolvers_continue_past_excluded_url(public_urls, scheduler) -> None:
+    result = scheduler(
+        {"doi": "10.1000/x"},
+        [doi_pdf_step],
+        {
+            "fetch_crossref_pdf": lambda doi: _DEAD,
+            "fetch_europepmc_pdf": lambda doi: _GOOD,
+            "fetch_doaj_pdf": lambda doi: None,
+            "exclude_pdf_urls": {_DEAD},
+        },
+    )
+    assert result.get("pdf_url") == _GOOD
+    assert result.get("pdf_source") == "doi"
+
+
+def test_discovery_still_refuses_unsafe_candidate_ahead_of_good_one(monkeypatch) -> None:
+    import pzi.pdf_discovery as module
+
+    monkeypatch.setattr(module, "safe_public_http_url", lambda url: "169.254" not in url)
+    monkeypatch.setattr(module, "classify_public_http_url", lambda url: "public")
+    result = apply_pdf_discovery(
+        {},
+        [pdf_url_candidates_step],
+        {"pdf_url_candidates": ["http://169.254.169.254/x.pdf", "https://example.com/ok.pdf"]},
+    )
+    assert result.get("pdf_url") == "https://example.com/ok.pdf"

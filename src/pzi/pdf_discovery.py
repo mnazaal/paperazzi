@@ -157,6 +157,11 @@ def excluded_pdf_urls(context: PdfDiscoveryContext | None) -> frozenset[str]:
     return frozenset(str(url) for url in raw)
 
 
+def _is_usable_pdf_url(url: str, context: PdfDiscoveryContext) -> bool:
+    """A candidate a step may offer: public, and not already failed on."""
+    return safe_public_http_url(url) and url not in excluded_pdf_urls(context)
+
+
 def _validated_discovery(
     record: NormalizedRecord, context: PdfDiscoveryContext | None = None
 ) -> NormalizedRecord:
@@ -327,7 +332,7 @@ def translation_attachment_step(
         if not isinstance(url, str) or not url.strip():
             continue
         normalized = url.strip()
-        if not safe_public_http_url(normalized):
+        if not _is_usable_pdf_url(normalized, context):
             continue
 
         updated = dict(record)
@@ -350,7 +355,7 @@ def pdf_url_candidates_step(
     for candidate in candidates:
         if isinstance(candidate, str) and candidate.strip():
             normalized = candidate.strip()
-            if not safe_public_http_url(normalized):
+            if not _is_usable_pdf_url(normalized, context):
                 continue
             updated = dict(record)
             updated["pdf_url"] = normalized
@@ -430,7 +435,7 @@ def web_attachment_step(
                 if not isinstance(pdf_url, str) or not pdf_url.strip():
                     continue
                 normalized_pdf_url = pdf_url.strip()
-                if not safe_public_http_url(normalized_pdf_url):
+                if not _is_usable_pdf_url(normalized_pdf_url, context):
                     continue
 
                 updated = dict(record)
@@ -573,7 +578,7 @@ def doi_pdf_step(
         )
         for detail in provider_errors[before:]:
             context.setdefault("discovery_diagnostics", []).append(f"{name}: {detail}")
-        if pdf_url:
+        if pdf_url and pdf_url not in excluded_pdf_urls(context):
             updated = dict(record)
             updated["pdf_url"] = pdf_url
             updated["pdf_source"] = "doi"
