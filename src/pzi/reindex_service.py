@@ -544,8 +544,17 @@ def reindex_library(
             foreign_pdfs=frozenset(foreign_pdfs),
             hold_all_moves=bool(sibling_errors),
         )
+        bib_dir = os.path.dirname(os.path.abspath(bib_path))
+        # A sibling that read only partly is news only when it is why a move was
+        # held: a PDF no sibling blocks is held for no reason of the sibling's,
+        # and an already-clean target holds nothing.
+        held_by_sibling_read = any(
+            "kept_other_library_pdf" in change
+            and _attachment_key(change["kept_other_library_pdf"], bib_dir) not in foreign_pdfs
+            for change in changes
+        )
         errors: list[str] = [
-            *sibling_errors,
+            *(sibling_errors if held_by_sibling_read else []),
             *(
                 _other_library_error(change["old_citekey"], change["kept_other_library_pdf"])
                 for change in changes

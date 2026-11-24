@@ -1294,4 +1294,57 @@ def test_reindex_does_not_move_a_pdf_a_readable_sibling_names_beside_an_unreadab
     )
 
     assert shared.exists()
-    assert any("sib.bib" in e for e in result["errors"]), result["errors"]
+    assert any("another library" in e for e in result["errors"]), result["errors"]
+
+
+def test_reindex_reports_no_sibling_error_when_nothing_was_held_for_it(tmp_path) -> None:
+    """A clean target has no move to hold, so an unreadable sibling is not its error."""
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    pdf = papers / "shared.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    bib = tmp_path / "lib.bib"
+    bib.write_text(
+        "@article{smith2020first,\n  title = {First Paper},\n  author = {Smith, Jane},\n"
+        f"  year = {{2020}},\n  file = {{{pdf}}},\n}}\n"
+    )
+    sibling = tmp_path / "sib.bib"
+    sibling.write_bytes(_LATIN1_SIBLING)
+
+    result = reindex_library(
+        bib_path=str(bib), papers_dir=str(papers), dry_run=True,
+        sibling_bib_paths=[str(sibling)],
+    )
+
+    assert result["changed"] == []
+    assert result["errors"] == [], result["errors"]
+
+
+def test_reindex_reports_a_partial_sibling_only_when_it_held_a_move(tmp_path) -> None:
+    sibling_text = "@article{dup,\n  title = {A},\n}\n@article{dup,\n  title = {B},\n}\n"
+
+    clean = tmp_path / "clean"
+    clean.mkdir()
+    pdf = clean / "shared.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    target = clean / "lib.bib"
+    target.write_text(
+        "@article{smith2020first,\n  title = {First Paper},\n  author = {Smith, Jane},\n"
+        f"  year = {{2020}},\n  file = {{{pdf}}},\n}}\n"
+    )
+    sib = clean / "sib.bib"
+    sib.write_text(sibling_text)
+    quiet = reindex_library(
+        bib_path=str(target), papers_dir=str(clean), dry_run=True, sibling_bib_paths=[str(sib)]
+    )
+    assert quiet["errors"] == [], quiet["errors"]
+
+    held_dir = tmp_path / "held"
+    held_dir.mkdir()
+    bib, papers, shared = _shared_library(held_dir, lambda p: "")
+    sib2 = held_dir / "sib.bib"
+    sib2.write_text(sibling_text)
+    held = reindex_library(
+        bib_path=str(bib), papers_dir=str(papers), dry_run=True, sibling_bib_paths=[str(sib2)]
+    )
+    assert any("sib.bib" in e for e in held["errors"]), held["errors"]
