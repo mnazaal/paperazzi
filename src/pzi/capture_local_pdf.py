@@ -394,6 +394,13 @@ def add_local_pdf(
         )
         if strict_failure is not None:
             return strict_failure
+    # Bookkeeping, read only by the strict gate above: popped as the DOI/URL
+    # branch pops it (`add_service`), or it was reported in `changed_fields`
+    # as if it were a field of the entry.
+    merged = cast(
+        NormalizedRecord,
+        {key: value for key, value in merged.items() if key != "metadata_provider"},
+    )
     record_with_ck = ensure_citekey(
         merged,
         existing_records,

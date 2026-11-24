@@ -745,3 +745,54 @@ def test_local_pdf_strict_accepts_a_title_search_that_confirms_the_pdf(
     assert result["status"] == "ok", result
     assert len(added) == 1
     assert added[0]["title"] == "Graph Parsers"
+
+
+def test_local_pdf_result_does_not_report_the_provider_name_as_a_field(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """`metadata_provider` is bookkeeping; the DOI/URL branch pops it before writing.
+
+    The local-PDF branch never did, so an adopted provider answer listed it in
+    `changed_fields` beside the real fields.
+    """
+    import pzi.capture_local_pdf as clp
+
+    source_pdf = tmp_path / "paper.pdf"
+    source_pdf.write_bytes(b"%PDF-1.4\n")
+    papers_dir = tmp_path / "papers"
+    papers_dir.mkdir()
+    bib_path = tmp_path / "library.bib"
+    bib_path.write_text("")
+    same = {"title": "Graph Parsers", "doi": "10.1000/paper", "authors": ["Smith, Jane"]}
+    monkeypatch.setattr(clp, "extract_pdf_metadata", lambda _p: dict(same))
+
+    def down(*_a, **_k):
+        raise OSError("provider down")
+
+    original = clp.local_pdf_base_record
+    monkeypatch.setattr(
+        clp, "local_pdf_base_record",
+        lambda **kw: original(**{**kw, "fetch_record": down}),
+    )
+    added: list[dict] = []
+
+    def _add_record(**kw):
+        added.append(dict(kw["record"]))
+        return {"status": "ok", "action": "insert", "message": "insert entry",
+                "warnings": [], "errors": []}
+
+    clp.add_local_pdf(
+        bib={"name": "main", "path": str(bib_path),
+             "papers_dir": str(papers_dir), "default": True},
+        raw_value=str(source_pdf),
+        record_overrides={},
+        dry_run=False,
+        server_url="http://127.0.0.1:1",
+        fetch_search=lambda *_a, **_k: [{"record": dict(same)}],
+        ensure_citekey=lambda record, existing, **_kw: {**record, "citekey": "k"},
+        add_record=_add_record,
+        strict_metadata=False,
+    )
+
+    assert len(added) == 1
+    assert "metadata_provider" not in added[0]
