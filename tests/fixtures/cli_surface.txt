@@ -17,7 +17,7 @@ pzi add
     --pdf-candidate dest=pdf_candidate action=append default=[]
     --strict-metadata dest=strict_metadata nargs=0
     --tags dest=tags
-    --target dest=target
+    --target dest=target action=singletarget
     --verbose dest=verbose nargs=0
     <value> dest=value nargs='?'
 
@@ -28,7 +28,7 @@ pzi delete
     --json dest=json nargs=0
     --keep-pdf dest=keep_pdf nargs=0
     --no-backup dest=no_backup nargs=0
-    --target dest=target
+    --target dest=target action=singletarget
     <citekey> dest=citekey nargs='+' required
 
 pzi doctor
@@ -44,7 +44,7 @@ pzi entries
     --offset dest=offset
     --sort dest=sort choices=['author', 'citekey', 'title', 'year']
     --stats dest=stats nargs=0
-    --target dest=target
+    --target dest=target action=singletarget
     <citekey> dest=citekey nargs='?'
 
 pzi export
@@ -52,14 +52,14 @@ pzi export
     --force dest=force nargs=0
     --format dest=format choices=['bibtex', 'csv', 'json', 'ris'] default='bibtex'
     --output -o dest=output
-    --target dest=target
+    --target dest=target action=singletarget
 
 pzi import
     --config dest=config
     --dry-run dest=dry_run nargs=0
     --force-new dest=force_new nargs=0
     --json dest=json nargs=0
-    --target dest=target
+    --target dest=target action=singletarget
     <source> dest=source required
 
 pzi inbox
@@ -91,19 +91,19 @@ pzi library check
     --recheck-after dest=recheck_after default=0
     --report dest=report
     --strict dest=strict nargs=0
-    --target dest=target
+    --target dest=target action=singletarget
 
 pzi library clean
     --config dest=config
     --dry-run dest=dry_run nargs=0
     --fix dest=fix nargs=0
     --json dest=json nargs=0
-    --target dest=target
+    --target dest=target action=singletarget
 
 pzi library dedupe
     --config dest=config
     --json dest=json nargs=0
-    --target dest=target
+    --target dest=target action=singletarget
 
 pzi library list
     --config dest=config
@@ -115,7 +115,7 @@ pzi library merge
     --json dest=json nargs=0
     --keep-pdf dest=keep_pdf nargs=0
     --no-backup dest=no_backup nargs=0
-    --target dest=target
+    --target dest=target action=singletarget
     <citekey_a> dest=citekey_a required
     <citekey_b> dest=citekey_b required
 
@@ -128,14 +128,14 @@ pzi library reindex
     --json dest=json nargs=0
     --rename-citekeys dest=rename_citekeys nargs=0
     --rename-files dest=rename_files nargs=0
-    --target dest=target
+    --target dest=target action=singletarget
 
 pzi pdf
 
 pzi pdf attach
     --config dest=config
     --json dest=json nargs=0
-    --target dest=target
+    --target dest=target action=singletarget
     <citekey> dest=citekey required
     <source> dest=source required
 
@@ -144,7 +144,7 @@ pzi pdf retry
     --discover dest=discover nargs=0
     --failed-only dest=failed_only nargs=0
     --json dest=json nargs=0
-    --target dest=target
+    --target dest=target action=singletarget
     <citekey> dest=citekey nargs='?'
 
 pzi search
@@ -175,21 +175,21 @@ pzi tag add
     --config dest=config
     --dry-run dest=dry_run nargs=0
     --json dest=json nargs=0
-    --target dest=target
+    --target dest=target action=singletarget
     <citekey> dest=citekey required
     <tags> dest=tags nargs='+' required
 
 pzi tag list
     --config dest=config
     --json dest=json nargs=0
-    --target dest=target
+    --target dest=target action=singletarget
     <citekey> dest=citekey nargs='?'
 
 pzi tag remove
     --config dest=config
     --dry-run dest=dry_run nargs=0
     --json dest=json nargs=0
-    --target dest=target
+    --target dest=target action=singletarget
     <citekey> dest=citekey required
     <tags> dest=tags nargs='+' required
 

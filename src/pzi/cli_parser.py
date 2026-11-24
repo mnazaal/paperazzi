@@ -10,7 +10,7 @@ import argparse
 import json
 import math
 import sys
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import NoReturn, TextIO
 
@@ -72,6 +72,28 @@ class _PziParser(argparse.ArgumentParser):
         for line in _usage_error_lines(self, message):
             print(line, file=stream)
         sys.exit(2)
+
+
+class _SingleTargetAction(argparse.Action):
+    """`store`, except that a second `--target` is refused.
+
+    `store` kept the last of a repeated flag, so `pzi delete k --target a
+    --target b --force` acted on `b` and said nothing about `a`. Only `search`
+    and `update` take several libraries, and they say so by appending.
+    """
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: str | Sequence[str] | None,
+        option_string: str | None = None,
+    ) -> None:
+        if getattr(namespace, self.dest, None) is not None:
+            raise argparse.ArgumentError(
+                self, "given more than once; this command takes a single library"
+            )
+        setattr(namespace, self.dest, values)
 
 
 def set_error_stream(parser: argparse.ArgumentParser, stream: TextIO) -> None:
@@ -296,7 +318,11 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--config", metavar="PATH", help="path to the pzi config file")
 
     def add_single_target(p: argparse.ArgumentParser) -> None:
-        p.add_argument("--target", help="configured library name/path or direct .bib path")
+        p.add_argument(
+            "--target",
+            action=_SingleTargetAction,
+            help="configured library name/path or direct .bib path",
+        )
 
     def add_multi_target(p: argparse.ArgumentParser) -> None:
         p.add_argument(

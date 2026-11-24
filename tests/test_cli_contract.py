@@ -1413,3 +1413,67 @@ def test_wrong_typed_enum_config_is_a_structured_error(
     assert json.loads(stdout)["status"] == "error"
     assert "Traceback" not in stderr
     assert key in stdout
+
+
+# ---------------------------------------------------------------------------
+# A repeated --target
+# ---------------------------------------------------------------------------
+
+
+def _two_libraries(tmp_path: Path) -> tuple[Path, Path, Path]:
+    entry = "@article{shared,\n  title = {From %s},\n  year = {2024},\n}\n"
+    first, second = tmp_path / "a.bib", tmp_path / "b.bib"
+    first.write_text(entry % "A", encoding="utf-8")
+    second.write_text(entry % "B", encoding="utf-8")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'[[bibs]]\nname = "a"\npath = "{first}"\ndefault = true\n'
+        f'[[bibs]]\nname = "b"\npath = "{second}"\n',
+        encoding="utf-8",
+    )
+    return config_path, first, second
+
+
+def test_repeated_target_cannot_delete_from_a_library_chosen_by_accident(
+    tmp_path: Path,
+) -> None:
+    config_path, first, second = _two_libraries(tmp_path)
+    before = (first.read_bytes(), second.read_bytes())
+
+    code, stdout, stderr = _run(
+        ["delete", "shared", "--target", "a", "--target", "b", "--force",
+         "--config", str(config_path)],
+        tmp_path,
+    )
+
+    assert code == exit_codes.USAGE
+    assert "--target" in stderr
+    assert "deleted" not in stdout
+    assert (first.read_bytes(), second.read_bytes()) == before
+
+
+def test_every_single_library_command_refuses_a_repeated_target() -> None:
+    import argparse
+
+    from pzi.cli_parser import build_parser
+
+    refused: list[str] = []
+    accepted_many: list[str] = []
+    stack = [(("pzi",), build_parser())]
+    while stack:
+        path, parser = stack.pop()
+        for action in parser._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                stack.extend(((*path, name), sub) for name, sub in action.choices.items())
+            elif "--target" in action.option_strings:
+                (accepted_many if isinstance(action, argparse._AppendAction) else refused).append(
+                    " ".join(path)
+                )
+                if not isinstance(action, argparse._AppendAction):
+                    ns = argparse.Namespace()
+                    action(parser, ns, "a", "--target")
+                    with pytest.raises(argparse.ArgumentError):
+                        action(parser, ns, "b", "--target")
+    # Only these two take several libraries; any other command must refuse.
+    assert sorted(accepted_many) == ["pzi search", "pzi update"]
+    assert len(refused) >= 14
