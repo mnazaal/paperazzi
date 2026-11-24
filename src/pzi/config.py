@@ -1004,8 +1004,8 @@ _TOML_ESCAPE_MAP = {
     "\r": "\\r",
 }
 
-# Control characters (U+0000-U+001F) not handled by _TOML_ESCAPE_MAP
-_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+# Control characters (U+0000-U+001F and U+007F) not handled by _TOML_ESCAPE_MAP
+_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
 def _escape(value: str) -> str:

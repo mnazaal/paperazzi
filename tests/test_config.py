@@ -1041,3 +1041,15 @@ def test_distinct_bibs_are_still_accepted(tmp_path) -> None:
     assert errors == []
     assert config is not None
     assert len(config["bibs"]) == 2
+
+
+def test_escape_toml_string_round_trips_every_control_character() -> None:
+    """TOML forbids U+0000-U+001F and U+007F raw in a basic string."""
+    import tomllib
+
+    from pzi.config import escape_toml_string
+
+    for code in [*range(0x20), 0x7F]:
+        value = f"a{chr(code)}b"
+        parsed = tomllib.loads(f'k = "{escape_toml_string(value)}"')
+        assert parsed["k"] == value, hex(code)
