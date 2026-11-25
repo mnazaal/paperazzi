@@ -502,7 +502,10 @@ def add_local_pdf(
     # branch pops it (`add_service`), or it was reported in `changed_fields`
     # as if it were a field of the entry. Named in `metadata_diagnostics`, as
     # that branch names it, so `--verbose` says where the metadata came from.
-    provider = merged.get("metadata_provider")
+    # Read from the lookup's own record: the merged one also carries the
+    # user's overrides, so a `metadata_provider` (or `fallback_metadata_provider`)
+    # key there named a provider that never answered.
+    provider = base_record.get("metadata_provider")
     merged = cast(
         NormalizedRecord,
         {key: value for key, value in merged.items() if key != "metadata_provider"},

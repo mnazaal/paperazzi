@@ -1165,3 +1165,47 @@ def test_local_pdf_strict_still_refuses_a_provider_outage(
     assert result["message"] == "metadata provider error (--strict-metadata)"
     assert any("HTTP 503" in error for error in result["errors"]), result
     assert writes == []
+
+
+@pytest.mark.parametrize(
+    "override",
+    [{"metadata_provider": "crossref"}, {"fallback_metadata_provider": "openalex"}],
+    ids=["metadata_provider", "fallback_metadata_provider"],
+)
+def test_local_pdf_a_user_override_cannot_name_the_metadata_provider(
+    tmp_path: Path, monkeypatch, override: dict
+) -> None:
+    """"metadata from X" names the provider that answered, never a user's key.
+
+    It was read from the merged record, so an override naming a provider for a
+    PDF no provider found printed "metadata from crossref".
+    """
+    import pzi.capture_local_pdf as clp
+
+    source_pdf = tmp_path / "paper.pdf"
+    source_pdf.write_bytes(b"%PDF-1.4\n")
+    papers_dir = tmp_path / "papers"
+    papers_dir.mkdir()
+    bib_path = tmp_path / "library.bib"
+    bib_path.write_text("")
+    monkeypatch.setattr(
+        clp, "extract_pdf_metadata",
+        lambda _p: {"title": "Graph Parsers", "authors": ["Smith, Jane"]},
+    )
+
+    result = clp.add_local_pdf(
+        bib={"name": "main", "path": str(bib_path),
+             "papers_dir": str(papers_dir), "default": True},
+        raw_value=str(source_pdf),
+        record_overrides=dict(override),
+        dry_run=True,
+        server_url="http://127.0.0.1:1",
+        fetch_search=lambda *a, **kw: [],
+        ensure_citekey=lambda record, *a, **kw: {**record, "citekey": "key"},
+        add_record=lambda **kw: {"status": "ok", "warnings": []},
+    )
+
+    assert result["status"] == "ok", result
+    assert not any(
+        line.startswith("metadata from") for line in result.get("metadata_diagnostics", [])
+    ), result
