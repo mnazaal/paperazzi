@@ -668,13 +668,33 @@ def _failure_reason(line: str) -> str:
 
 
 def _note_refusal(
-    result: FetchResult, errors: list[str] | None, url: str | None = None
+    result: FetchResult,
+    errors: list[str] | None,
+    url: str | None = None,
+    refusals: list[str] | None = None,
 ) -> None:
     """Record why a response was refused before its body was read, naming
     only the origin of the URL refused: a candidate's path or query can
     carry a session token."""
-    if errors is not None and result.refused:
-        errors.append(f"{_url_origin(url)}: {result.refused}" if url else result.refused)
+    if result.refused:
+        _record_refusal(
+            f"{_url_origin(url)}: {result.refused}" if url else result.refused, errors, refusals
+        )
+
+
+def _record_refusal(
+    reason: str, errors: list[str] | None, refusals: list[str] | None
+) -> None:
+    """Record a refusal in *errors*, and in *refusals*, which holds refusals only.
+
+    A refusal is pzi declining what the browser reached (a compressed body, a
+    URL the guard blocks); the session is fine. *refusals* lets the server
+    answer it with a status that does not mean "the session is dead".
+    """
+    if errors is not None:
+        errors.append(reason)
+    if refusals is not None:
+        refusals.append(reason)
 
 
 def download_pdf(
@@ -689,6 +709,7 @@ def download_pdf(
     candidate_deadline_seconds: float = CANDIDATE_DEADLINE_SECONDS,
     url_allowed: Callable[[str], bool] | None = None,
     errors: list[str] | None = None,
+    refusals: list[str] | None = None,
 ) -> bytes | None:
     """Download PDF bytes using browser, with optional profile reuse.
 
@@ -707,6 +728,10 @@ def download_pdf(
     it exists specifically because Chromium turns a PDF navigation into a
     download exception (see the comment at that site), which is a normal
     outcome, not a broken session.
+
+    *refusals* receives the subset of *errors* that are refusals: a response
+    pzi would not read, or a URL the SSRF guard blocked. A guard block used to
+    record nothing, so it read as "no PDF".
     """
     close_on_exit = _session is None
     if _session is not None:  # pragma: no branch
@@ -724,7 +749,7 @@ def download_pdf(
     try:
         # 1. Try direct request
         result = session.fetch_direct(pdf_url)
-        _note_refusal(result, errors)
+        _note_refusal(result, errors, refusals=refusals)
         if result.is_pdf():
             return result.body
 
@@ -733,6 +758,11 @@ def download_pdf(
         navigation_failed = False
         try:
             response = session.navigate(pdf_url, wait_until="domcontentloaded", timeout=60000)
+        except SsrfBlocked as exc:
+            # The guard refused this URL or where it landed: never read that
+            # page, and say so rather than answer "no PDF".
+            _record_refusal(f"{_url_origin(pdf_url)}: {exc.reason}", errors, refusals)
+            navigation_failed = True
         except Exception:
             # The shared session's page may still be whatever it last loaded,
             # usually another request's landing page; sweeping its links
@@ -752,7 +782,7 @@ def download_pdf(
 
         if response is not None:
             navigated = FetchResult.from_response(response)
-            _note_refusal(navigated, errors)
+            _note_refusal(navigated, errors, refusals=refusals)
             if navigated.is_pdf():
                 return navigated.body
 
@@ -788,12 +818,18 @@ def download_pdf(
                 # download worked while following a link never did.
                 try:
                     result = session.fetch_direct(candidate)
-                    _note_refusal(result, errors, candidate)
+                    _note_refusal(result, errors, candidate, refusals)
                     if result.is_pdf():
                         return result.body
                 except Exception:
                     continue
 
+        return None
+    except SsrfBlocked as exc:
+        # From the challenge loop: a guard refusal, not a dead session. It
+        # subclasses `URLError`, so the bare `except Exception` below took it
+        # and recorded nothing.
+        _record_refusal(f"{_url_origin(pdf_url)}: {exc.reason}", errors, refusals)
         return None
     except RuntimeError as exc:
         if errors is not None:

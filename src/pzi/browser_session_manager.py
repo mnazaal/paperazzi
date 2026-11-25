@@ -110,12 +110,18 @@ class BrowserSessionManager:
             return self._run(work)
 
     def download_pdf_bytes(
-        self, pdf_url: str, *, errors: list[str] | None = None
+        self,
+        pdf_url: str,
+        *,
+        errors: list[str] | None = None,
+        refusals: list[str] | None = None,
     ) -> bytes | None:
         """Download PDF bytes using the persistent browser session.
 
         *errors* is the sibling of `discover_pdf_url`'s: a session that dies
-        mid-download must answer 503, not a 200 reporting no PDF.
+        mid-download must answer 503, not a 200 reporting no PDF. *refusals*
+        holds the entries of *errors* that are refusals (see
+        `browser_pdf_hook.download_pdf`), which the server does not answer 503.
         """
         from pzi.browser_pdf_hook import download_pdf as _download
 
@@ -127,6 +133,7 @@ class BrowserSessionManager:
                 _session=session,
                 headless=self._headless,
                 errors=errors,
+                refusals=refusals,
             )
 
         with self._lock:

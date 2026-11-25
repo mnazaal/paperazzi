@@ -14,6 +14,23 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
+def _http_error_detail(exc: HTTPError) -> str:
+    """*exc* with the server's own `error` text, when its body carries one.
+
+    The server answers a failure with a JSON `{"error": ...}` naming the reason
+    (a refused compressed PDF, a dead session); without reading it the caller
+    saw only "HTTP Error 503".
+    """
+    try:
+        data = json.loads(exc.read().decode("utf-8"))
+    except (OSError, ValueError, TypeError, AttributeError):
+        return str(exc)
+    reason = data.get("error") if isinstance(data, dict) else None
+    if isinstance(reason, str) and reason.strip():
+        return f"{reason.strip()} (HTTP {exc.code})"
+    return str(exc)
+
+
 def discover_via_server_api(
     api_url: str,
     page_url: str,
@@ -52,7 +69,11 @@ def discover_via_server_api(
         if errors is not None:
             errors.append(f"{api_url}: response carried no PDF")
         return None
-    except (HTTPError, json.JSONDecodeError, ValueError, TypeError) as exc:
+    except HTTPError as exc:
+        if errors is not None:
+            errors.append(f"{api_url}: {_http_error_detail(exc)}")
+        return None
+    except (json.JSONDecodeError, ValueError, TypeError) as exc:
         if errors is not None:
             errors.append(f"{api_url}: bad response ({exc})")
         return None
@@ -98,7 +119,11 @@ def download_via_server_api(
         if errors is not None:
             errors.append(f"{api_url}: response carried no PDF")
         return None
-    except (HTTPError, json.JSONDecodeError, ValueError, TypeError) as exc:
+    except HTTPError as exc:
+        if errors is not None:
+            errors.append(f"{api_url}: {_http_error_detail(exc)}")
+        return None
+    except (json.JSONDecodeError, ValueError, TypeError) as exc:
         if errors is not None:
             errors.append(f"{api_url}: bad response ({exc})")
         return None

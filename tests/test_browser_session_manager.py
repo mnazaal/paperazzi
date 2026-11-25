@@ -113,6 +113,7 @@ def test_each_delegate_passes_the_persistent_session_and_its_browser_settings(
                 # Forwarded even when the caller passed none, so the hook's own
                 # signature stays one shape. See the `errors` test below.
                 "errors": None,
+                **({"refusals": None} if method == "download_pdf_bytes" else {}),
             },
         )
     ]
@@ -280,3 +281,26 @@ def test_browser_work_runs_on_one_thread_no_matter_who_calls(monkeypatch) -> Non
     assert len(hook_threads) == 3
     assert len(set(hook_threads)) == 1, "browser work ran on more than one thread"
     assert hook_threads[0] != threading.get_ident()
+
+
+def test_download_forwards_the_refusals_list_to_the_hook(monkeypatch) -> None:
+    """The route passes `refusals=` only when the manager accepts it; pin that it does.
+
+    Without it every refusal on the persistent-session path read as a dead
+    session (503), the guard degrading silently as the `errors` one did.
+    """
+    import pzi.browser_pdf_hook
+
+    session = FakeBrowserSession()
+    _install_fake_launcher(monkeypatch, [session])
+    manager = BrowserSessionManager(browser="firefox", profile_path="/p", headless=False)
+
+    def record(url, **kwargs):
+        kwargs["refusals"].append("refused a gzip-encoded PDF")
+        return None
+
+    monkeypatch.setattr(pzi.browser_pdf_hook, "download_pdf", record)
+    refusals: list[str] = []
+
+    assert manager.download_pdf_bytes("https://journal.test/p.pdf", refusals=refusals) is None
+    assert refusals == ["refused a gzip-encoded PDF"]

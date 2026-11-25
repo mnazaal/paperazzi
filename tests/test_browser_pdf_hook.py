@@ -934,3 +934,107 @@ def test_url_origin_reads_the_host_as_a_browser_does(url: str, origin: str) -> N
 def test_a_failure_is_described_by_a_code_or_a_fixed_reason(message: str, reason: str) -> None:
     note = hook._describe_failure(RuntimeError(message), TOKEN_URL)
     assert note == f"RuntimeError: {reason} at https://pub.example.org"
+
+
+# ---------------------------------------------------------------------------
+# A refusal is recorded with its reason, apart from a dead session
+# ---------------------------------------------------------------------------
+
+
+def test_download_pdf_records_a_guard_refusal_of_the_navigation() -> None:
+    """`SsrfBlocked` left `errors` empty, so a refusal read as "no PDF"."""
+    from pzi.safe_http import SsrfBlocked
+
+    url = "https://journal.test/rebind"
+    s = _raising_session(
+        start_url="https://journal.test/previous",
+        lands_on=url,
+        error=SsrfBlocked("browser landed on a non-public URL"),
+    )
+    errors: list[str] = []
+    refusals: list[str] = []
+
+    assert hook.download_pdf(url, _session=s, errors=errors, refusals=refusals) is None
+    assert errors == refusals
+    assert len(errors) == 1 and "non-public URL" in errors[0], errors
+
+
+def test_download_pdf_records_a_guard_refusal_in_the_challenge_loop() -> None:
+    """The challenge loop's own navigation can land on a refused URL too."""
+    from pzi.safe_http import SsrfBlocked
+    from tests.fake_session import FakeBrowserSession
+
+    html = type("R", (), {
+        "status": 200, "headers": {"content-type": "text/html"}, "body": lambda: b"<html>",
+    })
+
+    class Challenged(FakeBrowserSession):
+        navigations = 0
+
+        def navigate(self, url, **kwargs):
+            self.calls.append(("navigate", url))
+            Challenged.navigations += 1
+            if Challenged.navigations == 1:
+                return html
+            raise SsrfBlocked("challenge redirected to a non-public URL")
+
+    errors: list[str] = []
+    refusals: list[str] = []
+    result = hook.download_pdf(
+        "https://journal.test/challenge", _session=Challenged(), challenge_timeout=1,
+        errors=errors, refusals=refusals,
+    )
+
+    assert result is None
+    assert any("challenge redirected" in e for e in refusals), (errors, refusals)
+
+
+def test_download_pdf_keeps_a_dead_session_out_of_the_refusals() -> None:
+    from tests.fake_session import FakeBrowserSession
+
+    s = FakeBrowserSession(fetch_result=(-1, None, b""))
+    s.close()
+    errors: list[str] = []
+    refusals: list[str] = []
+
+    assert hook.download_pdf(
+        "https://example.com/paper.pdf", _session=s, errors=errors, refusals=refusals
+    ) is None
+    assert errors and "browser session is closed" in errors[0]
+    assert refusals == []
+
+
+def test_download_pdf_records_a_refused_body_as_a_refusal() -> None:
+    from tests.fake_session import FakeBrowserSession
+
+    class Compressed(FakeBrowserSession):
+        def fetch_direct(self, url):
+            self.calls.append(("fetch_direct", url))
+            return FetchResult(
+                status=-1, content_type=None, body=b"", refused="gzip-encoded PDF refused"
+            )
+
+    errors: list[str] = []
+    refusals: list[str] = []
+    hook.download_pdf(
+        "https://journal.test/a.pdf", _session=Compressed(), errors=errors, refusals=refusals
+    )
+
+    assert "gzip-encoded PDF refused" in refusals
+    assert errors == refusals
+
+
+def test_download_pdf_names_a_guard_refusal_in_errors() -> None:
+    """The caller that passes only `errors` still learns why nothing came back."""
+    from pzi.safe_http import SsrfBlocked
+
+    url = "https://journal.test/rebind"
+    s = _raising_session(
+        start_url="https://journal.test/previous",
+        lands_on=url,
+        error=SsrfBlocked("browser landed on a non-public URL"),
+    )
+    errors: list[str] = []
+
+    assert hook.download_pdf(url, _session=s, errors=errors) is None
+    assert errors and "non-public URL" in errors[0], errors

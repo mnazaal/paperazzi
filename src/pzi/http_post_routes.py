@@ -523,14 +523,23 @@ def _handle_browser_download_post(
     # Sibling of the `errors=` handling in `_handle_browser_discover_post`
     # above (G1): a session that dies mid-download must not read as "no PDF".
     download_errors: list[str] = []
-    kwargs = {"errors": download_errors} if accepts_keyword(download, "errors") else {}
+    refusals: list[str] = []
+    kwargs: dict[str, list[str]] = {}
+    if accepts_keyword(download, "errors"):
+        kwargs["errors"] = download_errors
+    if accepts_keyword(download, "refusals"):
+        kwargs["refusals"] = refusals
     pdf_bytes = cast("bytes | None", download(normalized_pdf_url, **kwargs))
     if pdf_bytes:
         if len(pdf_bytes) > max(0, max_pdf_bytes):
             return 413, {"error": "PDF too large"}
         return 200, {"pdf_base64": base64.b64encode(pdf_bytes).decode()}
     if download_errors:
-        return 503, {"error": "; ".join(download_errors)}
+        # 503 means the session is gone. A download that only met refusals
+        # (a compressed PDF, a URL the guard blocked) came from a working
+        # session: the upstream answered with something pzi would not take.
+        only_refused = all(error in refusals for error in download_errors)
+        return (502 if only_refused else 503), {"error": "; ".join(download_errors)}
     return 200, {"pdf_base64": None}
 
 

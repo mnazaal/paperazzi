@@ -1531,3 +1531,44 @@ def test_json_body_without_a_repeated_key_still_dispatches(tmp_path: Path) -> No
         server.server_close()
     assert status == 200
     assert "shared" in a.read_text() and "shared" not in b.read_text()
+
+
+class _RefusingBrowserManager:
+    """A download the browser refused (a compressed PDF, a guard block)."""
+
+    def download_pdf_bytes(
+        self, pdf_url: str, *, errors: list[str] | None = None,
+        refusals: list[str] | None = None,
+    ) -> bytes | None:
+        reason = f"{pdf_url}: refused a gzip-encoded PDF response"
+        if errors is not None:
+            errors.append(reason)
+        if refusals is not None:
+            refusals.append(reason)
+        return None
+
+
+def test_browser_download_refusal_is_not_a_dead_session(tmp_path: Path) -> None:
+    """A refusal answered 503, the status the CLI reads as "session is gone".
+
+    It is the upstream response pzi would not take, so 502, with the reason.
+    """
+    config_path, _ = _seed(tmp_path)
+    port, _thread, server = _serve_once(
+        config_path, tmp_path, browser_manager=_RefusingBrowserManager()
+    )
+    try:
+        try:
+            urllib.request.urlopen(
+                _post_json(
+                    port, "/browser/download", {"pdf_url": "https://example.test/a.pdf"}
+                ),
+                timeout=10,
+            )
+            raise AssertionError("expected HTTPError")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 502
+            assert "gzip-encoded" in json.loads(exc.read())["error"]
+    finally:
+        server.shutdown()
+        server.server_close()

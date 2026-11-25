@@ -84,3 +84,27 @@ def test_download_sends_auth_token_under_x_pzi_token_header(monkeypatch) -> None
     headers = captured[0].headers
     assert headers.get("X-pzi-token") == "secret"
     assert "X-pzi-auth" not in headers
+
+
+def test_download_reports_the_servers_reason_for_a_refusal(monkeypatch) -> None:
+    """The server's JSON `error` was dropped: only "bad response (HTTP Error 503)"."""
+    from urllib.error import HTTPError
+
+    body = json.dumps({"error": "https://example.com/p.pdf: refused a gzip-encoded PDF"})
+
+    def refusing(req: Any, timeout: float = 0) -> Any:
+        raise HTTPError(
+            req.full_url, 502, "Bad Gateway", {},  # type: ignore[arg-type]
+            io.BytesIO(body.encode("utf-8")),
+        )
+
+    monkeypatch.setattr(server_browser, "urlopen", refusing)
+    errors: list[str] = []
+
+    result = server_browser.download_via_server_api(
+        "http://127.0.0.1:8765", "https://example.com/p.pdf", errors=errors,
+    )
+
+    assert result is None
+    assert errors and "refused a gzip-encoded PDF" in errors[0], errors
+    assert "502" in errors[0]
