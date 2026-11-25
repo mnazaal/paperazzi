@@ -486,7 +486,7 @@ async function doSingleCapture() {
   try {
     await runSingleCapture(lockPending);
   } finally {
-    (await lockPending)();
+    await lockPending.then((release) => { release(); }, () => {});
   }
 }
 
@@ -523,7 +523,14 @@ async function runSingleCapture(lockPending) {
   // Kept, not discarded: the release below needs to know whether this capture
   // is the thing that granted it, or whether the user already had it.
   let originPermission = null;
-  await lockPending; // already settled in practice; the journal write must follow it
+  try {
+    await lockPending; // already settled in practice; the journal write must follow it
+  } catch (err) {
+    // No lock, no capture: a sweep could otherwise take the grant mid-capture.
+    summary.textContent = `❌ Capture lock unavailable: ${err?.message || err}`;
+    button.disabled = false;
+    return;
+  }
   if (!dryRun) {
     originPermission = await requestActiveTabOriginPermission(tabUrl);
   }

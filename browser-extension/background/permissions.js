@@ -175,10 +175,13 @@ function holdLock(name) {
   if (!locks?.request) return Promise.resolve(() => {});
   // The returned function resolves once the lock is really gone: a caller that
   // goes on to ask for it exclusively would otherwise find it still held.
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const finished = locks.request(name, { mode: "shared" }, () => new Promise((release) => {
       resolve(async () => { release(); await finished; });
     }));
+    // Refused before it was granted (SecurityError, InvalidStateError), the
+    // callback never runs: settle with the refusal rather than never.
+    finished.catch(reject);
   });
 }
 

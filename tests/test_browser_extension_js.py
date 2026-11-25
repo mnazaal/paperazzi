@@ -1160,7 +1160,7 @@ _MOCK_PERMISSIONS_MODULE = (
     # cookies at all.
     "export async function cookieHeaderForUrl(url) { (globalThis.__cookieCalls ??= []).push(url); return globalThis.__cookieHeader ?? ''; }\n"
     # The popup journals the grant it borrows and sweeps what a closed popup left.
-    "export function holdCaptureLock() { (globalThis.__journal ??= []).push(['lock']); return Promise.resolve(() => { globalThis.__journal.push(['unlock']); }); }\n"
+    "export function holdCaptureLock() { (globalThis.__journal ??= []).push(['lock']); if (globalThis.__lockError) return Promise.reject(new Error(globalThis.__lockError)); return Promise.resolve(() => { globalThis.__journal.push(['unlock']); }); }\n"
     "export async function noteBorrowedGrant(p) { (globalThis.__journal ??= []).push(['note', p]); }\n"
     "export async function forgetBorrowedGrant(p) { (globalThis.__journal ??= []).push(['forget', p]); }\n"
     "export async function sweepAbandonedCaptureState() { globalThis.__sweeps = (globalThis.__sweeps || 0) + 1; }\n"
@@ -5734,6 +5734,95 @@ console.log(JSON.stringify({ failed, left: globalThis.state.rules.size }));
 ''',
     )
     assert out == {"failed": True, "left": 0}, out
+
+
+# A lock request can reject without ever granting: Chromium does so with
+# SecurityError for an opaque origin (reproduced natively in a sandboxed frame),
+# and the spec also rejects when the document is not fully active. The callback
+# then never runs.
+_REJECTING_LOCKS = r'''
+process.on("unhandledRejection", (reason) => { (globalThis.unhandled ??= []).push(String(reason?.name)); });
+const lockError = () => Object.assign(new Error("lock refused"), { name: "SecurityError" });
+const rejectingLocks = { request: () => Promise.reject(lockError()) };
+const workingLocks = globalThis.navigator.locks;
+Object.defineProperty(globalThis, "navigator", { value: { locks: rejectingLocks }, configurable: true });
+const within = (promise, ms = 500) => Promise.race([
+  promise.then(() => "resolved", (e) => `rejected ${e.name}`),
+  new Promise((r) => setTimeout(() => r("pending"), ms)),
+]);
+'''
+
+
+def test_a_capture_lock_refused_before_it_is_granted_is_reported_not_awaited_forever(
+    tmp_path: Path,
+) -> None:
+    """The popup awaits this lock before it does anything; an unsettled one hangs it."""
+    out = _borrowed(
+        tmp_path,
+        _REJECTING_LOCKS
+        + r'''
+const p = await import("./background/permissions.mjs");
+const outcome = await within(p.holdCaptureLock());
+await new Promise((r) => setTimeout(r, 20));
+console.log(JSON.stringify({ outcome, unhandled: globalThis.unhandled ?? [] }));
+''',
+    )
+    # Fails closed: without the lock a sweep could take the grant mid-capture.
+    assert out == {"outcome": "rejected SecurityError", "unhandled": []}, out
+
+
+def test_a_guard_lock_refused_before_it_is_granted_fails_the_install_and_leaves_no_holder(
+    tmp_path: Path,
+) -> None:
+    out = _borrowed(
+        tmp_path,
+        _REJECTING_LOCKS
+        + r'''
+const { installPrivateNetworkGuard } = await import("./background/permissions.mjs");
+const outcome = await within(installPrivateNetworkGuard("http://127.0.0.1:8765/capture"));
+const rulesAfterFailure = state.rules.size;
+// The lock works again: one install and its release must leave nothing behind.
+Object.defineProperty(globalThis, "navigator", { value: { locks: workingLocks }, configurable: true });
+const release = await installPrivateNetworkGuard("http://127.0.0.1:8765/capture");
+const installed = state.rules.size;
+await release();
+await new Promise((r) => setTimeout(r, 20));
+console.log(JSON.stringify({ outcome, rulesAfterFailure, installed, left: state.rules.size, unhandled: globalThis.unhandled ?? [] }));
+''',
+    )
+    assert out["outcome"] == "rejected SecurityError", out
+    assert out["rulesAfterFailure"] == 0, out
+    assert out["installed"] > 0 and out["left"] == 0, out
+    assert out["unhandled"] == [], out
+
+
+def test_a_popup_whose_capture_lock_is_refused_reports_it_and_borrows_nothing(
+    tmp_path: Path,
+) -> None:
+    result = _run_popup_js_test(
+        _CAPTURE_DOM
+        + r'''
+globalThis.__lockError = "lock refused";
+let settled = "pending";
+const run = runCapture().then(() => { settled = "resolved"; }, (e) => { settled = `rejected ${e.message}`; });
+await Promise.race([run, new Promise((r) => setTimeout(r, 500))]);
+const go = document.getElementById("go");
+console.log(JSON.stringify({
+  settled,
+  journal: globalThis.__journal,
+  events: globalThis.events,
+  summary: document.getElementById("summary").textContent,
+  disabled: go.disabled,
+}));
+''',
+        tmp_path,
+    )
+    assert result["settled"] == "resolved", result
+    # Nothing was borrowed or captured without the lock.
+    assert result["journal"] == [["lock"]], result
+    assert result["events"] == [], result
+    assert "lock refused" in result["summary"], result
+    assert result["disabled"] is False, result
 
 
 def test_a_popup_that_closed_mid_capture_has_its_grant_and_rules_swept(tmp_path: Path) -> None:
