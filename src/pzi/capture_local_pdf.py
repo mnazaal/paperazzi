@@ -15,7 +15,7 @@ from pzi.add_planning import (
     select_best_metadata_result,
 )
 from pzi.bib_repository import AppliedWrite, WritePlan, read_bib_file
-from pzi.bibtex import NormalizedRecord, bibtex_entry_to_record
+from pzi.bibtex import NormalizedRecord, bibtex_entry_to_record, normalize_authors
 from pzi.config import DEFAULT_PDF_FILE_PATH_STYLE, BibConfig
 from pzi.identifiers import normalize_doi
 from pzi.pdf import (
@@ -34,6 +34,7 @@ from pzi.protocols import (
     WebTranslationFetcher,
 )
 from pzi.resolution_match import score_match
+from pzi.similarity import normalize_title
 from pzi.translation_server import fetch_web_translations
 
 #: The capture result shape, defined once in `add_planning` beside the other
@@ -147,28 +148,38 @@ def _supplies_identifying_metadata(
     base_record: Mapping[str, object],
     merged: Mapping[str, object],
 ) -> bool:
-    """Whether the user's overrides put an identifying value into the record.
+    """Whether the user's overrides put a new identifying value into the record.
 
-    A key alone is not enough: `{"doi": null}` is dropped by the merge and
-    `{"year": "n/a"}` coerces to nothing, so both leave a record resting on the
-    PDF's text. Counted only when the merged value is real and is not simply the
-    value the PDF already gave.
+    Each field is compared in the normal form pzi already uses for it, so a key
+    with no usable value (`{"doi": null}`, `{"year": "n/a"}`, a blank string, a
+    list of blanks) and a restatement of what the PDF already gave (the same
+    title with stray whitespace) both leave a record resting on the PDF's text.
     """
     return any(
         key in overrides
-        and _has_content(merged.get(key))
-        and merged.get(key) != base_record.get(key)
+        and (value := _identity(key, merged.get(key))) is not None
+        and value != _identity(key, base_record.get(key))
         for key in _IDENTIFYING_FIELDS
     )
 
 
-def _has_content(value: object) -> bool:
-    """A value with something in it: not None, not blank, not a list of blanks."""
-    if isinstance(value, str):
-        return bool(value.strip())
-    if isinstance(value, (list, tuple)):
-        return any(_has_content(item) for item in value)
-    return value is not None
+def _identity(key: str, value: object) -> object:
+    """*value* reduced to the form that decides whether it identifies anything."""
+    if key == "doi":
+        return normalize_doi(value) if isinstance(value, str) else None
+    if key == "year":
+        return _add_planning._coerce_year(value)
+    if key == "title":
+        folded = normalize_title(value) if isinstance(value, str) else ""
+        return folded or None
+    if key == "authors":
+        # Authors are strings in pzi; `normalize_authors` would `str()` a dict
+        # into a non-empty "name", so only string entries are read here.
+        raw = [a for a in value if isinstance(a, str)] if isinstance(value, list) else value
+        names = [" ".join(name.split()).casefold() for name in normalize_authors(raw)]
+        names = [name for name in names if name]
+        return tuple(names) or None
+    return None
 
 
 def _provider_added_to_extraction(
