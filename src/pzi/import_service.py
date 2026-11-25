@@ -392,7 +392,16 @@ def _resolve_like_the_kernel(source_dir: str, path: str) -> str:
         if os.path.samefile(lexical, kernel):
             return lexical
     except OSError:
-        pass
+        # A missing file cannot be compared, but its folder can: the same
+        # folder and the same name are the same path, so a symlinked HOME keeps
+        # its `~` spelling for a file not there yet.
+        try:
+            if os.path.basename(lexical) == os.path.basename(kernel) and os.path.samefile(
+                os.path.dirname(lexical), os.path.dirname(kernel)
+            ):
+                return lexical
+        except OSError:
+            pass
     return kernel
 
 

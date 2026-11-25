@@ -1349,3 +1349,22 @@ def test_a_stdin_duplicate_naming_the_same_relative_path_gives_no_warning(
 
     assert result["skipped_duplicates"] == 1, result
     assert _not_merged(result) == [], result["warnings"]
+
+
+def test_a_missing_dotdot_attachment_keeps_a_symlinked_home_spelling(tmp_path: Path) -> None:
+    """The file is not there yet, so `samefile` could not vouch for the lexical path.
+
+    The kernel spelling was used instead, which expands a symlinked HOME and
+    puts the path outside `~`, losing the configured home style.
+    """
+    from pzi.import_service import _resolve_like_the_kernel
+
+    real = tmp_path / "realhome"
+    (real / "src").mkdir(parents=True)
+    (real / "pp").mkdir()
+    home = tmp_path / "home"
+    home.symlink_to(real)
+
+    resolved = _resolve_like_the_kernel(str(home / "src"), "../pp/missing.pdf")
+
+    assert resolved == str(home / "pp" / "missing.pdf")
