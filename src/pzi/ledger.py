@@ -323,6 +323,23 @@ class PendingAnswers:
             return
         if not self._pending and not even_if_empty:
             return
+        # Imported here: `inbox_service` pulls in the write path, which this
+        # pure module does not otherwise need.
+        from pzi.errors import PziError
+        from pzi.inbox_service import with_inbox_lock
+
+        # Read-merge-write under `<ledger>.lock`: unlocked, a save from another
+        # sweep landing between this read and this write was overwritten. The
+        # helper is the inbox's, a plain exclusive lock on `<path>.lock`. No
+        # lock (unwritable folder, a wedged holder) still saves: the ledger is
+        # best-effort.
+        try:
+            with with_inbox_lock(Path(self._path)):
+                self._merge_and_save()
+        except (OSError, PziError):
+            self._merge_and_save()
+
+    def _merge_and_save(self) -> None:
         state: Any = load(self._path)
         for citekey, identity in self._pending:
             state = record_checked(

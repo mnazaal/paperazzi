@@ -167,3 +167,41 @@ def test_a_timestamp_in_the_future_counts_as_fresh():
     assert ledger.is_recently_checked(
         state, "ml", "x-2020", now=_NOW, horizon_days=30, identity=_ID
     )
+
+
+def test_a_save_landing_between_another_saves_read_and_write_is_kept(
+    tmp_path, monkeypatch
+):
+    """Two sweeps sharing one ledger: A reads, B saves, A writes.
+
+    `PendingAnswers.save` read, merged and wrote with no lock, so A's write
+    replaced the file B had just written and B's answers were lost. B runs on
+    a thread here, so a file lock (which conflicts across open files) makes
+    it wait for A, as another process would.
+    """
+    import threading
+
+    path = tmp_path / "check-verified.json"
+    a = ledger.PendingAnswers(path, "ml", now=_NOW, horizon_days=30)
+    b = ledger.PendingAnswers(path, "ml", now=_NOW, horizon_days=30)
+    a.add("a-key", "id-a")
+    b.add("b-key", "id-b")
+    real_load = ledger.load
+    other = threading.Thread(target=b.save)
+    started = threading.Event()
+
+    def load_while_another_writer_saves(p):
+        state = real_load(p)
+        if not started.is_set():
+            started.set()
+            other.start()
+            # Unlocked, B finishes here, before A writes. Locked, B waits for A.
+            other.join(timeout=1.0)
+        return state
+
+    monkeypatch.setattr(ledger, "load", load_while_another_writer_saves)
+    a.save()
+    other.join(timeout=30)
+
+    assert not other.is_alive()
+    assert sorted(real_load(path)["bibs"]["ml"]) == ["a-key", "b-key"]
