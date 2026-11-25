@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import errno
+import os
 import sys
 from pathlib import Path
 
 from pzi import cli_json, exit_codes
+from pzi.bib_repository import _resolve_write_target
 from pzi.clean_service import siblings_sharing_papers_dir
 from pzi.cli_render import reindex_error_lines, render_reindex_result
 from pzi.commands.common import (
@@ -20,6 +23,24 @@ from pzi.reindex_service import (
     reindex_library,
     rename_files_to_policy,
 )
+
+
+def _check_the_run_could_lock(bib_path: str) -> None:
+    """Raise what the run's exclusive lock would raise, without creating the lock.
+
+    A preview takes only the shared lock, which tolerates a folder where
+    `<bib>.lock` cannot be created; the run takes the exclusive lock, which
+    does not, and exits 5. So in a read-only folder the preview reported a plan
+    for a run that cannot start. Probed with `os.access` rather than by opening
+    the file, so the preview still creates nothing.
+    """
+    lock_path = Path(str(_resolve_write_target(bib_path)) + ".lock")
+    if lock_path.exists():
+        usable = os.access(lock_path, os.W_OK)
+    else:
+        usable = os.access(lock_path.parent, os.W_OK | os.X_OK)
+    if not usable:
+        raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), str(lock_path))
 
 
 def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_selector) -> int:
@@ -54,6 +75,9 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
             stdout=stdout,
             stderr=stderr,
         )
+    if getattr(args, "dry_run", False) and passes_requested:
+        # Only a preview of a pass that writes; the bare audit previews nothing.
+        _check_the_run_could_lock(target["path"])
     if convert_paths:
         # A one-time pass, distinct from the two above: it does not touch
         # citekeys or filenames, only folds an already-written `file =`

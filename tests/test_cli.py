@@ -2825,3 +2825,44 @@ def test_reindex_rename_files_reports_what_it_could_not_read(tmp_path: Path) -> 
     assert "unparseable BibTeX block" in stderr.getvalue(), stderr.getvalue()
     assert exit_code == exit_codes.FINDINGS
     assert mangled.exists()
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [["--rename-citekeys"], ["--convert-file-paths"], ["--rename-files"]],
+    ids=["rename-citekeys", "convert-file-paths", "rename-files"],
+)
+def test_a_reindex_preview_fails_where_the_run_cannot_take_its_lock(
+    tmp_path: Path, flags: list[str]
+) -> None:
+    """In a read-only folder the run cannot create `<bib>.lock` and exits 5.
+
+    The preview took only the shared lock, which tolerates that, so it reported
+    a clean plan (exit 0 or 1) for a run that cannot start.
+    """
+    import os
+
+    if os.geteuid() == 0:
+        pytest.skip("root ignores directory permissions")
+    folder = tmp_path / "lib"
+    folder.mkdir()
+    config_path, bib_path = _reindex_config(folder)
+    folder.chmod(0o555)
+    try:
+        def run(extra: list[str]) -> tuple[int, str]:
+            out, err = StringIO(), StringIO()
+            code = run_cli(
+                ["library", "reindex", *flags, *extra, "--config", str(config_path)],
+                home_dir=str(tmp_path), stdout=out, stderr=err,
+            )
+            return code, err.getvalue()
+
+        real_code, real_err = run(["--force"] if flags == ["--rename-citekeys"] else [])
+        preview_code, preview_err = run(["--dry-run"])
+    finally:
+        folder.chmod(0o755)
+
+    assert real_code == exit_codes.ENVIRONMENT, real_err
+    assert preview_code == real_code, preview_err
+    assert f"{bib_path}.lock" in preview_err
+    assert not Path(f"{bib_path}.lock").exists()
