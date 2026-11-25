@@ -74,12 +74,17 @@ _IDENTITY_HEADERS = {"Accept-Encoding": "identity"}
 
 
 def _claims_pdf(content_type: str) -> bool:
-    """Whether a Content-Type's media type is PDF; media types are case-insensitive.
+    """Whether a Content-Type names PDF as a media type, case-insensitively.
 
-    The type before any parameters is compared, so `text/html;
-    note="application/pdf"` is not a PDF claim.
+    Each media type is compared before its parameters, so `text/html;
+    note="application/pdf"` is not a PDF claim. Playwright joins repeated
+    Content-Type headers with ", ", and a PDF among them still counts, as it
+    did before parameters were parsed.
     """
-    return content_type.split(";", 1)[0].strip().lower() == "application/pdf"
+    return any(
+        part.split(";", 1)[0].strip().lower() == "application/pdf"
+        for part in content_type.split(",")
+    )
 
 
 def _declared_encoding(headers: Any) -> str | None:

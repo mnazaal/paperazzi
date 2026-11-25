@@ -512,6 +512,54 @@ def test_download_pdf_sweeps_its_own_page_when_navigation_times_out_after_commit
     assert result == b"%PDF-own"
 
 
+def _raising_session(*, start_url, lands_on, error):
+    from tests.fake_session import FakeBrowserSession
+
+    class Raising(FakeBrowserSession):
+        def navigate(self, url, **kwargs):
+            self.calls.append(("navigate", url))
+            if lands_on is not None:
+                self._url = lands_on
+            raise error
+
+    return Raising(
+        url=start_url,
+        fetch_results=[
+            (200, "text/html", b"<html>"),
+            (200, "application/pdf", b"%PDF-swept"),
+        ],
+        evaluate_results=[["https://journal.test/linked.pdf"]],
+    )
+
+
+def test_download_pdf_ignores_a_stale_page_at_the_same_url() -> None:
+    """An earlier request's load of this very URL is not this request's page."""
+    url = "https://journal.test/toggle"
+    s = _raising_session(start_url=url, lands_on=None, error=RuntimeError("Download is starting"))
+    assert hook.download_pdf(url, _session=s) is None
+
+
+def test_download_pdf_never_sweeps_a_page_the_ssrf_guard_refused() -> None:
+    from pzi.safe_http import SsrfBlocked
+
+    url = "https://journal.test/rebind"
+    s = _raising_session(
+        start_url="https://journal.test/previous",
+        lands_on=url,
+        error=SsrfBlocked("browser landed on a non-public URL"),
+    )
+    assert hook.download_pdf(url, _session=s) is None
+
+
+def test_download_pdf_sweeps_a_redirect_target_this_navigation_committed() -> None:
+    s = _raising_session(
+        start_url="https://journal.test/previous",
+        lands_on="https://journal.test/landing",
+        error=TimeoutError("Timeout 60000ms exceeded"),
+    )
+    assert hook.download_pdf("https://resolver.test/doi", _session=s) == b"%PDF-swept"
+
+
 def test_download_pdf_follows_candidate_links_after_html_page() -> None:
     from tests.fake_session import FakeBrowserSession
     s = FakeBrowserSession(

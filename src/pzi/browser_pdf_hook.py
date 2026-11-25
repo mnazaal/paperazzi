@@ -39,6 +39,7 @@ from pzi.browser_session import (
     default_url_allowed,
     launch_browser,
 )
+from pzi.safe_http import SsrfBlocked
 
 PDF_HINT_RE = re.compile(r"pdf|download", re.IGNORECASE)
 
@@ -368,6 +369,14 @@ def discover_pdf_url(
             session.close()
 
 
+def _page_url(session: BrowserSession) -> str | None:
+    """The session page's current URL, or None if it cannot be read."""
+    try:
+        return session.current_url()
+    except Exception:
+        return None
+
+
 def _note_refusal(
     result: FetchResult, errors: list[str] | None, url: str | None = None
 ) -> None:
@@ -430,18 +439,26 @@ def download_pdf(
         # 2. Navigate to URL (fallback — browser handles auth via profile cookies)
         response = None
         navigation_failed = False
+        before = _page_url(session)
         try:
             response = session.navigate(pdf_url, wait_until="domcontentloaded", timeout=60000)
+        except SsrfBlocked:
+            # The guard refused this URL or where it landed: never read that page.
+            navigation_failed = True
         except Exception:
-            # Unless the page committed this URL before the error (a slow page
-            # timing out after its DOM arrived), it still shows whatever this
-            # shared session last loaded, usually another request's landing
-            # page. Its links are not this URL's candidates: sweeping them
-            # returned paper A's PDF for a request about paper B.
-            try:
-                navigation_failed = session.current_url() != pdf_url
-            except Exception:
-                navigation_failed = True
+            # A shared session keeps whatever it last loaded, usually another
+            # request's landing page; sweeping its links returned paper A's PDF
+            # for a request about paper B. Only a page this navigation itself
+            # moved to (a slow page that timed out, possibly after a redirect)
+            # is this URL's page. An unchanged URL proves nothing, even when it
+            # equals `pdf_url`: an earlier request may have loaded it.
+            after = _page_url(session)
+            navigation_failed = (
+                before is None
+                or after is None
+                or after == before
+                or not getattr(session, "url_allowed", lambda _url: True)(after)
+            )
 
         if response is not None:
             navigated = FetchResult.from_response(response)

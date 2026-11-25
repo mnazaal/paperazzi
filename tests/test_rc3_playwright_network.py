@@ -597,6 +597,14 @@ def test_a_parameter_naming_pdf_is_not_a_pdf_claim() -> None:
     assert response.body_calls == 0 and result.refused is None and not result.is_pdf()
 
 
+def test_a_pdf_among_joined_content_types_still_counts() -> None:
+    """Playwright joins repeated Content-Type headers with ", "."""
+    joined = bs.FetchResult(
+        status=200, content_type="application/pdf, application/octet-stream", body=b"%PDF-1.4"
+    )
+    assert joined.is_pdf()
+
+
 def test_download_pdf_reports_a_refused_encoding() -> None:
     from pzi.browser_pdf_hook import download_pdf
     from tests.fake_session import FakeBrowserSession
