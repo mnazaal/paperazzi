@@ -883,3 +883,81 @@ def test_a_late_stdout_refusal_says_the_stream_was_already_written(
     assert code == exit_codes.USAGE, err
     assert "already written" in err
     assert "nothing was written" not in err
+
+
+def _check_ledger(tmp_path: Path, config: Path) -> Path:
+    """The check ledger this configuration's runs read and write, seeded."""
+    from pzi import ledger
+    from pzi.config import BibResolutionFailure, load_bib_target
+
+    resolved = load_bib_target(
+        config_path=str(config), home_dir=str(tmp_path), bib_selector=None
+    )
+    assert not isinstance(resolved, BibResolutionFailure), resolved
+    app_config, _bib = resolved
+    path = ledger.ledger_path(app_config["pzi_data_home"], ledger.CHECK_FILENAME)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"version": 1, "bibs": {"main": {}}}\n', encoding="utf-8")
+    return path
+
+
+def test_report_naming_the_check_ledger_is_refused(tmp_path: Path) -> None:
+    """`--report <check-verified.json> --force` replaced the ledger with the report.
+
+    The ledger is pzi's own record of verified entries; a report written over
+    it reads back as an empty ledger, so the next sweep re-audits everything.
+    """
+    bib = tmp_path / "main.bib"
+    bib.write_text(LIBRARY, encoding="utf-8")
+    config = _write_config(tmp_path, [("main", bib)], default="main")
+    ledger_file = _check_ledger(tmp_path, config)
+    before = ledger_file.read_bytes()
+
+    code, _out, err = _run_configured(
+        tmp_path, _args(report=str(ledger_file), force=True), _never_ran, config=config
+    )
+
+    assert code == exit_codes.USAGE, err
+    assert "check ledger" in err
+    assert ledger_file.read_bytes() == before
+
+
+def test_jsonl_naming_the_check_ledger_is_refused(tmp_path: Path) -> None:
+    bib = tmp_path / "main.bib"
+    bib.write_text(LIBRARY, encoding="utf-8")
+    config = _write_config(tmp_path, [("main", bib)], default="main")
+    ledger_file = _check_ledger(tmp_path, config)
+    before = ledger_file.read_bytes()
+
+    code, _out, err = _run_configured(
+        tmp_path, _args(jsonl=str(ledger_file), force=True), _never_ran, config=config
+    )
+
+    assert code == exit_codes.USAGE, err
+    assert "check ledger" in err
+    assert ledger_file.read_bytes() == before
+
+
+def test_a_late_resolution_still_guards_the_check_ledger(tmp_path: Path) -> None:
+    """The target resolves only after the audit; the late re-check must see the ledger."""
+    first, second = _two_libraries(tmp_path)
+    resolved_config = _write_config(tmp_path, [("a", first), ("b", second)], default="a")
+    ledger_file = _check_ledger(tmp_path, resolved_config)
+    before = ledger_file.read_bytes()
+    config = _write_config(tmp_path, [("a", first), ("b", second)])
+
+    def config_gains_a_default(**_kw):
+        _write_config(tmp_path, [("a", first), ("b", second)], default="a")
+        result = _many(1)
+        result["bib_name"] = "a"
+        return result
+
+    code, _out, err = _run_configured(
+        tmp_path, _args(report=str(ledger_file), force=True), config_gains_a_default,
+        config=config,
+    )
+
+    assert code == exit_codes.USAGE, err
+    assert "check ledger" in err
+    assert ledger_file.read_bytes() == before
+

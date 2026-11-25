@@ -9,7 +9,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TextIO
 
-from pzi import cli_json, exit_codes
+from pzi import cli_json, exit_codes, ledger
 from pzi.check_service import CheckItem, CheckResult, check_bib
 from pzi.cli_render import error_lines, render_check_items
 from pzi.commands.common import (
@@ -89,7 +89,7 @@ def _same_file(left: str, right: str) -> bool:
 
 def _libraries_this_run_could_read(
     *, config_path: str, home_dir: str, bib_selector: str | None
-) -> tuple[list[tuple[str, str | None, bool]], bool]:
+) -> tuple[list[tuple[str, str | None, bool]], bool, str | None]:
     """``(path, name, selected)`` for every library the audit may read from.
 
     Every configured library, not only the selected one: a report aimed at a
@@ -100,14 +100,18 @@ def _libraries_this_run_could_read(
     list is incomplete — a TOML error hides every library, and an ambiguous or
     unknown `--target` hides the configured ones — so "not in the list" proves
     nothing, and the caller must not open an output on the strength of it.
+
+    The third is the check ledger the audit reads and saves (`None` when the
+    target did not resolve). An output written over it replaced pzi's record of
+    verified entries with a report, which reads back as an empty ledger.
     """
     resolved = load_bib_target(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector
     )
     if isinstance(resolved, BibResolutionFailure):
         if bib_selector and bib_selector.strip().endswith(".bib"):
-            return [(bib_selector.strip(), None, True)], False
-        return [], False
+            return [(bib_selector.strip(), None, True)], False, None
+        return [], False, None
     config, bib = resolved
     selected = (bib["path"], bib["name"], True)
     others = [
@@ -115,7 +119,8 @@ def _libraries_this_run_could_read(
         for other in config["bibs"]
         if other["path"] != bib["path"]
     ]
-    return [selected, *others], True
+    check_ledger = str(ledger.ledger_path(config["pzi_data_home"], ledger.CHECK_FILENAME))
+    return [selected, *others], True, check_ledger
 
 
 def _output_alias_refusal(
@@ -123,9 +128,11 @@ def _output_alias_refusal(
     jsonl_path: str | None,
     libraries: list[tuple[str, str | None, bool]],
     *,
+    check_ledger: str | None = None,
     after_audit: bool = False,
 ) -> str | None:
-    """Why an output may not be written, or None: it names a library or the other output.
+    """Why an output may not be written, or None: it names a library, the
+    check ledger, or the other output.
 
     *after_audit* is the late re-check, run once a target that did not resolve
     before the audit does: by then `--jsonl -` has already streamed to stdout.
@@ -166,6 +173,12 @@ def _output_alias_refusal(
                 f"{flag} {path} names a library pzi also manages"
                 f"{f' ({name})' if name else ''}; checking would overwrite"
                 " it — write the output to another path"
+            )
+        if check_ledger is not None and _same_file(path, check_ledger):
+            return (
+                f"{flag} {path} names pzi's check ledger ({check_ledger}); writing"
+                " the output there would replace the record of verified entries —"
+                " write the output to another path"
             )
     if (
         report_path and jsonl_path
@@ -249,10 +262,12 @@ def run_check_command(
     # problem — it is the flag a caller uses when they mean to replace a report.
     # Refused by identity rather than by spelling, because a symlink or a hard
     # link reaches the same file under another name.
-    libraries, target_resolved = _libraries_this_run_could_read(
+    libraries, target_resolved, check_ledger = _libraries_this_run_could_read(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector
     )
-    refusal = _output_alias_refusal(report_path, jsonl_path, libraries)
+    refusal = _output_alias_refusal(
+        report_path, jsonl_path, libraries, check_ledger=check_ledger
+    )
     if refusal is not None:
         return emit_usage_error(
             args, refusal, command_path=("library", "check"),
@@ -385,11 +400,12 @@ def run_check_command(
         # Known limit: if this second resolution also fails, the list is still
         # incomplete. The real `check_bib` cannot run in that state, so it needs
         # the configuration to change twice during startup.
-        libraries, _resolved = _libraries_this_run_could_read(
+        libraries, _resolved, check_ledger = _libraries_this_run_could_read(
             config_path=config_path, home_dir=home_dir, bib_selector=bib_selector
         )
         refusal = _output_alias_refusal(
-            report_path, jsonl_path, libraries, after_audit=True
+            report_path, jsonl_path, libraries, check_ledger=check_ledger,
+            after_audit=True,
         )
         if refusal is not None:
             return emit_usage_error(
