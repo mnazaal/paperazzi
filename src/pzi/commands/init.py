@@ -325,10 +325,18 @@ def run_init_command(
 
     if existing.token_settings:
         in_use = existing.token_settings[0][0]
+        # A command that prints nothing resolves to no token, and the server
+        # then falls back to the data-home file, so "ignored" is true only
+        # while the command prints one.
+        ignored_while = (
+            "while that command prints a token"
+            if in_use == "api_auth_token_cmd"
+            else "while that key is set"
+        )
         print(
             f"the API auth token comes from `{in_use}` in {dest}; no api_token "
             "file was created or reused, and one under the data home is ignored "
-            "while that key is set.",
+            f"{ignored_while}.",
             file=stdout,
         )
         if any(key == "api_auth_token" for key, _value in existing.token_settings):

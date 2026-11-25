@@ -157,9 +157,11 @@ to nowhere else — not to any other publisher, and not to any metadata API.
 
 ### API token considerations
 
-- The token lives in `<data-home>/api_token` (0600), not in `config.toml`, so
-  the config file stays secret-free and committable. `api_auth_token` in the
-  config is still supported as a plaintext fallback.
+- By default the token lives in `<data-home>/api_token` (0600), not in
+  `config.toml`, so the config file holds no secret. `api_auth_token` in the
+  config is still supported as a plaintext fallback; a config that sets it
+  holds the token and must not be committed, and `pzi init --force` carries
+  it over and says so.
 - It is sent over plain HTTP on the loopback interface.
 - This is safe when `api_listen_host` is `127.0.0.1` (default).
 - Binding to a LAN address exposes the token to the local network. `0.0.0.0`

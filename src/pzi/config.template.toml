@@ -3,7 +3,8 @@ api_listen_host = "127.0.0.1"
 api_listen_port = 8765
 # Localhost API hardening. `pzi init` writes a token to <data-home>/api_token
 # (0600) and pzi auto-reads it there at runtime, so you normally set nothing
-# here and this file stays secret-free. To override, in precedence order:
+# here. A plaintext api_auth_token in this file makes it hold a secret: do not
+# commit it then. To override, in precedence order:
 # api_auth_token_cmd = "pass show pzi-token"   # stdout is the token; runs without a shell
 # api_auth_token = "change-me-long-random-token"  # plaintext fallback (avoid committing)
 # api_allowed_origins = ["http://127.0.0.1", "http://localhost", "chrome-extension://", "moz-extension://"]

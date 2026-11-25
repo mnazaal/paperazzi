@@ -2752,3 +2752,12 @@ def test_init_rotate_token_without_force_refuses_setup_only_flags(tmp_path: Path
     assert "--bib requires --setup" in stderr.getvalue()
     assert (data_home / "api_token").read_text() == "SYNTHETIC-FILE-TOKEN\n"
     assert config_path.read_text() == original
+
+
+def test_shipped_config_template_never_calls_itself_secret_free() -> None:
+    """`init --force` prepends a carried plaintext token to this template."""
+    import importlib.resources
+
+    text = importlib.resources.files("pzi").joinpath("config.template.toml").read_text()
+    assert "secret-free" not in text
+    assert "do not\n# commit it" in text or "do not commit" in text
