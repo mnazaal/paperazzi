@@ -43,6 +43,19 @@ def _check_the_run_could_lock(bib_path: str) -> None:
         raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), str(lock_path))
 
 
+def _check_the_run_could_write(bib_path: str) -> None:
+    """Raise what a run that changes the bib would raise in a read-only folder.
+
+    The lock check above passes once `<bib>.lock` exists, which any earlier pzi
+    write leaves behind. The run then takes its lock but cannot create its
+    backup or temp file beside the bib, and exits 5. Called only for a preview
+    that plans a change: a run with nothing to change writes nothing there.
+    """
+    folder = Path(str(_resolve_write_target(bib_path))).parent
+    if not os.access(folder, os.W_OK | os.X_OK):
+        raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), str(folder))
+
+
 def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_selector) -> int:
     config, target = resolve_target(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector,
@@ -91,6 +104,8 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
             file_path_style=style,
             dry_run=getattr(args, "dry_run", False),
         )
+        if getattr(args, "dry_run", False) and result["to_convert"]:
+            _check_the_run_could_write(target["path"])
         if as_json:
             cli_json.emit_result(
                 result, stdout, command="library reindex",
@@ -135,6 +150,8 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
             file_path_style=config["pdf_file_path_style"],
             sibling_bib_paths=siblings_sharing_papers_dir(config, target),
         )
+        if getattr(args, "dry_run", False) and result["changed"]:
+            _check_the_run_could_write(target["path"])
         if as_json:
             cli_json.emit_result(
                 result, stdout, command="library reindex",
@@ -248,6 +265,8 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
         file_path_style=config["pdf_file_path_style"],
         sibling_bib_paths=siblings_sharing_papers_dir(config, target),
     )
+    if rename and not apply and result.get("changed"):
+        _check_the_run_could_write(target["path"])
 
     # Computed once above the format branch, as `library dedupe` does. Keying only
     # off `errors` meant a read-only audit that found renames to make exited 0

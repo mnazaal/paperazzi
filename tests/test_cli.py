@@ -2866,3 +2866,101 @@ def test_a_reindex_preview_fails_where_the_run_cannot_take_its_lock(
     assert preview_code == real_code, preview_err
     assert f"{bib_path}.lock" in preview_err
     assert not Path(f"{bib_path}.lock").exists()
+
+
+def _locked_readonly_library(tmp_path: Path, *, file_field: str) -> tuple[Path, Path]:
+    """A library whose folder is read-only and whose `<bib>.lock` already exists.
+
+    Any earlier pzi write leaves the lock file behind, so the run can open it
+    and take its lock; what it cannot do is create its backup and temp file.
+    """
+    folder = tmp_path / "lib"
+    papers = folder / "papers"
+    papers.mkdir(parents=True)
+    (papers / "a.pdf").write_bytes(b"%PDF-1.4\n")
+    bib_path = folder / "main.bib"
+    bib_path.write_text(
+        "@article{oldkey,\n  author = {Smith, Jane},\n  title = {Graph Networks},\n"
+        f"  year = {{2020}},\n  file = {{{file_field}}},\n}}\n"
+    )
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        'pdf_file_path_style = "relative"\n'
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\npapers_dir = "{papers}"\n'
+        "default = true\n"
+    )
+    Path(f"{bib_path}.lock").touch()
+    return config_path, bib_path
+
+
+def _reindex_preview_and_run(
+    tmp_path: Path, config_path: Path, flags: list[str]
+) -> tuple[int, str, int, str]:
+    """Exit codes and stderr of the `--dry-run` preview, then the real run."""
+    folder = config_path.parent / "lib"
+    folder.chmod(0o555)
+    try:
+        def run(extra: list[str]) -> tuple[int, str]:
+            out, err = StringIO(), StringIO()
+            code = run_cli(
+                ["library", "reindex", *flags, *extra, "--config", str(config_path)],
+                home_dir=str(tmp_path), stdout=out, stderr=err,
+            )
+            return code, err.getvalue()
+
+        preview_code, preview_err = run(["--dry-run"])
+        real_code, real_err = run(["--force"] if flags == ["--rename-citekeys"] else [])
+    finally:
+        folder.chmod(0o755)
+    return preview_code, preview_err, real_code, real_err
+
+
+@pytest.mark.parametrize(
+    "flags",
+    # `--all`: the file name differs from the template only cosmetically.
+    [["--rename-citekeys"], ["--convert-file-paths"], ["--rename-files", "--all"]],
+    ids=["rename-citekeys", "convert-file-paths", "rename-files"],
+)
+def test_a_reindex_preview_fails_where_the_run_cannot_write_beside_an_existing_lock(
+    tmp_path: Path, flags: list[str]
+) -> None:
+    """With `<bib>.lock` present the preview checked only that file.
+
+    The run takes its lock, then cannot create its backup or temp file in the
+    read-only folder and exits 5, while the preview reported a plan.
+    """
+    import os
+
+    if os.geteuid() == 0:
+        pytest.skip("root ignores directory permissions")
+    config_path, bib_path = _locked_readonly_library(
+        tmp_path, file_field=str(tmp_path / "lib" / "papers" / "a.pdf")
+    )
+    before = bib_path.read_bytes()
+
+    preview_code, preview_err, real_code, real_err = _reindex_preview_and_run(
+        tmp_path, config_path, flags
+    )
+
+    assert real_code == exit_codes.ENVIRONMENT, real_err
+    assert preview_code == real_code, preview_err
+    assert "Permission denied" in preview_err, preview_err
+    assert bib_path.read_bytes() == before
+
+
+def test_a_reindex_preview_with_nothing_to_write_passes_beside_an_existing_lock(
+    tmp_path: Path,
+) -> None:
+    """A run with no change writes nothing, so a read-only folder does not stop it."""
+    import os
+
+    if os.geteuid() == 0:
+        pytest.skip("root ignores directory permissions")
+    config_path, _bib_path = _locked_readonly_library(tmp_path, file_field="papers/a.pdf")
+
+    preview_code, preview_err, real_code, real_err = _reindex_preview_and_run(
+        tmp_path, config_path, ["--convert-file-paths"]
+    )
+
+    assert real_code == exit_codes.OK, real_err
+    assert preview_code == real_code, preview_err
