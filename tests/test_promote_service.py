@@ -22,6 +22,38 @@ from pzi.promote_service import promote_bib
 from pzi.update_service import update_bib
 
 
+@pytest.fixture(autouse=True)
+def _outbound_attempts_fail_at_once(monkeypatch):
+    """Make every outbound fetch a test did not mock fail on its first attempt.
+
+    Promotion attaches a PDF, and that path reaches the real PDF resolvers
+    (Crossref, Europe PMC, DOAJ) and the candidate's `pdf_url` with the
+    default fetchers. conftest blocks the connect, but connect-time DNS is not
+    stubbed: where DNS fails, the lookup error is retryable, and each of the
+    four fetches slept 1 s + 2 s before giving up — 12 s per test. Resolving
+    to the suite's fixed public address hands the connect to conftest's
+    blocker, whose `SsrfBlocked` is terminal, so nothing is retried.
+    """
+    import ipaddress
+    import socket
+
+    from pzi import safe_http
+
+    real = safe_http.resolve_pinned_ips
+
+    def _fixed_address(host, port, *args, **kwargs):
+        try:
+            address = str(ipaddress.ip_address(host))
+        except ValueError:
+            address = "93.184.216.34"
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, port))]
+
+    def offline(host, port, *, getaddrinfo=None, allow_host=None):
+        return real(host, port, getaddrinfo=_fixed_address, allow_host=allow_host)
+
+    monkeypatch.setattr(safe_http, "resolve_pinned_ips", offline)
+
+
 def _add_via_config(*, config_path, home_dir, record, bib_selector=None, dry_run=False):
     """Seed the bib through the live write path (`add_record_with_bib`).
 
