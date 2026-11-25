@@ -7,6 +7,8 @@ import io
 import json
 from typing import Any
 
+import pytest
+
 from pzi import server_browser
 
 
@@ -135,3 +137,48 @@ def test_download_survives_an_error_body_cut_short(monkeypatch) -> None:
 
     assert result is None
     assert errors and "502" in errors[0], errors
+
+
+def _serve_a_body_cut_short() -> str:
+    """A loopback server answering 200 with 5 of the 100 bytes it promised."""
+    import socket
+    import threading
+
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+
+    def answer() -> None:
+        conn, _ = listener.accept()
+        with conn, listener:
+            conn.recv(65536)
+            conn.sendall(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                b'Content-Length: 100\r\n\r\n{"pdf'
+            )
+            conn.shutdown(socket.SHUT_WR)
+
+    threading.Thread(target=answer, daemon=True).start()
+    return f"http://127.0.0.1:{listener.getsockname()[1]}"
+
+
+@pytest.mark.parametrize(
+    "call",
+    [server_browser.download_via_server_api, server_browser.discover_via_server_api],
+    ids=["download", "discover"],
+)
+def test_a_success_body_cut_short_is_recorded_not_raised(call: Any) -> None:
+    """A 200 whose body ends early raised `IncompleteRead` out of the caller.
+
+    It is an `http.client.HTTPException`, not an `OSError`, so neither handler
+    caught it, and the fallbacks after this stage in `pdf.py` never ran.
+    """
+    api_url = _serve_a_body_cut_short()
+    errors: list[str] = []
+
+    result = call(api_url, "https://journal.test/p.pdf", errors=errors, timeout=5)
+
+    assert result is None
+    assert len(errors) == 1, errors
+    assert errors[0].startswith(f"{api_url}: "), errors
+    assert "IncompleteRead" in errors[0] or "bytes read" in errors[0], errors

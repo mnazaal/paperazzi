@@ -81,6 +81,13 @@ def discover_via_server_api(
         if errors is not None:
             errors.append(f"{api_url}: bad response ({exc})")
         return None
+    except http.client.HTTPException as exc:
+        # A body cut short (`IncompleteRead`) or a malformed status line. Not
+        # an `OSError`, so without this it escaped, and the later fallbacks in
+        # `pdf.py` never ran.
+        if errors is not None:
+            errors.append(f"{api_url}: broken response ({exc!r})")
+        return None
     except (URLError, OSError) as exc:
         if errors is not None:
             reason = getattr(exc, "reason", None) or exc
@@ -130,6 +137,13 @@ def download_via_server_api(
     except (json.JSONDecodeError, ValueError, TypeError) as exc:
         if errors is not None:
             errors.append(f"{api_url}: bad response ({exc})")
+        return None
+    except http.client.HTTPException as exc:
+        # A body cut short (`IncompleteRead`) or a malformed status line. Not
+        # an `OSError`, so without this it escaped, and the later fallbacks in
+        # `pdf.py` never ran.
+        if errors is not None:
+            errors.append(f"{api_url}: broken response ({exc!r})")
         return None
     except (URLError, OSError) as exc:
         if errors is not None:
