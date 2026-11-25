@@ -213,7 +213,17 @@ def _rename_without_clobber(old: str, new: str) -> None:
         return
     _link_or_replace(Path(old), Path(new))
     if os.path.lexists(old):
-        os.unlink(old)
+        try:
+            os.unlink(old)
+        except OSError:
+            # The link to *new* succeeded and the old name could not be
+            # removed (a read-only folder): the caller's rollback undoes only
+            # moves that completed, so drop the second link here rather than
+            # leave the PDF under both names. *new* is removed only while it is
+            # still the same file as *old*, which keeps the PDF.
+            if os.path.exists(new) and os.path.samefile(new, old):
+                os.unlink(new)
+            raise
 
 
 def _destination_key(destination: str, folds: dict[str, bool]) -> str:

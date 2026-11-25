@@ -1397,3 +1397,38 @@ def test_rename_files_holds_every_move_when_a_sibling_cannot_be_read(
     assert (Path(papers) / "A textbraceleft Mangled Name.pdf").exists()
     assert result["changed"] == []
     assert any("sib.bib" in e for e in result["errors"]), result["errors"]
+
+
+def test_a_rename_whose_old_name_cannot_be_removed_leaves_no_second_link(
+    tmp_path, monkeypatch
+) -> None:
+    """Link succeeded, unlinking the old name failed: the PDF keeps one name.
+
+    The batch rollback undoes only completed moves, so a link left here stayed
+    in papers_dir as a second name for the PDF (review of 77f7995).
+    """
+    import os
+
+    from pzi import reindex_service
+
+    old = tmp_path / "sub" / "x.pdf"
+    old.parent.mkdir()
+    old.write_bytes(b"%PDF-1.4 only copy")
+    new = tmp_path / "a.pdf"
+    real_unlink = os.unlink
+
+    def refusing_unlink(path, *args, **kwargs):
+        if os.fspath(path) == str(old):
+            raise PermissionError(13, "Permission denied", str(old))
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(reindex_service.os, "unlink", refusing_unlink)
+    try:
+        reindex_service._rename_without_clobber(str(old), str(new))
+    except PermissionError:
+        pass
+    else:
+        raise AssertionError("the refused unlink must propagate")
+    assert old.read_bytes() == b"%PDF-1.4 only copy"
+    assert not new.exists()
+    assert os.stat(old).st_nlink == 1
