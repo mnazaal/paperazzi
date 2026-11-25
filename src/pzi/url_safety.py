@@ -21,7 +21,18 @@ LOCAL_HOSTNAMES = {"localhost", "localhost.localdomain"}
 
 ResolvedAddress: TypeAlias = tuple[Any, ...]
 
-UrlClassification: TypeAlias = Literal["public", "non-public", "dns-timeout", "invalid"]
+UrlClassification: TypeAlias = Literal[
+    "public", "non-public", "dns-timeout", "dns-failure", "invalid"
+]
+
+
+class DnsLookupFailedTemporarily(Exception):
+    """Raised by a resolver whose lookup answered ``EAI_AGAIN`` ("try again").
+
+    The resolver did not say the host has no public address; it said it could
+    not answer now. Read as an empty answer, a briefly failing resolver made a
+    redirect hop look like a blocked private URL, which is terminal.
+    """
 
 
 class DnsLookupTimedOut(Exception):
@@ -43,8 +54,9 @@ def classify_public_http_url(
     """Classify *value* as a destination this process may fetch.
 
     ``"public"`` is the only classification a caller should treat as safe to
-    fetch. ``"dns-timeout"`` is still fail-closed (never fetched) but is a
-    distinct outcome from ``"non-public"`` (resolved, but private/local, or a
+    fetch. ``"dns-timeout"`` and ``"dns-failure"`` (the resolver answered
+    ``EAI_AGAIN``) are still fail-closed (never fetched) but are distinct
+    outcomes from ``"non-public"`` (resolved, but private/local, or a
     malformed/non-http URL) so a caller can report *why* a URL was dropped
     instead of silently discarding it.  ``allow_host`` names a single
     explicitly-trusted host (e.g. a configured EZProxy host) whose
@@ -78,6 +90,8 @@ def classify_public_http_url(
             resolved = resolver(host, port, timeout=dns_timeout)
         except DnsLookupTimedOut:
             return "dns-timeout"
+        except DnsLookupFailedTemporarily:
+            return "dns-failure"
         if not resolved:
             return "non-public"
         return (
@@ -126,22 +140,34 @@ def resolve_host_with_timeout(
     Raises :class:`DnsLookupTimedOut` when the budget expires before
     resolution completes — a distinct outcome from a completed failure, so a
     caller can tell "no such host" apart from "the network was too slow to
-    say" (see :func:`classify_public_http_url`).
+    say" (see :func:`classify_public_http_url`). Raises
+    :class:`DnsLookupFailedTemporarily` when the resolver answers ``EAI_AGAIN``,
+    which says only that it could not answer now.
     """
-    result_queue: queue.Queue[list[ResolvedAddress] | None] = queue.Queue(maxsize=1)
+    result_queue: queue.Queue[list[ResolvedAddress] | None | DnsLookupFailedTemporarily] = (
+        queue.Queue(maxsize=1)
+    )
 
     def resolve() -> None:
         try:
             result_queue.put(list(socket.getaddrinfo(host, port)), block=False)
+        except socket.gaierror as exc:
+            if exc.errno == socket.EAI_AGAIN:
+                result_queue.put(DnsLookupFailedTemporarily(host), block=False)
+            else:
+                result_queue.put(None, block=False)
         except OSError:
             result_queue.put(None, block=False)
 
     thread = threading.Thread(target=resolve, daemon=True)
     thread.start()
     try:
-        return result_queue.get(timeout=max(0.001, timeout))
+        outcome = result_queue.get(timeout=max(0.001, timeout))
     except queue.Empty:
         raise DnsLookupTimedOut(host) from None
+    if isinstance(outcome, DnsLookupFailedTemporarily):
+        raise outcome
+    return outcome
 
 
 def resolved_address_public(item: ResolvedAddress) -> bool:

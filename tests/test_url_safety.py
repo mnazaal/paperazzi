@@ -228,3 +228,25 @@ def test_safe_public_http_url_is_classify_public_http_url_boolean_wrapper() -> N
         raise DnsLookupTimedOut("example.com")
 
     assert not safe_public_http_url("https://example.com/x", resolve_host=timed_out)
+
+
+def test_a_temporary_resolver_failure_is_not_a_non_public_address(monkeypatch) -> None:
+    """EAI_AGAIN answers "try again", not "this host is private".
+
+    It was read as a completed lookup with no address, so a redirect hop whose
+    resolver briefly failed was reported as a blocked non-public URL and never
+    retried. A permanent failure (no such host) is still non-public.
+    """
+    def _try_again(*_a, **_k):
+        raise socket.gaierror(socket.EAI_AGAIN, "Temporary failure in name resolution")
+
+    # The real resolver, not conftest's offline stub of it.
+    monkeypatch.setattr(url_safety, "resolve_host_with_timeout", resolve_host_with_timeout)
+    monkeypatch.setattr(url_safety.socket, "getaddrinfo", _try_again)
+    assert classify_public_http_url("https://flaky.example.org/x") == "dns-failure"
+
+    def _no_such_host(*_a, **_k):
+        raise socket.gaierror(socket.EAI_NONAME, "Name or service not known")
+
+    monkeypatch.setattr(url_safety.socket, "getaddrinfo", _no_such_host)
+    assert classify_public_http_url("https://missing.example.org/x") == "non-public"

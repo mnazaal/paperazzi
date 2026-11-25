@@ -228,9 +228,10 @@ def _validated_discovery(
     classification = classify_public_http_url(str(pdf_url))
     if classification == "public" and str(pdf_url) not in excluded_pdf_urls(context):
         return record
-    if classification == "dns-timeout" and isinstance(context, dict):
+    if classification in ("dns-timeout", "dns-failure") and isinstance(context, dict):
+        what = "timed out" if classification == "dns-timeout" else "failed (try again)"
         context.setdefault("discovery_diagnostics", []).append(
-            f"dropped {pdf_url}: DNS lookup timed out"
+            f"dropped {pdf_url}: DNS lookup {what}"
         )
     cleaned = dict(record)
     cleaned.pop("pdf_url", None)

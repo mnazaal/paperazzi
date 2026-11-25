@@ -11,6 +11,7 @@ import pytest
 
 from pzi import fetch_helpers, safe_http
 from pzi.safe_http import SsrfBlocked, resolve_pinned_ip
+from pzi.url_safety import resolve_host_with_timeout as _real_resolve_host
 
 
 def _addrinfo(*ips: str, port: int = 443):
@@ -237,3 +238,23 @@ def test_connect_time_resolution_still_propagates_a_failed_lookup() -> None:
     with pytest.raises(OSError, match="not known") as info:
         safe_http.resolve_pinned_ips("example.com", 443, getaddrinfo=failing)
     assert not isinstance(info.value, SsrfBlocked)
+
+
+def test_a_redirect_whose_resolver_says_try_again_is_retryable(monkeypatch) -> None:
+    """A fast EAI_AGAIN on the redirect pre-check is a DNS failure, not SSRF."""
+    import socket
+
+    from pzi import url_safety
+
+    def _try_again(*_a, **_k):
+        raise socket.gaierror(socket.EAI_AGAIN, "Temporary failure in name resolution")
+
+    # The real resolver, not conftest's offline stub of it.
+    monkeypatch.setattr(url_safety, "resolve_host_with_timeout", _real_resolve_host)
+    monkeypatch.setattr(url_safety.socket, "getaddrinfo", _try_again)
+    handler = safe_http._ValidatingRedirectHandler()
+    with pytest.raises(OSError, match="DNS lookup failed for flaky.example.org") as info:
+        _redirect(handler, "https://flaky.example.org/next")
+    assert not isinstance(info.value, SsrfBlocked)
+    assert isinstance(info.value, socket.gaierror)
+    assert info.value.errno == socket.EAI_AGAIN
