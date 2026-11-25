@@ -108,7 +108,8 @@ def _refuse_rotation_behind_token_source(
     keys = " / ".join(f"`{key}`" for key, _value in existing.token_settings)
     print(
         f"error: {dest} sets {keys}, which the server reads ahead of the data "
-        "home's api_token file, so --rotate-token would change nothing it uses. "
+        "home's api_token file, so --rotate-token would not change the token it "
+        "uses while that key yields one. "
         "Nothing was rotated or written. To rotate, change the token at that "
         "source, or remove the key from the config to fall back to the data "
         "home's file and rerun `pzi init --rotate-token`.",

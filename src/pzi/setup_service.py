@@ -14,10 +14,11 @@ from pzi.errors import REASON_UNAVAILABLE, PziError
 def provision_api_token(data_home: Path, *, rotate: bool = False) -> tuple[Path, bool]:
     """Ensure an API auth token exists under *data_home*; return ``(path, created)``.
 
-    Keeping the token in its own file (not ``config.toml``) is what lets the
-    config be committed to dotfiles safely: pzi auto-reads this file at runtime
-    from the resolved data home, so the config references neither the secret nor
-    a path. Users who prefer a manager can set ``api_auth_token_cmd`` instead.
+    Keeping the token in its own file (not ``config.toml``) is what lets a
+    config without a plaintext ``api_auth_token`` be committed to dotfiles
+    safely: pzi auto-reads this file at runtime from the resolved data home, so
+    such a config references neither the secret nor a path. Users who prefer a
+    manager can set ``api_auth_token_cmd`` instead.
 
     **An existing token is reused unless *rotate* is set.** This function used
     to mint a fresh token on every call, and ``pzi init`` calls it
@@ -87,8 +88,9 @@ def render_config(
 
     No API auth token is written here. ``pzi init`` writes the token to a
     ``0600`` file under the data home, and pzi auto-reads it at runtime from the
-    running user's resolved data home — so this file (routinely committed to
-    dotfiles) carries neither the secret nor an absolute home path. Users who
+    running user's resolved data home — so this rendered text carries neither
+    the secret nor an absolute home path. ``init --force`` prepends a carried
+    plaintext ``api_auth_token``, and the file then holds the secret. Users who
     prefer a password manager can add ``api_auth_token_cmd = "pass show ..."``.
 
     When ``browser`` is ``"firefox"``, auto-detects the Firefox profile

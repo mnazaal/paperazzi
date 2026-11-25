@@ -175,7 +175,7 @@ python tools/build_extension.py
 ### 6. Expected failures
 
 - `PDF not saved: publisher blocked direct download`: metadata is saved; try opening the actual PDF page and capture again.
-- `invalid API token`: copy the token from `<pzi-data-home>/api_token` (written by `pzi init`, mode 0600) into the popup. It is not in `config.toml` — that is what makes the config safe to commit.
+- `invalid API token`: copy the token from `<pzi-data-home>/api_token` (written by `pzi init`, mode 0600) into the popup. By default it is not in `config.toml`, which is what makes that config safe to commit; a config that sets a plaintext `api_auth_token` holds the token and must not be committed.
 - Empty bib dropdown: ensure `pzi server --stop-after 30` is running and `/bibs` is reachable.
 
 ## Zotero-like parity checklist
