@@ -1539,3 +1539,42 @@ def test_clean_fix_skip_names_an_unreadable_target_and_caps_long_note_lists(
     messages = [i["message"] for i in unreadable["issues"] if i["type"] == "quarantine_skipped"]
     assert any("cannot read a.bib" in m for m in messages), messages
     assert (pa / "orphan.pdf").exists()
+
+
+def test_a_batch_delete_waits_on_a_locked_other_library_once(
+    _other_library_state, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each key waited a whole lock timeout (300 s by default) on the same library.
+
+    The first key's disposal already learned that the other library cannot be
+    read; the rest of the batch keeps its PDFs for that reason without asking
+    again.
+    """
+    import json
+    from io import StringIO
+
+    from pzi import clean_service
+    from pzi.cli import run_cli
+
+    a_bib, b_bib, pa, cfg = _other_library_state("locked")
+    attempts: list[str] = []
+    real_read = clean_service.read_bib_file_with_failures
+
+    def counting_read(path, *args, **kwargs):
+        if Path(path) == b_bib:
+            attempts.append(str(path))
+        return real_read(path, *args, **kwargs)
+
+    monkeypatch.setattr(clean_service, "read_bib_file_with_failures", counting_read)
+    out, err = StringIO(), StringIO()
+    code = run_cli(
+        ["delete", "x", "y", "--target", "a", "--force", "--json", "--config", str(cfg)],
+        home_dir=str(tmp_path / "home"), stdout=out, stderr=err,
+    )
+
+    assert code == 0, (out.getvalue(), err.getvalue())
+    assert len(attempts) == 1, attempts
+    assert (pa / "x.pdf").exists() and (pa / "y.pdf").exists()
+    items = json.loads(out.getvalue())["items"]
+    reasons = [item["pdf_action"]["reason"] for item in items]
+    assert all(r.startswith("could not verify references") for r in reasons), reasons

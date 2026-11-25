@@ -73,6 +73,11 @@ def run_delete_command(args, *, home_dir, config_path, stdout, stderr, bib_selec
     # removal; a key that was not found writes none and leaves it to the next.
     items: list[dict] = []
     want_backup = not getattr(args, "no_backup", False)
+    #: Why an earlier key's PDF was kept unverified: a library that could not be
+    #: read or locked. Asking again costs every later key another lock timeout
+    #: (300 s by default) for the same answer, so the rest of the batch keeps
+    #: its PDFs for the same reason.
+    unverifiable: str | None = None
     for citekey in citekeys:
         result = dict(delete_entry(
             bib_path=target["path"],
@@ -86,14 +91,26 @@ def run_delete_command(args, *, home_dir, config_path, stdout, stderr, bib_selec
             # The bib write is the commit point; the PDF moves after it. A move
             # that fails therefore degrades to exactly the old behaviour — an
             # orphan the sweep still catches — rather than half-deleting.
-            pdf_action = plan_pdf_disposal(
-                result=result,
-                config=config,
-                target=target,
-                keep_pdf=getattr(args, "keep_pdf", False),
-                dry_run=args.dry_run,
-                removed_citekeys=citekeys,
-            )
+            pdf_path = result.get("pdf_path") or result.get("orphaned_pdf")
+            if (
+                unverifiable is not None
+                and not getattr(args, "keep_pdf", False)
+                and isinstance(pdf_path, str)
+                and pdf_path.strip()
+            ):
+                pdf_action = {"status": "kept", "source": pdf_path, "reason": unverifiable}
+            else:
+                pdf_action = plan_pdf_disposal(
+                    result=result,
+                    config=config,
+                    target=target,
+                    keep_pdf=getattr(args, "keep_pdf", False),
+                    dry_run=args.dry_run,
+                    removed_citekeys=citekeys,
+                )
+                reason = (pdf_action or {}).get("reason")
+                if isinstance(reason, str) and reason.startswith("could not verify references"):
+                    unverifiable = reason
             if pdf_action is not None:
                 result["pdf_action"] = pdf_action
         items.append(result)
