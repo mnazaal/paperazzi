@@ -169,39 +169,48 @@ def test_a_timestamp_in_the_future_counts_as_fresh():
     )
 
 
+def _save_from_another_process(path, ready) -> None:
+    """Sweep B, in its own process: hold one answer and save it."""
+    b = ledger.PendingAnswers(path, "ml", now=_NOW, horizon_days=30)
+    b.add("b-key", "id-b")
+    ready.set()
+    b.save()
+
+
 def test_a_save_landing_between_another_saves_read_and_write_is_kept(
     tmp_path, monkeypatch
 ):
     """Two sweeps sharing one ledger: A reads, B saves, A writes.
 
     `PendingAnswers.save` read, merged and wrote with no lock, so A's write
-    replaced the file B had just written and B's answers were lost. B runs on
-    a thread here, so a file lock (which conflicts across open files) makes
-    it wait for A, as another process would.
+    replaced the file B had just written and B's answers were lost. B is a
+    separate process, as a second sweep is: a lock that only excludes threads
+    of one process lets B finish inside A's window and fails this test.
     """
-    import threading
+    import multiprocessing
 
+    spawn = multiprocessing.get_context("spawn")
     path = tmp_path / "check-verified.json"
     a = ledger.PendingAnswers(path, "ml", now=_NOW, horizon_days=30)
-    b = ledger.PendingAnswers(path, "ml", now=_NOW, horizon_days=30)
     a.add("a-key", "id-a")
-    b.add("b-key", "id-b")
+    ready = spawn.Event()
+    other = spawn.Process(target=_save_from_another_process, args=(str(path), ready))
     real_load = ledger.load
-    other = threading.Thread(target=b.save)
-    started = threading.Event()
+    started: list[bool] = []
 
-    def load_while_another_writer_saves(p):
+    def load_while_another_process_saves(p):
         state = real_load(p)
-        if not started.is_set():
-            started.set()
+        if not started:
+            started.append(True)
             other.start()
+            assert ready.wait(timeout=30), "sweep B never started"
             # Unlocked, B finishes here, before A writes. Locked, B waits for A.
-            other.join(timeout=1.0)
+            other.join(timeout=2.0)
         return state
 
-    monkeypatch.setattr(ledger, "load", load_while_another_writer_saves)
+    monkeypatch.setattr(ledger, "load", load_while_another_process_saves)
     a.save()
     other.join(timeout=30)
 
-    assert not other.is_alive()
+    assert other.exitcode == 0
     assert sorted(real_load(path)["bibs"]["ml"]) == ["a-key", "b-key"]
