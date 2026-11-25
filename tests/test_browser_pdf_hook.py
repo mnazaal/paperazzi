@@ -1038,3 +1038,42 @@ def test_download_pdf_names_a_guard_refusal_in_errors() -> None:
 
     assert hook.download_pdf(url, _session=s, errors=errors) is None
     assert errors and "non-public URL" in errors[0], errors
+
+
+def test_a_recorded_landing_refusal_leaves_out_the_landed_urls_query() -> None:
+    """The landed URL is the redirect's choice, and its query can be an SSO ticket.
+
+    The guard's reason named it in full, and the reason is recorded, returned
+    to the CLI in the server's error body and printed.
+    """
+    from pzi.browser_session import BrowserSession
+
+    landed = "http://10.1.2.3/sso?ticket=ST-SECRET123#frag"
+
+    class FakeRequest:
+        def get(self, *_args, **_kwargs):
+            raise OSError("no direct fetch")
+
+    class FakePage:
+        url = "about:blank"
+        request = FakeRequest()
+
+        def goto(self, url, **_kwargs):
+            self.url = landed
+            return None
+
+    session = BrowserSession(
+        playwright="pw", browser_ref="br", page=FakePage(),
+        url_allowed=lambda url: "10.1.2.3" not in url,
+    )
+    errors: list[str] = []
+    refusals: list[str] = []
+
+    assert hook.download_pdf(
+        "https://journal.test/p.pdf", _session=session, errors=errors, refusals=refusals
+    ) is None
+
+    assert len(refusals) == 1, errors
+    assert "http://10.1.2.3/sso" in refusals[0], refusals
+    assert "ST-SECRET123" not in " ".join(errors), errors
+    assert "frag" not in refusals[0], refusals

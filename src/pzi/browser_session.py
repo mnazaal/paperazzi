@@ -26,7 +26,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from pzi.pinning_proxy import DEFAULT_MAX_RESPONSE_BYTES, PinningProxy
 
@@ -531,6 +531,20 @@ def _is_close_delimited(headers: dict[str, str]) -> bool:
     return codings[-1].strip() != "chunked"
 
 
+def _without_query(url: str) -> str:
+    """*url* without its query and fragment, for a refusal reason.
+
+    A landed URL is chosen by the redirect, not the user, and an SSO hop puts
+    its ticket in the query. The reason is recorded, sent back in the server's
+    error body and printed, so it names only scheme, host and path.
+    """
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url.split("?", 1)[0].split("#", 1)[0]
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+
+
 @dataclass
 class BrowserSession:
     """Unified browser session wrapping Playwright lifecycle.
@@ -601,7 +615,9 @@ class BrowserSession:
         with contextlib.suppress(Exception):
             landed = self.page.url or ""
         if landed and not self.url_allowed(landed):
-            raise SsrfBlocked(f"browser landed on a non-public URL: {landed}")
+            raise SsrfBlocked(
+                f"browser landed on a non-public URL: {_without_query(landed)}"
+            )
 
     def leave_page(self) -> None:
         """Close every other page, then leave the session's page on
