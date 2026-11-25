@@ -8,6 +8,7 @@ import pytest
 
 from pzi import http_binary_routes, http_get_routes, http_post_routes, http_status
 from pzi.capture_models import AuthHints, CaptureInput, CaptureOptions, PageArtifact, PdfCandidate
+from pzi.config import _normalize_app_config
 from pzi.http_get_routes import process_get_request
 from pzi.http_security import (
     AUTH_HEADER,
@@ -19,6 +20,13 @@ from pzi.http_security import (
 )
 from pzi.pdf_attach_session import build_attach_session
 from pzi.pdf_attach_session_store import AttachSessionStore
+
+#: A loaded config with one library, as the route's `load_config_file` yields.
+_MAIN_LIBRARY_CONFIG = _normalize_app_config(
+    {},
+    [{"name": "main", "path": "/tmp/main.bib", "papers_dir": "/tmp/papers", "default": True}],
+    home_dir="/tmp",
+)
 
 # === safe_header_filename ===
 
@@ -942,10 +950,7 @@ def test_post_capture_emits_pdf_request_and_stores_attach_session(monkeypatch) -
     monkeypatch.setattr(
         http_post_routes,
         "load_config_file",
-        lambda config_path, home_dir: {
-            "config": {"bibs": [{"name": "main", "path": "/tmp/main.bib",
-                                 "papers_dir": "/tmp/papers", "default": True}]}
-        },
+        lambda config_path, home_dir: {"config": _MAIN_LIBRARY_CONFIG},
     )
     monkeypatch.setattr(
         http_post_routes,
@@ -1005,7 +1010,11 @@ def test_post_capture_uses_configured_api_url_for_pdf_attach_request(monkeypatch
     monkeypatch.setattr(
         http_post_routes,
         "load_config_file",
-        lambda config_path, home_dir: {"config": {"api_url": "http://127.0.0.1:9876"}},
+        lambda config_path, home_dir: {
+            "config": _normalize_app_config(
+                {"api_url": "http://127.0.0.1:9876"}, [], home_dir="/tmp"
+            )
+        },
     )
     monkeypatch.setattr(
         http_post_routes,
@@ -1207,10 +1216,7 @@ def test_http_refuses_a_bib_path_that_is_not_a_configured_library(monkeypatch) -
     monkeypatch.setattr(
         http_post_routes,
         "load_config_file",
-        lambda config_path, home_dir: {
-            "config": {"bibs": [{"name": "main", "path": "/tmp/main.bib",
-                                 "papers_dir": "/tmp/papers", "default": True}]}
-        },
+        lambda config_path, home_dir: {"config": _MAIN_LIBRARY_CONFIG},
     )
 
     status, body = http_post_routes.process_post_request(
@@ -1238,10 +1244,7 @@ def test_http_still_accepts_a_configured_library_by_name_or_path(monkeypatch) ->
     monkeypatch.setattr(
         http_post_routes,
         "load_config_file",
-        lambda config_path, home_dir: {
-            "config": {"bibs": [{"name": "main", "path": "/tmp/main.bib",
-                                 "papers_dir": "/tmp/papers", "default": True}]}
-        },
+        lambda config_path, home_dir: {"config": _MAIN_LIBRARY_CONFIG},
     )
 
     class _ReachedTheService(Exception):

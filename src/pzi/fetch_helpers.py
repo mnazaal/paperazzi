@@ -7,15 +7,18 @@ import json
 import time
 import urllib.error
 import urllib.parse
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 from urllib.request import Request
 
 from pzi import rate_limit
 from pzi.metadata_cache import MetadataCache
 from pzi.rate_limit import RateLimiter
 from pzi.safe_http import SsrfBlocked, safe_urlopen
+
+if TYPE_CHECKING:
+    from pzi.config import AppConfig
 
 _T = TypeVar("_T")
 
@@ -277,7 +280,7 @@ class ProviderBreaker:
 
 
 def build_metadata_fetch_text(
-    config: Mapping[str, Any],
+    config: AppConfig,
     *,
     api_key: str | None = None,
     inner: Callable[..., str] | None = None,
@@ -295,9 +298,9 @@ def build_metadata_fetch_text(
     ``inner`` / ``cache`` / ``rate_limiter`` are injectable for tests.
     """
     if cache is None:
-        ttl = int(config.get("metadata_cache_ttl", 0) or 0)
+        ttl = config["metadata_cache_ttl"]
         if ttl > 0:
-            cache_dir = Path(str(config.get("pzi_data_home", "."))) / "metadata-cache"
+            cache_dir = Path(config["pzi_data_home"]) / "metadata-cache"
             cache = MetadataCache(cache_dir, ttl)
     # One limiter per process unless a test injects one: `add --from-file` and
     # `inbox` build a fetcher per item, and a limiter per fetcher forgot the

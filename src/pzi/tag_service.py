@@ -15,7 +15,7 @@ from pzi.bib_repository import (
     update_bib_entry,
 )
 from pzi.bibtex import NormalizedRecord, apply_record_to_entry
-from pzi.config import DEFAULT_PDF_FILE_PATH_STYLE, BibResolutionFailure, load_bib_target
+from pzi.config import BibResolutionFailure, load_bib_target
 from pzi.errors import REASON_CONFIG, REASON_NOT_FOUND, REASON_USAGE
 
 # ---------------------------------------------------------------------------
@@ -309,7 +309,7 @@ def _mutate_entry_tags(
     updated_record["tags"] = merged_sorted
 
     if not dry_run:
-        file_path_style = config.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE)
+        file_path_style = config["pdf_file_path_style"]
 
         def _updater(entry, record):
             # Re-derive from the record the repository hands back *under the

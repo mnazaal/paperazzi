@@ -446,7 +446,7 @@ def retry_pdf(
                 pdf_url=pdf_url,
             ),
             expected_paper=snapshot,
-            file_path_style=config.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE),
+            file_path_style=config["pdf_file_path_style"],
         ),
         new_pdf=local_pdf_path,
         existing_pdf_paths=existing_pdf_paths,
@@ -618,7 +618,7 @@ def retry_failed_pdfs(
                         pdf_url=pdf_url,
                     ),
                     expected_paper=record_dict,
-                    file_path_style=config.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE),
+                    file_path_style=config["pdf_file_path_style"],
                 ),
                 new_pdf=local_pdf_path,
                 existing_pdf_paths=existing_pdf_paths,
@@ -755,7 +755,7 @@ def attach_pdf(
                 pdf_url=source if source.startswith(("http://", "https://")) else None,
             ),
             expected_paper=_record_at(read_result, index),
-            file_path_style=config.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE),
+            file_path_style=config["pdf_file_path_style"],
         ),
         new_pdf=local_pdf_path,
         existing_pdf_paths=existing_pdf_paths,
@@ -855,7 +855,7 @@ def attach_pdf_bytes(
         data=data,
         source_url=source_url,
         filename_format=config.get("pdf_filename_format"),
-        file_path_style=config.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE),
+        file_path_style=config["pdf_file_path_style"],
     )
 
 
@@ -906,7 +906,7 @@ def attach_pdf_raw_bytes(
         data=pdf_bytes,
         source_url=source_url,
         filename_format=config.get("pdf_filename_format"),
-        file_path_style=config.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE),
+        file_path_style=config["pdf_file_path_style"],
     )
 
 

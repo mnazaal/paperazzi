@@ -1,7 +1,11 @@
 import pytest
 
 from pzi import fetch_helpers
+from pzi.config import _normalize_app_config
 from pzi.fetch_helpers import read_limited
+
+#: What the loader yields for an empty config file: no metadata cache.
+DEFAULT_CONFIG = _normalize_app_config({}, [], home_dir="/h")
 
 
 class _FakeResponse:
@@ -96,7 +100,9 @@ def test_build_metadata_fetch_text_rate_limits_and_passes_kwargs() -> None:
         return "BODY"
 
     limiter = _RecordingLimiter()
-    fetch = fetch_helpers.build_metadata_fetch_text({}, inner=inner, rate_limiter=limiter)
+    fetch = fetch_helpers.build_metadata_fetch_text(
+        DEFAULT_CONFIG, inner=inner, rate_limiter=limiter
+    )
 
     assert fetch("http://x/api", user_agent="ua") == "BODY"
     assert seen == [("http://x/api", {"user_agent": "ua"})]
@@ -115,7 +121,7 @@ def test_build_metadata_fetch_text_cache_hit_short_circuits(tmp_path) -> None:
     limiter = _RecordingLimiter()
     cache = MetadataCache(tmp_path, 60)
     fetch = fetch_helpers.build_metadata_fetch_text(
-        {}, inner=inner, cache=cache, rate_limiter=limiter
+        DEFAULT_CONFIG, inner=inner, cache=cache, rate_limiter=limiter
     )
 
     assert fetch("http://x/api") == "BODY"  # miss: inner + cache.set

@@ -211,9 +211,9 @@ def capture_options_from_http_body(
     config: AppConfig | None,
 ) -> CaptureOptions:
     """Build pure capture options from HTTP body and normalized config."""
-    cfg = config or {}
-    page_metadata_cmd = cfg.get("page_metadata_cmd")
-    timeout = cfg.get("page_metadata_timeout_seconds", 5)
+    page_metadata_cmd = config["page_metadata_cmd"] if config is not None else None
+    # 5 only when no config loaded: the loader guarantees an int >= 1.
+    timeout = config["page_metadata_timeout_seconds"] if config is not None else 5
     return CaptureOptions(
         dry_run=body_flag(body, "dry_run", default=False),
         force_new=body_flag(body, "force_new", default=False),
@@ -222,7 +222,7 @@ def capture_options_from_http_body(
             if isinstance(page_metadata_cmd, str) and page_metadata_cmd.strip()
             else None
         ),
-        page_metadata_timeout_seconds=int(timeout) if isinstance(timeout, int) else 5,
+        page_metadata_timeout_seconds=timeout,
     )
 
 

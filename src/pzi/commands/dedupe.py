@@ -66,7 +66,7 @@ def run_merge_command(args, *, home_dir, config_path, stdout, stderr, bib_select
         citekey_a=args.citekey_a,
         citekey_b=args.citekey_b,
         dry_run=getattr(args, "dry_run", False),
-        file_path_style=config.get("pdf_file_path_style", "absolute"),
+        file_path_style=config["pdf_file_path_style"],
         backup=not getattr(args, "no_backup", False),
     )
     # Same disposal step as `delete`: the bib write is the commit point and the

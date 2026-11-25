@@ -18,7 +18,7 @@ from pzi.bibtex import (
     escape_file_component,
     split_file_field,
 )
-from pzi.config import DEFAULT_PDF_FILE_PATH_STYLE, BibResolutionFailure, load_bib_target
+from pzi.config import BibResolutionFailure, load_bib_target
 from pzi.errors import REASON_CONFIG, REASON_UNAVAILABLE, REASON_USAGE, PziError
 from pzi.fileio import read_text_utf8
 
@@ -208,10 +208,10 @@ def import_from_bibtex(
             source_entries=record_source_entries,
             dry_run=dry_run,
             force_new=force_new,
-            browser_hook=config.get("browser_hook", True),
+            browser_hook=config["browser_hook"],
             citekey_format=config.get("citekey_format"),
             pdf_filename_format=config.get("pdf_filename_format"),
-            file_path_style=config.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE),
+            file_path_style=config["pdf_file_path_style"],
         )
     except Exception as exc:  # reported, not swallowed
         # The batch write is transactional: if it raised, nothing was written.

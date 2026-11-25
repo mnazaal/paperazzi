@@ -16,13 +16,17 @@ from __future__ import annotations
 
 import re as _re
 from collections.abc import Callable, Mapping
-from typing import Any, Literal, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Literal, TypedDict, cast
 from urllib.parse import urlsplit, urlunsplit
 
 from pzi.bibtex import NormalizedRecord
 from pzi.identifiers import detect_preprint_source
 from pzi.protocols import accepts_keyword
 from pzi.url_safety import classify_public_http_url, origin_of, safe_public_http_url
+
+if TYPE_CHECKING:
+    from pzi.capture_context import DiscoveryEmails
+    from pzi.config import AppConfig
 
 
 class PdfDiscoveryContext(TypedDict, total=False):
@@ -830,7 +834,7 @@ DEFAULT_DISCOVERY_STEPS: list[PdfDiscoveryStep] = [
 def discover_pdf_url_for_record(
     record: NormalizedRecord,
     *,
-    config: Mapping[str, Any] | None = None,
+    config: AppConfig,
     deep: bool = False,
 ) -> NormalizedRecord:
     """Fill a record's ``pdf_url`` from the identifiers it already carries.
@@ -853,7 +857,7 @@ def discover_pdf_url_for_record(
         for step in DEFAULT_DISCOVERY_STEPS
         if phase_of(step) == "pure" or (deep and phase_of(step) == "http")
     ]
-    context = _stored_record_context(record, config or {}, deep=deep)
+    context = _stored_record_context(record, config, deep=deep)
     found = apply_pdf_discovery(record, steps, context)
     # A raising step is swallowed as "no result"; without this, a permanently
     # broken provider reads like a paper with no open-access copy. Same
@@ -866,7 +870,7 @@ def discover_pdf_url_for_record(
 
 
 def _stored_record_context(
-    record: NormalizedRecord, config: Mapping[str, Any], *, deep: bool
+    record: NormalizedRecord, config: AppConfig, *, deep: bool
 ) -> PdfDiscoveryContext:
     """The runtime context the discovery steps read, built for a stored entry.
 
@@ -884,7 +888,7 @@ def _stored_record_context(
     raw_value = str(
         record.get("source_url") or record.get("canonical_url") or record.get("doi") or ""
     )
-    server_url = str(config.get("translation_server_url") or "")
+    server_url = config["translation_server_url"]
     if not deep:
         return build_discovery_context(raw_value=raw_value, server_url=server_url)
     emails = stored_discovery_emails(config)
@@ -910,17 +914,17 @@ def _stored_record_context(
 _EMAILS_MEMO: list[Any] = []
 
 
-def stored_discovery_emails(config: Mapping[str, Any]) -> Any:
+def stored_discovery_emails(config: AppConfig) -> DiscoveryEmails:
     from pzi.capture_context import resolve_discovery_emails
 
     if _EMAILS_MEMO and _EMAILS_MEMO[0] is config:
         return _EMAILS_MEMO[1]
-    emails = resolve_discovery_emails(cast(Any, config))
+    emails = resolve_discovery_emails(config)
     _EMAILS_MEMO[:] = [config, emails]
     return emails
 
 
-def stored_credential_warnings(config: Mapping[str, Any]) -> list[str]:
+def stored_credential_warnings(config: AppConfig) -> list[str]:
     """One warning per credential command that failed for *config*, by key only.
 
     Reads the memo without resolving anything, so a run that never needed a

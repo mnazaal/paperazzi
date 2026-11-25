@@ -971,7 +971,7 @@ def other_library_paths(config: AppConfig, target: BibConfig) -> list[str]:
     the PDF of, an entry in another library the user never named.
     """
     return [
-        bib["path"] for bib in config.get("bibs", []) if bib["path"] != target["path"]
+        bib["path"] for bib in config["bibs"] if bib["path"] != target["path"]
     ]
 
 

@@ -70,7 +70,7 @@ def run_server_command(args, *, home_dir, config_path, stdout, stderr) -> int:
             security=plan["security"],
             idle_minutes=stop_after,
             browser_profile_path=config.get("browser_profile_path") if config else None,
-            browser_engine=config.get("browser_engine", "chromium") if config else "chromium",
+            browser_engine=config["browser_engine"] if config else "chromium",
             # stderr, not stdout: stdout is where a `--json`-shaped tool would
             # look, and the server's own progress lines already go to stderr.
             log_requests_to=stderr if getattr(args, "log_requests", False) else None,

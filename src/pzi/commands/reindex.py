@@ -15,7 +15,6 @@ from pzi.commands.common import (
     print_read_warnings,
     resolve_target,
 )
-from pzi.config import DEFAULT_PDF_FILE_PATH_STYLE
 from pzi.reindex_service import (
     convert_file_paths,
     reindex_library,
@@ -62,7 +61,7 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
         # path (add, import, tag, promote, this command's own citekey pass)
         # already applies the style going forward — this exists only to
         # catch up entries written before the style changed or was set.
-        style = config.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE)
+        style = config["pdf_file_path_style"]
         result = convert_file_paths(
             bib_path=target["path"],
             file_path_style=style,
@@ -109,7 +108,7 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
             pdf_filename_format=config.get("pdf_filename_format"),
             dry_run=getattr(args, "dry_run", False),
             include_all=getattr(args, "all", False),
-            file_path_style=config.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE),
+            file_path_style=config["pdf_file_path_style"],
         )
         if as_json:
             cli_json.emit_result(
@@ -216,7 +215,7 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
         citekey_format=config.get("citekey_format"),
         pdf_filename_format=config.get("pdf_filename_format"),
         dry_run=not apply,
-        file_path_style=config.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE),
+        file_path_style=config["pdf_file_path_style"],
         sibling_bib_paths=siblings_sharing_papers_dir(config, target),
     )
 

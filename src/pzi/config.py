@@ -27,9 +27,9 @@ DEFAULT_PROMOTE_RECHECK_AFTER_DAYS = 30
 
 # The `file =` path style a write with no configured preference falls back to.
 # Named once, like the threshold above, because it is read from three places —
-# the loader, the validator, and every write-path caller's own `config.get(...,
-# "absolute")` fallback — and a copy that drifts silently changes what a bare
-# config produces. `"home"` (`~/...`) is the default because the measured
+# the loader, the validator, and the write path's `file_path_style` parameter
+# defaults — and a copy that drifts silently changes what a bare config
+# produces. `"home"` (`~/...`) is the default because the measured
 # alternative, `"relative"`, is a no-op whenever the bib and its PDFs sit in
 # different directory trees, which the read side already tolerates (`~` is
 # expanded by `pdf_planning.pdf_file_present` and left alone by

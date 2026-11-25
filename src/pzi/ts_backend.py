@@ -1058,7 +1058,7 @@ def backend_session(
             yield {"url": ts_url, "ready": False, "owned": False, "proc": None}
             return
 
-        raw_home = config.get("pzi_data_home", home_dir)
+        raw_home = config["pzi_data_home"]
         data_home = Path(str(raw_home)).expanduser()
 
         node_path = config.get("node_path")

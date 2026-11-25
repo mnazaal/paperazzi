@@ -200,7 +200,7 @@ def add_input_to_bib(
     api_auth_token = context.api_auth_token
     ezproxy_host = context.ezproxy_host
     desktop_fallback_hosts = context.desktop_fallback_hosts
-    metadata_confidence_min_score = int(config.get("metadata_confidence_min_score", 0))
+    metadata_confidence_min_score = config["metadata_confidence_min_score"]
     # Compose the shared metadata fetcher, as `check` and `promote` already do.
     # Without it the add path called the providers with their module-level
     # default fetcher, so `metadata_cache_ttl` did nothing for adds, keyless
@@ -279,12 +279,12 @@ def add_input_to_bib(
             flaresolverr_url=config.get("flaresolverr_url"),
             browser_pdf_cmd=effective_browser_pdf_cmd,
             browser=effective_browser,
-            browser_hook=config.get("browser_hook", True),
+            browser_hook=config["browser_hook"],
             settings=context.settings,
             citekey_format=citekey_format,
             pdf_filename_format=pdf_filename_format,
             force_new=force_new,
-            file_path_style=config.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE),
+            file_path_style=config["pdf_file_path_style"],
             api_url=api_url,
             api_auth_token=api_auth_token,
             desktop_fallback_hosts=desktop_fallback_hosts,
@@ -344,12 +344,12 @@ def add_input_to_bib(
             flaresolverr_url=config.get("flaresolverr_url"),
             browser_pdf_cmd=effective_browser_pdf_cmd,
             browser=effective_browser,
-            browser_hook=config.get("browser_hook", True),
+            browser_hook=config["browser_hook"],
             citekey_format=citekey_format,
             pdf_filename_format=pdf_filename_format,
             strict_metadata=effective_strict,
             force_new=force_new,
-            file_path_style=config.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE),
+            file_path_style=config["pdf_file_path_style"],
             batch_preview=batch_preview,
         ))
 
@@ -480,7 +480,7 @@ def add_input_to_bib(
             api_url=api_url,
             api_auth_token=api_auth_token,
             desktop_fallback_hosts=desktop_fallback_hosts,
-            pdf_discovery_parallel=config.get("pdf_discovery_parallel", False),
+            pdf_discovery_parallel=config["pdf_discovery_parallel"],
             metadata_fetch_text=metadata_fetch_text,
         )
         provider_errors.extend(_fetched_provider_errors)

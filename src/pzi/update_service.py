@@ -133,8 +133,8 @@ def update_bib(
         }
     config, bib = resolved
     search_fn = fetch_search or fetch_search_translations
-    metadata_confidence_min_score = int(config.get("metadata_confidence_min_score", 0))
-    file_path_style = str(config.get("pdf_file_path_style", DEFAULT_PDF_FILE_PATH_STYLE))
+    metadata_confidence_min_score = config["metadata_confidence_min_score"]
+    file_path_style = config["pdf_file_path_style"]
     read_result = read_bib_file(bib["path"])
     records = read_result["records"]
     entries = read_result["entries"]

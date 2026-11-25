@@ -36,7 +36,7 @@ def _read_default_token_file(data_home: str | None) -> str | None:
 
 
 def resolve_api_auth_token(
-    config: Mapping[str, Any],
+    config: AppConfig,
     *,
     run_command: Callable[[str], str] | None = None,
     resolve_secret: Callable[[str | None, str | None], str | None] | None = None,
