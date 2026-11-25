@@ -1069,3 +1069,47 @@ def test_local_pdf_strict_page_html_restating_the_pdf_does_not_exempt(
     assert result["status"] == "error"
     assert "no metadata provider found this PDF" in result["message"]
     assert writes == []
+
+
+def test_local_pdf_names_the_provider_its_metadata_came_from(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """`--verbose` prints "metadata from X"; the local-PDF branch never set it.
+
+    The DOI/URL branch lifts `metadata_provider` into `metadata_diagnostics`;
+    this branch popped it and dropped it.
+    """
+    import pzi.capture_local_pdf as clp
+
+    source_pdf = tmp_path / "paper.pdf"
+    source_pdf.write_bytes(b"%PDF-1.4\n")
+    papers_dir = tmp_path / "papers"
+    papers_dir.mkdir()
+    bib_path = tmp_path / "library.bib"
+    bib_path.write_text("")
+    monkeypatch.setattr(
+        clp, "extract_pdf_metadata",
+        lambda _p: {"title": "Graph Parsers", "authors": ["Smith, Jane"]},
+    )
+
+    def search(_title, *, server_url):
+        return [{
+            "item_type": "journalArticle",
+            "record": {"title": "Graph Parsers", "authors": ["Smith, Jane"],
+                       "year": 2020, "doi": "10.1000/graph"},
+        }]
+
+    result = clp.add_local_pdf(
+        bib={"name": "main", "path": str(bib_path),
+             "papers_dir": str(papers_dir), "default": True},
+        raw_value=str(source_pdf),
+        record_overrides={},
+        dry_run=True,
+        server_url="http://127.0.0.1:1",
+        fetch_search=search,
+        ensure_citekey=lambda record, *a, **kw: {**record, "citekey": "key"},
+        add_record=lambda **kw: {"status": "ok", "warnings": []},
+    )
+
+    assert result["status"] == "ok", result
+    assert result.get("metadata_diagnostics") == ["metadata from translation_server"]

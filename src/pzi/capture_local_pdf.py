@@ -486,7 +486,9 @@ def add_local_pdf(
             return strict_failure
     # Bookkeeping, read only by the strict gate above: popped as the DOI/URL
     # branch pops it (`add_service`), or it was reported in `changed_fields`
-    # as if it were a field of the entry.
+    # as if it were a field of the entry. Named in `metadata_diagnostics`, as
+    # that branch names it, so `--verbose` says where the metadata came from.
+    provider = merged.get("metadata_provider")
     merged = cast(
         NormalizedRecord,
         {key: value for key, value in merged.items() if key != "metadata_provider"},
@@ -524,6 +526,10 @@ def add_local_pdf(
         rollback_new_pdfs([copied_local_path], existing_pdf_paths, bib_path=bib["path"])
         raise
     result["warnings"] = [*provider_warnings, *warnings, *result["warnings"]]
+    if isinstance(provider, str) and provider:
+        result["metadata_diagnostics"] = [
+            f"metadata from {provider}", *result.get("metadata_diagnostics", []),
+        ]
     return result
 
 
