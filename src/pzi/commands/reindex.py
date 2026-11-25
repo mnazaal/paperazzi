@@ -33,12 +33,18 @@ def _check_the_run_could_lock(bib_path: str) -> None:
     does not, and exits 5. So in a read-only folder the preview reported a plan
     for a run that cannot start. Probed with `os.access` rather than by opening
     the file, so the preview still creates nothing.
+
+    The run's lock creates a missing folder (`mkdir(parents=True)`), so a bib
+    whose folder does not exist yet is judged by the nearest folder that does.
     """
     lock_path = Path(str(_resolve_write_target(bib_path)) + ".lock")
     if lock_path.exists():
         usable = os.access(lock_path, os.W_OK)
     else:
-        usable = os.access(lock_path.parent, os.W_OK | os.X_OK)
+        folder = lock_path.parent
+        while not folder.exists() and folder != folder.parent:
+            folder = folder.parent
+        usable = os.access(folder, os.W_OK | os.X_OK)
     if not usable:
         raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), str(lock_path))
 

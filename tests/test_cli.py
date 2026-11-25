@@ -2964,3 +2964,44 @@ def test_a_reindex_preview_with_nothing_to_write_passes_beside_an_existing_lock(
 
     assert real_code == exit_codes.OK, real_err
     assert preview_code == real_code, preview_err
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [["--rename-citekeys"], ["--convert-file-paths"], ["--rename-files", "--all"]],
+    ids=["rename-citekeys", "convert-file-paths", "rename-files"],
+)
+def test_a_reindex_preview_matches_the_run_when_the_bibs_folder_is_missing(
+    tmp_path: Path, flags: list[str]
+) -> None:
+    """The run's exclusive lock creates a missing folder; the preview refused it.
+
+    The preview asked whether the lock's own folder was writable, and a folder
+    that does not exist is not, so it exited 5 with "Permission denied" while
+    the run created the folder and exited 1 ("bib file does not exist yet").
+    """
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    bib_path = tmp_path / "missing" / "main.bib"
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\npapers_dir = "{papers}"\n'
+        "default = true\n"
+    )
+
+    def run(extra: list[str]) -> tuple[int, str]:
+        out, err = StringIO(), StringIO()
+        code = run_cli(
+            ["library", "reindex", *flags, *extra, "--config", str(config_path)],
+            home_dir=str(tmp_path), stdout=out, stderr=err,
+        )
+        return code, err.getvalue()
+
+    preview_code, preview_err = run(["--dry-run"])
+    assert not bib_path.parent.exists(), "a preview creates nothing"
+    real_code, real_err = run(["--force"] if flags == ["--rename-citekeys"] else [])
+
+    assert real_code == exit_codes.FINDINGS, real_err
+    assert preview_code == real_code, preview_err
+    assert "Permission denied" not in preview_err, preview_err
+
