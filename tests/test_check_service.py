@@ -901,3 +901,67 @@ def test_a_concurrent_saves_negatives_survive_this_runs_save(tmp_path, monkeypat
     # Both this run's own verdict and the concurrently-saved one survive.
     assert "a" in entries
     assert "concurrent-entry" in entries
+
+
+def _two_entry_library(tmp_path):
+    bib_path = tmp_path / "ml.bib"
+    config_path = _write_config(tmp_path, bib_path)
+    for citekey, title in (("first", "Alpha Paper"), ("second", "Beta Paper")):
+        _seed(
+            tmp_path, config_path,
+            citekey=citekey, title=title, authors=["Smith, A"], year=2020,
+        )
+    resolved = load_bib_target(
+        config_path=str(config_path), home_dir=str(tmp_path), bib_selector=None
+    )
+    assert not isinstance(resolved, BibResolutionFailure)
+    config, _bib = resolved
+    return config_path, ledger.ledger_path(config["pzi_data_home"], ledger.CHECK_FILENAME)
+
+
+def test_an_interrupted_sweep_keeps_the_verdicts_it_already_earned(tmp_path):
+    """Ctrl-C during an hours-long `check` must not discard the verdicts so far.
+
+    The ledger used to be saved only after the loop, so an interrupt on the
+    last entry of a 3.7 h run threw away every verdict that run had earned.
+    """
+    config_path, ledger_file = _two_entry_library(tmp_path)
+    lookups: list[str] = []
+
+    def _interrupt_on_second(title, **_kw):
+        lookups.append(title)
+        if len(lookups) == 2:
+            raise KeyboardInterrupt("user pressed ctrl-c mid-sweep")
+        return _confirms(title)
+
+    try:
+        _ledger_run(tmp_path, config_path, crossref=_interrupt_on_second, days=30)
+    except KeyboardInterrupt:
+        pass
+    else:
+        raise AssertionError("the interrupt did not propagate")
+
+    assert lookups == ["Alpha Paper", "Beta Paper"]
+    assert set(ledger.load(ledger_file)["bibs"]["ml"]) == {"first"}
+
+
+def test_a_sweep_saves_its_verdicts_while_it_runs(tmp_path, monkeypatch):
+    """A killed run (no unwinding at all) keeps every verdict up to the last save.
+
+    The save interval is shrunk to one verdict so the second lookup can read
+    the file as a SIGKILL at that moment would leave it.
+    """
+    config_path, ledger_file = _two_entry_library(tmp_path)
+    monkeypatch.setattr(ledger, "SAVE_EVERY", 1, raising=False)
+    seen_during_second_lookup: list[set[str]] = []
+
+    def _observe(title, **_kw):
+        if title == "Beta Paper":
+            state = ledger.load(ledger_file)
+            seen_during_second_lookup.append(set(state.get("bibs", {}).get("ml", {})))
+        return _confirms(title)
+
+    _ledger_run(tmp_path, config_path, crossref=_observe, days=30)
+
+    assert seen_during_second_lookup == [{"first"}]
+    assert set(ledger.load(ledger_file)["bibs"]["ml"]) == {"first", "second"}

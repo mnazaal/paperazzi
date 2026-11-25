@@ -211,9 +211,15 @@ def promote_bib(
     ledger_file = ledger.ledger_path(config["pzi_data_home"], ledger.PROMOTE_FILENAME)
     ledger_state = ledger.load(ledger_file) if recheck_after_days > 0 else {}
     ledger_now = ledger.utc_now()
-    #: Citekeys this run confirmed are still unpublished, written once at the
-    #: end rather than per item.
-    checked_negative: list[tuple[str, str]] = []
+    #: Citekeys this run confirmed are still unpublished, saved while the
+    #: sweep runs, *including* under `--dry-run`: the lookups really happened
+    #: and "still unpublished" is just as true for a preview, while the sidecar
+    #: is not the library, so a dry run stays read-only against the `.bib`.
+    #: Each save merges onto a fresh read, so a concurrent `promote` run on
+    #: the same file keeps the negatives it saved in between.
+    checked_negative = ledger.PendingAnswers(
+        ledger_file, bib["name"], now=ledger_now, horizon_days=recheck_after_days
+    )
 
     read_result = read_bib_file(bib["path"])
     records = read_result["records"]
@@ -410,7 +416,7 @@ def promote_bib(
         if provider_errors:
             return
         # Bound to the entry as looked up, so a same-key replacement is re-asked.
-        checked_negative.append((citekey, ledger.entry_identity(looked_up)))
+        checked_negative.add(citekey, ledger.entry_identity(looked_up))
 
     def record_item(item: PromoteItem) -> None:
         """Append a verdict and stream it, in one place.
@@ -423,209 +429,216 @@ def promote_bib(
         if on_item is not None:
             on_item(item, len(items), planned)
 
-    for record in records:
-        reason = _skip_reason(record)
-        if reason is not None:
-            if reason in _COUNTED_SKIPS:
-                summary[reason] += 1
-            continue
-        # Narrowing for the type checker; `_skip_reason` already rejected the
-        # records where this is not a string.
-        preprint_ck = record.get("citekey")
-        if not isinstance(preprint_ck, str):
-            continue
-        # Eligible whether or not this run has budget left, so `remaining` counts
-        # what a follow-up run would still face rather than what this loop saw.
-        eligible += 1
-        if budget is not None and summary["checked"] >= budget:
-            continue
-        summary["checked"] += 1
+    try:
+        for record in records:
+            reason = _skip_reason(record)
+            if reason is not None:
+                if reason in _COUNTED_SKIPS:
+                    summary[reason] += 1
+                continue
+            # Narrowing for the type checker; `_skip_reason` already rejected the
+            # records where this is not a string.
+            preprint_ck = record.get("citekey")
+            if not isinstance(preprint_ck, str):
+                continue
+            # Eligible whether or not this run has budget left, so `remaining` counts
+            # what a follow-up run would still face rather than what this loop saw.
+            eligible += 1
+            if budget is not None and summary["checked"] >= budget:
+                continue
+            summary["checked"] += 1
 
-        candidate_result = find_published_candidate_with_diagnostics(
-            record=record,
-            server_url=config["translation_server_url"],
-            fetch_search=fetch_search,
-            fetch_crossref=fetch_crossref,
-            fetch_openalex=fetch_openalex,
-            fetch_dblp=fetch_dblp,
-            fetch_openreview=fetch_openreview,
-            fetch_s2=fetch_s2,
-            s2_api_key=s2_api_key,
-            contact_email=contact_email,
-            metadata_fetch_text=metadata_fetch_text,
-            breaker=breaker,
-            best_of=best_of,
-            gate=gate,
-        )
-        candidate = candidate_result["candidate"]
-        provider_errors = candidate_result["provider_errors"]
-        metadata_diagnostics = candidate_result.get("metadata_diagnostics", [])
-        if candidate is None:
-            if candidate_result.get("reason") == "no_query":
-                # `checked` was already incremented above; without an item and a
-                # counter here that increment had nothing to show for itself —
-                # `checked` outran the sum of the outcome counters, and this was
-                # the one preprint `on_item`'s `planned` denominator never
-                # reached. A record with no title, authors, or year to build a
-                # query from is a real (if rare) outcome, not a non-event.
-                summary["skipped_no_query"] += 1
-                item = _skip_item(
-                    preprint_ck, "no query could be built (record has no title, authors, or year)"
-                )
+            candidate_result = find_published_candidate_with_diagnostics(
+                record=record,
+                server_url=config["translation_server_url"],
+                fetch_search=fetch_search,
+                fetch_crossref=fetch_crossref,
+                fetch_openalex=fetch_openalex,
+                fetch_dblp=fetch_dblp,
+                fetch_openreview=fetch_openreview,
+                fetch_s2=fetch_s2,
+                s2_api_key=s2_api_key,
+                contact_email=contact_email,
+                metadata_fetch_text=metadata_fetch_text,
+                breaker=breaker,
+                best_of=best_of,
+                gate=gate,
+            )
+            candidate = candidate_result["candidate"]
+            provider_errors = candidate_result["provider_errors"]
+            metadata_diagnostics = candidate_result.get("metadata_diagnostics", [])
+            if candidate is None:
+                if candidate_result.get("reason") == "no_query":
+                    # `checked` was already incremented above; without an item and a
+                    # counter here that increment had nothing to show for itself —
+                    # `checked` outran the sum of the outcome counters, and this was
+                    # the one preprint `on_item`'s `planned` denominator never
+                    # reached. A record with no title, authors, or year to build a
+                    # query from is a real (if rare) outcome, not a non-event.
+                    summary["skipped_no_query"] += 1
+                    item = _skip_item(
+                        preprint_ck,
+                        "no query could be built (record has no title, authors, or year)",
+                    )
+                    record_item(item)
+                    continue
+                summary["provider_errors"] += len(provider_errors)
+                summary["skipped_no_candidate"] += 1
+                note_still_unpublished(preprint_ck, provider_errors, record)
+                note = "no published candidate found"
+                if provider_errors:
+                    note = f"{note} (provider errors: {', '.join(provider_errors)})"
+                item = _skip_item(preprint_ck, note)
+                if metadata_diagnostics:
+                    item["metadata_diagnostics"] = metadata_diagnostics
                 record_item(item)
                 continue
-            summary["provider_errors"] += len(provider_errors)
-            summary["skipped_no_candidate"] += 1
-            note_still_unpublished(preprint_ck, provider_errors, record)
-            note = "no published candidate found"
-            if provider_errors:
-                note = f"{note} (provider errors: {', '.join(provider_errors)})"
-            item = _skip_item(preprint_ck, note)
-            if metadata_diagnostics:
-                item["metadata_diagnostics"] = metadata_diagnostics
-            record_item(item)
-            continue
 
-        # Gate on the explainable 0–100 breakdown, not a coarse feature count:
-        # the old integer scale let three shared surnames reach the threshold on
-        # their own, so a candidate flagged `title_mismatch` was written in
-        # anyway while the diagnostics printed `confidence 0/100`.
-        match = score_match(record, candidate)
-        score = match["score"]
-        title_similarity = match["title_similarity"]
-        if score < effective_confidence_threshold or title_similarity < _MIN_TITLE_SIMILARITY:
-            summary["skipped_low_confidence"] += 1
-            note_still_unpublished(preprint_ck, provider_errors, record)
-            reason = (
-                f"low confidence ({score} < {effective_confidence_threshold})"
-                if score < effective_confidence_threshold
-                else f"title too different ({title_similarity} < {_MIN_TITLE_SIMILARITY}) "
-                "— looks like a related paper, not this one's published version"
-            )
-            item = _skip_item(preprint_ck, reason)
-            if metadata_diagnostics:
-                item["metadata_diagnostics"] = metadata_diagnostics
-            metadata_warnings = published_candidate_confidence_warnings(
-                score=score, min_score=effective_confidence_threshold
-            )
-            if metadata_warnings:
-                item["metadata_warnings"] = metadata_warnings
-            record_item(item)
-            continue
-
-        duplicate_ck = _find_duplicate_citekey(candidate, known_records, preprint_ck)
-        if duplicate_ck is not None:
-            msg = f"already exists as {duplicate_ck}"
-            summary["skipped_existing"] += 1
-            item = _skip_item(preprint_ck, msg, published_ck=duplicate_ck)
-            if metadata_diagnostics:
-                item["metadata_diagnostics"] = metadata_diagnostics
-            record_item(item)
-            continue
-
-        # Explainable breakdown of the score the gate above accepted (shown
-        # under --verbose).
-        match_line = (
-            f"match confidence {match['score']}/100 "
-            f"(title {match['title_similarity']}, author {match['author_similarity']})"
-        )
-        if match["flags"]:
-            match_line += f"; flags: {', '.join(match['flags'])}"
-        metadata_diagnostics = [match_line, *metadata_diagnostics]
-
-        pdf_kwargs: dict[str, Any] = dict(
-            papers_dir=bib["papers_dir"],
-            fetch_binary=fetch_binary,
-            flaresolverr_url=effective_flaresolverr_url,
-            browser_pdf_cmd=effective_browser_pdf_cmd,
-            pdf_filename_format=config.get("pdf_filename_format"),
-            browser_hook=config.get("browser_hook", True),
-            # The third of the three seams that build these knobs from config
-            # (`pdf_service._fallback_kwargs` and `capture_context` are the
-            # others). `browser_profile_path` reaching only some of them is how
-            # a config key comes to work in `add` and not in `promote`.
-            settings=PdfFallbackSettings.from_config(config),
-            # Built once for the run: it resolves credentials, which do not vary
-            # per entry. Without it `promote` retries one URL through every
-            # transport and gives up, the same defect `add` and `retry` had.
-            next_candidate=next_pdf_candidate_for_config(config, bib),
-        )
-
-        # Isolate the handler for one preprint: an unexpected failure here
-        # (malformed candidate, failed download) must surface as an explainable
-        # skip and let the rest of the library promote, not abort the whole run.
-        # The handlers clean up any downloaded PDF before raising.
-        try:
-            if keep_preprint:
-                item, write = _handle_keep_preprint(
-                    bib_path=bib["path"],
-                    preprint_record=record,
-                    candidate=candidate,
-                    existing_citekeys=existing_citekeys,
-                    dry_run=dry_run,
-                    citekey_format=config.get("citekey_format"),
-                    file_path_style=file_path_style,
-                    **pdf_kwargs,
+            # Gate on the explainable 0–100 breakdown, not a coarse feature count:
+            # the old integer scale let three shared surnames reach the threshold on
+            # their own, so a candidate flagged `title_mismatch` was written in
+            # anyway while the diagnostics printed `confidence 0/100`.
+            match = score_match(record, candidate)
+            score = match["score"]
+            title_similarity = match["title_similarity"]
+            if score < effective_confidence_threshold or title_similarity < _MIN_TITLE_SIMILARITY:
+                summary["skipped_low_confidence"] += 1
+                note_still_unpublished(preprint_ck, provider_errors, record)
+                reason = (
+                    f"low confidence ({score} < {effective_confidence_threshold})"
+                    if score < effective_confidence_threshold
+                    else f"title too different ({title_similarity} < {_MIN_TITLE_SIMILARITY}) "
+                    "— looks like a related paper, not this one's published version"
                 )
-            else:
-                item, write = _handle_update_in_place(
-                    bib_path=bib["path"],
-                    preprint_record=record,
-                    candidate=candidate,
-                    dry_run=dry_run,
-                    file_path_style=file_path_style,
-                    **pdf_kwargs,
+                item = _skip_item(preprint_ck, reason)
+                if metadata_diagnostics:
+                    item["metadata_diagnostics"] = metadata_diagnostics
+                metadata_warnings = published_candidate_confidence_warnings(
+                    score=score, min_score=effective_confidence_threshold
                 )
-        except (StalePlanError, ConcurrentEditError):
-            # Not a per-record problem: the bib changed underneath this run, so
-            # continuing to write the remaining preprints is unsafe. Swallowed,
-            # one lost write race was reported once per preprint as "promotion
-            # failed" on a run that still called itself ok. `update_bib` makes
-            # the same carve-out; the CLI and the HTTP API both classify these
-            # at their boundary.
-            raise
-        except Exception as exc:  # one failing entry must not abort the run
-            summary["skipped_failed"] += 1
-            record_item(
-                _skip_item(preprint_ck, f"promotion failed: {exc}", failed=True)
-            )
-            continue
-        if metadata_diagnostics:
-            item["metadata_diagnostics"] = metadata_diagnostics
+                if metadata_warnings:
+                    item["metadata_warnings"] = metadata_warnings
+                record_item(item)
+                continue
 
-        record_item(item)
-        if write is not None:
-            # Counted when the write lands, not here: whether this promotion
-            # happened is not known until its edits have gone into a session.
-            pending.append((len(items) - 1, write))
-            if len(pending) >= _WRITE_CHUNK:
-                _flush_pending(pending)
-        # Both of these feed the *next* record's decisions — the citekey
-        # generator and `_find_duplicate_citekey` — so they are recorded as soon
-        # as this record resolves, before the write lands.
+            duplicate_ck = _find_duplicate_citekey(candidate, known_records, preprint_ck)
+            if duplicate_ck is not None:
+                msg = f"already exists as {duplicate_ck}"
+                summary["skipped_existing"] += 1
+                item = _skip_item(preprint_ck, msg, published_ck=duplicate_ck)
+                if metadata_diagnostics:
+                    item["metadata_diagnostics"] = metadata_diagnostics
+                record_item(item)
+                continue
+
+            # Explainable breakdown of the score the gate above accepted (shown
+            # under --verbose).
+            match_line = (
+                f"match confidence {match['score']}/100 "
+                f"(title {match['title_similarity']}, author {match['author_similarity']})"
+            )
+            if match["flags"]:
+                match_line += f"; flags: {', '.join(match['flags'])}"
+            metadata_diagnostics = [match_line, *metadata_diagnostics]
+
+            pdf_kwargs: dict[str, Any] = dict(
+                papers_dir=bib["papers_dir"],
+                fetch_binary=fetch_binary,
+                flaresolverr_url=effective_flaresolverr_url,
+                browser_pdf_cmd=effective_browser_pdf_cmd,
+                pdf_filename_format=config.get("pdf_filename_format"),
+                browser_hook=config.get("browser_hook", True),
+                # The third of the three seams that build these knobs from config
+                # (`pdf_service._fallback_kwargs` and `capture_context` are the
+                # others). `browser_profile_path` reaching only some of them is how
+                # a config key comes to work in `add` and not in `promote`.
+                settings=PdfFallbackSettings.from_config(config),
+                # Built once for the run: it resolves credentials, which do not vary
+                # per entry. Without it `promote` retries one URL through every
+                # transport and gives up, the same defect `add` and `retry` had.
+                next_candidate=next_pdf_candidate_for_config(config, bib),
+            )
+
+            # Isolate the handler for one preprint: an unexpected failure here
+            # (malformed candidate, failed download) must surface as an explainable
+            # skip and let the rest of the library promote, not abort the whole run.
+            # The handlers clean up any downloaded PDF before raising.
+            try:
+                if keep_preprint:
+                    item, write = _handle_keep_preprint(
+                        bib_path=bib["path"],
+                        preprint_record=record,
+                        candidate=candidate,
+                        existing_citekeys=existing_citekeys,
+                        dry_run=dry_run,
+                        citekey_format=config.get("citekey_format"),
+                        file_path_style=file_path_style,
+                        **pdf_kwargs,
+                    )
+                else:
+                    item, write = _handle_update_in_place(
+                        bib_path=bib["path"],
+                        preprint_record=record,
+                        candidate=candidate,
+                        dry_run=dry_run,
+                        file_path_style=file_path_style,
+                        **pdf_kwargs,
+                    )
+            except (StalePlanError, ConcurrentEditError):
+                # Not a per-record problem: the bib changed underneath this run, so
+                # continuing to write the remaining preprints is unsafe. Swallowed,
+                # one lost write race was reported once per preprint as "promotion
+                # failed" on a run that still called itself ok. `update_bib` makes
+                # the same carve-out; the CLI and the HTTP API both classify these
+                # at their boundary.
+                raise
+            except Exception as exc:  # one failing entry must not abort the run
+                summary["skipped_failed"] += 1
+                record_item(
+                    _skip_item(preprint_ck, f"promotion failed: {exc}", failed=True)
+                )
+                continue
+            if metadata_diagnostics:
+                item["metadata_diagnostics"] = metadata_diagnostics
+
+            record_item(item)
+            if write is not None:
+                # Counted when the write lands, not here: whether this promotion
+                # happened is not known until its edits have gone into a session.
+                pending.append((len(items) - 1, write))
+                if len(pending) >= _WRITE_CHUNK:
+                    _flush_pending(pending)
+            # Both of these feed the *next* record's decisions — the citekey
+            # generator and `_find_duplicate_citekey` — so they are recorded as soon
+            # as this record resolves, before the write lands.
+            #
+            # Accepted, deliberately, with its cost stated: a later record that
+            # duplicates a promotion whose write then *failed* is skipped as
+            # already-existing, so that paper goes unpromoted until the next sweep.
+            # Recording on commit instead would fork two entries for one paper
+            # whenever two records resolve to the same publication, which is the
+            # ordinary case rather than the failure case. A missed promotion is
+            # recoverable by re-running; a duplicated entry is manual cleanup in the
+            # user's library.
+            if item["published_citekey"] is not None:  # pragma: no branch
+                existing_citekeys.add(item["published_citekey"])
+                if item["action"] in {"create", "update"}:
+                    published_record = cast(NormalizedRecord, dict(candidate))
+                    published_record["citekey"] = item["published_citekey"]
+                    known_records.append(published_record)
+
+        # Phase 2 — whatever the last chunk left over. The writes are the only part
+        # that holds the lock, and they make no network call.
         #
-        # Accepted, deliberately, with its cost stated: a later record that
-        # duplicates a promotion whose write then *failed* is skipped as
-        # already-existing, so that paper goes unpromoted until the next sweep.
-        # Recording on commit instead would fork two entries for one paper
-        # whenever two records resolve to the same publication, which is the
-        # ordinary case rather than the failure case. A missed promotion is
-        # recoverable by re-running; a duplicated entry is manual cleanup in the
-        # user's library.
-        if item["published_citekey"] is not None:  # pragma: no branch
-            existing_citekeys.add(item["published_citekey"])
-            if item["action"] in {"create", "update"}:
-                published_record = cast(NormalizedRecord, dict(candidate))
-                published_record["citekey"] = item["published_citekey"]
-                known_records.append(published_record)
-
-    # Phase 2 — whatever the last chunk left over. The writes are the only part
-    # that holds the lock, and they make no network call.
-    #
-    # Only the write path reaches here: the dry run needs a per-preprint diff,
-    # and the only way to render one is `preview_batch_write`, which opens the
-    # file itself.
-    _flush_pending(pending)
+        # Only the write path reaches here: the dry run needs a per-preprint diff,
+        # and the only way to render one is `preview_batch_write`, which opens the
+        # file itself.
+        _flush_pending(pending)
+    finally:
+        # In a `finally`, so Ctrl-C keeps the answers this run earned. The
+        # promotions still queued are not written: a chunk is the unit an
+        # interrupt may lose (`_WRITE_CHUNK`).
+        checked_negative.save()
 
     # Derived from the item outcomes rather than accumulated beside them, as
     # `update_bib` derives its own: a verdict is settled in phase 1 for a skip
@@ -639,30 +652,6 @@ def promote_bib(
     # A provider dropped for the rest of the run is reported once, not per
     # candidate — the same rule `check` applies to the same providers.
     errors.extend(breaker.tripped.values())
-
-    # Persist the negatives once, not per item, and *including* under
-    # `--dry-run`: the lookups really happened and "still unpublished" is just
-    # as true for a preview, while the sidecar is not the library, so a dry run
-    # stays read-only against the `.bib`. Pruning here is what bounds the file.
-    if recheck_after_days > 0 and checked_negative:
-        # Re-read right before writing rather than reusing `ledger_state` as
-        # loaded at the top of the run: promote's own network phase runs for
-        # tens of minutes to hours over the whole library, long enough for a
-        # concurrent `check`/`promote` run on the same ledger file to save its
-        # own negatives in between. Saving this run's stale snapshot as the new
-        # state would silently drop that run's entries; re-reading and merging
-        # this run's negatives onto the fresh state keeps both.
-        ledger_state = ledger.load(ledger_file)
-        for citekey, identity in checked_negative:
-            ledger_state = ledger.record_checked(
-                ledger_state, bib["name"], citekey, now=ledger_now, identity=identity
-            )
-        ledger.save(
-            ledger_file,
-            ledger.prune(
-                ledger_state, now=ledger_now, horizon_days=recheck_after_days
-            ),
-        )
 
     # What a follow-up run still faces, and what this one cost per candidate.
     # `remaining` is the difference between a bounded pass and a silently

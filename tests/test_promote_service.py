@@ -2606,6 +2606,58 @@ def test_a_concurrent_saves_negatives_survive_this_runs_save(tmp_path):
     assert "concurrent-entry" in entries
 
 
+def test_an_interrupted_sweep_keeps_the_negatives_it_already_earned(tmp_path):
+    """Ctrl-C must not discard the "still unpublished" answers found so far.
+
+    The ledger used to be saved only after the loop, so an interrupt on the
+    last candidate of an hours-long sweep threw away every answer it had.
+    """
+    bib_path = tmp_path / "ml.bib"
+    data_home = tmp_path / "data"
+    config_path = _write_config(tmp_path, bib_path, pzi_data_home=str(data_home))
+    _seed_many_preprints(tmp_path, bib_path, config_path, 2)
+    ledger_file = ledger.ledger_path(data_home, ledger.PROMOTE_FILENAME)
+    queries: list[str] = []
+
+    def _interrupt_on_second(query: str, *, server_url: str):
+        queries.append(query)
+        if len(queries) == 2:
+            raise KeyboardInterrupt("user pressed ctrl-c mid-sweep")
+        return []
+
+    with pytest.raises(KeyboardInterrupt):
+        _promote(
+            config_path, tmp_path, **{**_NOTHING_FOUND, "fetch_search": _interrupt_on_second}
+        )
+
+    assert len(queries) == 2
+    assert set(ledger.load(ledger_file)["bibs"]["ml"]) == {"pre000"}
+
+
+def test_a_sweep_saves_its_negatives_while_it_runs(tmp_path, monkeypatch):
+    """A killed run (no unwinding at all) keeps every answer up to the last save."""
+    bib_path = tmp_path / "ml.bib"
+    data_home = tmp_path / "data"
+    config_path = _write_config(tmp_path, bib_path, pzi_data_home=str(data_home))
+    _seed_many_preprints(tmp_path, bib_path, config_path, 2)
+    ledger_file = ledger.ledger_path(data_home, ledger.PROMOTE_FILENAME)
+    monkeypatch.setattr(ledger, "SAVE_EVERY", 1, raising=False)
+    seen_during_second_search: list[set[str]] = []
+    searches = {"n": 0}
+
+    def _observe(query: str, *, server_url: str):
+        searches["n"] += 1
+        if searches["n"] == 2:
+            state = ledger.load(ledger_file)
+            seen_during_second_search.append(set(state.get("bibs", {}).get("ml", {})))
+        return []
+
+    _promote(config_path, tmp_path, **{**_NOTHING_FOUND, "fetch_search": _observe})
+
+    assert seen_during_second_search == [{"pre000"}]
+    assert set(ledger.load(ledger_file)["bibs"]["ml"]) == {"pre000", "pre001"}
+
+
 # --- Chunked writes (item 570) --------------------------------------------
 
 def _seed_many_preprints(tmp_path, bib_path, config_path, count):

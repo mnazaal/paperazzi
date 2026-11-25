@@ -357,7 +357,9 @@ pzi library check --recheck-after 90 --limit 200   # 200 entries of real work
 
 Run that repeatedly — from a cron job, say — and it works through the library
 200 unaudited entries at a time, rather than re-auditing the same first 200. The
-filter applies *before* `--limit`, which is what makes the two compose.
+filter applies *before* `--limit`, which is what makes the two compose. The
+ledger is saved while the sweep runs, every 25 verdicts, and again when it is
+interrupted, so Ctrl-C keeps what the run already verified.
 
 Only the `verified` verdict is remembered. A **problematic** entry is the one
 you have not fixed yet, so it is re-raised on every run; a

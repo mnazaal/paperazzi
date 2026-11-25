@@ -274,6 +274,64 @@ def load(path: str | Path) -> dict[str, Any]:
     return parsed
 
 
+#: Answers a sweep holds before saving them. A save re-reads, merges and
+#: rewrites the whole file — about 0.3 s for a 22k-entry ledger — while `check`
+#: is floored at 0.6 s per entry, so saving every answer would cost a third of
+#: the run. 25 matches promote's write chunk: a killed run loses at most 24
+#: answers, and an interrupted one (Ctrl-C) loses none, because the caller
+#: saves the rest on the way out.
+SAVE_EVERY = 25
+
+
+class PendingAnswers:
+    """The answers one sweep has earned, saved while the sweep runs.
+
+    A sweep ran for hours and saved only after its loop, so Ctrl-C on the last
+    entry discarded every answer the run had earned. `add` saves every
+    `SAVE_EVERY` answers, and the caller calls `save` from a ``finally:`` so an
+    interrupt keeps the rest.
+
+    Every save re-reads the file and merges this run's answers onto it, so a
+    concurrent run sharing the file keeps the answers it saved in between.
+    A disabled horizon makes this a no-op at both ends.
+    """
+
+    def __init__(
+        self, path: str | Path, bib_name: str, *, now: datetime, horizon_days: int
+    ) -> None:
+        self._path = path
+        self._bib_name = bib_name
+        self._now = now
+        self._horizon_days = horizon_days
+        self._pending: list[tuple[str, str]] = []
+
+    def add(self, citekey: str, identity: str) -> None:
+        """Hold one answer, saving the batch once `SAVE_EVERY` are held."""
+        if not is_enabled(self._horizon_days):
+            return
+        self._pending.append((citekey, identity))
+        if len(self._pending) >= SAVE_EVERY:
+            self.save()
+
+    def save(self, *, even_if_empty: bool = False) -> None:
+        """Merge the held answers onto a fresh read and write the result.
+
+        *even_if_empty* still rewrites the file when nothing is held, which
+        prunes expired entries.
+        """
+        if not is_enabled(self._horizon_days):
+            return
+        if not self._pending and not even_if_empty:
+            return
+        state: Any = load(self._path)
+        for citekey, identity in self._pending:
+            state = record_checked(
+                state, self._bib_name, citekey, now=self._now, identity=identity
+            )
+        save(self._path, prune(state, now=self._now, horizon_days=self._horizon_days))
+        self._pending.clear()
+
+
 def save(path: str | Path, state: dict[str, Any]) -> None:
     """Write the ledger atomically.  Best-effort: write failures are swallowed.
 
