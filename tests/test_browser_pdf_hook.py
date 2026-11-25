@@ -552,6 +552,19 @@ def test_download_pdf_never_sweeps_after_a_failed_navigation(lands_on: str) -> N
     assert not any(call[0] == "evaluate" for call in s.calls)
 
 
+def test_download_pdf_never_sweeps_after_a_same_document_navigation() -> None:
+    """`goto` returns None when only the fragment changes: nothing was loaded."""
+    from tests.fake_session import FakeBrowserSession
+
+    s = FakeBrowserSession(
+        url="https://journal.test/b-landing",
+        fetch_results=[(200, "text/html", b"<html>"), (200, "application/pdf", b"%PDF-A")],
+        evaluate_results=[["https://journal.test/paperA.pdf"]],
+    )
+    assert hook.download_pdf("https://journal.test/b-landing#main", _session=s) is None
+    assert not any(call[0] == "evaluate" for call in s.calls)
+
+
 def test_challenge_wait_refusal_stops_the_sweep() -> None:
     """A challenge-loop reload refused by the landing check must not be swept."""
     from pzi.safe_http import SsrfBlocked

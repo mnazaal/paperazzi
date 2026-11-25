@@ -443,6 +443,12 @@ def download_pdf(
             # navigation never sweeps (a landing page slower than the timeout
             # is lost; review of `a322bf9`).
             navigation_failed = True
+        else:
+            # `goto` answers None for a same-document navigation (a URL that
+            # differs from the showing one only by its fragment, or one the
+            # page itself already `pushState`d to): nothing was loaded, so the
+            # document is still the earlier request's (review of `9161bd0`).
+            navigation_failed = response is None
 
         if response is not None:
             navigated = FetchResult.from_response(response)
