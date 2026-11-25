@@ -67,12 +67,17 @@ def local_pdf_base_record(
     flaresolverr_url: str | None = None,
     browser_pdf_cmd: str | None = None,
     errors: list[str] | None = None,
+    not_found: list[str] | None = None,
 ) -> NormalizedRecord:
     """Resolve a record for a local PDF from its embedded DOI or title.
 
     *errors* collects provider failures. Without it this path resolved metadata
     "best effort" and reported nothing, so ``--strict-metadata`` had nothing to
     act on and silently did not apply to local-PDF input.
+
+    *not_found* collects the DOI lookups every source answered without the
+    paper. That is an answer, not a failure: kept apart from *errors*, it no
+    longer makes strict mode refuse before judging metadata the user supplied.
     """
     raw_doi = extracted.get("doi")
     # Scraped out of the PDF's text, so it arrives with whatever surrounded it —
@@ -101,6 +106,14 @@ def local_pdf_base_record(
             if errors is not None:
                 errors.extend(provider_errors)
             return record
+        except _add_planning.MetadataExhausted as exc:
+            # Every source was tried and none had this DOI. Only the failures
+            # met on the way are provider errors; the verdict itself is not.
+            if errors is not None:
+                errors.extend(exc.provider_errors)
+            if not_found is not None:
+                not_found.append(str(exc))
+            unresolved_doi = doi
         except (OSError, ValueError) as exc:
             if errors is not None:
                 errors.append(str(exc))
@@ -154,9 +167,14 @@ def _supplies_identifying_metadata(
     with no usable value (`{"doi": null}`, `{"year": "n/a"}`, a blank string, a
     list of blanks) and a restatement of what the PDF already gave (the same
     title with stray whitespace) both leave a record resting on the PDF's text.
+
+    A `fallback_*` key counts as well: it carries page-HTML metadata (`--page-html`,
+    the extension's page read), which is not the PDF's text either. A fallback
+    only fills a field the PDF left empty, so one the PDF already gave adds
+    nothing and does not count.
     """
     return any(
-        key in overrides
+        (key in overrides or f"fallback_{key}" in overrides)
         and (value := _identity(key, merged.get(key))) is not None
         and value != _identity(key, base_record.get(key))
         for key in _IDENTIFYING_FIELDS
@@ -351,6 +369,9 @@ def add_local_pdf(
             existing_records, read_result["entries"]
         )
     metadata_errors: list[str] = []
+    #: DOI lookups every source answered without this paper. Reported, but not
+    #: as provider errors: nothing failed.
+    metadata_not_found: list[str] = []
     extracted = extract_pdf_metadata(raw_value)
     base_record = local_pdf_base_record(
         raw_value=raw_value,
@@ -367,6 +388,7 @@ def add_local_pdf(
         flaresolverr_url=flaresolverr_url,
         browser_pdf_cmd=browser_pdf_cmd,
         errors=metadata_errors,
+        not_found=metadata_not_found,
     )
     # Splitting, not a plain merge: `merge_record_sources` does not know about
     # `fallback_*` keys, so a caller-supplied `fallback_title` never filled
@@ -381,7 +403,10 @@ def add_local_pdf(
     # `--strict-metadata` was set, so a capture degraded by a Crossref 429 was
     # reported exactly like a clean one. Carried as warnings from here on, the
     # same wording `add_input_to_bib._finalize` uses for the other branch.
-    provider_warnings = [f"provider error ({error})" for error in metadata_errors]
+    provider_warnings = [
+        *(f"provider error ({error})" for error in metadata_errors),
+        *metadata_not_found,
+    ]
     # pypdf's verdict on the file, which was discarded: a truncated, encrypted
     # or 0-byte PDF looked exactly like a scan with no extractable text, so pzi
     # stored a file it could not read and said nothing. Reported rather than

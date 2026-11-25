@@ -959,3 +959,113 @@ def test_local_pdf_strict_an_empty_or_unchanged_override_does_not_exempt(
     )
     assert result["status"] == "error", result
     assert writes == []
+
+
+def _strict_local_pdf(tmp_path: Path, monkeypatch, *, extracted: dict, overrides: dict,
+                      fetch_record=None, base_record: dict | None = None):
+    """Run `add_local_pdf` under `--strict-metadata` offline; return (result, writes)."""
+    import pzi.capture_local_pdf as clp
+
+    source_pdf = tmp_path / "paper.pdf"
+    source_pdf.write_bytes(b"%PDF-1.4\n")
+    papers_dir = tmp_path / "papers"
+    papers_dir.mkdir(exist_ok=True)
+    bib_path = tmp_path / "library.bib"
+    bib_path.write_text("")
+    monkeypatch.setattr(clp, "extract_pdf_metadata", lambda _p: dict(extracted))
+    if base_record is not None:
+        monkeypatch.setattr(clp, "local_pdf_base_record", lambda **_kw: dict(base_record))
+    elif fetch_record is not None:
+        original = clp.local_pdf_base_record
+        monkeypatch.setattr(
+            clp, "local_pdf_base_record",
+            lambda **kw: original(**{**kw, "fetch_record": fetch_record}),
+        )
+    writes: list[dict] = []
+    result = clp.add_local_pdf(
+        bib={"name": "main", "path": str(bib_path),
+             "papers_dir": str(papers_dir), "default": True},
+        raw_value=str(source_pdf),
+        record_overrides=dict(overrides),
+        dry_run=True,
+        server_url="http://127.0.0.1:1",
+        fetch_search=lambda *a, **kw: [],
+        ensure_citekey=lambda record, *a, **kw: {**record, "citekey": "key"},
+        add_record=lambda **kw: writes.append(kw) or {"status": "ok", "warnings": []},
+        strict_metadata=True,
+    )
+    return result, writes
+
+
+def _doi_not_found(**_kwargs):
+    from pzi.add_planning import MetadataExhausted
+
+    raise MetadataExhausted("no metadata found for DOI: 10.1000/scraped", [])
+
+
+def test_local_pdf_strict_judges_a_user_title_beside_a_doi_no_provider_found(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """"Not found" is an answer, not a provider error.
+
+    Every DOI source answered that it did not have the PDF's DOI. That was
+    recorded as a provider error, so strict refused before looking at the
+    title the user supplied, which is the exemption the rule allows.
+    """
+    result, writes = _strict_local_pdf(
+        tmp_path, monkeypatch, extracted={"doi": "10.1000/scraped"},
+        overrides={"title": "Graph Parsers"}, fetch_record=_doi_not_found,
+    )
+
+    assert result["status"] == "ok", result
+    assert len(writes) == 1
+
+
+def test_local_pdf_strict_names_a_doi_no_provider_found_as_not_found(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Without supplied metadata it is still refused, but not as a provider error."""
+    result, writes = _strict_local_pdf(
+        tmp_path, monkeypatch,
+        extracted={"doi": "10.1000/scraped", "title": "Graph Parsers"},
+        overrides={}, fetch_record=_doi_not_found,
+    )
+
+    assert result["status"] == "error"
+    assert "no metadata provider found this PDF" in result["message"], result
+    assert writes == []
+
+
+def test_local_pdf_strict_counts_a_new_identifier_from_the_page_html(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Page-HTML `fallback_*` metadata is not text read from the PDF.
+
+    A `fallback_doi` that fills the DOI the PDF lacked was ignored, and the
+    refusal said the record held only the PDF's own text.
+    """
+    scraped = {"title": "Graph Parsers", "authors": ["Smith, Jane"]}
+
+    result, writes = _strict_local_pdf(
+        tmp_path, monkeypatch, extracted=scraped, base_record=scraped,
+        overrides={"fallback_title": "Graph Parsers", "fallback_doi": "10.1000/page"},
+    )
+
+    assert result["status"] == "ok", result
+    assert len(writes) == 1
+
+
+def test_local_pdf_strict_page_html_restating_the_pdf_does_not_exempt(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A fallback only fills an empty field; one the PDF already gave adds nothing."""
+    scraped = {"title": "Graph Parsers", "authors": ["Smith, Jane"]}
+
+    result, writes = _strict_local_pdf(
+        tmp_path, monkeypatch, extracted=scraped, base_record=scraped,
+        overrides={"fallback_title": "Another Title", "fallback_authors": ["Roe, R"]},
+    )
+
+    assert result["status"] == "error"
+    assert "no metadata provider found this PDF" in result["message"]
+    assert writes == []
