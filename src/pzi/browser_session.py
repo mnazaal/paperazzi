@@ -357,9 +357,13 @@ class BrowserSession:
             # `goto` loads nothing for a same-document navigation: the URL
             # differs from the showing one only by its fragment, or the page
             # already `pushState`d to it. The document is then an earlier
-            # request's, so reload it from this URL; refusing it instead
-            # answered "no PDF" to every repeat of a URL (review of 658d4f9).
-            response = self.page.reload(wait_until=wait_until, timeout=timeout)
+            # request's; refusing it answered "no PDF" to every repeat of a URL
+            # (review of 658d4f9). `reload()` is no fix: it replays the stale
+            # document's own history entry, which may be a form POST or a URL
+            # its script swapped in (review of 22d91d7). Leave the document,
+            # then load `url` itself with a plain GET.
+            self.page.goto("about:blank")
+            response = self.page.goto(url, wait_until=wait_until, timeout=timeout)
         self._reject_non_public_landing()
         return response
 

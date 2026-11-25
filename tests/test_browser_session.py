@@ -566,11 +566,12 @@ def test_sweep_never_probes_a_clone_this_process_owns(tmp_path, monkeypatch) -> 
     module._discard_profile_clone(clone)
 
 
-def test_navigate_reloads_after_a_same_document_navigation() -> None:
+def test_navigate_loads_the_url_afresh_after_a_same_document_navigation() -> None:
     """`goto` answers None when only the fragment differs: nothing was loaded.
 
-    The showing document is then an earlier request's; `navigate` reloads it
-    from this URL so the caller reads this request's page, not that one.
+    The showing document is then an earlier request's. `navigate` leaves it and
+    loads *url* itself; a `reload()` would replay that document's own history
+    entry (a POST, or a URL its script swapped in).
     """
 
     class Page:
@@ -580,14 +581,19 @@ def test_navigate_reloads_after_a_same_document_navigation() -> None:
             self.calls: list[str] = []
 
         def goto(self, url, **kwargs):
-            self.calls.append("goto")
-            return None
+            self.calls.append(url)
+            if len(self.calls) == 1:
+                return None
+            return None if url == "about:blank" else "fresh-response"
 
         def reload(self, **kwargs):
-            self.calls.append("reload")
-            return "fresh-response"
+            raise AssertionError("reload replays the stale history entry")
 
     page = Page()
     s = BrowserSession(playwright="pw", browser_ref="br", page=page, url_allowed=lambda u: True)
     assert s.navigate("https://journal.test/b-landing#main") == "fresh-response"
-    assert page.calls == ["goto", "reload"]
+    assert page.calls == [
+        "https://journal.test/b-landing#main",
+        "about:blank",
+        "https://journal.test/b-landing#main",
+    ]
