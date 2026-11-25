@@ -190,8 +190,13 @@ def test_discover_without_errors_param_still_swallows_crash() -> None:
     assert hook.discover_pdf_url("https://example.com", _session=s) is None
 
 
+#: A navigation response: `discover_pdf_url` reads the page only after a real
+#: load (`goto` answers None for a same-document navigation, which loads nothing).
+_LOADED_PAGE = object()
+
+
 def test_discover_candidates_found() -> None:
-    s = FakeBrowserSession(evaluate_results=[["/paper.pdf"]])
+    s = FakeBrowserSession(goto_results=[_LOADED_PAGE], evaluate_results=[["/paper.pdf"]])
     result = hook.discover_pdf_url(
         "https://example.com",
         _session=s,
@@ -201,7 +206,7 @@ def test_discover_candidates_found() -> None:
 
 
 def test_discover_post_click_pdf() -> None:
-    s = FakeBrowserSession(
+    s = FakeBrowserSession(goto_results=[_LOADED_PAGE], 
         url="https://journal.test/download.pdf",
         evaluate_results=[[]],
     )
@@ -428,7 +433,7 @@ def test_ensure_browser_reports_install_failure(monkeypatch) -> None:
 
 def test_discover_pdf_url_returns_post_click_pdf_url() -> None:
     from tests.fake_session import FakeBrowserSession
-    s = FakeBrowserSession(
+    s = FakeBrowserSession(goto_results=[_LOADED_PAGE], 
         url="https://journal.test/download.pdf",
         evaluate_results=[[]],
     )
@@ -443,7 +448,7 @@ def test_discover_pdf_url_returns_post_click_pdf_url() -> None:
 
 def test_discover_pdf_url_returns_post_click_candidate() -> None:
     from tests.fake_session import FakeBrowserSession
-    s = FakeBrowserSession(
+    s = FakeBrowserSession(goto_results=[_LOADED_PAGE], 
         evaluate_results=[[], ["/reader/download?id=1"]],
     )
     result = hook.discover_pdf_url(
@@ -549,6 +554,17 @@ def test_download_pdf_never_sweeps_after_a_failed_navigation(lands_on: str) -> N
         error=TimeoutError("Timeout 60000ms exceeded"),
     )
     assert hook.download_pdf("https://resolver.test/doi", _session=s) is None
+    assert not any(call[0] == "evaluate" for call in s.calls)
+
+
+def test_discover_pdf_url_never_reads_a_page_a_same_document_navigation_left() -> None:
+    from tests.fake_session import FakeBrowserSession
+
+    s = FakeBrowserSession(
+        url="https://journal.test/b-landing",
+        evaluate_results=[["https://journal.test/paperA.pdf"]],
+    )
+    assert hook.discover_pdf_url("https://journal.test/b-landing#main", _session=s) is None
     assert not any(call[0] == "evaluate" for call in s.calls)
 
 

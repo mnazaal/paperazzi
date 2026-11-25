@@ -336,7 +336,12 @@ def discover_pdf_url(
     resolve_fn = _resolve or resolve_pdf_candidate_urls
 
     try:
-        session.navigate(page_url)
+        if session.navigate(page_url) is None:
+            # A same-document navigation (only the fragment differs, or the
+            # page already `pushState`d to this URL) loads nothing: the page is
+            # still the earlier request's, and its links answered paper A's PDF
+            # for paper B (review of `8441cab`).
+            return None
         dismiss_fn(session.page)
         session.wait_network_idle()
 
