@@ -1077,3 +1077,46 @@ def test_a_recorded_landing_refusal_leaves_out_the_landed_urls_query() -> None:
     assert "http://10.1.2.3/sso" in refusals[0], refusals
     assert "ST-SECRET123" not in " ".join(errors), errors
     assert "frag" not in refusals[0], refusals
+
+
+@pytest.mark.parametrize(
+    ("landed", "named", "hidden"),
+    [
+        ("http://u:pw@10.1.2.3/login;jsessionid=ABC123?t=1#f",
+         "http://10.1.2.3/login", ("pw", "u:", "jsessionid", "ABC123")),
+        ("http://u:pw@[fd00::1]:8080/a;sid=S1/b?t=1",
+         "http://[fd00::1]:8080/a", ("pw", "sid", "S1")),
+        ("http://u:pw@[::1/x;sid=S1?y=1", "http://[::1/x", ("pw", "sid", "S1")),
+    ],
+    ids=["userinfo-and-jsessionid", "ipv6-port", "unparseable"],
+)
+def test_a_landing_refusal_leaves_out_userinfo_and_path_parameters(
+    landed: str, named: str, hidden: tuple[str, ...]
+) -> None:
+    """Userinfo (`u:pw@`) and a path parameter (`;jsessionid=`) are credentials too.
+
+    The refusal reason is recorded, returned in the server's error body and
+    printed. Cutting only the query and fragment left both in it.
+    """
+    from pzi.browser_session import BrowserSession
+    from pzi.safe_http import SsrfBlocked
+
+    class FakePage:
+        url = "about:blank"
+
+        def goto(self, url, **_kwargs):
+            self.url = landed
+            return None
+
+    session = BrowserSession(
+        playwright="pw", browser_ref="br", page=FakePage(),
+        url_allowed=lambda url: "journal.test" in url,
+    )
+
+    with pytest.raises(SsrfBlocked) as caught:
+        session.navigate("https://journal.test/p.pdf")
+
+    reason = str(caught.value)
+    assert reason == f"<urlopen error browser landed on a non-public URL: {named}>"
+    for secret in hidden:
+        assert secret not in reason, reason

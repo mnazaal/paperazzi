@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import re
 import shutil
 import socket
 import stat
@@ -532,17 +533,30 @@ def _is_close_delimited(headers: dict[str, str]) -> bool:
 
 
 def _without_query(url: str) -> str:
-    """*url* without its query and fragment, for a refusal reason.
+    """*url* reduced to scheme, host, port and path, for a refusal reason.
 
-    A landed URL is chosen by the redirect, not the user, and an SSO hop puts
-    its ticket in the query. The reason is recorded, sent back in the server's
-    error body and printed, so it names only scheme, host and path.
+    A landed URL is chosen by the redirect, not the user. An SSO hop puts its
+    ticket in the query, a session id in a path parameter (`;jsessionid=`),
+    and a login can carry `user:password@`. The reason is recorded, sent back
+    in the server's error body and printed, so the path is cut at its first
+    `;` and the userinfo is dropped.
     """
     try:
         parts = urlsplit(url)
+        host = parts.hostname or ""
+        port = parts.port
     except ValueError:
-        return url.split("?", 1)[0].split("#", 1)[0]
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+        # Unparseable (an unclosed `[`): cut by hand, the same way.
+        head = re.split(r"[?#;]", url, maxsplit=1)[0]
+        scheme, sep, rest = head.partition("//")
+        if not sep:
+            return head
+        authority, slash, path = rest.partition("/")
+        return f"{scheme}//{authority.rpartition('@')[2]}{slash}{path}"
+    if ":" in host:
+        host = f"[{host}]"
+    netloc = host if port is None else f"{host}:{port}"
+    return urlunsplit((parts.scheme, netloc, parts.path.split(";", 1)[0], "", ""))
 
 
 @dataclass
