@@ -1368,3 +1368,39 @@ def test_a_missing_dotdot_attachment_keeps_a_symlinked_home_spelling(tmp_path: P
     resolved = _resolve_like_the_kernel(str(home / "src"), "../pp/missing.pdf")
 
     assert resolved == str(home / "pp" / "missing.pdf")
+
+
+def test_a_dotdot_attachment_in_a_missing_folder_keeps_a_symlinked_home_spelling(
+    tmp_path: Path,
+) -> None:
+    """Neither the file nor its folder exists yet, so comparing parents failed.
+
+    The deepest folder that does exist (HOME itself) is the same on both
+    spellings, so the `~` spelling is kept.
+    """
+    from pzi.import_service import _resolve_like_the_kernel
+
+    real = tmp_path / "realhome"
+    (real / "src").mkdir(parents=True)
+    home = tmp_path / "home"
+    home.symlink_to(real)
+
+    resolved = _resolve_like_the_kernel(str(home / "src"), "../newdir/missing.pdf")
+
+    assert resolved == str(home / "newdir" / "missing.pdf")
+
+
+def test_a_dotdot_through_a_symlinked_folder_into_a_missing_one_keeps_the_kernel_spelling(
+    tmp_path: Path,
+) -> None:
+    """`..` from a linked subfolder climbs the link's target, not the lexical parent."""
+    from pzi.import_service import _resolve_like_the_kernel
+
+    (tmp_path / "elsewhere" / "a").mkdir(parents=True)
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "src").symlink_to(tmp_path / "elsewhere" / "a")
+
+    resolved = _resolve_like_the_kernel(str(home / "src"), "../newdir/missing.pdf")
+
+    assert resolved == str(tmp_path / "elsewhere" / "newdir" / "missing.pdf")

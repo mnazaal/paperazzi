@@ -392,17 +392,34 @@ def _resolve_like_the_kernel(source_dir: str, path: str) -> str:
         if os.path.samefile(lexical, kernel):
             return lexical
     except OSError:
-        # A missing file cannot be compared, but its folder can: the same
-        # folder and the same name are the same path, so a symlinked HOME keeps
-        # its `~` spelling for a file not there yet.
-        try:
-            if os.path.basename(lexical) == os.path.basename(kernel) and os.path.samefile(
-                os.path.dirname(lexical), os.path.dirname(kernel)
-            ):
-                return lexical
-        except OSError:
-            pass
+        if _same_missing_path(lexical, kernel):
+            return lexical
     return kernel
+
+
+def _same_missing_path(lexical: str, kernel: str) -> bool:
+    """Whether two spellings of a path that does not exist name one place.
+
+    A missing file cannot be compared, but its deepest existing folder can:
+    the same folder followed by the same names is the same path, so a
+    symlinked HOME keeps its `~` spelling for a file, or a folder, not there
+    yet. Comparing only the parent failed when that was missing too.
+    """
+    while True:
+        if os.path.basename(lexical) != os.path.basename(kernel):
+            return False
+        lexical_parent, kernel_parent = os.path.dirname(lexical), os.path.dirname(kernel)
+        if lexical_parent == lexical or kernel_parent == kernel:
+            return False
+        lexical, kernel = lexical_parent, kernel_parent
+        lexical_exists, kernel_exists = os.path.exists(lexical), os.path.exists(kernel)
+        if lexical_exists != kernel_exists:
+            return False
+        if lexical_exists:
+            try:
+                return os.path.samefile(lexical, kernel)
+            except OSError:
+                return False
 
 
 def _is_relative_local_path(path: str) -> bool:
