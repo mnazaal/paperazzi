@@ -961,3 +961,58 @@ def test_a_late_resolution_still_guards_the_check_ledger(tmp_path: Path) -> None
     assert "check ledger" in err
     assert ledger_file.read_bytes() == before
 
+
+def _late_stdout_refusal(tmp_path: Path, items: int, *, stream: bool) -> tuple[int, str]:
+    """`--jsonl -` with fd 1 appended into library `a`, which only the late re-check sees."""
+    import os
+
+    first, second = _two_libraries(tmp_path)
+    config = _write_config(tmp_path, [("a", first), ("b", second)])
+
+    def config_gains_a_default(**kw):
+        _write_config(tmp_path, [("a", first), ("b", second)], default="a")
+        result = _many(items)
+        result["bib_name"] = "a"
+        if stream:
+            for index, item in enumerate(result["items"], start=1):
+                kw["on_item"](item, index, len(result["items"]))
+        return result
+
+    saved = os.dup(1)
+    fd = os.open(first, os.O_WRONLY | os.O_APPEND)
+    try:
+        os.dup2(fd, 1)
+        code, _out, err = _run_configured(
+            tmp_path, _args(jsonl="-"), config_gains_a_default, config=config
+        )
+    finally:
+        os.dup2(saved, 1)
+        os.close(saved)
+        os.close(fd)
+    return code, err
+
+
+def test_a_late_stdout_refusal_after_an_empty_audit_says_nothing_was_written(
+    tmp_path: Path,
+) -> None:
+    """Zero items streamed, so "the stream was already written" was false."""
+    code, err = _late_stdout_refusal(tmp_path, 0, stream=True)
+
+    assert code == exit_codes.USAGE, err
+    assert "nothing was written" in err
+    assert "already written" not in err
+
+
+def test_a_late_stdout_refusal_tells_an_appending_user_what_to_remove(
+    tmp_path: Path,
+) -> None:
+    """`>>` keeps the library but appends NDJSON; the advice named only `>`.
+
+    The count includes lines written after the audit returned, for a service
+    that did not stream them.
+    """
+    code, err = _late_stdout_refusal(tmp_path, 2, stream=False)
+
+    assert code == exit_codes.USAGE, err
+    assert "`>>`" in err
+    assert "remove the last 2 lines" in err

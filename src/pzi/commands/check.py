@@ -129,15 +129,15 @@ def _output_alias_refusal(
     libraries: list[tuple[str, str | None, bool]],
     *,
     check_ledger: str | None = None,
-    after_audit: bool = False,
+    streamed: int = 0,
 ) -> str | None:
     """Why an output may not be written, or None: it names a library, the
     check ledger, or the other output.
 
-    *after_audit* is the late re-check, run once a target that did not resolve
-    before the audit does: by then `--jsonl -` has already streamed to stdout.
+    *streamed* is how many NDJSON lines `--jsonl -` already wrote to stdout,
+    which only the late re-check can see: it runs once a target that did not
+    resolve before the audit does.
     """
-    streamed = after_audit and jsonl_path == "-"
     for flag, path in (("--report", report_path), ("--jsonl", jsonl_path)):
         if not path:
             continue
@@ -150,18 +150,25 @@ def _output_alias_refusal(
             if path == "-":
                 # By the time pzi runs, a shell `>` has already truncated the
                 # file; "would overwrite" would tell the user it is intact.
-                # The late re-check runs after `--jsonl -` has streamed, so
-                # "nothing was written" would be false there.
-                written = (
-                    "the --jsonl stream was already written to it"
-                    if streamed
-                    else "nothing was written"
-                )
+                # The late re-check runs after `--jsonl -` may have streamed,
+                # and a `>>` kept the library but appended those lines to it.
+                lines = streamed if flag == "--jsonl" else 0
+                if lines:
+                    written = (
+                        f"{lines} NDJSON line{'s were' if lines != 1 else ' was'}"
+                        " of the --jsonl stream already written to it"
+                    )
+                    appended = (
+                        f"; if with `>>`, remove the last {lines}"
+                        f" line{'s' if lines != 1 else ''} it gained"
+                    )
+                else:
+                    written, appended = "nothing was written", ""
                 return (
                     f"{flag} - writes to stdout, which is the library"
                     f"{f' {name}' if name else ''}; {written} — if stdout"
                     " was redirected with `>`, the shell has already emptied that"
-                    " file, so restore it from a backup"
+                    f" file, so restore it from a backup{appended}"
                 )
             if selected:
                 return (
@@ -387,6 +394,7 @@ def run_check_command(
             # that does not stream still gets a complete file.
             for item in result["items"][streamed:]:
                 print(json.dumps(item, default=str), file=jsonl_stream)
+                streamed += 1
 
     audit_ran = result["status"] == "ok" or bool(result["items"])
     if not target_resolved and audit_ran:
@@ -405,7 +413,7 @@ def run_check_command(
         )
         refusal = _output_alias_refusal(
             report_path, jsonl_path, libraries, check_ledger=check_ledger,
-            after_audit=True,
+            streamed=streamed,
         )
         if refusal is not None:
             return emit_usage_error(
