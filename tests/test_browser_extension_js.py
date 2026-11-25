@@ -5825,6 +5825,40 @@ console.log(JSON.stringify({
     assert result["disabled"] is False, result
 
 
+def test_a_popup_lock_refused_while_another_await_is_pending_is_never_unhandled(
+    tmp_path: Path,
+) -> None:
+    """Real `chrome.*` calls resolve in a later task, not a microtask.
+
+    The popup awaits the lock only after them, so a refusal in between was
+    reported as an uncaught SecurityError before the capture refused it
+    (review of 3aca94f).
+    """
+    result = _run_popup_js_test(
+        _CAPTURE_DOM
+        + r'''
+const unhandled = [];
+process.on("unhandledRejection", (reason) => { unhandled.push(String(reason?.message)); });
+const realQuery = chrome.tabs.query;
+chrome.tabs.query = (...args) => new Promise((r) => setTimeout(() => r(realQuery(...args)), 0));
+globalThis.__lockError = "lock refused";
+let settled = "pending";
+const run = runCapture().then(() => { settled = "resolved"; }, (e) => { settled = `rejected ${e.message}`; });
+await Promise.race([run, new Promise((r) => setTimeout(r, 500))]);
+await new Promise((r) => setTimeout(r, 20));
+console.log(JSON.stringify({
+  settled,
+  unhandled,
+  summary: document.getElementById("summary").textContent,
+}));
+''',
+        tmp_path,
+    )
+    assert result["settled"] == "resolved", result
+    assert result["unhandled"] == [], result
+    assert "lock refused" in result["summary"], result
+
+
 def test_a_popup_that_closed_mid_capture_has_its_grant_and_rules_swept(tmp_path: Path) -> None:
     out = _borrowed(
         tmp_path,

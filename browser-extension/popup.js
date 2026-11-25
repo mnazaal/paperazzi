@@ -483,6 +483,10 @@ async function doSingleCapture() {
   // `permissions.request` could lose the user gesture it needs. The lock
   // request is queued at this line, ahead of any later sweep's.
   const lockPending = holdCaptureLock();
+  // Marks a refusal handled now: `runSingleCapture` awaits it only after
+  // other awaits, and a refusal in between was reported as an uncaught
+  // SecurityError. The await there still sees the rejection.
+  lockPending.catch(() => {});
   try {
     await runSingleCapture(lockPending);
   } finally {
