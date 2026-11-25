@@ -491,27 +491,6 @@ def test_download_pdf_does_not_sweep_a_page_its_navigation_never_reached() -> No
     assert ("fetch_direct", "https://journal.test/paperA.pdf") not in s.calls
 
 
-def test_download_pdf_sweeps_its_own_page_when_navigation_times_out_after_commit() -> None:
-    """A slow page that committed this URL before timing out is this URL's page."""
-    from tests.fake_session import FakeBrowserSession
-
-    class SlowPage(FakeBrowserSession):
-        def navigate(self, url, **kwargs):
-            self.calls.append(("navigate", url))
-            self._url = url
-            raise TimeoutError("Timeout 60000ms exceeded")
-
-    s = SlowPage(
-        fetch_results=[
-            (200, "text/html", b"<html>"),
-            (200, "application/pdf", b"%PDF-own"),
-        ],
-        evaluate_results=[["https://journal.test/own.pdf"]],
-    )
-    result = hook.download_pdf("https://journal.test/slow", _session=s)
-    assert result == b"%PDF-own"
-
-
 def _raising_session(*, start_url, lands_on, error):
     from tests.fake_session import FakeBrowserSession
 
@@ -551,13 +530,52 @@ def test_download_pdf_never_sweeps_a_page_the_ssrf_guard_refused() -> None:
     assert hook.download_pdf(url, _session=s) is None
 
 
-def test_download_pdf_sweeps_a_redirect_target_this_navigation_committed() -> None:
+@pytest.mark.parametrize(
+    "lands_on",
+    ["https://journal.test/landing", "https://journal.test/previous?t=3"],
+    ids=["moved-to-a-new-url", "stale-document-rewrote-its-own-url"],
+)
+def test_download_pdf_never_sweeps_after_a_failed_navigation(lands_on: str) -> None:
+    """A changed URL does not prove this request loaded the page.
+
+    A stale single-page app rewrites its own URL (`pushState`) while the old
+    document stays loaded; sweeping it returned paper A's PDF for paper B
+    (review of a322bf9, real Chromium). A slow page of this request's own is
+    lost too, by design.
+    """
     s = _raising_session(
         start_url="https://journal.test/previous",
-        lands_on="https://journal.test/landing",
+        lands_on=lands_on,
         error=TimeoutError("Timeout 60000ms exceeded"),
     )
-    assert hook.download_pdf("https://resolver.test/doi", _session=s) == b"%PDF-swept"
+    assert hook.download_pdf("https://resolver.test/doi", _session=s) is None
+    assert not any(call[0] == "evaluate" for call in s.calls)
+
+
+def test_challenge_wait_refusal_stops_the_sweep() -> None:
+    """A challenge-loop reload refused by the landing check must not be swept."""
+    from pzi.safe_http import SsrfBlocked
+    from tests.fake_session import FakeBrowserSession
+
+    class RefusedOnReload(FakeBrowserSession):
+        navigations = 0
+
+        def navigate(self, url, **kwargs):
+            self.calls.append(("navigate", url))
+            self.navigations += 1
+            if self.navigations == 1:
+                return type("R", (), {"headers": {"content-type": "text/html"}, "status": 200})()
+            raise SsrfBlocked("browser landed on a non-public URL")
+
+        def wait_for_timeout(self, ms):
+            pass
+
+    s = RefusedOnReload(
+        fetch_results=[(200, "text/html", b"<html>"), (200, "text/html", b"<html>")],
+        evaluate_results=[["https://journal.test/refused.pdf"]],
+    )
+    assert hook.download_pdf("https://journal.test/chal", _session=s, challenge_timeout=5) is None
+    assert not any(call[0] == "evaluate" for call in s.calls)
 
 
 def test_download_pdf_follows_candidate_links_after_html_page() -> None:

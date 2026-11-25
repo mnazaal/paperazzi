@@ -597,6 +597,14 @@ def test_a_parameter_naming_pdf_is_not_a_pdf_claim() -> None:
     assert response.body_calls == 0 and result.refused is None and not result.is_pdf()
 
 
+@pytest.mark.parametrize(
+    "ctype",
+    ['text/html; a="x, application/pdf;y"', 'text/html; a="x\\", application/pdf"'],
+)
+def test_a_comma_inside_a_quoted_parameter_is_not_a_second_type(ctype: str) -> None:
+    assert not bs._claims_pdf(ctype)
+
+
 def test_a_pdf_among_joined_content_types_still_counts() -> None:
     """Playwright joins repeated Content-Type headers with ", "."""
     joined = bs.FetchResult(

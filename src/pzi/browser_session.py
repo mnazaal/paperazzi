@@ -83,8 +83,29 @@ def _claims_pdf(content_type: str) -> bool:
     """
     return any(
         part.split(";", 1)[0].strip().lower() == "application/pdf"
-        for part in content_type.split(",")
+        for part in _split_header_values(content_type)
     )
+
+
+def _split_header_values(value: str) -> list[str]:
+    """Split a header on commas outside quoted strings (RFC 9110 §5.6)."""
+    parts: list[str] = []
+    current: list[str] = []
+    quoted = escaped = False
+    for char in value:
+        if escaped:
+            escaped = False
+        elif quoted and char == "\\":
+            escaped = True
+        elif char == '"':
+            quoted = not quoted
+        elif char == "," and not quoted:
+            parts.append("".join(current))
+            current = []
+            continue
+        current.append(char)
+    parts.append("".join(current))
+    return parts
 
 
 def _declared_encoding(headers: Any) -> str | None:
