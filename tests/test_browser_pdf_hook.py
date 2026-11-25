@@ -466,6 +466,31 @@ def test_download_pdf_uses_direct_request_when_pdf() -> None:
     assert result == b"%PDF-direct"
 
 
+def test_download_pdf_does_not_sweep_a_page_its_navigation_never_reached() -> None:
+    """A failed navigation leaves the shared page on the previous request's page.
+
+    Sweeping it returned paper A's PDF for a request about paper B (review of
+    414506c, executed against real Chromium).
+    """
+    from tests.fake_session import FakeBrowserSession
+
+    class StalePage(FakeBrowserSession):
+        def navigate(self, url, **kwargs):
+            self.calls.append(("navigate", url))
+            raise RuntimeError("Download is starting")
+
+    s = StalePage(
+        fetch_results=[
+            (200, "text/html", b"<html>"),
+            (200, "application/pdf", b"%PDF-paper-A"),
+        ],
+        evaluate_results=[["https://journal.test/paperA.pdf"]],
+    )
+    result = hook.download_pdf("https://journal.test/paperB.pdf", _session=s)
+    assert result is None
+    assert ("fetch_direct", "https://journal.test/paperA.pdf") not in s.calls
+
+
 def test_download_pdf_follows_candidate_links_after_html_page() -> None:
     from tests.fake_session import FakeBrowserSession
     s = FakeBrowserSession(

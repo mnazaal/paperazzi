@@ -429,10 +429,15 @@ def download_pdf(
 
         # 2. Navigate to URL (fallback — browser handles auth via profile cookies)
         response = None
+        navigation_failed = False
         try:
             response = session.navigate(pdf_url, wait_until="domcontentloaded", timeout=60000)
         except Exception:
-            pass
+            # The page still shows whatever this shared session last loaded,
+            # usually another request's landing page. Its links are not this
+            # URL's candidates: sweeping them returned paper A's PDF for a
+            # request about paper B.
+            navigation_failed = True
 
         if response is not None:
             navigated = FetchResult.from_response(response)
@@ -444,6 +449,9 @@ def download_pdf(
             pdf_bytes = _wait_for_verified_pdf(session, pdf_url, timeout=challenge_timeout)
             if pdf_bytes is not None:
                 return pdf_bytes
+
+        if navigation_failed:
+            return None
 
         # 3. HTML page — look for PDF candidate links
         dismiss_fn(session.page)
