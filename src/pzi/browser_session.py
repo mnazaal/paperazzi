@@ -386,6 +386,14 @@ class BrowserSession:
                     if response.status not in _REDIRECT_STATUSES:
                         ct = response.headers.get("content-type", "")
                         encoding = _declared_encoding(response.headers)
+                        if encoding is not None and "application/pdf" not in ct:
+                            # Not a PDF either way, so it is answered unread and
+                            # unrefused: a refusal note turned a compressed HTML
+                            # page's "no PDF" into an error, and reading it would
+                            # let the driver decode it past the cap.
+                            return FetchResult(
+                                status=response.status, content_type=ct, body=b""
+                            )
                         if encoding is not None:
                             # Refused from the headers: `body()` would make the
                             # driver buffer the decoded bytes, past the cap.
@@ -535,7 +543,11 @@ class FetchResult:
         round trip that can itself raise on a response that carries none.
         """
         content_type = response.headers.get("content-type", "")
-        encoding = _declared_encoding(response.headers)
+        claims_pdf = "application/pdf" in content_type
+        # Only a body pzi would read is refused for its encoding. A compressed
+        # HTML landing page is ordinary since navigations keep Chrome's default
+        # Accept-Encoding, and its body is never read here.
+        encoding = _declared_encoding(response.headers) if claims_pdf else None
         if encoding is not None:
             return cls(
                 status=-1,
@@ -543,7 +555,7 @@ class FetchResult:
                 body=b"",
                 refused=_encoding_refusal(encoding),
             )
-        body = response.body() if "application/pdf" in content_type else b""
+        body = response.body() if claims_pdf else b""
         return cls(
             status=getattr(response, "status", 200),
             content_type=content_type,

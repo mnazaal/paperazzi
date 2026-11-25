@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import socket
 import threading
+import types
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -537,6 +538,45 @@ def test_from_response_reads_an_identity_body() -> None:
     )
     result = bs.FetchResult.from_response(response)
     assert response.body_calls == 1 and result.is_pdf()
+
+
+def test_from_response_does_not_refuse_a_compressed_html_page() -> None:
+    """Navigations keep Chrome's Accept-Encoding, so a gzip landing page is normal.
+
+    Its body is never read, so it is not refused: refusing it turned an
+    ordinary no-PDF page into a 503 from POST /browser/download.
+    """
+    response = _FakeNavResponse({"content-type": "text/html", "content-encoding": "gzip"})
+    result = bs.FetchResult.from_response(response)
+    assert response.body_calls == 0
+    assert result.refused is None and result.status == 200 and not result.is_pdf()
+
+
+def _direct(headers):
+    response = _FakeNavResponse(headers)
+    session = bs.BrowserSession(
+        playwright=None,
+        browser_ref=None,
+        page=types.SimpleNamespace(
+            request=types.SimpleNamespace(get=lambda url, **kwargs: response)
+        ),
+        url_allowed=lambda url: True,
+    )
+    return session, response
+
+
+def test_fetch_direct_neither_refuses_nor_reads_a_compressed_html_page() -> None:
+    session, response = _direct({"content-type": "text/html", "content-encoding": "gzip"})
+    result = session.fetch_direct("https://example.org/landing")
+    assert response.body_calls == 0
+    assert result.refused is None and not result.is_pdf()
+
+
+def test_fetch_direct_still_refuses_a_compressed_pdf() -> None:
+    session, response = _direct({"content-type": "application/pdf", "content-encoding": "gzip"})
+    result = session.fetch_direct("https://example.org/paper.pdf")
+    assert response.body_calls == 0
+    assert result.refused is not None and "gzip" in result.refused
 
 
 def test_download_pdf_reports_a_refused_encoding() -> None:
