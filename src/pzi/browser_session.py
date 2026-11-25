@@ -68,8 +68,14 @@ PLAYWRIGHT_INSTALL_HINT = (
 #: Sent on direct PDF reads (`fetch_direct`) only; navigations keep the
 #: browser's default headers. The pinning proxy caps wire bytes, and the driver
 #: decodes after that, so an encoded body can inflate past the cap. HTTPS is
-#: opaque to the proxy, so ask for none and refuse any body that still declares one.
+#: opaque to the proxy, so ask for none and refuse any PDF body that still declares
+#: one. A non-PDF response is never read for its encoding's sake.
 _IDENTITY_HEADERS = {"Accept-Encoding": "identity"}
+
+
+def _claims_pdf(content_type: str) -> bool:
+    """Whether a Content-Type names a PDF; media types are case-insensitive."""
+    return "application/pdf" in content_type.lower()
 
 
 def _declared_encoding(headers: Any) -> str | None:
@@ -386,7 +392,7 @@ class BrowserSession:
                     if response.status not in _REDIRECT_STATUSES:
                         ct = response.headers.get("content-type", "")
                         encoding = _declared_encoding(response.headers)
-                        if encoding is not None and "application/pdf" not in ct:
+                        if encoding is not None and not _claims_pdf(ct):
                             # Not a PDF either way, so it is answered unread and
                             # unrefused: a refusal note turned a compressed HTML
                             # page's "no PDF" into an error, and reading it would
@@ -528,7 +534,7 @@ class FetchResult:
         """True if the response looks like a PDF."""
         if self.status != 200:
             return False
-        if self.content_type and "application/pdf" in self.content_type:
+        if self.content_type and _claims_pdf(self.content_type):
             return self.body.startswith(b"%PDF-")
         return False
 
@@ -543,7 +549,7 @@ class FetchResult:
         round trip that can itself raise on a response that carries none.
         """
         content_type = response.headers.get("content-type", "")
-        claims_pdf = "application/pdf" in content_type
+        claims_pdf = _claims_pdf(content_type)
         # Only a body pzi would read is refused for its encoding. A compressed
         # HTML landing page is ordinary since navigations keep Chrome's default
         # Accept-Encoding, and its body is never read here.

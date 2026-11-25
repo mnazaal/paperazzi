@@ -452,7 +452,7 @@ Three front-ends — the CLI (`pzi.cli` → `pzi.commands.*`), the local HTTP AP
 
 Outbound fetching has no whole-operation deadline. The connect-time DNS lookup is bounded by the same 2 s budget as the pre-fetch URL check, but the rest of a fetch is bounded only by the size cap and the retry count: the socket timeout applies to each read, so a server that trickles one byte per second under a 2 s socket timeout kept one fetch open for 9.0 s, and a 5-hop redirect chain (each hop answered in 1 s, fresh socket timeout per hop) took 6.0 s. This is separate from the inbound request deadline of the HTTP API.
 
-The size cap on the browser fallback counts bytes received. On direct PDF reads pzi sends `Accept-Encoding: identity` and refuses a response that still declares a `Content-Encoding`, before reading its body. Playwright's driver may already have decoded such a response, so a server that ignores the request can make the driver hold the decoded body: in local measurements a 64 MiB decoded body added 60 to 154 MiB of resident memory before the refusal.
+The size cap on the browser fallback counts bytes received. On direct PDF reads pzi sends `Accept-Encoding: identity`. On every read, direct or navigated, it refuses a response whose `Content-Type` is `application/pdf` and which still declares a `Content-Encoding`, before reading its body; a compressed response of any other type counts as no PDF and is not read. Playwright's driver may already have decoded such a response, so a server that ignores the request can make the driver hold the decoded body: in local measurements a 64 MiB decoded body added 60 to 154 MiB of resident memory before the refusal.
 
 ## Sharing the library with another program
 

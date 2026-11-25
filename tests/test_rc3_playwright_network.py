@@ -579,6 +579,17 @@ def test_fetch_direct_still_refuses_a_compressed_pdf() -> None:
     assert result.refused is not None and "gzip" in result.refused
 
 
+@pytest.mark.parametrize("ctype", ["Application/PDF", "APPLICATION/PDF; charset=x"])
+def test_pdf_media_type_is_matched_case_insensitively(ctype: str) -> None:
+    identity = bs.FetchResult(status=200, content_type=ctype, body=b"%PDF-1.4 x")
+    assert identity.is_pdf()
+    session, response = _direct({"content-type": ctype, "content-encoding": "gzip"})
+    refused = session.fetch_direct("https://example.org/paper.pdf")
+    assert response.body_calls == 0 and refused.refused is not None
+    nav = _FakeNavResponse({"content-type": ctype, "content-encoding": "gzip"})
+    assert bs.FetchResult.from_response(nav).refused is not None
+
+
 def test_download_pdf_reports_a_refused_encoding() -> None:
     from pzi.browser_pdf_hook import download_pdf
     from tests.fake_session import FakeBrowserSession
