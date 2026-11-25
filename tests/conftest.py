@@ -136,11 +136,11 @@ def _dump_app_config(config: AppConfig) -> str:
 def _hermetic_dns(request, monkeypatch):
     """Make the SSRF guard's hostname lookup deterministic and offline.
 
-    Scope: this patches only ``url_safety.resolve_host_with_timeout``.
+    Function scope: this patches only ``url_safety.resolve_host_with_timeout``.
     Connect-time resolution in ``safe_http.resolve_pinned_ips`` still calls
     the real ``getaddrinfo``, so it is not offline.
 
-    Scope: this fixture, ``_block_non_loopback_sockets`` and ``_clear_xdg_env``
+    Process scope: this fixture, ``_block_non_loopback_sockets`` and ``_clear_xdg_env``
     patch only the pytest process (``monkeypatch`` on in-process objects). A
     test that spawns a child process (the ``pzi`` console script, ``python -m``)
     gets none of them: the child is offline only if the test's inherited
