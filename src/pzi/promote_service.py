@@ -397,7 +397,7 @@ def promote_bib(
         queue.clear()
 
     def note_still_unpublished(
-        citekey: str, provider_errors: list[str], looked_up: dict[str, Any]
+        citekey: str, provider_errors: list[str], looked_up: Mapping[str, Any]
     ) -> None:
         """Record a negative answer for the ledger — if it is really an answer.
 
@@ -615,7 +615,7 @@ def promote_bib(
         if item["published_citekey"] is not None:  # pragma: no branch
             existing_citekeys.add(item["published_citekey"])
             if item["action"] in {"create", "update"}:
-                published_record = dict(candidate)
+                published_record = cast(NormalizedRecord, dict(candidate))
                 published_record["citekey"] = item["published_citekey"]
                 known_records.append(published_record)
 

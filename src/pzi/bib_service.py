@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from typing import Any, NotRequired, TypeAlias, TypedDict, TypeVar
+from typing import Any, Literal, NotRequired, TypeAlias, TypedDict, TypeVar
 
 from pzi.bib_repository import (
     delete_bib_entry,
@@ -13,6 +13,7 @@ from pzi.bib_repository import (
     read_bib_file_with_failures,
     with_bib_lock,
 )
+from pzi.bibtex import NormalizedRecord
 from pzi.config import BibResolutionFailure, load_bib_target, load_config_file
 from pzi.errors import REASON_CONFIG, REASON_NOT_FOUND
 from pzi.identifiers import is_preprint
@@ -290,8 +291,66 @@ class EntryRecord(TypedDict):
     isbn: str | None
 
 
-EntriesResult: TypeAlias = dict[str, Any]
-DetailResult: TypeAlias = dict[str, Any]
+class EntriesError(TypedDict):
+    """`list_entries` when the library target did not resolve."""
+
+    status: Literal["error"]
+    message: str
+    #: Structured failure reason (`pzi.errors.REASON_*`). Both the exit-code
+    #: and HTTP-status mappers read it.
+    reason: str
+    errors: list[str]
+
+
+class EntriesOk(TypedDict):
+    """One page of a library listing."""
+
+    status: Literal["ok"]
+    bib_name: str
+    bib_path: str
+    papers_dir: str
+    #: Entries in the whole library, not on this page.
+    total: int
+    offset: int
+    limit: int
+    sort: str
+    items: list[EntrySummary]
+    errors: list[str]
+    #: Blocks the parser dropped and a missing library file. Non-fatal.
+    warnings: list[str]
+
+
+EntriesResult: TypeAlias = EntriesOk | EntriesError
+
+
+class DetailError(TypedDict):
+    """`entry_detail` when the target did not resolve or the citekey is absent."""
+
+    status: Literal["error"]
+    citekey: str
+    message: str
+    #: Structured failure reason (`pzi.errors.REASON_*`).
+    reason: str
+    errors: list[str]
+    #: Present when the library resolved and the citekey was not in it.
+    bib_name: NotRequired[str]
+
+
+class DetailOk(TypedDict):
+    """One entry's full record."""
+
+    status: Literal["ok"]
+    citekey: str
+    bib_name: str
+    bib_path: str
+    #: The parsed record, plus `entry_type` read off the parsed entry.
+    record: NormalizedRecord
+    errors: list[str]
+    #: Blocks the parser dropped and a missing library file. Non-fatal.
+    warnings: list[str]
+
+
+DetailResult: TypeAlias = DetailOk | DetailError
 
 
 def list_entries(
@@ -427,7 +486,7 @@ def entry_detail(
             "errors": [f"no entry with citekey {citekey}"],
         }
 
-    record = records[index] if index < len(records) else {}
+    record: NormalizedRecord = records[index] if index < len(records) else {}
     return {
         "status": "ok",
         "citekey": citekey,
@@ -446,7 +505,7 @@ def entry_detail(
     }
 
 
-def _author_names(record: dict[str, Any]) -> list[str]:
+def _author_names(record: Mapping[str, Any]) -> list[str]:
     """Author names from a record, one per entry, as `Family, Given`.
 
     A list, matching `export --format json` — the entries listing used to emit a

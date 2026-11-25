@@ -21,7 +21,7 @@ import urllib.parse
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import NamedTuple, NotRequired, TextIO, TypedDict
+from typing import TYPE_CHECKING, NamedTuple, NotRequired, TextIO, TypedDict
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -31,6 +31,9 @@ import portalocker
 from pzi.node_runtime import ensure_node
 from pzi.pdf_planning import env_flag
 from pzi.ts_egress_guard import note_replaced_proxy, proxy_env, shared_guard
+
+if TYPE_CHECKING:
+    from pzi.config import AppConfig
 
 # ---------------------------------------------------------------------------
 # Pinned repository references.
@@ -919,7 +922,7 @@ def wait_for_ts(
 # ---------------------------------------------------------------------------
 
 
-def _ts_url_from_config(config: dict[str, object]) -> str | None:
+def _ts_url_from_config(config: AppConfig) -> str | None:
     url = config.get("translation_server_url")
     if isinstance(url, str) and url.strip():
         return url
@@ -991,7 +994,7 @@ def sigterm_unwinds() -> Iterator[None]:
 
 @contextmanager
 def backend_session(
-    config: dict[str, object],
+    config: AppConfig,
     home_dir: str,
     *,
     interactive: bool = True,

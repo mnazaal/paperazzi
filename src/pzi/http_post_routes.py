@@ -27,6 +27,7 @@ from pzi.clean_service import plan_pdf_disposal
 from pzi.config import (
     DEFAULT_API_LISTEN_HOST,
     DEFAULT_API_LISTEN_PORT,
+    AppConfig,
     load_config_file,
 )
 from pzi.http_binary_routes import path_confined_to
@@ -207,7 +208,7 @@ def capture_input_from_http_body(
 def capture_options_from_http_body(
     body: dict[str, Any],
     *,
-    config: dict[str, Any] | None,
+    config: AppConfig | None,
 ) -> CaptureOptions:
     """Build pure capture options from HTTP body and normalized config."""
     cfg = config or {}
@@ -853,7 +854,7 @@ def _handle_attach_pdf_post(
     status = status_for_service_result(result)
     if status != 200 and session is not None and attach_session_store is not None:
         attach_session_store.restore(session)
-    return status, result
+    return status, cast(dict[str, Any], result)
 
 
 def _origin_candidate(body: Any) -> str | None:
@@ -929,7 +930,7 @@ def _handle_attach_pdf_raw_post(
     status = status_for_service_result(result)
     if status != 200 and session is not None and attach_session_store is not None:
         attach_session_store.restore(session)
-    return status, result
+    return status, cast(dict[str, Any], result)
 
 
 def _handle_tags_post(

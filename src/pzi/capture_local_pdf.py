@@ -44,7 +44,7 @@ from pzi.translation_server import fetch_web_translations
 AddRecordResult: TypeAlias = AddResult
 FetchPdf = Callable[..., tuple[str | None, str | None, str | None]]
 FetchRecord = Callable[..., tuple[NormalizedRecord, list[str], list[dict]]]
-FetchSearch = Callable[..., list[dict[str, object]]]
+FetchSearch = Callable[..., Sequence[Mapping[str, object]]]
 CopyPdf = Callable[..., tuple[str | None, str | None]]
 EnsureCitekey = Callable[..., NormalizedRecord]
 AddRecord = Callable[..., AddRecordResult]

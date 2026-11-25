@@ -5,7 +5,7 @@ from __future__ import annotations
 import functools
 import json
 from collections.abc import Callable, Mapping
-from typing import Any, TypeAlias, cast
+from typing import TypedDict, cast
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
@@ -18,8 +18,22 @@ from pzi.identifiers import (
     normalize_url,
 )
 
-TranslationAttachment: TypeAlias = dict[str, Any]
-TranslationResult: TypeAlias = dict[str, Any]
+
+class TranslationAttachment(TypedDict):
+    """A PDF attachment a translator listed, as `extract_pdf_attachments` keeps it."""
+
+    title: str | None
+    url: str
+    mime_type: str | None
+
+
+class TranslationResult(TypedDict):
+    """One translation-server item, as `normalize_translation_item` builds it."""
+
+    #: Zotero's `itemType` (`journalArticle`, `webpage`, …), when given.
+    item_type: str | None
+    record: NormalizedRecord
+    attachments: list[TranslationAttachment]
 
 JsonPost = Callable[[str, object], object]
 TextPost = Callable[[str, str], object]

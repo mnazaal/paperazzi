@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import NotRequired, TypedDict, cast
 
 from pzi.bib_repository import read_bib_file_with_notices
@@ -189,7 +190,7 @@ def _failed_search(
 
 
 def _match_record(
-    record: dict[str, object],
+    record: Mapping[str, object],
     *,
     query: str | None,
     author: str | None,

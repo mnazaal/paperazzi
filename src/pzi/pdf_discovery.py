@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import re as _re
 from collections.abc import Callable, Mapping
-from typing import Any, Literal, TypeAlias, TypedDict, cast
+from typing import Any, Literal, TypedDict, cast
 from urllib.parse import urlsplit, urlunsplit
 
 from pzi.bibtex import NormalizedRecord
@@ -61,8 +61,6 @@ class PdfDiscoveryContext(TypedDict, total=False):
     exclude_pdf_urls: frozenset[str] | set[str] | None
     metadata_fetch_text: Callable[..., str] | None
     discovery_diagnostics: list[str]
-
-PdfCandidate: TypeAlias = dict[str, Any]
 
 PdfDiscoveryStep = Callable[[NormalizedRecord, PdfDiscoveryContext], NormalizedRecord]
 

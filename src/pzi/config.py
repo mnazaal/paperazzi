@@ -8,7 +8,7 @@ import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, TypeAlias, TypedDict
+from typing import Literal, NotRequired, TypedDict
 from urllib.parse import urlsplit
 
 from pzi.fileio import directory_folds_case
@@ -840,7 +840,17 @@ DEFAULT_DESKTOP_FALLBACK_HOSTS = [
     "authorea.com",
 ]
 
-LoadConfigResult: TypeAlias = dict[str, Any]
+class LoadConfigResult(TypedDict):
+    """A config file loaded: the validated config, or why there is none.
+
+    `config` is None exactly when `errors` is non-empty.
+    """
+
+    config: AppConfig | None
+    errors: list[str]
+    #: Keys the loader does not know. Absent when the file could not be parsed.
+    warnings: NotRequired[list[str]]
+    path: str
 
 
 def _xdg_base_dir(env_var: str, home_dir: str, fallback_rel: str) -> str:

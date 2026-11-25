@@ -41,7 +41,7 @@ def run_doctor_command(args, *, home_dir, config_path, stdout, stderr) -> int:
         # `argv[0]` resolution is a pure filesystem lookup, so it stays inside
         # the "offline" contract `--config-only` documents — unlike the rest of
         # `doctor_check`, which probes live services.
-        cmd_checks = check_cmd_resolutions(cfg["config"]) if valid else []
+        cmd_checks = check_cmd_resolutions(cfg["config"]) if cfg["config"] is not None else []
         findings = doctor_advisory_problems({"cmd_checks": cmd_checks}) if valid else []
         if getattr(args, "json", False):
             # This branch returns before the `--json` check below, so

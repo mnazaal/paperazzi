@@ -7,10 +7,11 @@ import os
 import re
 from collections.abc import Callable, Collection, Iterable, Mapping
 from pathlib import Path
-from typing import Any, TypeAlias, cast
+from typing import Any, Literal, NotRequired, TypeAlias, TypedDict, cast
 
 from pzi.add_planning import next_pdf_candidate_for_config
 from pzi.bib_repository import (
+    ReadBibResult,
     StalePlanError,
     find_entry_index,
     read_bib_file,
@@ -185,17 +186,108 @@ def _fallback_kwargs(config: AppConfig) -> dict[str, Any]:
     }
 
 
-PdfRetryResult: TypeAlias = dict[str, Any]
+class PdfRetryResult(TypedDict):
+    """`retry_pdf`: one entry's PDF fetched and recorded, or why not."""
+
+    status: str
+    #: None when the library target did not resolve.
+    bib_name: str | None
+    citekey: str
+    local_pdf_path: str | None
+    message: str
+    #: Structured failure reason (`pzi.errors.REASON_*`) — present only on
+    #: failure.
+    reason: NotRequired[str]
+    warnings: list[str]
+    errors: list[str]
 
 
+class PdfRetryFailure(TypedDict):
+    """One entry `retry_failed_pdfs` attempted and could not attach."""
 
-PdfAttachResult: TypeAlias = dict[str, Any]
+    citekey: str
+    error: str
 
 
+class PdfRetryBatchError(TypedDict):
+    """`retry_failed_pdfs` when the library target did not resolve."""
 
-PdfAttachBytesResult: TypeAlias = dict[str, Any]
+    status: Literal["error"]
+    bib_name: None
+    message: str
+    reason: str
+    errors: list[str]
 
-PdfExtractionResult: TypeAlias = dict[str, Any]
+
+class PdfRetryBatchOk(TypedDict):
+    """`retry_failed_pdfs`: the sweep's counts and per-entry failures."""
+
+    status: Literal["ok"]
+    bib_name: str
+    #: Entries attempted: those with no usable PDF and a URL to try.
+    total: int
+    succeeded: int
+    skipped_already_has_pdf: int
+    skipped_no_url: int
+    failures: list[PdfRetryFailure]
+    #: Absent on an empty sweep unless a credential command failed.
+    warnings: NotRequired[list[str]]
+
+
+PdfRetryBatchResult: TypeAlias = PdfRetryBatchOk | PdfRetryBatchError
+
+
+class PdfAttachResult(TypedDict):
+    """`attach_pdf`: a PDF from a URL or local path recorded on one entry."""
+
+    status: str
+    #: None when the library target did not resolve.
+    bib_name: str | None
+    citekey: str
+    local_pdf_path: str | None
+    #: The URL or path the caller passed.
+    source: str
+    message: str
+    #: Structured failure reason — present only on failure.
+    reason: NotRequired[str]
+    warnings: list[str]
+    errors: list[str]
+
+
+class PdfAttachBytesResult(TypedDict):
+    """`attach_pdf_bytes`/`attach_pdf_raw_bytes`: a PDF body recorded on one entry.
+
+    The `pdf_*` keys are set only on success, in the shape `pzi add` reports a
+    PDF, so the HTTP layer can render both the same way.
+    """
+
+    status: str
+    #: None when the library target did not resolve.
+    bib_name: str | None
+    citekey: str
+    local_pdf_path: str | None
+    source_url: str | None
+    message: str
+    #: Structured failure reason — present only on failure.
+    reason: NotRequired[str]
+    warnings: list[str]
+    errors: list[str]
+    pdf_path: NotRequired[str]
+    pdf_url: NotRequired[str | None]
+    pdf_status: NotRequired[str]
+    pdf_error: NotRequired[str | None]
+    pdf_suggestion: NotRequired[str | None]
+
+
+class PdfExtractionResult(TypedDict):
+    """What `extract_pdf_metadata` read off a PDF's first pages."""
+
+    doi: str | None
+    title: str | None
+    #: Up to the first 2000 characters of extracted text.
+    text_sample: str | None
+    #: Why the file could not be parsed; set only by `empty_pdf_metadata`.
+    unreadable: NotRequired[str | None]
 
 _PDF_BROWSER_RETRY_HINT = "hint: open the actual PDF tab in your browser and click pzi again"
 
@@ -403,7 +495,7 @@ def retry_failed_pdfs(
     home_dir: str,
     bib_selector: str | None,
     deep: bool = False,
-) -> PdfRetryResult:
+) -> PdfRetryBatchResult:
     """Retry PDF download for all entries that need it (no local PDF).
 
     Returns a summary result with per-entry success/failure details.
@@ -469,7 +561,7 @@ def retry_failed_pdfs(
         needs_retry.append((i, citekey, pdf_url))
 
     if not needs_retry:
-        early: PdfRetryResult = {
+        early: PdfRetryBatchOk = {
             "status": "ok",
             "bib_name": bib["name"],
             "total": 0,
@@ -484,7 +576,7 @@ def retry_failed_pdfs(
         return early
 
     succeeded = 0
-    failures: list[dict[str, Any]] = []
+    failures: list[PdfRetryFailure] = []
     warnings: list[str] = []
     # Files a committed entry in this batch now points at. `existing_pdf_paths`
     # is a single pre-batch snapshot, so it cannot know about them, and a later
@@ -905,7 +997,7 @@ def _attach_pdf_data(
     }
 
 
-def _record_at(read_result: dict[str, Any], index: int) -> dict[str, object]:
+def _record_at(read_result: ReadBibResult, index: int) -> dict[str, object]:
     records = read_result.get("records")
     if isinstance(records, list) and 0 <= index < len(records):
         value = records[index]

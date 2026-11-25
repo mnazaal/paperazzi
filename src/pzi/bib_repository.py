@@ -20,7 +20,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from pathlib import Path
-from typing import Any, NamedTuple, NotRequired, TypeAlias, TypedDict, cast
+from typing import Any, NamedTuple, NotRequired, TypedDict, cast
 
 import portalocker
 from bibtexparser.library import Library
@@ -192,7 +192,15 @@ def with_bib_lock(
             portalocker.unlock(lock_fh)
 
 
-ReadBibResult: TypeAlias = dict[str, Any]
+class ReadBibResult(TypedDict):
+    """A parsed library: its entries and their normalized records.
+
+    `records[i]` is `entries[i]` projected through `bibtex_entry_to_record`;
+    the two lists are positionally parallel.
+    """
+
+    entries: list[BibtexEntry]
+    records: list[NormalizedRecord]
 
 
 class UpdateBibEntryResult(TypedDict):

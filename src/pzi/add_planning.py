@@ -1096,7 +1096,7 @@ def fetch_record_for_input(
             else fetch_web(normalized, server_url=server_url, cookies=cookies),
             errors=provider_errors,
         )
-        translation_results.extend(results or [])
+        translation_results.extend(cast("list[dict]", results or []))
         url_floor: Mapping[str, Any] | None = None
         if results:
             selected = select_best_metadata_result(results, fallback)

@@ -668,7 +668,7 @@ def entries(
         limit=resolved_limit,
         sort=sort,
     )
-    typed = dict(result)
+    typed: dict[str, Any] = dict(result)
     items = list(_unwrap(typed, "items"))
     _emit_warnings(typed)
     return {
@@ -725,11 +725,12 @@ def get(
     )
     record = _unwrap(result, "record")
     _emit_warnings(result)
-    # `entry_detail` is typed `dict[str, Any]`, so the cast is where the claim
-    # "this is an `EntryRecord`" is actually made. What backs it is
-    # `bibtex_entry_to_record`, which sets exactly these keys on every record it
-    # parses, and the conformance test in `tests/test_public_api.py`, which
-    # compares a real call's keys against the declaration.
+    # `entry_detail` types the record as the wide `NormalizedRecord`, so the
+    # cast is where the claim "this is an `EntryRecord`" is actually made. What
+    # backs it is `bibtex_entry_to_record`, which sets exactly these keys on
+    # every record it parses, and the conformance test in
+    # `tests/test_public_api.py`, which compares a real call's keys against the
+    # declaration.
     return cast("EntryRecord", dict(record))
 
 

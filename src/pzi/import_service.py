@@ -12,6 +12,7 @@ from pzi.add_service import add_records_to_bib_batch
 from pzi.bib_repository import read_bib_file
 from pzi.bib_serialize import parse_bibtex_for_import, resolved_attachment_paths
 from pzi.bibtex import (
+    BibtexEntry,
     _unescape_file_component,
     bibtex_entry_to_record,
     escape_file_component,
@@ -507,7 +508,7 @@ def _unmerged_attachment_warnings(
     if not merged_sources:
         return []
     entries = read_bib_file(bib_path)["entries"]
-    by_key = {entry.get("citekey"): entry for entry in entries}
+    by_key: dict[str | None, BibtexEntry] = {entry.get("citekey"): entry for entry in entries}
 
     def located(paths: list[str]) -> set[str]:
         return {str(Path(path).expanduser().resolve()) for path in paths}

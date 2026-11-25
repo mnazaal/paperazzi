@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import ipaddress
 import socket
-from typing import Any, Literal, TypeAlias, TypedDict
+from typing import TYPE_CHECKING, Literal, TypeAlias, TypedDict
 
 from pzi.http_security import (
     DEFAULT_MAX_BODY_BYTES,
@@ -16,6 +16,9 @@ from pzi.http_security import (
     build_http_security_config,
     loopback_bind_host,
 )
+
+if TYPE_CHECKING:
+    from pzi.config import AppConfig
 
 
 class ServerPlanError(TypedDict):
@@ -42,7 +45,7 @@ def build_server_plan(
     *,
     host: str | None,
     port: int | None,
-    config: dict[str, Any] | None,
+    config: AppConfig | None,
     auth_token: str | None = None,
     allow_no_auth: bool = False,
 ) -> ServerPlan:

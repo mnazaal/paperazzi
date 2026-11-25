@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, NotRequired, TypedDict
 
 from pzi.capture_context import resolve_optional_value
-from pzi.config import load_config_file
+from pzi.config import AppConfig, load_config_file
 from pzi.errors import REASON_CONFIG, PziError
 from pzi.metadata_sources import probe_s2_api
 
@@ -216,7 +216,7 @@ def _resolve_cmd_argv0(command: str) -> tuple[str | None, str | None]:
     return None, f"not found on PATH: {argv0}"
 
 
-def check_cmd_resolutions(config: dict[str, Any]) -> list[DoctorCmdCheck]:
+def check_cmd_resolutions(config: AppConfig) -> list[DoctorCmdCheck]:
     """Whether `argv[0]` resolves for every configured command-valued key.
 
     Covers `CMD_CONFIG_KEYS`. A key that is unset or blank is skipped rather
@@ -476,7 +476,7 @@ def _unguarded_server_note(url: str | None, reachable: bool) -> list[str]:
     ]
 
 
-def _credential_status(config: dict[str, Any]) -> dict[str, str]:
+def _credential_status(config: AppConfig) -> dict[str, str]:
     return {
         "contact_email": _configured_status(
             cmd=config.get("contact_email_cmd"), value=config.get("contact_email")

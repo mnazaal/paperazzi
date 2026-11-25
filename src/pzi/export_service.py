@@ -5,9 +5,9 @@ from __future__ import annotations
 import csv
 import io
 import json as _json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any, TypedDict, cast
 
 from pzi.bib_repository import (
     ReadBibResult,
@@ -273,7 +273,9 @@ def _ris_value(value: object) -> str:
 def export_ris(bib_path: str) -> ExportResult:
     """Export a BibTeX library as RIS formatted text string."""
     raw, dropped = _read_for_export(bib_path)
-    records = raw["records"]
+    # Read as plain mappings: the loop below also accepts the string forms of
+    # `authors` and `tags`, which the record type does not declare.
+    records = cast(Sequence[Mapping[str, object]], raw["records"])
     entries = raw["entries"]
 
     lines: list[str] = []
