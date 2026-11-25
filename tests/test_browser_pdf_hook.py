@@ -156,19 +156,26 @@ def test_discovery_js_string() -> None:
 
 # === discover_pdf_url with FakeBrowserSession ===
 
+#: A navigation response: `discover_pdf_url` reads the page only after a real
+#: load (`goto` answers None for a same-document navigation, which loads nothing).
+_LOADED_PAGE = object()
+
+
 def test_discover_no_candidates() -> None:
-    s = FakeBrowserSession(evaluate_results=[[]])
+    s = FakeBrowserSession(goto_results=[_LOADED_PAGE], evaluate_results=[[]])
     result = hook.discover_pdf_url("https://example.com", _session=s)
     assert result is None
+    assert ("evaluate", hook.DISCOVERY_JS) in s.calls
 
 
 def test_discover_no_candidates_leaves_errors_empty() -> None:
     """A page that genuinely has no PDF must not look like a broken session."""
-    s = FakeBrowserSession(evaluate_results=[[]])
+    s = FakeBrowserSession(goto_results=[_LOADED_PAGE], evaluate_results=[[]])
     errs: list[str] = []
     result = hook.discover_pdf_url("https://example.com", _session=s, errors=errs)
     assert result is None
     assert errs == []
+    assert ("evaluate", hook.DISCOVERY_JS) in s.calls
 
 
 def test_discover_reports_crashed_session_in_errors() -> None:
@@ -188,11 +195,6 @@ def test_discover_without_errors_param_still_swallows_crash() -> None:
     s = FakeBrowserSession()
     s.close()
     assert hook.discover_pdf_url("https://example.com", _session=s) is None
-
-
-#: A navigation response: `discover_pdf_url` reads the page only after a real
-#: load (`goto` answers None for a same-document navigation, which loads nothing).
-_LOADED_PAGE = object()
 
 
 def test_discover_candidates_found() -> None:

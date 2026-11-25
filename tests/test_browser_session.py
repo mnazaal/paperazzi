@@ -564,3 +564,30 @@ def test_sweep_never_probes_a_clone_this_process_owns(tmp_path, monkeypatch) -> 
     assert calls == []
     assert clone in module._OWNED_CLONE_FDS
     module._discard_profile_clone(clone)
+
+
+def test_navigate_reloads_after_a_same_document_navigation() -> None:
+    """`goto` answers None when only the fragment differs: nothing was loaded.
+
+    The showing document is then an earlier request's; `navigate` reloads it
+    from this URL so the caller reads this request's page, not that one.
+    """
+
+    class Page:
+        url = "https://journal.test/b-landing#main"
+
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def goto(self, url, **kwargs):
+            self.calls.append("goto")
+            return None
+
+        def reload(self, **kwargs):
+            self.calls.append("reload")
+            return "fresh-response"
+
+    page = Page()
+    s = BrowserSession(playwright="pw", browser_ref="br", page=page, url_allowed=lambda u: True)
+    assert s.navigate("https://journal.test/b-landing#main") == "fresh-response"
+    assert page.calls == ["goto", "reload"]

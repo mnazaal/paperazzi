@@ -353,6 +353,13 @@ class BrowserSession:
             # was sent, and the route guard may be absent.
             raise SsrfBlocked(f"refusing to navigate to a non-public URL: {url}")
         response = self.page.goto(url, wait_until=wait_until, timeout=timeout)
+        if response is None:
+            # `goto` loads nothing for a same-document navigation: the URL
+            # differs from the showing one only by its fragment, or the page
+            # already `pushState`d to it. The document is then an earlier
+            # request's, so reload it from this URL; refusing it instead
+            # answered "no PDF" to every repeat of a URL (review of 658d4f9).
+            response = self.page.reload(wait_until=wait_until, timeout=timeout)
         self._reject_non_public_landing()
         return response
 
