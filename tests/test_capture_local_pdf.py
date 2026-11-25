@@ -963,7 +963,7 @@ def test_local_pdf_strict_an_empty_or_unchanged_override_does_not_exempt(
 
 def _strict_local_pdf(tmp_path: Path, monkeypatch, *, extracted: dict, overrides: dict,
                       fetch_record=None, base_record: dict | None = None,
-                      metadata_fetch_text=None):
+                      metadata_fetch_text=None, fetch_search=None):
     """Run `add_local_pdf` under `--strict-metadata` offline; return (result, writes)."""
     import pzi.capture_local_pdf as clp
 
@@ -990,7 +990,7 @@ def _strict_local_pdf(tmp_path: Path, monkeypatch, *, extracted: dict, overrides
         record_overrides=dict(overrides),
         dry_run=True,
         server_url="http://127.0.0.1:1",
-        fetch_search=lambda *a, **kw: [],
+        fetch_search=fetch_search or (lambda *a, **kw: []),
         ensure_citekey=lambda record, *a, **kw: {**record, "citekey": "key"},
         add_record=lambda **kw: writes.append(kw) or {"status": "ok", "warnings": []},
         strict_metadata=True,
@@ -1164,6 +1164,33 @@ def test_local_pdf_strict_still_refuses_a_provider_outage(
     assert result["status"] == "error", result
     assert result["message"] == "metadata provider error (--strict-metadata)"
     assert any("HTTP 503" in error for error in result["errors"]), result
+    assert writes == []
+
+
+def test_local_pdf_strict_refuses_a_translation_server_404(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A 404 from the translation server is a wrong `translation_server_url`.
+
+    Only a provider's 404 (`crossref: HTTP 404`) answers "no such DOI". The
+    translation server's arrives bare (`HTTP 404`) and was read as the same
+    verdict, so strict accepted the user's title with the server misconfigured.
+    """
+    import io
+    import urllib.error
+
+    def search(value, **_kwargs):
+        raise urllib.error.HTTPError("http://ts/search", 404, "nf", {}, io.BytesIO(b""))
+
+    result, writes = _strict_local_pdf(
+        tmp_path, monkeypatch, extracted={"doi": "10.1000/scraped"},
+        overrides={"title": "Graph Parsers"}, metadata_fetch_text=_providers_answer(404),
+        fetch_search=search,
+    )
+
+    assert result["status"] == "error", result
+    assert result["message"] == "metadata provider error (--strict-metadata)"
+    assert "HTTP 404" in result["errors"], result
     assert writes == []
 
 

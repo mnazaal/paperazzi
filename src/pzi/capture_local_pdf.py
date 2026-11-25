@@ -161,8 +161,10 @@ def _is_not_found(error: str) -> bool:
 
     The cascade records an HTTP failure as `HTTP <code>`, prefixed with the
     provider's name. A 5xx, a 429, a timeout or an auth failure stays an error.
+    So does a bare `HTTP 404`: that is the translation server's, and it means
+    a wrong `translation_server_url`, not an unknown DOI.
     """
-    return error == "HTTP 404" or error.endswith(": HTTP 404")
+    return error.endswith(": HTTP 404")
 
 
 #: The fields that identify a paper (`has_minimum_metadata`'s inputs). Only an
