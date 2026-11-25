@@ -123,6 +123,33 @@ def _libraries_this_run_could_read(
     return [selected, *others], True, check_ledger
 
 
+def _stdout_refusal(flag: str, what: str, streamed: int) -> str:
+    """The refusal for `--report -`/`--jsonl -` whose stdout is *what*.
+
+    By the time pzi runs, a shell `>` has already truncated the file; "would
+    overwrite" would tell the user it is intact. The late re-check runs after
+    `--jsonl -` may have streamed *streamed* lines, and a `>>` kept the file
+    but appended those lines to it.
+    """
+    lines = streamed if flag == "--jsonl" else 0
+    if lines:
+        written = (
+            f"{lines} NDJSON line{'s were' if lines != 1 else ' was'}"
+            " of the --jsonl stream already written to it"
+        )
+        appended = (
+            f"; if with `>>`, remove the last {lines}"
+            f" line{'s' if lines != 1 else ''} it gained"
+        )
+    else:
+        written, appended = "nothing was written", ""
+    return (
+        f"{flag} - writes to stdout, which is {what}; {written} — if stdout"
+        " was redirected with `>`, the shell has already emptied that"
+        f" file, so restore it from a backup{appended}"
+    )
+
+
 def _output_alias_refusal(
     report_path: str | None,
     jsonl_path: str | None,
@@ -148,27 +175,8 @@ def _output_alias_refusal(
             if not _same_file(path, library_path):
                 continue
             if path == "-":
-                # By the time pzi runs, a shell `>` has already truncated the
-                # file; "would overwrite" would tell the user it is intact.
-                # The late re-check runs after `--jsonl -` may have streamed,
-                # and a `>>` kept the library but appended those lines to it.
-                lines = streamed if flag == "--jsonl" else 0
-                if lines:
-                    written = (
-                        f"{lines} NDJSON line{'s were' if lines != 1 else ' was'}"
-                        " of the --jsonl stream already written to it"
-                    )
-                    appended = (
-                        f"; if with `>>`, remove the last {lines}"
-                        f" line{'s' if lines != 1 else ''} it gained"
-                    )
-                else:
-                    written, appended = "nothing was written", ""
-                return (
-                    f"{flag} - writes to stdout, which is the library"
-                    f"{f' {name}' if name else ''}; {written} — if stdout"
-                    " was redirected with `>`, the shell has already emptied that"
-                    f" file, so restore it from a backup{appended}"
+                return _stdout_refusal(
+                    flag, f"the library{f' {name}' if name else ''}", streamed
                 )
             if selected:
                 return (
@@ -182,6 +190,12 @@ def _output_alias_refusal(
                 " it — write the output to another path"
             )
         if check_ledger is not None and _same_file(path, check_ledger):
+            if path == "-":
+                # As for a library: a shell `>` emptied the ledger before pzi
+                # ran, so "would replace" told the user it was intact.
+                return _stdout_refusal(
+                    flag, f"pzi's check ledger ({check_ledger})", streamed
+                )
             return (
                 f"{flag} {path} names pzi's check ledger ({check_ledger}); writing"
                 " the output there would replace the record of verified entries —"

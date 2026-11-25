@@ -962,6 +962,39 @@ def test_a_late_resolution_still_guards_the_check_ledger(tmp_path: Path) -> None
     assert ledger_file.read_bytes() == before
 
 
+def test_report_to_stdout_redirected_onto_the_check_ledger_says_it_was_emptied(
+    tmp_path: Path,
+) -> None:
+    """`--report - > <ledger>`: the shell truncated the ledger before pzi ran.
+
+    The refusal said writing there "would replace" the ledger, which tells the
+    user it is intact; the library branch already says the shell emptied it.
+    """
+    import os
+
+    bib = tmp_path / "main.bib"
+    bib.write_text(LIBRARY, encoding="utf-8")
+    config = _write_config(tmp_path, [("main", bib)], default="main")
+    ledger_file = _check_ledger(tmp_path, config)
+    saved = os.dup(1)
+    fd = os.open(ledger_file, os.O_WRONLY | os.O_TRUNC)
+    try:
+        os.dup2(fd, 1)
+        code, _out, err = _run_configured(
+            tmp_path, _args(report="-"), _never_ran, config=config
+        )
+    finally:
+        os.dup2(saved, 1)
+        os.close(saved)
+        os.close(fd)
+
+    assert code == exit_codes.USAGE, err
+    assert "check ledger" in err
+    assert "the shell has already emptied that file" in err
+    assert "would replace" not in err
+    assert ledger_file.read_bytes() == b""
+
+
 def _late_stdout_refusal(tmp_path: Path, items: int, *, stream: bool) -> tuple[int, str]:
     """`--jsonl -` with fd 1 appended into library `a`, which only the late re-check sees."""
     import os
