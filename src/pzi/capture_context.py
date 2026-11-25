@@ -329,8 +329,8 @@ def build_capture_context(
     # Derive api_url from configured host/port.
     api_url = config.get("api_url")
     if not api_url:
-        api_host = config.get("api_listen_host", "127.0.0.1")
-        api_port = config.get("api_listen_port", 8765)
+        api_host = config["api_listen_host"]
+        api_port = config["api_listen_port"]
         api_url = f"http://{api_host}:{api_port}"
     return CaptureContext(
         config=config,
@@ -345,8 +345,8 @@ def build_capture_context(
         pdf_filename_format=config.get("pdf_filename_format"),
         api_url=api_url,
         api_auth_token=resolve_api_auth_token(config, resolve_secret=resolve_secret),
-        desktop_fallback_hosts=set(config.get("desktop_fallback_hosts", [])),
-        pdf_discovery_parallel=config.get("pdf_discovery_parallel", False),
+        desktop_fallback_hosts=set(config["desktop_fallback_hosts"]),
+        pdf_discovery_parallel=config["pdf_discovery_parallel"],
         ezproxy_host=config.get("ezproxy_host"),
     )
 

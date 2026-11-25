@@ -5,7 +5,7 @@ from pzi.config import _normalize_app_config
 from pzi.fetch_helpers import read_limited
 
 #: What the loader yields for an empty config file: no metadata cache.
-DEFAULT_CONFIG = _normalize_app_config({}, [], home_dir="/h")
+DEFAULT_CONFIG = _normalize_app_config({"pzi_data_home": "/h/pzi"}, [], home_dir="/h")
 
 
 class _FakeResponse:

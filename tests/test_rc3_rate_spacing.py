@@ -13,7 +13,7 @@ from pzi.fetch_helpers import build_metadata_fetch_text
 from pzi.rate_limit import RateLimiter
 
 #: What the loader yields for an empty config file: no metadata cache.
-DEFAULT_CONFIG = _normalize_app_config({}, [], home_dir="/h")
+DEFAULT_CONFIG = _normalize_app_config({"pzi_data_home": "/h/pzi"}, [], home_dir="/h")
 
 S2 = "https://api.semanticscholar.org/graph/v1/paper/search?query="
 CR = "https://api.crossref.org/works/"

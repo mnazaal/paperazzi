@@ -119,21 +119,17 @@ def test_each_secret_command_failure_names_its_own_config_key() -> None:
     the caller and this drives the caller.
     """
     from pzi.capture_context import build_capture_context
+    from pzi.config import _normalize_app_config
     from pzi.errors import PziError
 
-    config = {
-        "contact_email_cmd": None,
-        "contact_email": None,
-        "unpaywall_email_cmd": "false",
-        "unpaywall_email": None,
-        "semantic_scholar_api_key_cmd": None,
-        "semantic_scholar_api_key": None,
-    }
+    config = _normalize_app_config(
+        {"unpaywall_email_cmd": "false", "pzi_data_home": "/h/pzi"}, [], home_dir="/h"
+    )
     bib = {"name": "ml", "path": "/tmp/ml.bib", "papers_dir": "/tmp/papers", "default": True}
 
     with pytest.raises(PziError) as caught:
         build_capture_context(
-            config=config,  # type: ignore[arg-type]
+            config=config,
             bib=bib,  # type: ignore[arg-type]
             browser_pdf_cmd_override=None,
             browser=None,

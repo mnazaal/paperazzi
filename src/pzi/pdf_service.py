@@ -25,8 +25,6 @@ from pzi.bibtex import (
 )
 from pzi.capture_context import resolve_api_auth_token
 from pzi.config import (
-    DEFAULT_API_LISTEN_HOST,
-    DEFAULT_API_LISTEN_PORT,
     DEFAULT_PDF_FILE_PATH_STYLE,
     AppConfig,
     BibResolutionFailure,
@@ -168,13 +166,13 @@ def _fallback_kwargs(config: AppConfig) -> dict[str, Any]:
     api_url = config.get("api_url")
     if not api_url:
         api_url = (
-            f"http://{config.get('api_listen_host', DEFAULT_API_LISTEN_HOST)}"
-            f":{config.get('api_listen_port', DEFAULT_API_LISTEN_PORT)}"
+            f"http://{config['api_listen_host']}"
+            f":{config['api_listen_port']}"
         )
     return {
         "flaresolverr_url": config.get("flaresolverr_url"),
         "browser_pdf_cmd": config.get("browser_pdf_cmd"),
-        "browser_hook": config.get("browser_hook", True),
+        "browser_hook": config["browser_hook"],
         "api_url": api_url,
         "api_auth_token": resolve_api_auth_token(config),
         "desktop_fallback_hosts": set(config.get("desktop_fallback_hosts") or []),

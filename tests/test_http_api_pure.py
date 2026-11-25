@@ -23,7 +23,7 @@ from pzi.pdf_attach_session_store import AttachSessionStore
 
 #: A loaded config with one library, as the route's `load_config_file` yields.
 _MAIN_LIBRARY_CONFIG = _normalize_app_config(
-    {},
+    {"pzi_data_home": "/tmp/pzi"},
     [{"name": "main", "path": "/tmp/main.bib", "papers_dir": "/tmp/papers", "default": True}],
     home_dir="/tmp",
 )
@@ -1012,7 +1012,9 @@ def test_post_capture_uses_configured_api_url_for_pdf_attach_request(monkeypatch
         "load_config_file",
         lambda config_path, home_dir: {
             "config": _normalize_app_config(
-                {"api_url": "http://127.0.0.1:9876"}, [], home_dir="/tmp"
+                {"api_url": "http://127.0.0.1:9876", "pzi_data_home": "/tmp/pzi"},
+                [],
+                home_dir="/tmp",
             )
         },
     )

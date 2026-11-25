@@ -121,7 +121,7 @@ def build_server_plan(
     security = build_http_security_config(
         auth_token=auth_token,
         allowed_origins=config.get("api_allowed_origins") if config is not None else None,
-        max_body_bytes=config.get("api_max_body_bytes", DEFAULT_MAX_BODY_BYTES)
+        max_body_bytes=config["api_max_body_bytes"]
         if config is not None
         else DEFAULT_MAX_BODY_BYTES,
         listen_host=resolved_host,

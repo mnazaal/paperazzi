@@ -8,7 +8,13 @@ from pzi.capture_context import (
     resolve_optional_value,
     run_shell_command,
 )
+from pzi.config import AppConfig, _normalize_app_config
 from pzi.errors import REASON_CONFIG, REASON_UNAVAILABLE, PziError
+
+
+def _loaded(raw: dict[str, object]) -> AppConfig:
+    """*raw* as the loader normalizes it, with `pzi_data_home` pinned."""
+    return _normalize_app_config({"pzi_data_home": "/h/pzi", **raw}, [], home_dir="/h")
 
 
 def test_resolve_api_auth_token_auto_reads_default_file(tmp_path) -> None:
@@ -66,7 +72,7 @@ def test_resolve_optional_value_returns_none_for_blank_command_output() -> None:
 
 
 def test_build_capture_context_resolves_runtime_options() -> None:
-    config = {
+    raw: dict[str, object] = {
         "unpaywall_email_cmd": "email-cmd",
         "unpaywall_email": "fallback@example.com",
         "contact_email_cmd": "contact-cmd",
@@ -78,7 +84,9 @@ def test_build_capture_context_resolves_runtime_options() -> None:
         "browser_pdf_cmd": "browser hook",
         "citekey_format": "{{ authors }}{{ year }}",
         "pdf_filename_format": "{{ citekey }}-{{ year }}",
+        "desktop_fallback_hosts": [],
     }
+    config = _loaded(raw)
     bib = {"name": "main", "path": "/tmp/lib.bib", "papers_dir": "/tmp/papers"}
 
     context = build_capture_context(
@@ -106,7 +114,7 @@ def test_build_capture_context_resolves_runtime_options() -> None:
 
 
 def test_build_capture_context_uses_contact_email_as_unpaywall_fallback() -> None:
-    config = {
+    raw: dict[str, object] = {
         "unpaywall_email_cmd": None,
         "unpaywall_email": None,
         "contact_email_cmd": "contact-cmd",
@@ -117,6 +125,7 @@ def test_build_capture_context_uses_contact_email_as_unpaywall_fallback() -> Non
         "citekey_format": None,
         "pdf_filename_format": None,
     }
+    config = _loaded(raw)
 
     context = build_capture_context(
         config=config,

@@ -67,17 +67,23 @@ def test_browser_for_profile_returns_none_when_it_cannot_tell() -> None:
     assert browser_for_profile("/opt/whatever") is None
 
 
-def test_the_pdf_command_path_carries_the_configured_profile() -> None:
+def test_the_pdf_command_path_carries_the_configured_profile(tmp_path) -> None:
     """The seam that was missing: `pdf retry` / `pdf attach` build their
     fallback kwargs here, and `settings` was never among them."""
+    from pzi.config import _normalize_app_config
     from pzi.pdf_service import _fallback_kwargs
 
     kwargs = _fallback_kwargs(
-        {  # type: ignore[arg-type]
-            "browser_profile_path": "~/.mozilla/firefox/abc.default",
-            "api_listen_host": "127.0.0.1",
-            "api_listen_port": 8765,
-        }
+        _normalize_app_config(
+            {
+                "browser_profile_path": "~/.mozilla/firefox/abc.default",
+                "api_listen_host": "127.0.0.1",
+                "api_listen_port": 8765,
+                "pzi_data_home": str(tmp_path),
+            },
+            [],
+            home_dir=str(tmp_path),
+        )
     )
     settings = kwargs["settings"]
     assert settings.browser_profile == "~/.mozilla/firefox/abc.default"

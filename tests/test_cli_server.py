@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 from pzi.cli_server import build_server_plan
+from pzi.config import _normalize_app_config
 
-_CONFIG = {
-    "api_listen_host": "127.0.0.1",
-    "api_listen_port": 8765,
-}
+#: A loaded config, as `pzi server` passes it. `pzi_data_home` is pinned so the
+#: environment at import time cannot point it anywhere real.
+_CONFIG = _normalize_app_config(
+    {"api_listen_host": "127.0.0.1", "api_listen_port": 8765, "pzi_data_home": "/h/pzi"},
+    [],
+    home_dir="/h",
+)
 
 
 def test_loopback_bind_without_a_token_reports_auth_off_once_opted_in() -> None:
