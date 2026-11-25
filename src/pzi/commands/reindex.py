@@ -109,6 +109,7 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
             dry_run=getattr(args, "dry_run", False),
             include_all=getattr(args, "all", False),
             file_path_style=config["pdf_file_path_style"],
+            sibling_bib_paths=siblings_sharing_papers_dir(config, target),
         )
         if as_json:
             cli_json.emit_result(
@@ -116,6 +117,7 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
                 items=result.get("changed") or [], bib_name=target["name"],
             )
         else:
+            print_read_warnings(result, stderr)
             verb = "would rename" if getattr(args, "dry_run", False) else "renamed"
             print(f"{verb} {len(result['changed'])} PDF(s)", file=stdout)
             for change in result["changed"]:
@@ -133,7 +135,11 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
             backup = result.get("backup_path")
             if backup:
                 print(f"backup saved to {backup}", file=stderr)
-        return exit_codes.FINDINGS if result["changed"] or result["errors"] else exit_codes.OK
+        return (
+            exit_codes.FINDINGS
+            if result["changed"] or result["errors"] or has_read_warnings(result)
+            else exit_codes.OK
+        )
 
     for flag, given in (
         ("--force", getattr(args, "force", False)),

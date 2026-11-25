@@ -2768,3 +2768,60 @@ def test_docs_never_call_a_token_bearing_config_safe_to_commit() -> None:
     reference = (Path(__file__).parent.parent / "docs" / "reference.md").read_text()
     sentence = next(line for line in reference.splitlines() if "safe to commit to dotfiles" in line)
     assert "on a fresh config" in sentence and "must not be committed" in sentence
+
+
+def _rename_files_libraries(tmp_path: Path, *, sibling_text: str | None) -> tuple[Path, Path, Path]:
+    """Library `ml` with one LaTeX-residue filename; optionally a second library `cs`."""
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    mangled = papers / "A textbraceleft Mangled Name.pdf"
+    mangled.write_bytes(b"%PDF-1.4\n")
+    bib = tmp_path / "ml.bib"
+    bib.write_text(
+        f"@article{{mangled2024,\n  title = {{A Real Title}},\n  file = {{{mangled}}},\n}}\n"
+    )
+    config = (
+        f'pdf_filename_format = "{{{{ title }}}}"\n'
+        f'[[bibs]]\nname = "ml"\npath = "{bib}"\npapers_dir = "{papers}"\ndefault = true\n'
+    )
+    if sibling_text is not None:
+        sibling = tmp_path / "cs.bib"
+        sibling.write_text(sibling_text.replace("@MANGLED@", str(mangled)))
+        config += f'[[bibs]]\nname = "cs"\npath = "{sibling}"\npapers_dir = "{papers}"\n'
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(config)
+    return config_path, bib, mangled
+
+
+def test_reindex_rename_files_keeps_a_pdf_another_library_names(tmp_path: Path) -> None:
+    """The pass read no sibling library, so it moved a PDF `cs` still named."""
+    config_path, _bib, mangled = _rename_files_libraries(
+        tmp_path,
+        sibling_text="@article{theirs,\n  title = {T},\n  file = {@MANGLED@},\n}\n",
+    )
+    stderr = StringIO()
+
+    exit_code = run_cli(
+        ["library", "reindex", "--rename-files", "--config", str(config_path)],
+        home_dir=str(tmp_path), stdout=StringIO(), stderr=stderr,
+    )
+
+    assert mangled.exists(), "moved a PDF another library still names"
+    assert "another library" in stderr.getvalue(), stderr.getvalue()
+    assert exit_code == exit_codes.FINDINGS
+
+
+def test_reindex_rename_files_reports_what_it_could_not_read(tmp_path: Path) -> None:
+    """A block the lenient read dropped was never considered; say so and exit 1."""
+    config_path, bib, mangled = _rename_files_libraries(tmp_path, sibling_text=None)
+    bib.write_text(bib.read_text() + "@article{broken,\n  title = {Unclosed\n")
+    stderr = StringIO()
+
+    exit_code = run_cli(
+        ["library", "reindex", "--rename-files", "--dry-run", "--config", str(config_path)],
+        home_dir=str(tmp_path), stdout=StringIO(), stderr=stderr,
+    )
+
+    assert "unparseable BibTeX block" in stderr.getvalue(), stderr.getvalue()
+    assert exit_code == exit_codes.FINDINGS
+    assert mangled.exists()

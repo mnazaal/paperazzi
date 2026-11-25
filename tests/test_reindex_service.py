@@ -1374,3 +1374,26 @@ def test_convert_file_paths_dry_run_refuses_what_the_real_run_refuses(
 
     assert str(preview.value) == str(real.value)
     assert bib.read_text() == text
+
+
+@pytest.mark.parametrize("dry_run", [True, False], ids=["dry-run", "apply"])
+def test_rename_files_holds_every_move_when_a_sibling_cannot_be_read(
+    tmp_path, dry_run
+) -> None:
+    """The same hold the citekey pass makes: an unreadable library may name the PDF."""
+    from pzi import reindex_service
+
+    bib, papers = _library_with_names(tmp_path, [
+        ("mangled2024", "A Real Title", "A textbraceleft Mangled Name.pdf"),
+    ])
+    sibling = tmp_path / "sib.bib"
+    sibling.write_bytes(_LATIN1_SIBLING)
+
+    result = reindex_service.rename_files_to_policy(
+        bib_path=bib, papers_dir=papers, pdf_filename_format="{{ title }}",
+        dry_run=dry_run, sibling_bib_paths=[str(sibling)],
+    )
+
+    assert (Path(papers) / "A textbraceleft Mangled Name.pdf").exists()
+    assert result["changed"] == []
+    assert any("sib.bib" in e for e in result["errors"]), result["errors"]

@@ -689,6 +689,7 @@ def rename_files_to_policy(
     dry_run: bool = True,
     include_all: bool = False,
     file_path_style: str = DEFAULT_PDF_FILE_PATH_STYLE,
+    sibling_bib_paths: Sequence[str] = (),
 ) -> ReindexResult:
     """Rename attached PDFs to the name ``pdf_filename_format`` now produces.
 
@@ -702,15 +703,21 @@ def rename_files_to_policy(
     counted as `skipped_cosmetic` and left alone. On a real library the wider
     set was 10,695 files whose names differ from the template purely in case,
     which is not a defect and must never be swept up by a repair.
+
+    A PDF another library in *sibling_bib_paths* still names is not moved, and
+    a sibling that cannot be read holds every move, as in the citekey pass.
     """
     # `shared=dry_run` and the *raw* read, mirroring `reindex_library`:
     # `read_bib_file` acquires the lock itself, so calling it here deadlocks
     # against the lock this function already holds.
     with with_bib_lock(bib_path, shared=dry_run):
         source = read_bib_source(bib_path)
-        raw, _dropped = read_bib_file_raw_with_failures(bib_path)
+        raw, dropped = read_bib_file_raw_with_failures(bib_path)
         entries = raw["entries"]
         records = raw["records"]
+        # The read is lenient: a block it dropped was never considered for a
+        # rename, so a clean-looking result described part of the library.
+        warnings = [*read_bib_notices(bib_path), *dropped]
 
         changed: list[dict[str, Any]] = []
         errors: list[str] = []
@@ -719,6 +726,10 @@ def rename_files_to_policy(
         planned_sources: set[tuple[int, int] | str] = set()
         bib_dir = os.path.dirname(os.path.abspath(bib_path))
         protected = _multi_attachment_pdfs(entries, bib_dir)
+        # The citekey pass's rule: a PDF another library names stays put, and
+        # a library that did not read may name any of them.
+        foreign_pdfs, sibling_errors = _sibling_references(sibling_bib_paths)
+        held_by_sibling_read = False
         #: One case-sensitivity probe per directory, shared by both sets.
         folds: dict[str, bool] = {}
 
@@ -749,6 +760,14 @@ def rename_files_to_policy(
                 continue
             if _is_multi_attachment_pdf(current, protected, bib_dir):
                 errors.append(_shared_multi_attachment_error(citekey, current))
+                continue
+            if _attachment_key(current, bib_dir) in foreign_pdfs:
+                errors.append(_other_library_error(citekey, current))
+                continue
+            if sibling_errors:
+                # A sibling that did not read may name this PDF.
+                held_by_sibling_read = True
+                errors.append(_other_library_error(citekey, current))
                 continue
             destination = str(Path(papers_dir) / wanted)
             # The same two refusals the citekey pass makes, for the same
@@ -845,8 +864,9 @@ def rename_files_to_policy(
             "bib_path": bib_path,
             "total_entries": len(entries),
             "changed": changed,
-            "errors": errors,
-            "warnings": [],
+            # A sibling that read only partly is news only when it held a move.
+            "errors": [*(sibling_errors if held_by_sibling_read else []), *errors],
+            "warnings": warnings,
             "backup_path": str(backup_path) if backup_path else None,
             "skipped_cosmetic": skipped_cosmetic,
         }
