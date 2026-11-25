@@ -100,7 +100,7 @@ def render_config(
         'api_listen_host = "127.0.0.1"',
         'api_listen_port = 8765',
         "# API auth token is auto-read from <data-home>/api_token (written by "
-        "`pzi init`) unless a token key is set here. To use a manager instead: "
+        "`pzi init`) unless a token key here yields one. To use a manager instead: "
         '# api_auth_token_cmd = "pass show pzi-token"',
         '# pzi_data_home = "~/.local/share/pzi"  '
         "# defaults to $XDG_DATA_HOME/pzi (~/.local/share/pzi)",

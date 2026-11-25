@@ -2761,3 +2761,12 @@ def test_shipped_config_template_never_calls_itself_secret_free() -> None:
     text = importlib.resources.files("pzi").joinpath("config.template.toml").read_text()
     assert "secret-free" not in text
     assert "do not\n# commit it" in text or "do not commit" in text
+
+
+def test_docs_never_call_a_token_bearing_config_safe_to_commit() -> None:
+    """`init --force` (also with `--setup`) carries a plaintext token into config.toml."""
+    from pathlib import Path
+
+    reference = (Path(__file__).parent.parent / "docs" / "reference.md").read_text()
+    sentence = next(line for line in reference.splitlines() if "safe to commit to dotfiles" in line)
+    assert "on a fresh config" in sentence and "must not be committed" in sentence

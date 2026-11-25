@@ -368,7 +368,7 @@ Main extension endpoint: `POST /capture`; health check: `GET /health`. Every one
 
 Security defaults are local-first: bind to `127.0.0.1`, allow local/extension origins, cap body size, and require `X-Pzi-Token` or bearer auth when a token is set. Keep non-loopback binds behind your own network protections.
 
-The token is resolved in this order: `api_auth_token_cmd` (a command whose stdout is the token, e.g. `pass show pzi-token`) → the plaintext `api_auth_token` → an auto-read `<data-home>/api_token` file. `pzi init --setup` writes the token to that `0600` file and puts **nothing** token-related in `config.toml`; pzi reads it at runtime from the running user's resolved data home. So the config carries neither the secret nor an absolute home path, and is safe to commit to dotfiles and portable across machines. `api_auth_token_cmd`, if you set one, runs without a shell (no `~` expansion, no shell operators).
+The token is resolved in this order: `api_auth_token_cmd` (a command whose stdout is the token, e.g. `pass show pzi-token`) → the plaintext `api_auth_token` → an auto-read `<data-home>/api_token` file. `pzi init --setup` writes the token to that `0600` file and, on a fresh config, puts **nothing** token-related in `config.toml`; pzi reads it at runtime from the running user's resolved data home. Such a config carries neither the secret nor an absolute home path, so it is safe to commit to dotfiles and portable across machines. A config that sets a plaintext `api_auth_token` holds the secret and must not be committed; `pzi init --force` (with or without `--setup`) carries that key into the new file and says so. `api_auth_token_cmd`, if you set one, runs without a shell (no `~` expansion, no shell operators).
 
 ### Python API
 
