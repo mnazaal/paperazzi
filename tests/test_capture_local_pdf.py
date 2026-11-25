@@ -962,7 +962,8 @@ def test_local_pdf_strict_an_empty_or_unchanged_override_does_not_exempt(
 
 
 def _strict_local_pdf(tmp_path: Path, monkeypatch, *, extracted: dict, overrides: dict,
-                      fetch_record=None, base_record: dict | None = None):
+                      fetch_record=None, base_record: dict | None = None,
+                      metadata_fetch_text=None):
     """Run `add_local_pdf` under `--strict-metadata` offline; return (result, writes)."""
     import pzi.capture_local_pdf as clp
 
@@ -993,6 +994,7 @@ def _strict_local_pdf(tmp_path: Path, monkeypatch, *, extracted: dict, overrides
         ensure_citekey=lambda record, *a, **kw: {**record, "citekey": "key"},
         add_record=lambda **kw: writes.append(kw) or {"status": "ok", "warnings": []},
         strict_metadata=True,
+        **({"metadata_fetch_text": metadata_fetch_text} if metadata_fetch_text else {}),
     )
     return result, writes
 
@@ -1115,3 +1117,51 @@ def test_local_pdf_names_the_provider_its_metadata_came_from(
 
     assert result["status"] == "ok", result
     assert result.get("metadata_diagnostics") == ["metadata from translation_server"]
+
+
+def _providers_answer(code: int):
+    """A `metadata_fetch_text` that answers every provider request with HTTP *code*.
+
+    The real Crossref, OpenAlex and Semantic Scholar fetchers run on it, so the
+    errors arrive in the shape they record (`crossref: HTTP 404`).
+    """
+    import io
+    import urllib.error
+
+    def fetch_text(url, **_kwargs):
+        raise urllib.error.HTTPError(url, code, "status", {}, io.BytesIO(b""))
+
+    return fetch_text
+
+
+def test_local_pdf_strict_reads_a_provider_404_as_not_found(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Crossref, OpenAlex and S2 answer an unknown DOI with 404.
+
+    Each 404 was recorded as a provider error, so `metadata_errors` was never
+    empty in the real case and strict refused with "metadata provider error"
+    before it judged the title the user supplied.
+    """
+    result, writes = _strict_local_pdf(
+        tmp_path, monkeypatch, extracted={"doi": "10.1000/scraped"},
+        overrides={"title": "Graph Parsers"}, metadata_fetch_text=_providers_answer(404),
+    )
+
+    assert result["status"] == "ok", result
+    assert len(writes) == 1
+
+
+def test_local_pdf_strict_still_refuses_a_provider_outage(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A 503 is a failure, not an answer: strict keeps refusing it as one."""
+    result, writes = _strict_local_pdf(
+        tmp_path, monkeypatch, extracted={"doi": "10.1000/scraped"},
+        overrides={"title": "Graph Parsers"}, metadata_fetch_text=_providers_answer(503),
+    )
+
+    assert result["status"] == "error", result
+    assert result["message"] == "metadata provider error (--strict-metadata)"
+    assert any("HTTP 503" in error for error in result["errors"]), result
+    assert writes == []

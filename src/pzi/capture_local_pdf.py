@@ -109,8 +109,13 @@ def local_pdf_base_record(
         except _add_planning.MetadataExhausted as exc:
             # Every source was tried and none had this DOI. Only the failures
             # met on the way are provider errors; the verdict itself is not.
+            # Crossref, OpenAlex and Semantic Scholar answer an unknown DOI with
+            # 404, which the cascade records as `<provider>: HTTP 404`: that is
+            # each provider's "not found", so it is part of the verdict too.
             if errors is not None:
-                errors.extend(exc.provider_errors)
+                errors.extend(
+                    error for error in exc.provider_errors if not _is_not_found(error)
+                )
             if not_found is not None:
                 not_found.append(str(exc))
             unresolved_doi = doi
@@ -149,6 +154,15 @@ def local_pdf_base_record(
     if unresolved_doi is not None:
         return {"doi": unresolved_doi}
     return {}
+
+
+def _is_not_found(error: str) -> bool:
+    """Whether a cascade error is a provider's 404, its answer for an unknown DOI.
+
+    The cascade records an HTTP failure as `HTTP <code>`, prefixed with the
+    provider's name. A 5xx, a 429, a timeout or an auth failure stays an error.
+    """
+    return error == "HTTP 404" or error.endswith(": HTTP 404")
 
 
 #: The fields that identify a paper (`has_minimum_metadata`'s inputs). Only an
