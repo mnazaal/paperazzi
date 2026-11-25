@@ -62,6 +62,22 @@ def _check_the_run_could_write(bib_path: str) -> None:
         raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), str(folder))
 
 
+def _check_the_run_could_rename(changes: list[dict]) -> None:
+    """Raise what `--rename-files` would raise in a read-only `papers_dir`.
+
+    The run links each PDF to its new name and unlinks the old one, which
+    needs both folders writable and searchable; otherwise it exits 5. The
+    preview checked only the bib's folder, so it reported the renames and
+    exited 1.
+    """
+    folders = {
+        Path(change[key]).parent for change in changes for key in ("old_pdf", "new_pdf")
+    }
+    for folder in sorted(folders):
+        if not os.access(folder, os.W_OK | os.X_OK):
+            raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), str(folder))
+
+
 def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_selector) -> int:
     config, target = resolve_target(
         config_path=config_path, home_dir=home_dir, bib_selector=bib_selector,
@@ -158,6 +174,7 @@ def run_reindex_command(args, *, home_dir, config_path, stdout, stderr, bib_sele
         )
         if getattr(args, "dry_run", False) and result["changed"]:
             _check_the_run_could_write(target["path"])
+            _check_the_run_could_rename(result["changed"])
         if as_json:
             cli_json.emit_result(
                 result, stdout, command="library reindex",

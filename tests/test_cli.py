@@ -3005,3 +3005,54 @@ def test_a_reindex_preview_matches_the_run_when_the_bibs_folder_is_missing(
     assert preview_code == real_code, preview_err
     assert "Permission denied" not in preview_err, preview_err
 
+
+def test_a_rename_files_preview_fails_where_the_run_cannot_rename_in_papers_dir(
+    tmp_path: Path,
+) -> None:
+    """The run links and unlinks inside `papers_dir`; read-only, it exits 5.
+
+    The preview checked only the bib's folder, so it reported the rename and
+    exited 1 while the run refused it.
+    """
+    import os
+
+    if os.geteuid() == 0:
+        pytest.skip("root ignores directory permissions")
+    folder = tmp_path / "lib"
+    papers = folder / "papers"
+    papers.mkdir(parents=True)
+    (papers / "x.pdf").write_bytes(b"%PDF-1.4\n")
+    bib_path = folder / "main.bib"
+    bib_path.write_text(
+        "@article{a,\n  author = {Doe, Jane},\n  title = {Alpha Beta Gamma},\n"
+        f"  year = {{2020}},\n  file = {{{papers / 'x.pdf'}}},\n}}\n"
+    )
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        'pdf_file_path_style = "relative"\n'
+        f'[[bibs]]\nname = "ml"\npath = "{bib_path}"\npapers_dir = "{papers}"\n'
+        "default = true\n"
+    )
+    before = bib_path.read_bytes()
+
+    def run(extra: list[str]) -> tuple[int, str]:
+        out, err = StringIO(), StringIO()
+        code = run_cli(
+            ["library", "reindex", "--rename-files", "--all", *extra,
+             "--config", str(config_path)],
+            home_dir=str(tmp_path), stdout=out, stderr=err,
+        )
+        return code, err.getvalue()
+
+    papers.chmod(0o555)
+    try:
+        preview_code, preview_err = run(["--dry-run"])
+        real_code, real_err = run([])
+    finally:
+        papers.chmod(0o755)
+
+    assert real_code == exit_codes.ENVIRONMENT, real_err
+    assert preview_code == real_code, preview_err
+    assert "Permission denied" in preview_err, preview_err
+    assert bib_path.read_bytes() == before
+    assert sorted(p.name for p in papers.iterdir()) == ["x.pdf"]
