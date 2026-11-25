@@ -99,8 +99,9 @@ def _refuse_rotation_behind_token_source(
     """Refuse a rotation the server would not see.
 
     `api_auth_token_cmd` and `api_auth_token` outrank `<data_home>/api_token` in
-    `resolve_api_auth_token`, so replacing the file leaves the resolved token
-    unchanged while the command would report success. Names the keys, never
+    `resolve_api_auth_token`, so while that key yields a token, replacing the
+    file leaves the resolved token unchanged and the command would still report
+    success. Names the keys, never
     their values.
     """
     if not existing.token_settings:
@@ -286,7 +287,8 @@ def run_init_command(
             file=stderr,
         )
     # A configured token source outranks the data home's file, so writing or
-    # reusing that file would report a token the server never reads.
+    # reusing that file would report a token the server does not read while
+    # that key yields one.
     token_path: Path | None = None
     token_created = False
     if not existing.token_settings:

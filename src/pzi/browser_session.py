@@ -74,8 +74,12 @@ _IDENTITY_HEADERS = {"Accept-Encoding": "identity"}
 
 
 def _claims_pdf(content_type: str) -> bool:
-    """Whether a Content-Type names a PDF; media types are case-insensitive."""
-    return "application/pdf" in content_type.lower()
+    """Whether a Content-Type's media type is PDF; media types are case-insensitive.
+
+    The type before any parameters is compared, so `text/html;
+    note="application/pdf"` is not a PDF claim.
+    """
+    return content_type.split(";", 1)[0].strip().lower() == "application/pdf"
 
 
 def _declared_encoding(headers: Any) -> str | None:

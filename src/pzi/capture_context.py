@@ -23,7 +23,8 @@ def _read_default_token_file(data_home: str | None) -> str | None:
     Returns the stripped token, or ``None`` when the file is missing/empty.
     This is what lets ``config.toml`` carry no token reference at all — the
     file location is derived from the *running* user's resolved data home, so a
-    committed config leaks neither the secret nor an absolute home path.
+    committed config leaks neither the secret nor an absolute home path,
+    unless it sets a plaintext ``api_auth_token``.
     """
     if not data_home:
         return None

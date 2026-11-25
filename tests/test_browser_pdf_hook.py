@@ -491,6 +491,27 @@ def test_download_pdf_does_not_sweep_a_page_its_navigation_never_reached() -> No
     assert ("fetch_direct", "https://journal.test/paperA.pdf") not in s.calls
 
 
+def test_download_pdf_sweeps_its_own_page_when_navigation_times_out_after_commit() -> None:
+    """A slow page that committed this URL before timing out is this URL's page."""
+    from tests.fake_session import FakeBrowserSession
+
+    class SlowPage(FakeBrowserSession):
+        def navigate(self, url, **kwargs):
+            self.calls.append(("navigate", url))
+            self._url = url
+            raise TimeoutError("Timeout 60000ms exceeded")
+
+    s = SlowPage(
+        fetch_results=[
+            (200, "text/html", b"<html>"),
+            (200, "application/pdf", b"%PDF-own"),
+        ],
+        evaluate_results=[["https://journal.test/own.pdf"]],
+    )
+    result = hook.download_pdf("https://journal.test/slow", _session=s)
+    assert result == b"%PDF-own"
+
+
 def test_download_pdf_follows_candidate_links_after_html_page() -> None:
     from tests.fake_session import FakeBrowserSession
     s = FakeBrowserSession(

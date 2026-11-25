@@ -590,6 +590,13 @@ def test_pdf_media_type_is_matched_case_insensitively(ctype: str) -> None:
     assert bs.FetchResult.from_response(nav).refused is not None
 
 
+def test_a_parameter_naming_pdf_is_not_a_pdf_claim() -> None:
+    ctype = 'text/html; note="application/pdf"'
+    session, response = _direct({"content-type": ctype, "content-encoding": "gzip"})
+    result = session.fetch_direct("https://example.org/landing")
+    assert response.body_calls == 0 and result.refused is None and not result.is_pdf()
+
+
 def test_download_pdf_reports_a_refused_encoding() -> None:
     from pzi.browser_pdf_hook import download_pdf
     from tests.fake_session import FakeBrowserSession
