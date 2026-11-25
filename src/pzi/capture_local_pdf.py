@@ -156,10 +156,19 @@ def _supplies_identifying_metadata(
     """
     return any(
         key in overrides
-        and merged.get(key) not in (None, "", [], {})
+        and _has_content(merged.get(key))
         and merged.get(key) != base_record.get(key)
         for key in _IDENTIFYING_FIELDS
     )
+
+
+def _has_content(value: object) -> bool:
+    """A value with something in it: not None, not blank, not a list of blanks."""
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple)):
+        return any(_has_content(item) for item in value)
+    return value is not None
 
 
 def _provider_added_to_extraction(

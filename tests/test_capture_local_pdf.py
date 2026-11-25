@@ -919,7 +919,10 @@ def test_local_pdf_strict_tags_alone_do_not_exempt_an_unverified_pdf(
     assert writes == []
 
 
-@pytest.mark.parametrize("overrides", [{"doi": None}, {"year": "n/a"}, {"title": "Graph Parsers"}])
+@pytest.mark.parametrize(
+    "overrides",
+    [{"doi": None}, {"year": "n/a"}, {"title": "Graph Parsers"}, {"doi": " "}, {"authors": [""]}],
+)
 def test_local_pdf_strict_an_empty_or_unchanged_override_does_not_exempt(
     tmp_path: Path, monkeypatch, overrides: dict
 ) -> None:
