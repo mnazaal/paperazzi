@@ -233,7 +233,8 @@ found the paper, since the record would rest only on text read from the PDF. The
 exemption is a `--metadata-json` value you supply that adds a new identifying field
 (title, DOI, authors or year), compared in pzi's normal form, so a blank value or a
 restatement of the PDF's own text does not count. Page-scraped metadata, from
-`--page-html` or `page_metadata_cmd`, never exempts a local PDF. A provider error that a later provider recovered from is a
+`--page-html` or `page_metadata_cmd`, never exempts a local PDF. If any provider
+returns an error (not "not found"), strict mode refuses even with a typed field. A provider error that a later provider recovered from is a
 warning, not a failure: a Crossref 429 does not fail an add that OpenAlex
 completed.
 
