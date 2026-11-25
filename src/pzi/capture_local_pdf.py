@@ -168,13 +168,12 @@ def _supplies_identifying_metadata(
     list of blanks) and a restatement of what the PDF already gave (the same
     title with stray whitespace) both leave a record resting on the PDF's text.
 
-    A `fallback_*` key counts as well: it carries page-HTML metadata (`--page-html`,
-    the extension's page read), which is not the PDF's text either. A fallback
-    only fills a field the PDF left empty, so one the PDF already gave adds
-    nothing and does not count.
+    Only a key the user typed counts. A `fallback_*` key is page-scraped
+    (`--page-html`, `page_metadata_cmd`), so no person or provider vouched for
+    it and it does not exempt (owner decision 2026-11-25).
     """
     return any(
-        (key in overrides or f"fallback_{key}" in overrides)
+        key in overrides
         and (value := _identity(key, merged.get(key))) is not None
         and value != _identity(key, base_record.get(key))
         for key in _IDENTIFYING_FIELDS
@@ -472,7 +471,8 @@ def add_local_pdf(
                     message="no metadata provider found this PDF (--strict-metadata)",
                     errors=[
                         "every lookup answered but none found this paper; the record "
-                        "holds only text read from the PDF itself"
+                        "holds only text read from the PDF or its page, and no "
+                        "identifying field you supplied with --metadata-json"
                     ],
                     dry_run=dry_run,
                     warnings=["nothing was written: add it without --strict-metadata "

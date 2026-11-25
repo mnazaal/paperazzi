@@ -1036,13 +1036,14 @@ def test_local_pdf_strict_names_a_doi_no_provider_found_as_not_found(
     assert writes == []
 
 
-def test_local_pdf_strict_counts_a_new_identifier_from_the_page_html(
+def test_local_pdf_strict_a_new_identifier_from_the_page_html_does_not_exempt(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """Page-HTML `fallback_*` metadata is not text read from the PDF.
+    """Page-scraped metadata is not metadata the user supplied (owner, 2026-11-25).
 
-    A `fallback_doi` that fills the DOI the PDF lacked was ignored, and the
-    refusal said the record held only the PDF's own text.
+    `fallback_*` keys come from `--page-html` or `page_metadata_cmd`. Only a
+    typed `--metadata-json` value exempts a PDF no provider found, so a
+    `fallback_doi` that fills the DOI the PDF lacked is still refused.
     """
     scraped = {"title": "Graph Parsers", "authors": ["Smith, Jane"]}
 
@@ -1051,8 +1052,9 @@ def test_local_pdf_strict_counts_a_new_identifier_from_the_page_html(
         overrides={"fallback_title": "Graph Parsers", "fallback_doi": "10.1000/page"},
     )
 
-    assert result["status"] == "ok", result
-    assert len(writes) == 1
+    assert result["status"] == "error", result
+    assert "no metadata provider found this PDF" in result["message"]
+    assert writes == []
 
 
 def test_local_pdf_strict_page_html_restating_the_pdf_does_not_exempt(

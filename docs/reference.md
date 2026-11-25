@@ -229,8 +229,11 @@ pzi server [--host H --port P] [--stop-after N] [--no-auth] [--log-requests]
 `--strict-metadata` refuses a capture whose metadata does not identify a paper —
 a title plus at least one of DOI, author or year — and fails when no provider
 answered at all. For a local PDF it also fails when the lookups answered but none
-found the paper, since the record would rest only on text read from the PDF; metadata
-you supply with `--metadata-json` is accepted as before. A provider error that a later provider recovered from is a
+found the paper, since the record would rest only on text read from the PDF. The one
+exemption is a `--metadata-json` value you supply that adds a new identifying field
+(title, DOI, authors or year), compared in pzi's normal form, so a blank value or a
+restatement of the PDF's own text does not count. Page-scraped metadata, from
+`--page-html` or `page_metadata_cmd`, never exempts a local PDF. A provider error that a later provider recovered from is a
 warning, not a failure: a Crossref 429 does not fail an add that OpenAlex
 completed.
 
