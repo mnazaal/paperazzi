@@ -9,6 +9,7 @@ per PDF.  This is the CLI side of the server-side BrowserSessionManager.
 from __future__ import annotations
 
 import base64
+import http.client
 import json
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -20,10 +21,13 @@ def _http_error_detail(exc: HTTPError) -> str:
     The server answers a failure with a JSON `{"error": ...}` naming the reason
     (a refused compressed PDF, a dead session); without reading it the caller
     saw only "HTTP Error 503".
+
+    A body cut short raises `http.client.IncompleteRead`, which is not an
+    `OSError`; it falls back to the bare status like any unreadable body.
     """
     try:
         data = json.loads(exc.read().decode("utf-8"))
-    except (OSError, ValueError, TypeError, AttributeError):
+    except (OSError, ValueError, TypeError, AttributeError, http.client.HTTPException):
         return str(exc)
     reason = data.get("error") if isinstance(data, dict) else None
     if isinstance(reason, str) and reason.strip():

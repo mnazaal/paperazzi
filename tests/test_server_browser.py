@@ -108,3 +108,30 @@ def test_download_reports_the_servers_reason_for_a_refusal(monkeypatch) -> None:
     assert result is None
     assert errors and "refused a gzip-encoded PDF" in errors[0], errors
     assert "502" in errors[0]
+
+
+def test_download_survives_an_error_body_cut_short(monkeypatch) -> None:
+    """A truncated error body raised `IncompleteRead`, which escaped the caller.
+
+    It is an `http.client.HTTPException`, not an `OSError`, so reading the
+    server's reason let it out of `download_via_server_api` entirely.
+    """
+    import http.client
+    from urllib.error import HTTPError
+
+    class CutShort(io.BytesIO):
+        def read(self, *_args: Any) -> bytes:
+            raise http.client.IncompleteRead(b'{"err', 40)
+
+    def failing(req: Any, timeout: float = 0) -> Any:
+        raise HTTPError(req.full_url, 502, "Bad Gateway", {}, CutShort())  # type: ignore[arg-type]
+
+    monkeypatch.setattr(server_browser, "urlopen", failing)
+    errors: list[str] = []
+
+    result = server_browser.download_via_server_api(
+        "http://127.0.0.1:8765", "https://example.com/p.pdf", errors=errors,
+    )
+
+    assert result is None
+    assert errors and "502" in errors[0], errors
