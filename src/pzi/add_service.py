@@ -58,13 +58,14 @@ from pzi.bib_repository import (
     read_bib_file,
     validate_bibtex_roundtrip,
 )
-from pzi.bib_serialize import safe_composed_citekey
+from pzi.bib_serialize import resolved_attachment_paths, safe_composed_citekey
 from pzi.bibtex import (
     BibtexEntry,
     NormalizedRecord,
     bibtex_entry_to_record,
     generate_citekey,
     normalize_authors,
+    parse_file_field,
     resolve_citekey_collision,
 )
 from pzi.capture_context import CaptureContext, build_capture_context
@@ -1049,6 +1050,7 @@ def add_records_to_bib_batch(
                     warnings=[
                         *warnings,
                         *_add_planning.similarity_hint_warnings(typed),
+                        *_source_attachments_left_out(plan, source_entry, bib["path"]),
                     ],
                     dry_run=dry_run,
                 ))
@@ -1063,6 +1065,51 @@ def add_records_to_bib_batch(
         raise
 
     return results
+
+
+def _source_attachments_left_out(
+    plan: WritePlan, source_entry: BibtexEntry | None, bib_path: str
+) -> list[str]:
+    """Say which source attachments an import merge left out, instead of dropping them.
+
+    An incoming record merged into an entry that already names a file keeps the
+    entry's own `file` field: pzi does not re-compose one field out of two
+    producers' syntaxes (bare `;` lists, Zotero/JabRef composites). Compared by
+    resolved location, so a `~/` or other spelling of the same file is not
+    reported.
+
+    Built from the plan, which sees the library plus every record applied
+    earlier in this batch, so a dry run warns exactly where the real run does.
+    Both sides resolve against the library's folder: the source's relative
+    paths are either resolved at the source already (a file import) or stored
+    as written (stdin), and a stored relative path is read against the library.
+    """
+    if source_entry is None or plan["action"] != "update":
+        return []
+    if not (plan["entry"]["fields"].get("file") or "").strip():
+        return []
+
+    def located(path: str) -> str:
+        return str(Path(path).expanduser().resolve())
+
+    try:
+        kept = {located(path) for path in resolved_attachment_paths(plan["entry"], bib_path)}
+        offered = zip(
+            parse_file_field(source_entry["fields"].get("file")),
+            resolved_attachment_paths(source_entry, bib_path),
+            strict=True,
+        )
+        left_out = [spelled for spelled, path in offered if located(path) not in kept]
+    except (OSError, ValueError, RuntimeError) as exc:
+        # One unresolvable path (`~unknownuser/` raises in `expanduser`) is a
+        # warning on this entry, not a failed import.
+        return [f"could not compare its attachments with the source's: {exc}"]
+    if not left_out:
+        return []
+    return [
+        "kept the library entry's own file field; not merged from the source: "
+        + ", ".join(left_out)
+    ]
 
 
 # ---------------------------------------------------------------------------

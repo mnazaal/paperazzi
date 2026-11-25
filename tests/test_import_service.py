@@ -808,37 +808,6 @@ def test_import_is_silent_when_the_merge_left_nothing_out() -> None:
         ]
 
 
-def test_a_failed_re_read_does_not_fail_a_committed_import(monkeypatch) -> None:
-    """The warning step runs after the commit; its failure is a warning, not an error."""
-    from pzi import import_service
-    from pzi.errors import PziError
-
-    def locked(_path):
-        raise PziError("timed out after 1s waiting for the lock")
-
-    monkeypatch.setattr(import_service, "read_bib_file", locked)
-    with tempfile.TemporaryDirectory() as td:
-        first, second = _two_source_pdfs(td)
-        cp, bp, _pd = _setup_config(td)
-        Path(bp).write_text(
-            "@article{dual, title = {Two}, author = {Doe, Jane}, year = {2020},\n"
-            "  doi = {10.1000/dual}, file = {" + first + "}}\n"
-        )
-        src = os.path.join(td, "src", "export.bib")
-        Path(src).write_text(
-            "@article{dual, title = {Two}, author = {Doe, Jane}, year = {2020},\n"
-            "  doi = {10.1000/dual}, file = {" + f"{first};{second}" + "}}\n"
-            "@article{new1, title = {New}, author = {Roe, R}, year = {2021},\n"
-            "  doi = {10.1000/new1}}\n"
-        )
-
-        result = import_from_bibtex(config_path=cp, home_dir=td, source_path=src)
-
-        assert result["status"] == "ok", result
-        assert result["imported"] == 1, result
-        assert any("could not re-read the library" in w for w in result["warnings"])
-
-
 def test_an_unresolvable_home_in_a_library_file_field_does_not_fail_the_import() -> None:
     """`~unknownuser/` makes `expanduser` raise after the commit; that is a warning."""
     with tempfile.TemporaryDirectory() as td:
@@ -890,28 +859,6 @@ def test_one_unresolvable_entry_keeps_the_other_entries_warnings() -> None:
         assert any(w.startswith("good: kept the library entry's own file field")
                    for w in result["warnings"]), result["warnings"]
         assert any(w.startswith("odd: could not compare") for w in result["warnings"])
-
-
-def test_a_programming_error_in_the_warning_step_is_not_swallowed(monkeypatch) -> None:
-    """Only operational failures become warnings; a bug must still surface."""
-    import pytest
-
-    from pzi import import_service
-
-    def broken(*_a, **_k):
-        raise TypeError("a bug, not an operational failure")
-
-    monkeypatch.setattr(import_service, "_unmerged_attachment_warnings", broken)
-    with tempfile.TemporaryDirectory() as td:
-        first, _second = _two_source_pdfs(td)
-        cp, _bp, _pd = _setup_config(td)
-        src = os.path.join(td, "src", "export.bib")
-        Path(src).write_text(
-            "@article{x, title = {X}, author = {Doe, J}, year = {2020},\n"
-            "  doi = {10.1000/x}, file = {" + first + "}}\n"
-        )
-        with pytest.raises(TypeError, match="a bug"):
-            import_from_bibtex(config_path=cp, home_dir=td, source_path=src)
 
 
 def _import_with_relative_source(td: str, file_value: str, style: str) -> str:
@@ -1321,3 +1268,84 @@ def test_stdin_warning_names_a_merge_that_filled_the_attachment(tmp_path: Path) 
     assert files.get("old") == "papers/a.pdf", files
     stdin_warnings = [w for w in result.get("warnings", []) if "stdin" in w]
     assert len(stdin_warnings) == 1 and "old" in stdin_warnings[0], result.get("warnings")
+
+
+def _not_merged(result: dict) -> list[str]:
+    return [w for w in result.get("warnings", []) if "not merged" in w]
+
+
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_the_left_out_warning_sees_an_entry_inserted_earlier_in_the_batch(
+    dry_run: bool,
+) -> None:
+    """The preview warns exactly as the real run does.
+
+    The warning used to be built by re-reading the library after the batch, so
+    a dry run could not see an entry inserted earlier in the same batch and
+    said nothing where the real run warned.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        first, second = _two_source_pdfs(td)
+        cp, bp, _pd = _setup_config(td)
+        Path(bp).write_text("")
+        src = os.path.join(td, "src", "export.bib")
+        Path(src).write_text(
+            "@article{dual, title = {Two}, author = {Doe, Jane}, year = {2020},\n"
+            "  doi = {10.1000/dual}, file = {" + first + "}}\n"
+            "@article{again, title = {Two}, author = {Doe, Jane}, year = {2020},\n"
+            "  doi = {10.1000/dual}, file = {" + f"{first};{second}" + "}}\n"
+        )
+
+        result = import_from_bibtex(
+            config_path=cp, home_dir=td, source_path=src, dry_run=dry_run
+        )
+
+        assert _not_merged(result) == [
+            f"dual: kept the library entry's own file field; not merged from the "
+            f"source: {second}"
+        ], result
+
+
+def test_a_stdin_merge_that_stored_the_relative_path_is_not_left_out(
+    tmp_path: Path,
+) -> None:
+    """The merge stored `papers/a.pdf`; saying it was not merged is false.
+
+    A stdin path is kept as written, so the library reads it against its own
+    folder. The warning resolved the source's copy against the current
+    directory instead, and the two never matched.
+    """
+    cp, bp, _papers = _setup_config(str(tmp_path))
+    Path(bp).write_text(
+        "@article{old, title = {A}, author = {Doe, J}, year = {2020}, doi = {10.1000/aaa}}\n"
+    )
+    text = (
+        "@article{new, title = {A}, author = {Doe, J}, year = {2020}, doi = {10.1000/aaa},\n"
+        "  file = {papers/a.pdf}}\n"
+    )
+
+    result = import_from_bibtex(
+        config_path=cp, home_dir=str(tmp_path), source_path="<stdin>", source_text=text
+    )
+
+    assert result.get("updated") == 1, result
+    assert _not_merged(result) == [], result["warnings"]
+
+
+def test_a_stdin_duplicate_naming_the_same_relative_path_gives_no_warning(
+    tmp_path: Path,
+) -> None:
+    """A plain duplicate: the entry already names the path the source offers."""
+    cp, bp, _papers = _setup_config(str(tmp_path))
+    entry = (
+        "@article{old, title = {A}, author = {Doe, J}, year = {2020}, doi = {10.1000/aaa},\n"
+        "  file = {papers/a.pdf}}\n"
+    )
+    Path(bp).write_text(entry)
+
+    result = import_from_bibtex(
+        config_path=cp, home_dir=str(tmp_path), source_path="<stdin>", source_text=entry
+    )
+
+    assert result["skipped_duplicates"] == 1, result
+    assert _not_merged(result) == [], result["warnings"]
