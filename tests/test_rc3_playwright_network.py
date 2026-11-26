@@ -256,8 +256,11 @@ def test_fetch_direct_connects_only_through_the_pinning_proxy(listener) -> None:
 
 
 @pytest.mark.browser
-def test_launch_refuses_when_the_page_route_cannot_install(monkeypatch, listener) -> None:
-    from playwright.sync_api import Page
+def test_launch_refuses_when_the_context_route_cannot_install(monkeypatch, listener) -> None:
+    """The guard is a route on the browser context, so every page and popup
+    is covered (review-nd5 `popguard`); a context that cannot take it must
+    not be handed out."""
+    from playwright.sync_api import BrowserContext
 
     from pzi.safe_http import SsrfBlocked
     from tests.browser_probe import require_browser
@@ -267,7 +270,7 @@ def test_launch_refuses_when_the_page_route_cannot_install(monkeypatch, listener
     def broken_route(self, *args, **kwargs):
         raise RuntimeError("route unavailable")
 
-    monkeypatch.setattr(Page, "route", broken_route)
+    monkeypatch.setattr(BrowserContext, "route", broken_route)
     with pytest.raises(SsrfBlocked):
         with bs.open_browser_session("chromium"):
             pytest.fail("a session without the request guard was handed out")
