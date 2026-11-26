@@ -386,6 +386,11 @@ def discover_pdf_url(
                 errors.append(f"discovery links not read: {_describe_failure(exc, page_url)}")
             return _UNREAD
 
+    def note_cut() -> None:
+        if errors is not None:
+            cut = TimeoutError(f"Timeout {round(DISCOVERY_TIMEOUT_SECONDS * 1000)}ms exceeded")
+            errors.append(f"discovery cut at its deadline: {_describe_failure(cut, page_url)}")
+
     try:
         if session.navigate(page_url, timeout=round(DISCOVERY_TIMEOUT_SECONDS * 1000)) is None:
             # A same-document navigation (only the fragment differs, or the
@@ -408,15 +413,19 @@ def discover_pdf_url(
             # Past the deadline: the click and its download wait would hold
             # the session's lock for up to 6 s more (review-nd10). Noted, so
             # a cut is not read as "no PDF here" (review-st1).
-            if errors is not None:
-                cut = TimeoutError(f"Timeout {round(DISCOVERY_TIMEOUT_SECONDS * 1000)}ms exceeded")
-                errors.append(f"discovery cut at its deadline: {_describe_failure(cut, page_url)}")
+            note_cut()
             return None
         clicked, downloaded_url = _click_capturing_download(
             session.page, click_fn, timeout_ms=min(_DOWNLOAD_EVENT_TIMEOUT_MS, left_ms())
         )
         if downloaded_url and _is_pdf_url(downloaded_url):
             return downloaded_url
+        if left_ms() <= 0:
+            # The click's download wait used up what was left: the same cut
+            # as above, which went unnoted (review-st2 `cut_after_click_no_pdf`;
+            # the intermittent Firefox failure of the deadline test).
+            note_cut()
+            return None
         if clicked:
             wait_network_idle()
             if _is_pdf_url(session.current_url()):

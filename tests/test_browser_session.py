@@ -946,3 +946,25 @@ def subprocess_pid_that_exited() -> int:
     child = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"],
                            capture_output=True, text=True, check=True)
     return int(child.stdout)
+
+
+def test_a_refused_navigation_names_its_url_without_query_or_userinfo() -> None:
+    """The pre-navigation refusal put the whole URL in its reason, and the
+    wave 4 stack records that reason in `errors` (stacking report, 2026-11-26).
+    It is cut as the landed URL already is."""
+    from pzi.safe_http import SsrfBlocked
+
+    class FakePage:
+        url = "about:blank"
+
+    s = BrowserSession(
+        playwright="pw", browser_ref="br", page=FakePage(), url_allowed=lambda url: False
+    )
+    try:
+        s.navigate("http://u:SECRET1@10.1.2.3/sso;jsessionid=SECRET2?t=SECRET3#SECRET4")
+    except SsrfBlocked as exc:
+        reason = exc.reason
+    else:
+        raise AssertionError("a refused URL must raise SsrfBlocked")
+    assert "SECRET" not in reason
+    assert reason.endswith("http://10.1.2.3/sso")

@@ -606,7 +606,7 @@ class BrowserSession:
         if not self.url_allowed(url):
             # Before `goto`: the landing check below runs after the request
             # was sent, and the route guard may be absent.
-            raise SsrfBlocked(f"refusing to navigate to a non-public URL: {url}")
+            raise SsrfBlocked(f"refusing to navigate to a non-public URL: {_without_query(url)}")
         response = self.page.goto(url, wait_until=wait_until, timeout=timeout)
         if response is None:
             # `goto` loads nothing for a same-document navigation: the URL

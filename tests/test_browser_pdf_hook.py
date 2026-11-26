@@ -1120,3 +1120,28 @@ def test_a_landing_refusal_leaves_out_userinfo_and_path_parameters(
     assert reason == f"<urlopen error browser landed on a non-public URL: {named}>"
     for secret in hidden:
         assert secret not in reason, reason
+
+
+def test_a_discovery_cut_by_the_click_is_noted(monkeypatch) -> None:
+    """The click's download wait used up the deadline and nothing was found:
+    `errors` stayed empty, so the cut read as "no PDF here" (review-st2
+    `cut_after_click_no_pdf`; intermittent in the Firefox deadline test)."""
+    import time as _time
+
+    monkeypatch.setattr(hook, "DISCOVERY_TIMEOUT_SECONDS", 0.5)
+
+    def slow_click(page) -> bool:
+        _time.sleep(0.7)
+        return True
+
+    s = FakeBrowserSession(goto_results=[_LOADED_PAGE], evaluate_results=[[]])
+    errors: list[str] = []
+    result = hook.discover_pdf_url(
+        "https://example.com/landing",
+        _session=s,
+        _click=slow_click,
+        _resolve=lambda url, c: [],
+        errors=errors,
+    )
+    assert result is None
+    assert errors == ["discovery cut at its deadline: TimeoutError: Timeout at https://example.com"]
