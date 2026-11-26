@@ -284,6 +284,29 @@ def test_a_late_large_page_still_has_its_links_read(server, browser, monkeypatch
 
 
 @pytest.mark.parametrize("browser", BROWSERS)
+def test_the_link_read_is_linear_in_the_page_size(server, browser) -> None:
+    """`DISCOVERY_JS` deduplicated with `Array.includes`, quadratic in the
+    links: Chromium read 40000 in 11.6 s, past the read's 5 s floor, and
+    lost a late page's PDF link (review-st1 `probe_disc_big chromium 20
+    40000 1`). 60000 links, read in first-occurrence order, a repeat once.
+
+    The read is timed once the page answers at all: Chromium spends 38 s
+    laying out 100000 links before its first `evaluate` of any script
+    returns (`first-read-chromium.log`), and no read can shorten that."""
+    import pzi.browser_pdf_hook as hook
+
+    n = 60_000
+    links = b"".join(b"<a href='/p/%d'></a>\n" % i for i in range(n))
+    server.pages["/huge.html"] = links + b"<a href='/p/7'>again</a><a href='/real.pdf'>r</a>"
+    with _session(browser, server) as session:
+        session.navigate(server.base + "/huge.html", timeout=120_000)
+        assert session.evaluate("() => 1") == 1
+        found = session.evaluate(hook.DISCOVERY_JS, timeout=hook._LINK_READ_FLOOR_SECONDS)
+    expected = [f"{server.base}/p/{i}" for i in range(n)] + [server.base + "/real.pdf"]
+    assert found == expected
+
+
+@pytest.mark.parametrize("browser", BROWSERS)
 def test_discovery_past_its_deadline_skips_its_waits(server, browser, short_deadline) -> None:
     """A late page with no PDF link: the click's download wait and the
     network-idle waits ran in full after the deadline (review-nd10

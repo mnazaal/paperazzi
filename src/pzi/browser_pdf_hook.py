@@ -46,13 +46,16 @@ PDF_HINT_RE = re.compile(r"pdf|download", re.IGNORECASE)
 
 DISCOVERY_JS = r"""
 () => {
-  const out = [];
+  // A Set keeps the read linear in the links: `out.includes` made it
+  // quadratic, 11.6 s for 40000 links in Chromium (review-st1). A Set
+  // iterates in insertion order, so first occurrences keep their order.
+  const out = new Set();
   const add = (value) => {
     if (typeof value !== 'string') return;
     const trimmed = value.trim();
     if (!trimmed) return;
     if (!/^https?:\/\//i.test(trimmed)) return;
-    if (!out.includes(trimmed)) out.push(trimmed);
+    out.add(trimmed);
   };
 
   document
@@ -72,7 +75,7 @@ DISCOVERY_JS = r"""
       );
     });
 
-  return out;
+  return Array.from(out);
 }
 """
 
