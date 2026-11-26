@@ -81,7 +81,7 @@ class FakeBrowserSession:
         self._check_thread()
         return self._url
 
-    def evaluate(self, js):
+    def evaluate(self, js, *, timeout=None):
         self._check_open()
         self._check_thread()
         self._check_js(js)

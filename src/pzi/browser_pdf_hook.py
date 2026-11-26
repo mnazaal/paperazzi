@@ -97,6 +97,19 @@ MAX_PDF_CANDIDATES = 10
 #: cannot add up to five minutes of held lock either.
 CANDIDATE_DEADLINE_SECONDS = 60.0
 
+#: Discovery's deadline, from before its navigation: `BrowserSession.navigate`'s
+#: default timeout. Everything discovery waits for after the navigation (the
+#: network-idle waits, the click's download wait, the link reads) is bounded
+#: by what is left of it, so a page cannot hold the session's lock longer.
+DISCOVERY_TIMEOUT_SECONDS = 30.0
+#: Time a link read keeps when the deadline has passed or is close: a page
+#: that arrived in time has its links read, as at e190718. Reading 15000
+#: links took 1.3-2.5 s in Chromium; a 1 s floor lost such a page's PDF
+#: link (review-nd10 `probe_disc_big chromium 27 15000 1`).
+_LINK_READ_FLOOR_SECONDS = 5.0
+#: Longest single network-idle wait, as `BrowserSession.wait_network_idle`.
+_NETWORK_IDLE_MS = 5000
+
 DOWNLOAD_CANDIDATES_JS = r"""
 () => {
   const out = [];
@@ -291,6 +304,10 @@ def main() -> int:  # pragma: no cover — CLI entry point
     return 0
 
 
+#: `discover_pdf_url`'s read of a page whose links could not be read.
+_UNREAD = object()
+
+
 def discover_pdf_url(
     page_url: str,
     *,
@@ -335,29 +352,70 @@ def discover_pdf_url(
     click_fn = _click or _click_downloadish_links
     resolve_fn = _resolve or resolve_pdf_candidate_urls
 
+    deadline = time.monotonic() + DISCOVERY_TIMEOUT_SECONDS
+
+    def left_ms() -> int:
+        return round((deadline - time.monotonic()) * 1000)
+
+    def wait_network_idle() -> None:
+        # Never 0: Playwright reads a 0 timeout as none at all.
+        if left_ms() > 0:
+            session.wait_network_idle(timeout=min(_NETWORK_IDLE_MS, left_ms()))
+
+    def read_links(js: str) -> Any:
+        """The page's links, or `_UNREAD` once recorded why they were not read.
+
+        `Page.evaluate` has no timeout, and a page whose script spins never
+        answers: discovery hung with the session's lock held (review-nd6
+        `probe_close busy`). The read keeps a floor past the deadline, so a
+        large page that arrived in time is still read. The page is left, and
+        a spinning one replaced, on return.
+        """
+        try:
+            return session.evaluate(
+                js, timeout=max(left_ms() / 1000, _LINK_READ_FLOOR_SECONDS)
+            )
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            if errors is not None:
+                errors.append(f"discovery links not read: {type(exc).__name__}")
+            return _UNREAD
+
     try:
-        if session.navigate(page_url) is None:
+        if session.navigate(page_url, timeout=round(DISCOVERY_TIMEOUT_SECONDS * 1000)) is None:
             # A same-document navigation (only the fragment differs, or the
             # page already `pushState`d to this URL) loads nothing: the page is
             # still the earlier request's, and its links answered paper A's PDF
             # for paper B (review of `8441cab`).
             return None
-        dismiss_fn(session.page)
-        session.wait_network_idle()
+        if left_ms() > 0:
+            dismiss_fn(session.page)
+        wait_network_idle()
 
-        candidates = session.evaluate(DISCOVERY_JS)
+        candidates = read_links(DISCOVERY_JS)
+        if candidates is _UNREAD:
+            return None
         resolved = resolve_fn(page_url, candidates)
         if resolved:
             return resolved[0]
 
-        clicked, downloaded_url = _click_capturing_download(session.page, click_fn)
+        if left_ms() <= 0:
+            # Past the deadline: the click and its download wait would hold
+            # the session's lock for up to 6 s more (review-nd10).
+            return None
+        clicked, downloaded_url = _click_capturing_download(
+            session.page, click_fn, timeout_ms=min(_DOWNLOAD_EVENT_TIMEOUT_MS, left_ms())
+        )
         if downloaded_url and _is_pdf_url(downloaded_url):
             return downloaded_url
         if clicked:
-            session.wait_network_idle()
+            wait_network_idle()
             if _is_pdf_url(session.current_url()):
                 return session.current_url()
-            candidates = session.evaluate(POST_CLICK_JS)  # pragma: no cover — integration path
+            candidates = read_links(POST_CLICK_JS)  # pragma: no cover — integration path
+            if candidates is _UNREAD:  # pragma: no cover — integration path
+                return None
             resolved = resolve_fn(page_url, candidates)  # pragma: no cover — integration path
             if resolved:  # pragma: no cover — integration path
                 return resolved[0]
@@ -590,7 +648,10 @@ _DOWNLOAD_EVENT_TIMEOUT_MS = 5000
 
 
 def _click_capturing_download(
-    page: Any, click_fn: Callable[[Any], bool]
+    page: Any,
+    click_fn: Callable[[Any], bool],
+    *,
+    timeout_ms: int = _DOWNLOAD_EVENT_TIMEOUT_MS,
 ) -> tuple[bool, str | None]:
     """Click, and catch the download that a PDF navigation turns into.
 
@@ -607,7 +668,7 @@ def _click_capturing_download(
         return click_fn(page), None
     clicked = False
     try:
-        with expect_download(timeout=_DOWNLOAD_EVENT_TIMEOUT_MS) as info:
+        with expect_download(timeout=max(timeout_ms, 1)) as info:
             clicked = click_fn(page)
         return clicked, getattr(info.value, "url", None)
     except Exception:

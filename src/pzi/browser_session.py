@@ -146,6 +146,31 @@ def _dispose_response(response: Any) -> None:
         pass
 
 
+def _bounded_evaluate(page: Any, js: str, seconds: float) -> Any:
+    """`page.evaluate(js)`, abandoned with `TimeoutError` after *seconds*.
+
+    Awaited on Playwright's loop through the sync wrapper's private `_sync`
+    and `_impl_obj`, as `_close_pages` does. An abandoned call is left to
+    finish or fail when its page closes; its outcome is collected then, so
+    asyncio reports nothing.
+    """
+
+    async def evaluate() -> Any:
+        task = asyncio.ensure_future(page._impl_obj.evaluate(js))
+        done, _ = await asyncio.wait({task}, timeout=max(seconds, 0.0))
+        if not done:
+            task.add_done_callback(_collect_outcome)
+            raise TimeoutError(f"evaluate did not answer within {max(seconds, 0.0):.1f} s")
+        return task.result()
+
+    return page._sync(evaluate())
+
+
+def _collect_outcome(task: asyncio.Future[Any]) -> None:
+    if not task.cancelled():
+        task.exception()
+
+
 def _close_pages(pages: list[Any], seconds: float) -> None:
     """Close *pages* together, waiting at most *seconds* in all; never raise.
 
@@ -481,10 +506,19 @@ class BrowserSession:
     # JavaScript evaluation
     # ------------------------------------------------------------------
 
-    def evaluate(self, js: str) -> Any:
-        """Evaluate JavaScript in the page and return the result."""
+    def evaluate(self, js: str, *, timeout: float | None = None) -> Any:
+        """Evaluate JavaScript in the page and return the result.
+
+        *timeout*, in seconds, bounds the call: `Page.evaluate` has none, and
+        a page whose script spins never answers, so discovery hung with the
+        session's lock held (review-nd6 `probe_close busy`). Past it this
+        raises `TimeoutError`; the page stays as it is, so the caller leaves
+        it (`leave_page`).
+        """
         self._check_open()
-        return self.page.evaluate(js)
+        if timeout is None:
+            return self.page.evaluate(js)
+        return _bounded_evaluate(self.page, js, timeout)
 
     # ------------------------------------------------------------------
     # Direct HTTP requests (through browser's network stack)
