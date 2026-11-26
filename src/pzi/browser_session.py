@@ -616,9 +616,17 @@ class FetchResult:
 
 
 def install_request_guard(
-    page: Any, url_allowed: Callable[[str], bool] = default_url_allowed
+    target: Any, url_allowed: Callable[[str], bool] = default_url_allowed
 ) -> None:
     """Refuse browser requests to non-public destinations.
+
+    *target* is the browser context, so every page of it is covered: a page's
+    own route never sees a popup's first request, which reached a refused URL
+    (review-nd5 `probe_nd5 popguard`).
+
+    Known limit: a SharedWorker's, a WebSocket's or a service worker's own
+    fetches do not pass through any Playwright route. Only the pinning proxy
+    (`launch_browser`) stops those from reaching a non-public address.
 
     ``safe_http`` protects everything pzi fetches itself, but a Playwright page
     fetches through the *browser's* stack: it follows redirects and resolves DNS
@@ -644,7 +652,7 @@ def install_request_guard(
                 route.abort()
 
     try:
-        page.route("**/*", _guard)
+        target.route("**/*", _guard)
     except Exception as exc:
         from pzi.safe_http import SsrfBlocked
 
@@ -718,8 +726,8 @@ def launch_browser(
                 ctx = playwright.chromium.launch_persistent_context(
                     user_data_dir=str(profile), **options
                 )
+            install_request_guard(ctx, url_allowed)
             page = ctx.new_page()
-            install_request_guard(page, url_allowed)
         except BaseException:
             if temp_profile is not None:
                 _discard_profile_clone(temp_profile)
@@ -750,8 +758,8 @@ def launch_browser(
         else:
             browser_instance = playwright.chromium.launch(**options)
             context = browser_instance.new_context()
+        install_request_guard(context, url_allowed)
         page = context.new_page()
-        install_request_guard(page, url_allowed)
     except BaseException:
         pinning.close()
         with contextlib.suppress(Exception):

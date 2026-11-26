@@ -708,6 +708,12 @@ class _FakePage:
 class _FakeContext:
     def __init__(self, page):
         self.page = page
+        self.handlers: list = []
+
+    def route(self, pattern, handler):
+        if self.page.route_error:
+            raise self.page.route_error
+        self.handlers.append((pattern, handler))
 
     def new_page(self):
         return self.page
@@ -760,8 +766,11 @@ def test_every_launch_branch_installs_a_request_guard_that_refuses_private_urls(
     page = _FakePage()
     _, session = _launch(monkeypatch, tmp_path, browser, profile, page)
     try:
-        assert [pattern for pattern, _ in page.handlers] == ["**/*"]
-        handler = page.handlers[0][1]
+        # On the context, so every page is covered, a popup's first request
+        # included; a page's own route misses that (review-nd5 `popguard`).
+        context = session.browser_ref if profile else session.browser_ref[1]
+        assert [pattern for pattern, _ in context.handlers] == ["**/*"]
+        handler = context.handlers[0][1]
         verdicts: list[str] = []
         for url in ("http://127.0.0.1:8765/secret", "http://localhost/x"):
             route = MagicMock()
