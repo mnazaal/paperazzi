@@ -265,15 +265,20 @@ def test_discovery_on_a_spinning_page_ends_by_its_deadline(
 
 
 @pytest.mark.parametrize("browser", BROWSERS)
-def test_a_late_large_page_still_has_its_links_read(server, browser, short_deadline) -> None:
+def test_a_late_large_page_still_has_its_links_read(server, browser, monkeypatch) -> None:
     """A large page whose response arrives just before the deadline: a 1 s
     floor on the read lost a 15000-link page's PDF link, which e190718 found
     (review-nd10 `probe_disc_big chromium 27 15000 1`). 20000 links take
     Chromium 2.3-2.6 s to read here, Firefox 0.5 s (`link-read-cost.log`)."""
+    import pzi.browser_pdf_hook as hook
+
+    # 2.5 s for the 20000-link page to load within the deadline (a 1 s
+    # margin timed `goto` out under load); the banner tries then end within
+    # a second of it, so the read starts with less time left than it needs.
+    monkeypatch.setattr(hook, "DISCOVERY_TIMEOUT_SECONDS", 6.0)
     links = b"".join(b"<a href='/p/%d'>x</a>" % i for i in range(20000))
     server.pages["/big.html"] = links + b"<a href='/real.pdf'>real</a>" + BEACONS
-    # Loaded within the deadline; the banner tries then end past it.
-    server.delays["/big.html"] = SHORT_T - 1.0
+    server.delays["/big.html"] = 3.5
     url, errors, _ = _discover_within(browser, server, "/big.html", 60)
     assert url == server.base + "/real.pdf", errors
 
