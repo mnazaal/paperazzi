@@ -10,7 +10,7 @@ import pytest
 
 from pzi import browser_pdf_hook as hook
 from pzi.browser_session import FetchResult
-from tests.fake_session import FakeBrowserSession, make_pdf_response
+from tests.fake_session import FakeBrowserSession, make_fake_response, make_pdf_response
 
 
 def test_parse_hook_request_rejects_non_dict() -> None:
@@ -814,3 +814,123 @@ def test_download_returns_none_when_the_page_scan_raises() -> None:
     )
 
     assert hook.download_pdf("https://example.com/paper.pdf", _session=s) is None
+
+
+# ---------------------------------------------------------------------------
+# Error notes name a failure without its message's text
+# ---------------------------------------------------------------------------
+
+TOKEN_URL = "https://pub.example.org/x.pdf?token=SECRET"
+
+
+class _NavigationRaises(FakeBrowserSession):
+    """A session whose requests fail with a message naming the URL, as a
+    Playwright error does."""
+
+    def __init__(self, message: str, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._message = message
+
+    def navigate(self, url, *, wait_until="domcontentloaded", timeout=30000):
+        raise RuntimeError(self._message)
+
+    def fetch_direct(self, url):
+        raise RuntimeError(self._message)
+
+
+@pytest.mark.parametrize("call", ["discover", "download"])
+def test_a_session_note_keeps_no_text_of_the_message(call: str) -> None:
+    """`browser session: {exc}` put the URL from the message, token and all,
+    in `errors`, which the HTTP API returns as its error text."""
+    s = _NavigationRaises(f"Page.goto: net::ERR_ABORTED at {TOKEN_URL}")
+    errs: list[str] = []
+    if call == "discover":
+        hook.discover_pdf_url(TOKEN_URL, _session=s, errors=errs)
+    else:
+        hook.download_pdf(TOKEN_URL, _session=s, errors=errs)
+    assert errs, "no note, so the test proves nothing"
+    assert not any("SECRET" in note for note in errs), errs
+    assert any("net::ERR_ABORTED" in note for note in errs), errs
+    assert any("https://pub.example.org" in note for note in errs), errs
+
+
+def test_a_candidate_refusal_names_only_the_candidates_origin() -> None:
+    """A refused candidate was named in full, token and all."""
+    refused = FetchResult(status=-1, content_type=None, body=b"", refused="gzip refused")
+
+    class _Refuses(FakeBrowserSession):
+        def fetch_direct(self, url):
+            self.calls.append(("fetch_direct", url))
+            if url == TOKEN_URL:
+                return refused
+            return FetchResult(status=200, content_type="text/html", body=b"<html>")
+
+    s = _Refuses(
+        goto_results=[make_fake_response(content_type="text/html", body=b"<html>")],
+        evaluate_results=[[TOKEN_URL]],
+    )
+    errs: list[str] = []
+    hook.download_pdf("https://journal.test/landing", _session=s, errors=errs)
+    assert errs == ["https://pub.example.org: gzip refused"]
+
+
+@pytest.mark.parametrize(
+    ("url", "origin"),
+    [
+        # A browser reads `\` as `/` in an http(s) URL, so the host ends
+        # there; `urlsplit` read `secret.example` (review-nd9 `probe_origin9`).
+        ("https://pub.example.org\\@SECRET.example/x.pdf", "https://pub.example.org"),
+        ("http:/\\pub.example.org/x.pdf?token=SECRET", "http://pub.example.org"),
+        ("http:pub.example.org/x.pdf?token=SECRET", "http://pub.example.org"),
+        ("https://user:SECRET@pub.example.org/x.pdf", "https://pub.example.org"),
+        ("https://pub.example.org:SECRET@evil.example/x.pdf", "https://evil.example"),
+        ("https://pub.exa\tmple.org/x.pdf?SECRET", "https://pub.example.org"),
+        ("HTTPS://PUB.example.org:443/x.pdf?t=SECRET", "https://pub.example.org"),
+        ("http://127.0.0.1:8080/x?SECRET", "http://127.0.0.1:8080"),
+        ("http://[::1]:9/x?SECRET", "http://[::1]:9"),
+        # Hosts a browser would decode, map or refuse are not named.
+        ("https://pub.example.org%40SECRET/x.pdf", "<url>"),
+        ("https://[v1.SECRET]/x.pdf", "<url>"),
+        ("https://[::1%25SECRET]/x.pdf", "<url>"),
+        ("https://xn--SECRET-abc.example/x.pdf", "<url>"),
+        ("https://pub_SECRET.example/x.pdf", "<url>"),
+        ("https://ｓｅｃｒｅｔ.example/x.pdf", "<url>"),
+        ("https://pub.example.org:443SECRET/x.pdf", "<url>"),
+        ("https://pub.example.org:99999/x.pdf", "<url>"),
+        ("https://0x7f.1/x.pdf", "<url>"),
+        ("//pub.example.org/x.pdf?token=SECRET", "<url>"),
+        ("file:///home/SECRET", "<url>"),
+    ],
+)
+def test_url_origin_reads_the_host_as_a_browser_does(url: str, origin: str) -> None:
+    assert hook._url_origin(url) == origin
+
+
+@pytest.mark.parametrize(
+    ("message", "reason"),
+    [
+        ("Page.goto: net::ERR_ABORTED at https://pub.example.org/x?t=SECRET", "net::ERR_ABORTED"),
+        ("Page.goto: NS_BINDING_ABORTED", "NS_BINDING_ABORTED"),
+        ("Page.goto: net::ERR_UNSAFE_PORT at http://127.0.0.1:9/?t=SECRET", "net::ERR_UNSAFE_PORT"),
+        ("Page.goto: NS_ERROR_PORT_ACCESS_NOT_ALLOWED", "NS_ERROR_PORT_ACCESS_NOT_ALLOWED"),
+        ("Page.goto: Timeout 30000ms exceeded.", "Timeout"),
+        (
+            'Page.goto: Navigation to "https://x/?t=SECRET" is interrupted by another navigation',
+            "interrupted by another navigation",
+        ),
+        ("evaluate did not answer within 5.0 s", "Timeout"),
+        ("BrowserSession is closed", "browser session is closed"),
+        # Text a page's script threw is never a code (review-nd9 `probe_pagecode9`).
+        ("Page.evaluate: NS_PAGETEXT_42", "the page's script threw"),
+        ("Page.evaluate: net::ERR_ABORTED SECRET", "the page's script threw"),
+        ("Page.evaluate: Timeout 1ms exceeded SECRET", "the page's script threw"),
+        # Code-shaped text that is no known code.
+        ("Page.goto: NS_SECRET_TOKEN", "unrecognised"),
+        ("net::ERR_SECRET", "unrecognised"),
+        ("Page.goto: TimeoutSECRET", "unrecognised"),
+        ("refusing to navigate to a non-public URL: https://x/?t=SECRET", "non-public URL"),
+    ],
+)
+def test_a_failure_is_described_by_a_code_or_a_fixed_reason(message: str, reason: str) -> None:
+    note = hook._describe_failure(RuntimeError(message), TOKEN_URL)
+    assert note == f"RuntimeError: {reason} at https://pub.example.org"

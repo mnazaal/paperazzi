@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import ipaddress
 import json
 import re
 import subprocess
@@ -379,7 +380,7 @@ def discover_pdf_url(
             raise
         except Exception as exc:
             if errors is not None:
-                errors.append(f"discovery links not read: {type(exc).__name__}")
+                errors.append(f"discovery links not read: {_describe_failure(exc, page_url)}")
             return _UNREAD
 
     try:
@@ -423,7 +424,7 @@ def discover_pdf_url(
         return None
     except RuntimeError as exc:
         if errors is not None:
-            errors.append(f"browser session: {exc}")
+            errors.append(f"browser session: {_describe_failure(exc, page_url)}")
         return None
     except Exception:
         return None
@@ -437,12 +438,236 @@ def discover_pdf_url(
             session.leave_page()
 
 
+#: Playwright's API name and a code at the start of its message:
+#: `Page.goto: net::ERR_ABORTED at <url>`, `Page.goto: NS_BINDING_ABORTED`,
+#: `Page.goto: Timeout 60000ms exceeded.` Anchored there, so a code-like run
+#: inside a URL further on is never taken for one.
+_ERROR_CODE_RE = re.compile(r"net::ERR_[A-Z0-9_]+\b|NS_[A-Z0-9_]+\b|Timeout \d+ms exceeded")
+
+#: Network error codes a note may name. A code-shaped run is named only when
+#: it is one of these: a page's script can throw any text, and taking
+#: `NS_PAGETEXT_42` for a code put the page's own words in a note
+#: (review-nd9 `probe_pagecode9`). Chromium's names (`net_error_list.h`) and
+#: the Necko codes Firefox reports for a failed load.
+_KNOWN_ERROR_CODES = frozenset(
+    [
+        f"net::ERR_{name}"
+        for name in """
+        FAILED ABORTED INVALID_ARGUMENT INVALID_HANDLE FILE_NOT_FOUND TIMED_OUT
+        FILE_TOO_BIG UNEXPECTED ACCESS_DENIED NOT_IMPLEMENTED INSUFFICIENT_RESOURCES
+        OUT_OF_MEMORY UPLOAD_FILE_CHANGED SOCKET_NOT_CONNECTED FILE_EXISTS
+        FILE_PATH_TOO_LONG FILE_NO_SPACE FILE_VIRUS_INFECTED BLOCKED_BY_CLIENT
+        NETWORK_CHANGED BLOCKED_BY_ADMINISTRATOR SOCKET_IS_CONNECTED
+        CONTEXT_SHUT_DOWN BLOCKED_BY_RESPONSE CLEARTEXT_NOT_PERMITTED BLOCKED_BY_CSP
+        BLOCKED_BY_ORB NETWORK_ACCESS_REVOKED CONNECTION_CLOSED CONNECTION_RESET
+        CONNECTION_REFUSED CONNECTION_ABORTED CONNECTION_FAILED NAME_NOT_RESOLVED
+        INTERNET_DISCONNECTED SSL_PROTOCOL_ERROR ADDRESS_INVALID ADDRESS_UNREACHABLE
+        SSL_CLIENT_AUTH_CERT_NEEDED TUNNEL_CONNECTION_FAILED NO_SSL_VERSIONS_ENABLED
+        SSL_VERSION_OR_CIPHER_MISMATCH SSL_RENEGOTIATION_REQUESTED
+        PROXY_AUTH_UNSUPPORTED BAD_SSL_CLIENT_AUTH_CERT CONNECTION_TIMED_OUT
+        HOST_RESOLVER_QUEUE_TOO_LARGE SOCKS_CONNECTION_FAILED
+        SOCKS_CONNECTION_HOST_UNREACHABLE ALPN_NEGOTIATION_FAILED SSL_NO_RENEGOTIATION
+        SSL_DECOMPRESSION_FAILURE_ALERT SSL_BAD_RECORD_MAC_ALERT PROXY_AUTH_REQUESTED
+        PROXY_CONNECTION_FAILED MANDATORY_PROXY_CONFIGURATION_FAILED
+        PROXY_CERTIFICATE_INVALID NAME_RESOLUTION_FAILED NETWORK_ACCESS_DENIED
+        TEMPORARILY_THROTTLED HTTPS_PROXY_TUNNEL_RESPONSE_REDIRECT MSG_TOO_BIG
+        ADDRESS_IN_USE SSL_HANDSHAKE_NOT_COMPLETED SSL_BAD_PEER_PUBLIC_KEY
+        SSL_PINNED_KEY_NOT_IN_CERT_CHAIN SSL_DECRYPT_ERROR_ALERT
+        SSL_SERVER_CERT_CHANGED SSL_UNRECOGNIZED_NAME_ALERT ICANN_NAME_COLLISION
+        SSL_SERVER_CERT_BAD_FORMAT SSL_OBSOLETE_CIPHER NO_BUFFER_SPACE
+        EARLY_DATA_REJECTED WRONG_VERSION_ON_EARLY_DATA TLS13_DOWNGRADE_DETECTED
+        SSL_KEY_USAGE_INCOMPATIBLE INVALID_ECH_CONFIG_LIST ECH_NOT_NEGOTIATED
+        ECH_FALLBACK_CERTIFICATE_INVALID CERT_COMMON_NAME_INVALID CERT_DATE_INVALID
+        CERT_AUTHORITY_INVALID CERT_CONTAINS_ERRORS CERT_NO_REVOCATION_MECHANISM
+        CERT_UNABLE_TO_CHECK_REVOCATION CERT_REVOKED CERT_INVALID
+        CERT_WEAK_SIGNATURE_ALGORITHM CERT_NON_UNIQUE_NAME CERT_WEAK_KEY
+        CERT_NAME_CONSTRAINT_VIOLATION CERT_VALIDITY_TOO_LONG
+        CERTIFICATE_TRANSPARENCY_REQUIRED CERT_SYMANTEC_LEGACY
+        CERT_KNOWN_INTERCEPTION_BLOCKED INVALID_URL DISALLOWED_URL_SCHEME
+        UNKNOWN_URL_SCHEME INVALID_REDIRECT TOO_MANY_REDIRECTS UNSAFE_REDIRECT
+        UNSAFE_PORT INVALID_RESPONSE INVALID_CHUNKED_ENCODING METHOD_NOT_SUPPORTED
+        UNEXPECTED_PROXY_AUTH EMPTY_RESPONSE RESPONSE_HEADERS_TOO_BIG
+        PAC_SCRIPT_FAILED REQUEST_RANGE_NOT_SATISFIABLE MALFORMED_IDENTITY
+        CONTENT_DECODING_FAILED NETWORK_IO_SUSPENDED ENCODING_CONVERSION_FAILED
+        NO_SUPPORTED_PROXIES HTTP2_PROTOCOL_ERROR INVALID_AUTH_CREDENTIALS
+        UNSUPPORTED_AUTH_SCHEME ENCODING_DETECTION_FAILED MISSING_AUTH_CREDENTIALS
+        MISCONFIGURED_AUTH_ENVIRONMENT RESPONSE_BODY_TOO_BIG_TO_DRAIN
+        RESPONSE_HEADERS_MULTIPLE_CONTENT_LENGTH INCOMPLETE_HTTP2_HEADERS
+        RESPONSE_HEADERS_MULTIPLE_CONTENT_DISPOSITION
+        RESPONSE_HEADERS_MULTIPLE_LOCATION HTTP2_SERVER_REFUSED_STREAM
+        HTTP2_PING_FAILED CONTENT_LENGTH_MISMATCH INCOMPLETE_CHUNKED_ENCODING
+        QUIC_PROTOCOL_ERROR RESPONSE_HEADERS_TRUNCATED QUIC_HANDSHAKE_FAILED
+        HTTP2_INADEQUATE_TRANSPORT_SECURITY HTTP2_FLOW_CONTROL_ERROR
+        HTTP2_FRAME_SIZE_ERROR HTTP2_COMPRESSION_ERROR HTTP_1_1_REQUIRED
+        PROXY_HTTP_1_1_REQUIRED INVALID_HTTP_RESPONSE CONTENT_DECODING_INIT_FAILED
+        HTTP2_RST_STREAM_NO_ERROR_RECEIVED TOO_MANY_RETRIES HTTP2_STREAM_CLOSED
+        HTTP_RESPONSE_CODE_FAILURE INCONSISTENT_IP_ADDRESS_SPACE
+        BLOCKED_BY_PRIVATE_NETWORK_ACCESS_CHECKS CACHE_MISS CACHE_READ_FAILURE
+        CACHE_WRITE_FAILURE CACHE_OPEN_FAILURE CACHE_CREATE_FAILURE CACHE_RACE
+        INSECURE_RESPONSE DNS_MALFORMED_RESPONSE DNS_SERVER_REQUIRES_TCP
+        DNS_SERVER_FAILED DNS_TIMED_OUT DNS_CACHE_MISS DNS_SEARCH_EMPTY
+        DNS_SORT_ERROR DNS_NAME_HTTPS_ONLY DNS_REQUEST_CANCELLED
+        """.split()
+    ]
+    + [
+        f"NS_{name}"
+        for name in """
+        BINDING_ABORTED BINDING_FAILED BINDING_REDIRECTED BINDING_RETARGETED
+        ERROR_ABORT ERROR_FAILURE ERROR_NOT_AVAILABLE ERROR_UNEXPECTED
+        ERROR_OUT_OF_MEMORY ERROR_ILLEGAL_VALUE ERROR_CONNECTION_REFUSED
+        ERROR_NET_TIMEOUT ERROR_NET_RESET ERROR_NET_INTERRUPT
+        ERROR_NET_PARTIAL_TRANSFER ERROR_NET_INADEQUATE_SECURITY
+        ERROR_NET_HTTP2_SENT_GOAWAY ERROR_NET_HTTP3_PROTOCOL_ERROR
+        ERROR_NET_TIMEOUT_EXTERNAL ERROR_NET_EMPTY_RESPONSE ERROR_NET_ERROR_RESPONSE
+        ERROR_UNKNOWN_HOST ERROR_UNKNOWN_PROXY_HOST ERROR_PROXY_CONNECTION_REFUSED
+        ERROR_PROXY_AUTHENTICATION_FAILED ERROR_PROXY_BAD_GATEWAY
+        ERROR_PROXY_GATEWAY_TIMEOUT ERROR_OFFLINE ERROR_PORT_ACCESS_NOT_ALLOWED
+        ERROR_MALFORMED_URI ERROR_UNKNOWN_PROTOCOL ERROR_REDIRECT_LOOP
+        ERROR_CORRUPTED_CONTENT ERROR_INVALID_CONTENT_ENCODING
+        ERROR_DOCUMENT_NOT_CACHED ERROR_CONTENT_BLOCKED ERROR_CONTENT_BLOCKED_SHOW_ALT
+        ERROR_FILE_NOT_FOUND ERROR_FILE_ACCESS_DENIED ERROR_DOM_BAD_URI
+        ERROR_DOM_SECURITY_ERR ERROR_INTERCEPTION_FAILED ERROR_UNSAFE_CONTENT_TYPE
+        ERROR_PARSED_DATA_CACHED ERROR_DOCSHELL_DYING ERROR_SOCKET_CREATE_FAILED
+        ERROR_SOCKET_ADDRESS_IN_USE ERROR_ALREADY_CONNECTED ERROR_NOT_CONNECTED
+        ERROR_IN_PROGRESS ERROR_GENERATE_FAILURE ERROR_SOCKET_FAIL
+        """.split()
+    ]
+)
+
+#: Fixed phrases of Playwright's and pzi's own messages, and the reason a
+#: note gives for each. The note gives this text, never the message's.
+_FIXED_REASONS = (
+    ("is interrupted by another navigation", "interrupted by another navigation"),
+    ("Download is starting", "download is starting"),
+    ("Execution context was destroyed", "the page navigated during the read"),
+    ("has been closed", "the page was closed"),
+    ("evaluate did not answer within", "Timeout"),
+    ("session is closed", "browser session is closed"),
+    ("no longer running", "browser is no longer running"),
+    ("landed on a non-public URL", "landed on a non-public URL"),
+    ("navigate to a non-public URL", "non-public URL"),
+)
+
+#: APIs whose failure message continues with whatever the page's script threw.
+_SCRIPT_APIS = ("evaluate", "evaluate_handle", "evaluate_all")
+
+#: A host a note may name: ASCII letter-digit-hyphen labels. Anything else
+#: (an underscore, a percent sign, non-ASCII, an IPv6 zone) is `<url>`.
+_PLAIN_LABEL_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+
+
+#: What a browser strips from both ends of a URL before parsing it: C0
+#: controls and space (WHATWG URL standard).
+_URL_EDGE = "".join(chr(code) for code in range(0x21))
+
+#: A Playwright API name at the start of a message: `Page.goto: `.
+_API_PREFIX_RE = re.compile(r"[A-Za-z]+\.([A-Za-z_]+): ")
+
+
+def _url_origin(url: str) -> str:
+    """`scheme://host[:port]` of *url*, read as a browser reads it, else
+    `<url>`; never its userinfo, path, query or fragment.
+
+    `urlsplit` read `https://pub.example.org\\@x.example/` as host
+    `x.example`; a browser reads `\\` as `/` in an http(s) URL, so the host is
+    `pub.example.org`, and a URL could choose the origin a note named
+    (review-nd9 `probe_origin9`). So the URL is prepared as a browser
+    prepares it: C0 controls and spaces stripped from both ends, every tab
+    and newline removed, `\\` read as `/`, any slashes after the scheme
+    skipped. The host is named only when it is plain, ASCII labels of
+    letters, digits and hyphens, a dotted-quad IPv4 address, or a bracketed
+    IPv6 address: anything a browser would decode, map or refuse is `<url>`.
+    """
+    text = re.sub(r"[\t\n\r]", "", url.strip(_URL_EDGE))
+    scheme, colon, rest = text.partition(":")
+    scheme = scheme.lower()
+    if not colon or scheme not in ("http", "https"):
+        return "<url>"
+    authority = re.split(r"[/?#]", rest.replace("\\", "/").lstrip("/"), maxsplit=1)[0]
+    host_port = authority.rpartition("@")[2]
+    if host_port.startswith("["):
+        host, bracket, port = host_port[1:].partition("]")
+        if not bracket or (port and not port.startswith(":")):
+            return "<url>"
+        if not re.fullmatch(r"[0-9A-Fa-f:.]+", host):
+            # A zone ID (`%25…`) or an IPvFuture: a browser refuses both.
+            return "<url>"
+        try:
+            host = f"[{ipaddress.IPv6Address(host).compressed}]"
+        except ValueError:
+            return "<url>"
+        port = port[1:]
+    else:
+        host, _, port = host_port.partition(":")
+        host = host.lower()
+        if not _is_plain_host(host):
+            return "<url>"
+    if port:
+        if not port.isascii() or not port.isdigit() or int(port) > 65535:
+            return "<url>"
+        if int(port) != {"http": 80, "https": 443}[scheme]:
+            host = f"{host}:{int(port)}"
+    return f"{scheme}://{host}"
+
+
+def _is_plain_host(host: str) -> bool:
+    """A host of ASCII letter-digit-hyphen labels, or a dotted-quad IPv4
+    address. A last label a browser would read as a number (`0x7f`, `1`)
+    must be part of a plain dotted quad; an `xn--` label is not plain."""
+    labels = host.removesuffix(".").split(".")
+    if not all(_PLAIN_LABEL_RE.fullmatch(label) for label in labels):
+        return False
+    if any(label[2:4] == "--" for label in labels):
+        return False
+    if re.fullmatch(r"0x[0-9a-f]*|[0-9]+", labels[-1]):
+        try:
+            return str(ipaddress.IPv4Address(host)) == host
+        except ValueError:
+            return False
+    return True
+
+
+def _describe_failure(exc: BaseException, url: str | None = None) -> str:
+    """The exception's type, why it failed, and the origin of *url*, the URL
+    pzi asked for.
+
+    Why is a known network error code (`_KNOWN_ERROR_CODES`), `Timeout`, or a
+    fixed phrase (`_FIXED_REASONS`), and nothing else of the message: the
+    message names URLs, and a publisher's PDF URL can carry a session token
+    in its path or query. Text after an `evaluate` API name is whatever the
+    page's script threw, so no code is read from it.
+    """
+    first_line = (str(exc).splitlines() or [""])[0]
+    described = f"{type(exc).__name__}: {_failure_reason(first_line)}"
+    return described if url is None else f"{described} at {_url_origin(url)}"
+
+
+def _failure_reason(line: str) -> str:
+    prefix = _API_PREFIX_RE.match(line)
+    rest = line[prefix.end():] if prefix else line
+    if prefix is None or prefix.group(1) not in _SCRIPT_APIS:
+        code = _ERROR_CODE_RE.match(rest)
+        if code and code.group(0) in _KNOWN_ERROR_CODES:
+            return code.group(0)
+        if code and code.group(0).startswith("Timeout "):
+            return "Timeout"
+    lowered = line.lower()
+    for phrase, reason in _FIXED_REASONS:
+        if phrase.lower() in lowered:
+            return reason
+    if prefix is not None and prefix.group(1) in _SCRIPT_APIS:
+        return "the page's script threw"
+    return "unrecognised"
+
+
 def _note_refusal(
     result: FetchResult, errors: list[str] | None, url: str | None = None
 ) -> None:
-    """Record why a response was refused before its body was read."""
+    """Record why a response was refused before its body was read, naming
+    only the origin of the URL refused: a candidate's path or query can
+    carry a session token."""
     if errors is not None and result.refused:
-        errors.append(f"{url}: {result.refused}" if url else result.refused)
+        errors.append(f"{_url_origin(url)}: {result.refused}" if url else result.refused)
 
 
 def download_pdf(
@@ -565,7 +790,7 @@ def download_pdf(
         return None
     except RuntimeError as exc:
         if errors is not None:
-            errors.append(f"browser session: {exc}")
+            errors.append(f"browser session: {_describe_failure(exc, pdf_url)}")
         return None
     except Exception:
         return None
