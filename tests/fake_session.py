@@ -114,6 +114,11 @@ class FakeBrowserSession:
         from pzi.browser_session import FetchResult
         return FetchResult(status=-1, content_type=None, body=b"")
 
+    def leave_page(self):
+        """Never raises, like the real one, even on a closed session."""
+        self._check_thread()
+        self.calls.append(("leave_page", None))
+
     def wait_network_idle(self, *, timeout=5000):
         self._check_thread()
 

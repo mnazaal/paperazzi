@@ -372,6 +372,11 @@ def discover_pdf_url(
     finally:
         if close_on_exit:  # pragma: no cover — browser integration path
             session.close()
+        else:
+            # Discovery reads the session's page; leave it, and close any
+            # popup it opened, so nothing downloads while pzi is idle
+            # (review-nd5 `idle`, review-nd7 `probe_idle7 discover`).
+            session.leave_page()
 
 
 def _note_refusal(
@@ -509,6 +514,11 @@ def download_pdf(
     finally:
         if close_on_exit:  # pragma: no cover — browser integration path
             session.close()
+        else:
+            # Step 2, the challenge wait and step 3 all use the session's
+            # page; leave it, and close any popup they opened, so nothing
+            # downloads while pzi is idle (review-nd7 `probe_idle7 fallback`).
+            session.leave_page()
 
 
 def _wait_for_verified_pdf(

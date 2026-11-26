@@ -671,6 +671,9 @@ class _CandidateSession:
     def evaluate(self, _script):
         return self._candidates
 
+    def leave_page(self):
+        return None
+
 
 def test_a_hostile_page_cannot_drive_an_unbounded_candidate_loop() -> None:
     """Every candidate costs a navigation with a 30s timeout, and the whole

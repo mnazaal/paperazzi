@@ -110,3 +110,77 @@ def test_a_popups_first_request_meets_the_guard(server, browser) -> None:
     assert "/popper.html" in server.hits
     assert opened >= 2, "the popup never opened, so the test proves nothing"
     assert not any(hit.startswith("/private.html") for hit in server.hits)
+
+
+#: Opens a popup that requests /beacon every 100 ms while it is open.
+OPENER_PAGE = b"<script>window.open('/beacon-pop.html');</script>"
+BEACON_PAGE = (
+    b"<p>pop</p><script>setInterval(function () {"
+    b" fetch('/beacon?' + Math.random()); }, 100);</script>"
+)
+#: Opens a popup that sets its opener's location to /beat.html every 5 ms
+#: unless the opener already shows it (review-nd9 `probe_reopen9`).
+REOPEN_PAGE = b"<script>window.open('/reopener.html');</script>"
+REOPENER_PAGE = (
+    b"<p>rpop</p><script>setInterval(function () { var here = '';"
+    b" try { here = opener.location.pathname; } catch (e) {}"
+    b" if (here !== '/beat.html') { try { opener.location = '/beat.html'; } catch (e) {} }"
+    b" }, 5);</script>"
+)
+
+
+def _serve_beacons(server: _Server) -> None:
+    server.pages.update(
+        {
+            "/opener.html": OPENER_PAGE,
+            "/beacon-pop.html": BEACON_PAGE,
+            "/reopen.html": REOPEN_PAGE,
+            "/reopener.html": REOPENER_PAGE,
+            "/beat.html": BEACON_PAGE,
+        }
+    )
+
+
+def _beacons(server: _Server) -> int:
+    return sum(1 for hit in server.hits if hit.startswith("/beacon"))
+
+
+def _assert_idle_after_return(server: _Server, session) -> None:
+    """After the call returns, no page of the session requests anything
+    while pzi makes no Playwright call, and only the session's own page is
+    left, on `about:blank`."""
+    before = _beacons(server)
+    time.sleep(1.5)  # no Playwright call: nothing pzi does can intervene
+    assert _beacons(server) == before
+    assert [page.url for page in session.page.context.pages] == ["about:blank"]
+
+
+@pytest.mark.parametrize("browser", BROWSERS)
+@pytest.mark.parametrize("landing", ["/opener.html", "/reopen.html"])
+def test_discovery_leaves_no_live_page(server, browser, landing) -> None:
+    from pzi.browser_pdf_hook import discover_pdf_url
+
+    _serve_beacons(server)
+    with _session(browser, server) as session:
+        assert discover_pdf_url(server.base + landing, _session=session) is None
+        assert _beacons(server) > 0, "the popup never ran, so the test proves nothing"
+        _assert_idle_after_return(server, session)
+
+
+@pytest.mark.parametrize("browser", BROWSERS)
+@pytest.mark.parametrize("challenge_timeout", [0, 2])
+def test_a_download_attempt_leaves_no_live_page(server, browser, challenge_timeout) -> None:
+    """Step 2, the challenge wait and step 3 all use the session's page."""
+    from pzi.browser_pdf_hook import download_pdf
+
+    _serve_beacons(server)
+    with _session(browser, server) as session:
+        body = download_pdf(
+            server.base + "/opener.html",
+            _session=session,
+            challenge_timeout=challenge_timeout,
+            candidate_deadline_seconds=1,
+        )
+        assert body is None
+        assert _beacons(server) > 0, "the popup never ran, so the test proves nothing"
+        _assert_idle_after_return(server, session)

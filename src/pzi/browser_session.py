@@ -13,6 +13,7 @@ Usage:
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import os
 import shutil
@@ -34,6 +35,18 @@ from pzi.pinning_proxy import DEFAULT_MAX_RESPONSE_BYTES, PinningProxy
 _MAX_FETCH_DIRECT_REDIRECTS = 10
 
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+
+#: Bound on closing pages, and on moving the session's page to `about:blank`.
+_PAGE_CLEANUP_SECONDS = 1.0
+
+#: After pages are closed, how long to wait for a popup Playwright had not
+#: reported yet, so it is closed too. Chromium reported one while the page
+#: that opened it was closing, Firefox 11-20 ms after (navdl `exp_popup_race`).
+_POPUP_SETTLE_SECONDS = 0.2
+
+#: Rounds `leave_page` makes of "close the others, then blank the session's
+#: page". A popup opened between the two steps is caught by the next round.
+_LEAVE_PAGE_ROUNDS = 3
 
 #: Prefix for cloned-profile temp dirs, shared by the cleanup sweep below.
 _CLONE_PREFIX = "pzi-chrome-"
@@ -131,6 +144,33 @@ def _dispose_response(response: Any) -> None:
         response.dispose()
     except Exception:
         pass
+
+
+def _close_pages(pages: list[Any], seconds: float) -> None:
+    """Close *pages* together, waiting at most *seconds* in all; never raise.
+
+    `Page.close` has no timeout, and Chromium takes 0.5 s over a page whose
+    script is busy or spins in `unload` (navdl `exp_page_costs`). The closes
+    are awaited at once on Playwright's loop, through the sync wrapper's
+    private `_sync` and `_impl_obj`, so a page that opened many popups costs
+    *seconds*, not 0.5 s per popup. A page not closed in time is still
+    closing.
+    """
+    if not pages:
+        return
+
+    async def close_all() -> None:
+        tasks = [asyncio.ensure_future(page._impl_obj.close()) for page in pages]
+        _done, pending = await asyncio.wait(tasks, timeout=max(seconds, 0.0))
+        for task in pending:
+            task.cancel()
+
+    try:
+        pages[0]._sync(close_all())
+    except Exception:
+        for page in pages:
+            with contextlib.suppress(Exception):
+                page.close()
 
 
 def _claim_profile_clone(clone: Path) -> None:
@@ -375,6 +415,62 @@ class BrowserSession:
             landed = self.page.url or ""
         if landed and not self.url_allowed(landed):
             raise SsrfBlocked(f"browser landed on a non-public URL: {landed}")
+
+    def leave_page(self) -> None:
+        """Close every other page, then leave the session's page on
+        `about:blank`; never raise.
+
+        A document left loaded, or a popup it opened, can download while pzi
+        is idle, where nothing cancels it (review-nd5 `idle`, review-nd7
+        `probe_idle7`: 768 MiB on disk). The other pages close FIRST: a popup
+        left open while the session's page goes blank can navigate its opener
+        back to a downloading page (review-nd9 `probe_reopen9`). A popup the
+        session's page opens between the two steps is caught by the next
+        round. A page whose script spins cannot leave in time, so it is
+        closed and a fresh page, covered by the context's request guard,
+        becomes the session's page. Bounded by about
+        `_LEAVE_PAGE_ROUNDS * 3 * _PAGE_CLEANUP_SECONDS`.
+        """
+        for _ in range(_LEAVE_PAGE_ROUNDS):
+            self._close_other_pages(_PAGE_CLEANUP_SECONDS, settle=_POPUP_SETTLE_SECONDS)
+            try:
+                self.page.goto("about:blank", timeout=_PAGE_CLEANUP_SECONDS * 1000)
+            except Exception:
+                with contextlib.suppress(Exception):
+                    stuck, self.page = self.page, self.page.context.new_page()
+                    _close_pages([stuck], _PAGE_CLEANUP_SECONDS)
+            if not self._other_pages():
+                return
+
+    def _close_other_pages(self, seconds: float, *, settle: float = 0.0) -> None:
+        """Close every page of the context but the session's own, within
+        *seconds* in all.
+
+        A popup is reported to Playwright a moment after it opens, so a page
+        may appear while others close, or up to *settle* seconds after; it is
+        closed too.
+        """
+        ends = time.monotonic() + seconds
+        while time.monotonic() < ends:
+            others = self._other_pages()
+            if others:
+                _close_pages(others, ends - time.monotonic())
+                continue
+            wait = min(settle, ends - time.monotonic())
+            if wait <= 0:
+                return
+            try:
+                self.page.wait_for_timeout(wait * 1000)
+            except Exception:
+                return
+            if not self._other_pages():
+                return
+
+    def _other_pages(self) -> list[Any]:
+        try:
+            return [other for other in self.page.context.pages if other is not self.page]
+        except Exception:
+            return []
 
     def current_url(self) -> str:
         """Return the current page URL."""
