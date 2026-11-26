@@ -406,7 +406,11 @@ def discover_pdf_url(
 
         if left_ms() <= 0:
             # Past the deadline: the click and its download wait would hold
-            # the session's lock for up to 6 s more (review-nd10).
+            # the session's lock for up to 6 s more (review-nd10). Noted, so
+            # a cut is not read as "no PDF here" (review-st1).
+            if errors is not None:
+                cut = TimeoutError(f"Timeout {round(DISCOVERY_TIMEOUT_SECONDS * 1000)}ms exceeded")
+                errors.append(f"discovery cut at its deadline: {_describe_failure(cut, page_url)}")
             return None
         clicked, downloaded_url = _click_capturing_download(
             session.page, click_fn, timeout_ms=min(_DOWNLOAD_EVENT_TIMEOUT_MS, left_ms())

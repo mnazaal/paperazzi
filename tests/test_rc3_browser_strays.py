@@ -313,10 +313,13 @@ def test_discovery_past_its_deadline_skips_its_waits(server, browser, short_dead
     `NOPDF=1 probe_disc_big 28 10 1`: 39.5 s against a 30 s deadline)."""
     server.pages["/late.html"] = b"<a href='/p/1'>x</a><button>PDF</button>" + BEACONS
     server.delays["/late.html"] = SHORT_T - 0.4
-    url, _, seconds = _discover_within(browser, server, "/late.html", 60)
+    url, errors, seconds = _discover_within(browser, server, "/late.html", 60)
     assert url is None
     # The banner tries, a read of ten links and leaving an idle page.
     assert seconds < SHORT_T + 1.2 + 3.0
+    # Cut short by the deadline, not "no PDF here" (review-st1 `NOPDF=1
+    # probe_disc_big chromium 28 10 1`: `errors` was empty).
+    assert errors == [f"discovery cut at its deadline: TimeoutError: Timeout at {server.base}"]
 
 
 def _tree(root: Path) -> dict[str, str]:
