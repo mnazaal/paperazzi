@@ -361,6 +361,9 @@ def _sweep_stale_profile_clones(
 #: pzi made the copy, which the sweep's age gate reads (review-st1
 #: `probe_copystat_window`, `probe_sweep`).
 _CLONE_PROFILE_DIR = "profile"
+#: In a clone's root: each link the copy left out, and why. Kept beside the
+#: copy, not in it, and removed with it.
+_CLONE_LOG_FILE = "copy.log"
 
 
 def _clone_profile(
@@ -370,8 +373,10 @@ def _clone_profile(
     that holds its owner lock, leaving out what *ignore* names.
 
     Returns the clone's root; the browser runs on `_clone_profile_dir` of
-    it. Links are copied as links, so a link out of the profile does not
-    copy what it names.
+    it. The copy holds no links, so the browser never writes outside it: a
+    link copied as a link let it write through a cookie database linked out
+    of the profile (review-st1 `probe_symlink_write`). See `_link_left_out`
+    for what a link becomes.
     """
     _sweep_stale_profile_clones()
     temp_dir = Path(tempfile.mkdtemp(prefix=prefix))
@@ -379,14 +384,61 @@ def _clone_profile(
     # the cloned profile (which contains cookies and session tokens).
     os.chmod(temp_dir, 0o700)
     _claim_profile_clone(temp_dir)
+    source = profile.resolve()
+    left_out: list[str] = []
+
+    def _ignore_unsafe_links(directory: str, contents: list[str]) -> list[str]:
+        skipped = ignore(directory, contents)
+        for name in contents:
+            path = Path(directory) / name
+            if name in skipped or not path.is_symlink():
+                continue
+            reason = _link_left_out(path, profile, source)
+            if reason is not None:
+                skipped.append(name)
+                left_out.append(f"left out {path.relative_to(profile)}: {reason}\n")
+        return skipped
+
     try:
-        shutil.copytree(profile, _clone_profile_dir(temp_dir), symlinks=True, ignore=ignore)
+        shutil.copytree(profile, _clone_profile_dir(temp_dir), ignore=_ignore_unsafe_links)
+        if left_out:
+            (temp_dir / _CLONE_LOG_FILE).write_text("".join(left_out), encoding="utf-8")
     except BaseException:
         # The caller never receives `temp_dir`, so nothing else could remove
         # the partial copy of the cookie database or release its owner lock.
         _discard_profile_clone(temp_dir)
         raise
     return temp_dir
+
+
+def _link_left_out(link: Path, profile: Path, source: Path) -> str | None:
+    """Why the copy leaves out *link*, or None to copy what it names.
+
+    A link to a file is copied as the file. A link to a directory inside
+    *source* (*profile*, resolved) is copied as the directory, unless that
+    loops. Anything else is left out: a link to a
+    directory outside the profile, which may be any size, one that dangles
+    or loops, and one to neither a file nor a directory (`/dev/zero` would
+    never end).
+    """
+    try:
+        target = link.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return "a link that dangles or loops"
+    if target.is_file():
+        return None
+    if not target.is_dir():
+        return "a link to neither a file nor a directory"
+    if not target.is_relative_to(source):
+        return "a link to a directory outside the profile"
+    # The copy reaches *link* through the links it followed: each directory
+    # on that path, resolved, must not lie inside what *link* names. One that
+    # names a directory it is in, or two that name each other, would recurse
+    # forever.
+    walked = [link.parent, *link.parent.parents]
+    if any(d.resolve().is_relative_to(target) for d in walked if d.is_relative_to(profile)):
+        return "a link that loops"
+    return None
 
 
 def _clone_profile_dir(clone: Path) -> Path:

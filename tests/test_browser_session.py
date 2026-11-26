@@ -712,21 +712,89 @@ def test_the_sweep_ages_a_copy_from_when_pzi_made_it(
 
 
 @pytest.mark.parametrize("clone_name", ["_clone_chrome_profile", "_clone_firefox_profile"])
-def test_a_profile_copy_keeps_a_link_out_of_the_profile_a_link(
-    tmp_path, monkeypatch, clone_name: str
-) -> None:
-    """Following it copied whatever the link named into pzi's copy."""
+def test_a_link_to_a_file_is_copied_as_the_file(tmp_path, monkeypatch, clone_name: str) -> None:
+    """A link copied as a link let the browser write through it: a cookie
+    database linked to `$HOME/outside/Cookies.db` was written by pzi's
+    session (review-st1 `probe_symlink_write`)."""
     from pzi import browser_session as module
 
-    monkeypatch.setattr(module.tempfile, "tempdir", str(tmp_path))
+    temp_root = tmp_path / "tmp"
+    temp_root.mkdir()
+    monkeypatch.setattr(module.tempfile, "tempdir", str(temp_root))
     profile = _scratch_profile(tmp_path)
+    (tmp_path / "outside" / "Cookies.db").write_bytes(b"login")
+    (profile / "Cookies").symlink_to(tmp_path / "outside" / "Cookies.db")
     clone = getattr(module, clone_name)(profile)
     try:
-        assert (module._clone_profile_dir(clone) / "linkdir").is_symlink()
+        copied = module._clone_profile_dir(clone) / "Cookies"
+        assert not copied.is_symlink()
+        assert copied.read_bytes() == b"login"
+        copied.write_bytes(b"written by the browser")
+        assert (tmp_path / "outside" / "Cookies.db").read_bytes() == b"login"
     finally:
         module._discard_profile_clone(clone)
-    # Removing the copy removes the link, never what it names.
-    assert (tmp_path / "outside" / "sentinel.txt").read_text() == "outside"
+
+
+@pytest.mark.parametrize("clone_name", ["_clone_chrome_profile", "_clone_firefox_profile"])
+def test_a_link_to_a_directory_in_the_profile_is_copied_as_it(
+    tmp_path, monkeypatch, clone_name: str
+) -> None:
+    from pzi import browser_session as module
+
+    temp_root = tmp_path / "tmp"
+    temp_root.mkdir()
+    monkeypatch.setattr(module.tempfile, "tempdir", str(temp_root))
+    profile = _scratch_profile(tmp_path)
+    (profile / "real").mkdir()
+    (profile / "real" / "data").write_text("inside")
+    (profile / "alias").symlink_to("real")
+    clone = getattr(module, clone_name)(profile)
+    try:
+        alias = module._clone_profile_dir(clone) / "alias"
+        assert alias.is_dir() and not alias.is_symlink()
+        assert (alias / "data").read_text() == "inside"
+    finally:
+        module._discard_profile_clone(clone)
+
+
+@pytest.mark.parametrize("clone_name", ["_clone_chrome_profile", "_clone_firefox_profile"])
+def test_a_link_out_of_the_profile_dangling_or_looping_is_left_out(
+    tmp_path, monkeypatch, clone_name: str
+) -> None:
+    """The browser must never write outside pzi's copy, and a huge or
+    looping tree is never copied: such a link is left out, and the copy's
+    log says so."""
+    import os
+
+    from pzi import browser_session as module
+
+    temp_root = tmp_path / "tmp"
+    temp_root.mkdir()
+    monkeypatch.setattr(module.tempfile, "tempdir", str(temp_root))
+    profile = _scratch_profile(tmp_path)  # `linkdir` names a directory outside it
+    (profile / "dangling").symlink_to(tmp_path / "nowhere")
+    (profile / "sub").mkdir()
+    (profile / "sub" / "up").symlink_to("..")
+    (profile / "self").symlink_to("self")
+    (profile / "device").symlink_to(os.devnull)
+    # Two links that name each other's directories: each alone looks inside.
+    (profile / "a").mkdir()
+    (profile / "b").mkdir()
+    (profile / "a" / "to_b").symlink_to("../b")
+    (profile / "b" / "to_a").symlink_to("../a")
+    left_out = ["a/to_b/to_a", "b/to_a/to_b", "dangling", "device", "linkdir", "self", "sub/up"]
+    clone = getattr(module, clone_name)(profile)
+    try:
+        copy = module._clone_profile_dir(clone)
+        present = sorted(str(p.relative_to(copy)) for p in copy.rglob("*"))
+        log = (clone / module._CLONE_LOG_FILE).read_text()
+    finally:
+        module._discard_profile_clone(clone)
+    assert not set(left_out) & set(present), present
+    assert "sub" in present
+    for name in left_out:
+        assert f"left out {name}:" in log, log
+    assert sorted(os.listdir(tmp_path / "outside")) == ["sentinel.txt"]
 
 
 def test_a_firefox_copy_leaves_out_locks_caches_and_service_workers(

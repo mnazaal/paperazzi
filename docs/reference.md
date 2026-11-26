@@ -74,10 +74,14 @@ profile itself: Chrome refuses remote debugging on its default user-data dir,
 and a browser writes into the profile it runs on. Each session gets its own
 copy. The copy leaves out the profile's locks, caches and service workers, but
 keeps your logins (the cookie database included), so pzi's window starts
-signed in where you are. It is mode 0700, and it is removed when the session
-closes; one a killed hook left behind is swept at the next launch. So a login or
-a verification challenge you complete in pzi's window lasts only that session,
-for Chrome and Firefox alike: it is never written back to your profile.
+signed in where you are. The copy holds no links, so the browser never writes
+outside it: a link to a file is copied as the file, a link to a directory inside
+the profile as the directory, and any other link (to a directory outside the
+profile, or one that dangles or loops) is left out. It is mode 0700, and it is
+removed when the session closes; one a killed hook left behind is swept at the
+next launch. So a login or a verification challenge you complete in pzi's
+window lasts only that session, for Chrome and Firefox alike: it is never
+written back to your profile.
 
 ### Recovering from a refused or interrupted write
 

@@ -339,7 +339,8 @@ def _tree(root: Path) -> dict[str, str]:
 def test_firefox_runs_on_a_private_copy_of_its_profile(server, tmp_path) -> None:
     """Firefox ran on the user's profile in place and wrote into it
     (owner decision: "Copy it like Chrome"). The copy must still carry the
-    profile's login, be private, keep a link a link, and go on close."""
+    profile's login, be private, leave out a link to a directory outside
+    the profile, and go on close."""
     import os
     import stat
 
@@ -362,9 +363,57 @@ def test_firefox_runs_on_a_private_copy_of_its_profile(server, tmp_path) -> None
         copy = session._temp_profile
         assert copy is not None and copy != profile
         assert stat.S_IMODE(copy.stat().st_mode) == 0o700
-        assert (bs._clone_profile_dir(copy) / "linkdir").is_symlink()
+        assert not (bs._clone_profile_dir(copy) / "linkdir").exists()
         result = session.fetch_direct(server.base + "/login.pdf")
         assert result.is_pdf(), "the profile's login cookie was not sent"
     assert not copy.exists()
     assert _tree(profile) == before
     assert (outside / "sentinel.txt").read_text() == "outside"
+
+
+#: Each browser's cookie database, relative to its profile.
+COOKIE_DB = {"chromium": "Default/Cookies", "firefox": "cookies.sqlite"}
+
+
+@pytest.mark.parametrize("browser", BROWSERS)
+def test_a_cookie_database_linked_out_of_the_profile_is_not_written(
+    server, tmp_path, browser
+) -> None:
+    """A link copied as a link let the browser write through it, into the
+    file it names outside pzi's copy (review-st1 `probe_symlink_write`).
+    The login it holds is still sent."""
+    import hashlib
+    import os
+    import shutil
+
+    from playwright.sync_api import sync_playwright
+
+    profile = tmp_path / "scratch-profile"
+    with sync_playwright() as p:
+        kind = p.firefox if browser == "firefox" else p.chromium
+        context = kind.launch_persistent_context(str(profile), headless=True)
+        page = context.pages[0] if context.pages else context.new_page()
+        page.goto(server.base + "/set-cookie")
+        page.wait_for_timeout(1000)
+        context.close()
+    database = profile / COOKIE_DB[browser]
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    shutil.move(database, outside / "Cookies.db")
+    for side in ("-wal", "-journal", "-shm"):
+        Path(f"{database}{side}").unlink(missing_ok=True)
+    database.symlink_to(outside / "Cookies.db")
+
+    def outside_state() -> tuple[list[str], str]:
+        digest = hashlib.sha256((outside / "Cookies.db").read_bytes()).hexdigest()
+        return sorted(os.listdir(outside)), digest
+
+    before = outside_state()
+    with _session(browser, server, profile_path=str(profile)) as session:
+        assert session.fetch_direct(server.base + "/login.pdf").is_pdf(), (
+            "the profile's login cookie was not sent"
+        )
+        session.navigate(server.base + "/set-cookie")  # a cookie write
+        session.page.wait_for_timeout(1500)
+    assert outside_state() == before
+
