@@ -955,8 +955,11 @@ def install_request_guard(
     on its own, so validating only the URL handed in leaves
     ``https://public.example/x`` → ``http://127.0.0.1:8765/`` (or a DNS name
     that resolves to a private address) entirely unguarded. Routing every
-    request through the same public-URL predicate closes redirect and
-    rebinding, because each hop is a request of its own.
+    request through the same public-URL predicate refuses each new request
+    to a non-public URL. It does NOT see a navigation's redirect hops: the
+    browser follows a 302 without asking the route (review-w4
+    `probe_redirect_hits`). The pinning proxy refuses such a hop by
+    address, and the landing check refuses a navigation that ends on one.
 
     Fails closed: if Playwright cannot install the route, this raises and the
     launch is abandoned. A session without the route would send the first

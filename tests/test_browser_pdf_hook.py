@@ -1145,3 +1145,31 @@ def test_a_discovery_cut_by_the_click_is_noted(monkeypatch) -> None:
     )
     assert result is None
     assert errors == ["discovery cut at its deadline: TimeoutError: Timeout at https://example.com"]
+
+
+def test_a_click_that_lands_on_the_pdf_late_is_a_find(monkeypatch) -> None:
+    """The click used up the deadline but navigated inline to the PDF: the
+    post-click cut returned None and noted a cut (review-w4 of `160e12a`)."""
+    import time as _time
+
+    monkeypatch.setattr(hook, "DISCOVERY_TIMEOUT_SECONDS", 0.5)
+
+    def slow_click(page) -> bool:
+        _time.sleep(0.7)
+        return True
+
+    s = FakeBrowserSession(
+        goto_results=[_LOADED_PAGE],
+        url="https://journal.test/paper.pdf",
+        evaluate_results=[[]],
+    )
+    errors: list[str] = []
+    result = hook.discover_pdf_url(
+        "https://example.com/landing",
+        _session=s,
+        _click=slow_click,
+        _resolve=lambda url, c: [],
+        errors=errors,
+    )
+    assert result == "https://journal.test/paper.pdf"
+    assert errors == []

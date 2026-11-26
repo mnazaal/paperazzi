@@ -420,6 +420,11 @@ def discover_pdf_url(
         )
         if downloaded_url and _is_pdf_url(downloaded_url):
             return downloaded_url
+        if clicked and _is_pdf_url(session.current_url()):
+            # Checked before the cut: a click that navigated to the PDF inline
+            # (no download event) is a find, even when the download wait used
+            # up the deadline (review-w4 of `160e12a`).
+            return session.current_url()
         if left_ms() <= 0:
             # The click's download wait used up what was left: the same cut
             # as above, which went unnoted (review-st2 `cut_after_click_no_pdf`;
