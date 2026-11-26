@@ -362,7 +362,7 @@ def test_firefox_runs_on_a_private_copy_of_its_profile(server, tmp_path) -> None
         copy = session._temp_profile
         assert copy is not None and copy != profile
         assert stat.S_IMODE(copy.stat().st_mode) == 0o700
-        assert (copy / "linkdir").is_symlink()
+        assert (bs._clone_profile_dir(copy) / "linkdir").is_symlink()
         result = session.fetch_direct(server.base + "/login.pdf")
         assert result.is_pdf(), "the profile's login cookie was not sent"
     assert not copy.exists()

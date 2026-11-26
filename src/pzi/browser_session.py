@@ -355,16 +355,23 @@ def _sweep_stale_profile_clones(
     return removed
 
 
+#: Where in a clone the profile's copy goes, and the browser runs. The
+#: clone's root holds only it and the owner lock, so `copytree` never sets the
+#: root's mode or mtime: the root stays 0700 throughout, and its mtime is when
+#: pzi made the copy, which the sweep's age gate reads (review-st1
+#: `probe_copystat_window`, `probe_sweep`).
+_CLONE_PROFILE_DIR = "profile"
+
+
 def _clone_profile(
     profile: Path, prefix: str, ignore: Callable[[str, list[str]], list[str]]
 ) -> Path:
     """Copy a browser profile into a fresh private (0700) temp directory
     that holds its owner lock, leaving out what *ignore* names.
 
-    Links are copied as links, so a link out of the profile does not copy
-    what it names. `copytree` gives the copy's root the profile's own mode,
-    so the root is made 0700 again after it (review-nd9 `probe_ffprofile9
-    755`).
+    Returns the clone's root; the browser runs on `_clone_profile_dir` of
+    it. Links are copied as links, so a link out of the profile does not
+    copy what it names.
     """
     _sweep_stale_profile_clones()
     temp_dir = Path(tempfile.mkdtemp(prefix=prefix))
@@ -372,24 +379,19 @@ def _clone_profile(
     # the cloned profile (which contains cookies and session tokens).
     os.chmod(temp_dir, 0o700)
     _claim_profile_clone(temp_dir)
-
-    def _ignore_with_owner_file(directory: str, contents: list[str]) -> list[str]:
-        skipped = ignore(directory, contents)
-        if Path(directory) == profile and _CLONE_OWNER_FILE in contents:
-            skipped.append(_CLONE_OWNER_FILE)
-        return skipped
-
     try:
-        shutil.copytree(
-            profile, temp_dir, symlinks=True, dirs_exist_ok=True, ignore=_ignore_with_owner_file
-        )
-        os.chmod(temp_dir, 0o700)
+        shutil.copytree(profile, _clone_profile_dir(temp_dir), symlinks=True, ignore=ignore)
     except BaseException:
         # The caller never receives `temp_dir`, so nothing else could remove
         # the partial copy of the cookie database or release its owner lock.
         _discard_profile_clone(temp_dir)
         raise
     return temp_dir
+
+
+def _clone_profile_dir(clone: Path) -> Path:
+    """The profile's copy inside *clone*, which the browser runs on."""
+    return clone / _CLONE_PROFILE_DIR
 
 
 def _clone_firefox_profile(profile: Path) -> Path:
@@ -951,12 +953,12 @@ def launch_browser(
                 # Chrome refuses remote debugging on its default user-data dir.
                 # Clone to a temp location to satisfy the "non-default" requirement.
                 temp_profile = _clone_chrome_profile(profile)
-                profile = temp_profile
+                profile = _clone_profile_dir(temp_profile)
             if browser == "firefox":
                 # Never the user's profile in place: the browser writes to it
                 # (owner decision, "Copy it like Chrome").
                 temp_profile = _clone_firefox_profile(profile)
-                profile = temp_profile
+                profile = _clone_profile_dir(temp_profile)
             if browser == "firefox":
                 ctx = playwright.firefox.launch_persistent_context(
                     user_data_dir=str(profile), **options

@@ -489,13 +489,14 @@ def test_sweep_keeps_an_over_age_clone_a_live_session_owns(tmp_path, monkeypatch
     profile.mkdir()
     (profile / "Cookies").write_bytes(b"secrets")
     clone = module._clone_chrome_profile(profile)
-    assert clone.parent == tmp_path and (clone / "Cookies").read_bytes() == b"secrets"
+    copy = module._clone_profile_dir(clone)
+    assert clone.parent == tmp_path and (copy / "Cookies").read_bytes() == b"secrets"
     import os
 
     os.utime(clone, (1_000, 1_000))
 
     assert module._sweep_stale_profile_clones(temp_root=tmp_path) == []
-    assert (clone / "Cookies").exists()
+    assert (copy / "Cookies").exists()
 
     # Once the owner releases it (session close / process exit) it is swept.
     module._discard_profile_clone(clone)
@@ -532,6 +533,7 @@ def test_failed_profile_copy_leaves_no_clone_and_no_lock(tmp_path, monkeypatch) 
     (profile / "Cookies").write_bytes(b"secrets")
 
     def failing_copytree(src, dst, *args, **kwargs):
+        dst.mkdir()
         (dst / "Cookies").write_bytes(b"partial")
         raise shutil.Error([("Cookies-journal", "x", "No such file or directory")])
 
@@ -635,10 +637,78 @@ def test_a_profile_copy_is_private_even_when_the_profile_is_not(
     clone = getattr(module, clone_name)(profile)
     try:
         assert stat.S_IMODE(clone.stat().st_mode) == 0o700
-        assert (clone / "cookies.sqlite").read_bytes() == b"login"
+        assert (module._clone_profile_dir(clone) / "cookies.sqlite").read_bytes() == b"login"
     finally:
         module._discard_profile_clone(clone)
     assert not clone.exists()
+
+
+@pytest.mark.parametrize("clone_name", ["_clone_chrome_profile", "_clone_firefox_profile"])
+def test_a_profile_copys_root_is_never_wider_than_0700(
+    tmp_path, monkeypatch, clone_name: str
+) -> None:
+    """`copytree` gave the root the profile's 0755 before pzi's chmod after
+    it set 0700 again: a window in which the copy of the logins was
+    readable (review-st1 `probe_copystat_window`). The root's mode is read
+    after every chmod the copy makes, whoever makes it."""
+    import os
+    import stat
+
+    from pzi import browser_session as module
+
+    temp_root = tmp_path / "tmp"
+    temp_root.mkdir()
+    monkeypatch.setattr(module.tempfile, "tempdir", str(temp_root))
+    profile = _scratch_profile(tmp_path)
+    (profile / "sub").mkdir()
+    os.chmod(profile / "sub", 0o755)
+    seen: list[int] = []
+    real_chmod = os.chmod
+
+    def spy(path, mode, *args, **kwargs):
+        real_chmod(path, mode, *args, **kwargs)
+        seen.extend(stat.S_IMODE(root.stat().st_mode) for root in temp_root.glob("pzi-*"))
+
+    monkeypatch.setattr(os, "chmod", spy)
+    clone = getattr(module, clone_name)(profile)
+    monkeypatch.setattr(os, "chmod", real_chmod)
+    try:
+        assert len(seen) > 2, "the copy made no chmod, so the test proves nothing"
+        assert {f"{mode:o}" for mode in seen} == {"700"}
+    finally:
+        module._discard_profile_clone(clone)
+
+
+@pytest.mark.parametrize("clone_name", ["_clone_chrome_profile", "_clone_firefox_profile"])
+def test_the_sweep_ages_a_copy_from_when_pzi_made_it(
+    tmp_path, monkeypatch, clone_name: str
+) -> None:
+    """`copytree` gave the copy the profile's own mtime, so the 6 h age gate
+    read a month-old profile's fresh copy as stale (review-st1
+    `probe_sweep`: `mtime_age_days` 30.0)."""
+    import os
+    import shutil
+    import time
+
+    from pzi import browser_session as module
+
+    temp_root = tmp_path / "tmp"
+    temp_root.mkdir()
+    monkeypatch.setattr(module.tempfile, "tempdir", str(temp_root))
+    profile = _scratch_profile(tmp_path)
+    month_ago = time.time() - 30 * 86400
+    os.utime(profile, (month_ago, month_ago))
+    clone = getattr(module, clone_name)(profile)
+    # No live owner: only the age gate keeps the copy now. The owner file
+    # names this process, so `_owner_is_gone` does not decide it.
+    module._release_profile_clone(clone)
+    try:
+        assert module._sweep_stale_profile_clones(temp_root=temp_root) == []
+        assert clone.is_dir()
+        later = time.time() + module._CLONE_MAX_AGE_SECONDS + 60
+        assert module._sweep_stale_profile_clones(now=later, temp_root=temp_root) == [clone]
+    finally:
+        shutil.rmtree(clone, ignore_errors=True)
 
 
 @pytest.mark.parametrize("clone_name", ["_clone_chrome_profile", "_clone_firefox_profile"])
@@ -652,7 +722,7 @@ def test_a_profile_copy_keeps_a_link_out_of_the_profile_a_link(
     profile = _scratch_profile(tmp_path)
     clone = getattr(module, clone_name)(profile)
     try:
-        assert (clone / "linkdir").is_symlink()
+        assert (module._clone_profile_dir(clone) / "linkdir").is_symlink()
     finally:
         module._discard_profile_clone(clone)
     # Removing the copy removes the link, never what it names.
@@ -679,10 +749,9 @@ def test_a_firefox_copy_leaves_out_locks_caches_and_service_workers(
     for name in ("cookies.sqlite", "key4.db", "logins.json"):
         (profile / name).write_text("login")
     clone = module._clone_firefox_profile(profile)
+    copy = module._clone_profile_dir(clone)
     try:
-        copied = sorted(
-            str(p.relative_to(clone)) for p in clone.rglob("*") if p.name != module._CLONE_OWNER_FILE
-        )
+        copied = sorted(str(p.relative_to(copy)) for p in copy.rglob("*"))
     finally:
         module._discard_profile_clone(clone)
     assert copied == [
