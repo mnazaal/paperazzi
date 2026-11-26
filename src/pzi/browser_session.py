@@ -1001,16 +1001,18 @@ def launch_browser(
         # used to abandon it in $TMPDIR where nothing ever removed it — along
         # with the Playwright driver process it had already started.
         try:
-            if browser in ("chrome", "chromium"):
-                # Chrome refuses remote debugging on its default user-data dir.
-                # Clone to a temp location to satisfy the "non-default" requirement.
-                temp_profile = _clone_chrome_profile(profile)
-                profile = _clone_profile_dir(temp_profile)
             if browser == "firefox":
                 # Never the user's profile in place: the browser writes to it
                 # (owner decision, "Copy it like Chrome").
                 temp_profile = _clone_firefox_profile(profile)
-                profile = _clone_profile_dir(temp_profile)
+            else:
+                # Chrome refuses remote debugging on its default user-data dir.
+                # Clone to a temp location to satisfy the "non-default"
+                # requirement. Every other name, `webkit` included, launches
+                # Chromium below, so it gets the same copy (review-st1
+                # `probe_webkit_inplace`).
+                temp_profile = _clone_chrome_profile(profile)
+            profile = _clone_profile_dir(temp_profile)
             if browser == "firefox":
                 ctx = playwright.firefox.launch_persistent_context(
                     user_data_dir=str(profile), **options

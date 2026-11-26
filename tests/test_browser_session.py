@@ -858,6 +858,31 @@ def test_launch_runs_firefox_on_a_copy_of_the_profile(tmp_path, monkeypatch) -> 
     assert not module.Path(used).exists()
 
 
+def test_launch_runs_webkit_on_a_copy_of_the_profile(tmp_path, monkeypatch) -> None:
+    """`browser_engine = "webkit"` is a valid config value, and launches
+    Chromium: on the profile in place, which Chromium writes into
+    (review-st1 `probe_webkit_inplace`)."""
+    from unittest.mock import MagicMock
+
+    from pzi import browser_session as module
+
+    temp_root = tmp_path / "tmp"
+    temp_root.mkdir()
+    monkeypatch.setattr(module.tempfile, "tempdir", str(temp_root))
+    profile = _scratch_profile(tmp_path, mode=0o700)
+    playwright = MagicMock()
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "playwright.sync_api",
+        MagicMock(sync_playwright=MagicMock(return_value=MagicMock(start=lambda: playwright))),
+    )
+    session = module.launch_browser("webkit", str(profile))
+    used = playwright.chromium.launch_persistent_context.call_args.kwargs["user_data_dir"]
+    assert used.startswith(str(temp_root / "pzi-chrome-"))
+    session.close()
+    assert not module.Path(used).exists()
+
+
 def test_a_killed_owners_copy_is_swept_at_once(tmp_path) -> None:
     """A SIGKILLed hook's copy holds the user's logins; the 6 h age gate
     left it readable for hours after its owner lock was free
