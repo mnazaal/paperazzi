@@ -438,10 +438,10 @@ def discover_pdf_url(
             session.leave_page()
 
 
-#: Playwright's API name and a code at the start of its message:
+#: A code at the start of a message, after its API name (`_API_PREFIX_RE`):
 #: `Page.goto: net::ERR_ABORTED at <url>`, `Page.goto: NS_BINDING_ABORTED`,
-#: `Page.goto: Timeout 60000ms exceeded.` Anchored there, so a code-like run
-#: inside a URL further on is never taken for one.
+#: `Page.goto: Timeout 60000ms exceeded.` Matched there only, so a code-like
+#: run inside a URL further on is never taken for one.
 _ERROR_CODE_RE = re.compile(r"net::ERR_[A-Z0-9_]+\b|NS_[A-Z0-9_]+\b|Timeout \d+ms exceeded")
 
 #: Network error codes a note may name. A code-shaped run is named only when
