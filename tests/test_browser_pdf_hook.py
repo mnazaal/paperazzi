@@ -1173,3 +1173,28 @@ def test_a_click_that_lands_on_the_pdf_late_is_a_find(monkeypatch) -> None:
     )
     assert result == "https://journal.test/paper.pdf"
     assert errors == []
+
+
+def test_a_page_with_nothing_to_click_is_no_pdf_not_a_cut(monkeypatch) -> None:
+    """Nothing clicked, and the download wait ran out the deadline: no later
+    step was skipped, so this is "no PDF here", not a cut that the route
+    answers with 503 "retry later" (review-w4b `probe_branches` case A)."""
+    import time as _time
+
+    monkeypatch.setattr(hook, "DISCOVERY_TIMEOUT_SECONDS", 0.5)
+
+    def no_click(page) -> bool:
+        _time.sleep(0.7)
+        return False
+
+    s = FakeBrowserSession(goto_results=[_LOADED_PAGE], evaluate_results=[[]])
+    errors: list[str] = []
+    result = hook.discover_pdf_url(
+        "https://example.com/landing",
+        _session=s,
+        _click=no_click,
+        _resolve=lambda url, c: [],
+        errors=errors,
+    )
+    assert result is None
+    assert errors == []

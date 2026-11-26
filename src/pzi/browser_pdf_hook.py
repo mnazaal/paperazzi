@@ -425,10 +425,13 @@ def discover_pdf_url(
             # (no download event) is a find, even when the download wait used
             # up the deadline (review-w4 of `160e12a`).
             return session.current_url()
-        if left_ms() <= 0:
+        if clicked and left_ms() <= 0:
             # The click's download wait used up what was left: the same cut
             # as above, which went unnoted (review-st2 `cut_after_click_no_pdf`;
-            # the intermittent Firefox failure of the deadline test).
+            # the intermittent Firefox failure of the deadline test). Only
+            # after a click: with nothing clicked, no later step was skipped,
+            # and a cut note would turn "no PDF" into a 503 "retry later"
+            # (review-w4b `probe_branches` case A).
             note_cut()
             return None
         if clicked:

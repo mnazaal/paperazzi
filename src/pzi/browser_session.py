@@ -595,10 +595,11 @@ class BrowserSession:
     ) -> Any:
         """Navigate to URL, returning the Playwright response object.
 
-        The *landing* URL is checked as well as the one asked for: the guard
-        installed by :func:`install_request_guard` refuses each hop, and this
-        catches anything that still arrives somewhere non-public (a
-        ``file:``/``about:`` redirect, or a guard that failed to install).
+        The *landing* URL is checked as well as the one asked for. The guard
+        installed by :func:`install_request_guard` refuses each new request
+        but never sees a navigation's redirect hops; this check catches a
+        navigation that still ends somewhere non-public (a redirect, a
+        ``file:``/``about:`` landing, or a guard that failed to install).
         """
         self._check_open()
         from pzi.safe_http import SsrfBlocked
