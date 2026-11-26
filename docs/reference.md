@@ -67,12 +67,17 @@ command holds them, `<bib>.<citekey>.bak` from `delete`/`library merge`,
 `--failures-out` file from a bulk `add`, and `papers/.orphans/` from
 `library clean --fix`.
 
-Outside the data directory, PDF acquisition may briefly write a clone of your
-browser profile to `$TMPDIR` (`pzi-chrome-*`) when `browser_pdf_cmd` uses a
-Chrome profile — Chrome refuses remote debugging on its default user-data dir,
-so it has to be copied. The clone contains your cookie database, is created
-mode 0700, and is removed when the session closes; abandoned ones (from a hook
-killed by its timeout) are swept on the next launch.
+Outside the data directory, PDF acquisition may briefly write a copy of your
+browser profile to `$TMPDIR` (`pzi-chrome-*` or `pzi-firefox-*`) when
+`browser_pdf_cmd` uses a browser profile. pzi never runs the browser on your
+profile itself: Chrome refuses remote debugging on its default user-data dir,
+and a browser writes into the profile it runs on. Each session gets its own
+copy. The copy leaves out the profile's locks, caches and service workers, but
+keeps your logins (the cookie database included), so pzi's window starts
+signed in where you are. It is mode 0700, and it is removed when the session
+closes; one a killed hook left behind is swept at the next launch. So a login or
+a verification challenge you complete in pzi's window lasts only that session,
+for Chrome and Firefox alike: it is never written back to your profile.
 
 ### Recovering from a refused or interrupted write
 
@@ -622,7 +627,7 @@ works.
 | `PZI_CONFIG` | Config file path. `--config` takes precedence; otherwise this, then the XDG default |
 | `PZI_SKIP_AUTO_START` | Set to `1` to skip auto-starting the translation-server (for CI/testing) |
 | `PZI_BROWSER_PDF_CMD` | The `browser_pdf_cmd` to use when the config sets none. The config value **wins**: this is a fallback, not an override |
-| `PZI_BROWSER` | Which browser pzi builds its own `browser_pdf_cmd` around when neither the config nor `PZI_BROWSER_PDF_CMD` provides one: `firefox` (default) or anything else for Chrome/Chromium. That command runs the **headful** Playwright hook against a real profile — it is not the desktop "open and watch `Downloads/`" fallback, which always uses your OS default browser and reads neither of these two |
+| `PZI_BROWSER` | Which browser pzi builds its own `browser_pdf_cmd` around when neither the config nor `PZI_BROWSER_PDF_CMD` provides one: `firefox` (default) or anything else for Chrome/Chromium. That command runs the **headful** Playwright hook against a private copy of your real profile (see the `$TMPDIR` note above) — it is not the desktop "open and watch `Downloads/`" fallback, which always uses your OS default browser and reads neither of these two |
 | `PZI_BROWSER_PROFILE` | Profile directory for that generated command, in place of the auto-detected default Firefox/Chrome profile. The `browser_profile_path` config key **wins** over this, matching `PZI_BROWSER_PDF_CMD` above and unlike `PZI_NODE` below. The browser is inferred from the profile path, so setting the config key also settles `PZI_BROWSER` |
 | `PZI_NODE` | Explicit Node.js >=22 binary for the translation-server (absolute path or a command name on PATH). Overrides PATH auto-detect and the `node_path` config; when set, pzi never prompts or downloads. A broken value is a hard error, not a silent fallback. Use this under systemd/daemons whose PATH lacks your shell's version-manager (fnm/nvm/volta/asdf) shims |
 | `PZI_NODE_VERSION` | Pin the Node.js version pzi downloads, as full `X.Y.Z` (a leading `v` is accepted) |

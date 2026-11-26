@@ -597,3 +597,190 @@ def test_navigate_loads_the_url_afresh_after_a_same_document_navigation() -> Non
         "about:blank",
         "https://journal.test/b-landing#main",
     ]
+
+
+# === profile copies: mode, links, Firefox, dead owners ===
+
+
+def _scratch_profile(root, mode: int = 0o755):
+    import os
+
+    profile = root / "profile"
+    profile.mkdir()
+    (profile / "cookies.sqlite").write_bytes(b"login")
+    os.chmod(profile / "cookies.sqlite", 0o600)
+    outside = root / "outside"
+    outside.mkdir()
+    (outside / "sentinel.txt").write_text("outside")
+    (profile / "linkdir").symlink_to(outside)
+    os.chmod(profile, mode)
+    return profile
+
+
+@pytest.mark.parametrize("clone_name", ["_clone_chrome_profile", "_clone_firefox_profile"])
+def test_a_profile_copy_is_private_even_when_the_profile_is_not(
+    tmp_path, monkeypatch, clone_name: str
+) -> None:
+    """`copytree` gives the copy's root the source's mode, after the 0700
+    chmod, so a 0755 profile left a readable copy of its logins
+    (review-nd9 `probe_ffprofile9 755`)."""
+    import stat
+
+    from pzi import browser_session as module
+
+    temp_root = tmp_path / "tmp"
+    temp_root.mkdir()
+    monkeypatch.setattr(module.tempfile, "tempdir", str(temp_root))
+    profile = _scratch_profile(tmp_path)
+    clone = getattr(module, clone_name)(profile)
+    try:
+        assert stat.S_IMODE(clone.stat().st_mode) == 0o700
+        assert (clone / "cookies.sqlite").read_bytes() == b"login"
+    finally:
+        module._discard_profile_clone(clone)
+    assert not clone.exists()
+
+
+@pytest.mark.parametrize("clone_name", ["_clone_chrome_profile", "_clone_firefox_profile"])
+def test_a_profile_copy_keeps_a_link_out_of_the_profile_a_link(
+    tmp_path, monkeypatch, clone_name: str
+) -> None:
+    """Following it copied whatever the link named into pzi's copy."""
+    from pzi import browser_session as module
+
+    monkeypatch.setattr(module.tempfile, "tempdir", str(tmp_path))
+    profile = _scratch_profile(tmp_path)
+    clone = getattr(module, clone_name)(profile)
+    try:
+        assert (clone / "linkdir").is_symlink()
+    finally:
+        module._discard_profile_clone(clone)
+    # Removing the copy removes the link, never what it names.
+    assert (tmp_path / "outside" / "sentinel.txt").read_text() == "outside"
+
+
+def test_a_firefox_copy_leaves_out_locks_caches_and_service_workers(
+    tmp_path, monkeypatch
+) -> None:
+    from pzi import browser_session as module
+
+    monkeypatch.setattr(module.tempfile, "tempdir", str(tmp_path))
+    profile = tmp_path / "ff"
+    profile.mkdir()
+    for name in ("lock", ".parentlock", "parent.lock", "serviceworker.txt"):
+        (profile / name).write_text("x")
+    for name in ("cache2", "startupCache"):
+        (profile / name).mkdir()
+        (profile / name / "entry").write_text("x")
+    worker = profile / "storage" / "default" / "https+++pub.example"
+    (worker / "cache").mkdir(parents=True)
+    (worker / "cache" / "caches.sqlite").write_text("x")
+    (worker / "idb").mkdir()
+    for name in ("cookies.sqlite", "key4.db", "logins.json"):
+        (profile / name).write_text("login")
+    clone = module._clone_firefox_profile(profile)
+    try:
+        copied = sorted(
+            str(p.relative_to(clone)) for p in clone.rglob("*") if p.name != module._CLONE_OWNER_FILE
+        )
+    finally:
+        module._discard_profile_clone(clone)
+    assert copied == [
+        "cookies.sqlite",
+        "key4.db",
+        "logins.json",
+        "storage",
+        "storage/default",
+        "storage/default/https+++pub.example",
+        "storage/default/https+++pub.example/idb",
+    ]
+
+
+def test_launch_runs_firefox_on_a_copy_of_the_profile(tmp_path, monkeypatch) -> None:
+    """Firefox ran on the user's profile in place, and wrote into it
+    (owner decision: "Copy it like Chrome")."""
+    from unittest.mock import MagicMock
+
+    from pzi import browser_session as module
+
+    temp_root = tmp_path / "tmp"
+    temp_root.mkdir()
+    monkeypatch.setattr(module.tempfile, "tempdir", str(temp_root))
+    profile = _scratch_profile(tmp_path, mode=0o700)
+    playwright = MagicMock()
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "playwright.sync_api",
+        MagicMock(sync_playwright=MagicMock(return_value=MagicMock(start=lambda: playwright))),
+    )
+    session = module.launch_browser("firefox", str(profile))
+    used = playwright.firefox.launch_persistent_context.call_args.kwargs["user_data_dir"]
+    assert used != str(profile)
+    assert used.startswith(str(temp_root / "pzi-firefox-"))
+    session.close()
+    assert not module.Path(used).exists()
+
+
+def test_a_killed_owners_copy_is_swept_at_once(tmp_path) -> None:
+    """A SIGKILLed hook's copy holds the user's logins; the 6 h age gate
+    left it readable for hours after its owner lock was free
+    (review-nd9 `probe_ffprofile9`)."""
+    import os
+    import signal
+    import subprocess
+    import sys
+
+    from pzi import browser_session as module
+
+    profile = _scratch_profile(tmp_path, mode=0o700)
+    temp_root = tmp_path / "tmp"
+    temp_root.mkdir()
+    child = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import os, signal, sys, tempfile\n"
+            f"tempfile.tempdir = {str(temp_root)!r}\n"
+            "import pzi.browser_session as bs\n"
+            f"print(bs._clone_chrome_profile(bs.Path({str(profile)!r})), flush=True)\n"
+            "os.kill(os.getpid(), signal.SIGKILL)\n",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)},
+    )
+    assert child.returncode == -signal.SIGKILL, child.stderr
+    left = module.Path(child.stdout.strip())
+    assert left.is_dir()
+    assert module._sweep_stale_profile_clones(temp_root=temp_root) == [left]
+    assert not left.exists()
+
+
+def test_the_sweep_keeps_a_young_copy_that_is_not_pzis_own(tmp_path) -> None:
+    """Only a pzi-owned 0700 directory whose owner lock is free and whose
+    owner is gone goes before it is old."""
+    import os
+
+    from pzi import browser_session as module
+
+    dead = subprocess_pid_that_exited()
+    for name, mode in (("pzi-firefox-open", 0o755), ("pzi-firefox-private", 0o700)):
+        clone = tmp_path / name
+        clone.mkdir()
+        os.chmod(clone, mode)
+        (clone / module._CLONE_OWNER_FILE).write_text(str(dead))
+    (tmp_path / "pzi-firefox-link").symlink_to(tmp_path / "pzi-firefox-private")
+    assert module._sweep_stale_profile_clones(temp_root=tmp_path) == [
+        tmp_path / "pzi-firefox-private"
+    ]
+    assert (tmp_path / "pzi-firefox-open").is_dir()
+
+
+def subprocess_pid_that_exited() -> int:
+    import subprocess
+    import sys
+
+    child = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"],
+                           capture_output=True, text=True, check=True)
+    return int(child.stdout)

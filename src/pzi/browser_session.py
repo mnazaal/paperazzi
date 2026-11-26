@@ -18,6 +18,7 @@ import contextlib
 import os
 import shutil
 import socket
+import stat
 import tempfile
 import time
 from collections.abc import Callable, Iterator
@@ -50,6 +51,25 @@ _LEAVE_PAGE_ROUNDS = 3
 
 #: Prefix for cloned-profile temp dirs, shared by the cleanup sweep below.
 _CLONE_PREFIX = "pzi-chrome-"
+#: The same, for a Firefox profile's copy.
+_FIREFOX_CLONE_PREFIX = "pzi-firefox-"
+
+#: What a Firefox profile's copy leaves out: its locks (a copy holding them
+#: looks in use), caches, and service-worker registrations. Each worker's
+#: Cache API storage, `storage/<kind>/<origin>/cache`, is left out too.
+_FIREFOX_SKIPPED = frozenset(
+    {
+        "lock",
+        ".parentlock",
+        "parent.lock",
+        "cache2",
+        "startupCache",
+        "OfflineCache",
+        "shader-cache",
+        "jumpListCache",
+        "serviceworker.txt",
+    }
+)
 
 #: Age after which a clone with no live owner is swept. Age alone is not proof
 #: of abandonment: a `pzi server` run without `--stop-after` keeps one session,
@@ -60,6 +80,8 @@ _CLONE_MAX_AGE_SECONDS = 6 * 60 * 60
 #: File inside each clone that its owning process holds an exclusive `flock` on.
 #: The kernel drops the lock when that process exits or is killed, so a clone
 #: whose lock can be taken has no owner and is safe to sweep once it is old.
+#: Once locked, it holds the owner's process ID, so a clone whose owner is
+#: gone is swept at once (`_owner_is_gone`).
 _CLONE_OWNER_FILE = ".pzi-owner.lock"
 
 #: Descriptors holding the owner lock of this process's clones, by clone path.
@@ -212,6 +234,10 @@ def _claim_profile_clone(clone: Path) -> None:
         os.close(fd)
         return
     _OWNED_CLONE_FDS[clone] = fd
+    # Written only once the lock is held: a sweep that finds an ID finds a
+    # lock that was taken, so a free lock then means the owner is gone.
+    with contextlib.suppress(OSError):
+        os.write(fd, str(os.getpid()).encode())
 
 
 def _release_profile_clone(clone: Path) -> None:
@@ -253,10 +279,42 @@ def _clone_has_live_owner(clone: Path) -> bool:
     return False
 
 
+def _owner_is_gone(clone: Path) -> bool:
+    """True when *clone* is pzi's own copy and the process its owner lock
+    names no longer exists.
+
+    pzi's own: a real directory (not a link), this user's, mode 0700, whose
+    owner lock file names a process ID. Anything else waits for the age gate.
+    A process ID that exists, under any owner, counts as alive.
+    """
+    try:
+        info = clone.lstat()
+    except OSError:
+        return False
+    if not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o700:
+        return False
+    getuid = getattr(os, "getuid", None)
+    if getuid is not None and info.st_uid != getuid():
+        return False
+    try:
+        named = (clone / _CLONE_OWNER_FILE).read_text(encoding="ascii").strip()
+    except (OSError, UnicodeDecodeError):
+        return False
+    if not named.isdigit() or int(named) in (0, os.getpid()):
+        return False
+    try:
+        os.kill(int(named), 0)
+    except ProcessLookupError:
+        return True
+    except (OSError, OverflowError):
+        return False
+    return False
+
+
 def _sweep_stale_profile_clones(
     *, now: float | None = None, temp_root: Path | None = None
 ) -> list[Path]:
-    """Remove abandoned clones of the user's Chrome profile from $TMPDIR.
+    """Remove abandoned clones of the user's Chrome or Firefox profile from $TMPDIR.
 
     The clone is a full copy of the real profile, cookie database included, and
     cleanup lived only in `BrowserSession.close()` — which a browser-hook child
@@ -264,20 +322,28 @@ def _sweep_stale_profile_clones(
     else sweeps, so every hook timeout left another readable copy of the user's
     logged-in sessions behind until the machine was rebooted.
 
-    A clone is removed only when it is older than `_CLONE_MAX_AGE_SECONDS` and
-    no process holds its owner lock (`_CLONE_OWNER_FILE`). Returns what it
-    removed, so a test can assert on it.
+    A clone is removed only when no process holds its owner lock
+    (`_CLONE_OWNER_FILE`), and it is older than `_CLONE_MAX_AGE_SECONDS` or
+    its owner is gone (`_owner_is_gone`). A SIGKILLed hook's copy holds the
+    user's logins, and the age gate alone left it for six hours (review-nd9
+    `probe_ffprofile9`). Returns what it removed, so a test can assert on it.
     """
     root = temp_root or Path(tempfile.gettempdir())
     cutoff = (now if now is not None else time.time()) - _CLONE_MAX_AGE_SECONDS
     removed: list[Path] = []
     try:
-        candidates = list(root.glob(f"{_CLONE_PREFIX}*"))
+        candidates = [
+            path
+            for prefix in (_CLONE_PREFIX, _FIREFOX_CLONE_PREFIX)
+            for path in root.glob(f"{prefix}*")
+        ]
     except OSError:  # pragma: no cover — an unreadable $TMPDIR is the OS's problem
         return removed
     for candidate in candidates:
         try:
-            if not candidate.is_dir() or candidate.stat().st_mtime > cutoff:
+            if not candidate.is_dir():
+                continue
+            if candidate.stat().st_mtime > cutoff and not _owner_is_gone(candidate):
                 continue
         except OSError:
             continue
@@ -289,6 +355,61 @@ def _sweep_stale_profile_clones(
     return removed
 
 
+def _clone_profile(
+    profile: Path, prefix: str, ignore: Callable[[str, list[str]], list[str]]
+) -> Path:
+    """Copy a browser profile into a fresh private (0700) temp directory
+    that holds its owner lock, leaving out what *ignore* names.
+
+    Links are copied as links, so a link out of the profile does not copy
+    what it names. `copytree` gives the copy's root the profile's own mode,
+    so the root is made 0700 again after it (review-nd9 `probe_ffprofile9
+    755`).
+    """
+    _sweep_stale_profile_clones()
+    temp_dir = Path(tempfile.mkdtemp(prefix=prefix))
+    # Tighten permissions so other users on the system cannot read
+    # the cloned profile (which contains cookies and session tokens).
+    os.chmod(temp_dir, 0o700)
+    _claim_profile_clone(temp_dir)
+
+    def _ignore_with_owner_file(directory: str, contents: list[str]) -> list[str]:
+        skipped = ignore(directory, contents)
+        if Path(directory) == profile and _CLONE_OWNER_FILE in contents:
+            skipped.append(_CLONE_OWNER_FILE)
+        return skipped
+
+    try:
+        shutil.copytree(
+            profile, temp_dir, symlinks=True, dirs_exist_ok=True, ignore=_ignore_with_owner_file
+        )
+        os.chmod(temp_dir, 0o700)
+    except BaseException:
+        # The caller never receives `temp_dir`, so nothing else could remove
+        # the partial copy of the cookie database or release its owner lock.
+        _discard_profile_clone(temp_dir)
+        raise
+    return temp_dir
+
+
+def _clone_firefox_profile(profile: Path) -> Path:
+    """Copy a Firefox profile, as `_clone_chrome_profile` copies Chrome's.
+
+    Firefox ran on the user's profile in place, so the browser wrote into it
+    (owner decision, "Copy it like Chrome"). Logins come along
+    (`cookies.sqlite`, `key4.db`, `logins.json`); `_FIREFOX_SKIPPED` does not.
+    """
+
+    def _ignore(directory: str, contents: list[str]) -> list[str]:
+        skipped = [c for c in contents if c in _FIREFOX_SKIPPED]
+        parts = Path(directory).relative_to(profile).parts
+        if len(parts) >= 2 and parts[0] == "storage" and "cache" in contents:
+            skipped.append("cache")
+        return skipped
+
+    return _clone_profile(profile, _FIREFOX_CLONE_PREFIX, _ignore)
+
+
 def _clone_chrome_profile(profile: Path) -> Path:
     """Clone a Chrome user-data dir to a temporary location.
 
@@ -296,12 +417,6 @@ def _clone_chrome_profile(profile: Path) -> Path:
     directory. Copying to a temp dir satisfies the "non-default" requirement
     while preserving cookies and session state.
     """
-    _sweep_stale_profile_clones()
-    temp_dir = Path(tempfile.mkdtemp(prefix=_CLONE_PREFIX))
-    # Tighten permissions so other users on the system cannot read
-    # the cloned profile (which contains cookies and session tokens).
-    os.chmod(temp_dir, 0o700)
-    _claim_profile_clone(temp_dir)
 
     def _ignore(_dir: str, contents: list[str]) -> list[str]:
         return [
@@ -320,14 +435,7 @@ def _clone_chrome_profile(profile: Path) -> Path:
             }
         ]
 
-    try:
-        shutil.copytree(profile, temp_dir, dirs_exist_ok=True, ignore=_ignore)
-    except BaseException:
-        # The caller never receives `temp_dir`, so nothing else could remove
-        # the partial copy of the cookie database or release its owner lock.
-        _discard_profile_clone(temp_dir)
-        raise
-    return temp_dir
+    return _clone_profile(profile, _CLONE_PREFIX, _ignore)
 
 
 def browser_launch_options(browser: str, *, headless: bool = True) -> dict[str, Any]:
@@ -835,7 +943,7 @@ def launch_browser(
     if profile_path:
         profile = Path(profile_path).expanduser()
         # Everything past the clone is wrapped: the clone is a full copy of the
-        # user's Chrome profile, cookie database included, and a failed launch
+        # user's profile, cookie database included, and a failed launch
         # used to abandon it in $TMPDIR where nothing ever removed it — along
         # with the Playwright driver process it had already started.
         try:
@@ -843,6 +951,11 @@ def launch_browser(
                 # Chrome refuses remote debugging on its default user-data dir.
                 # Clone to a temp location to satisfy the "non-default" requirement.
                 temp_profile = _clone_chrome_profile(profile)
+                profile = temp_profile
+            if browser == "firefox":
+                # Never the user's profile in place: the browser writes to it
+                # (owner decision, "Copy it like Chrome").
+                temp_profile = _clone_firefox_profile(profile)
                 profile = temp_profile
             if browser == "firefox":
                 ctx = playwright.firefox.launch_persistent_context(

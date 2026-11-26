@@ -754,6 +754,7 @@ def _launch(monkeypatch, tmp_path: Path, browser: str, profile: bool, page: _Fak
 
     monkeypatch.setattr(sync_api, "sync_playwright", lambda: fake)
     monkeypatch.setattr(bs, "_clone_chrome_profile", lambda path: tmp_path / "clone")
+    monkeypatch.setattr(bs, "_clone_firefox_profile", lambda path: tmp_path / "clone")
     (tmp_path / "clone").mkdir(exist_ok=True)
     return fake, bs.launch_browser(browser, str(tmp_path / "profile") if profile else None)
 

@@ -57,6 +57,17 @@ class _Server:
             def do_GET(self):  # noqa: N802
                 outer.hits.append(self.path)
                 path = self.path.partition("?")[0]
+                if path == "/set-cookie":
+                    # A login: a cookie that outlives the browser.
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html")
+                    self.send_header("Content-Length", "2")
+                    self.send_header("Set-Cookie", "login=1; Path=/; Max-Age=86400")
+                    self.end_headers()
+                    self.wfile.write(b"ok")
+                    return None
+                if path == "/login.pdf" and "login=1" not in (self.headers.get("Cookie") or ""):
+                    return self._send(403, "text/html", b"login required")
                 if path in outer.pages:
                     time.sleep(outer.delays.get(path, 0.0))
                     return self._send(200, "text/html", outer.pages[path])
@@ -278,3 +289,54 @@ def test_discovery_past_its_deadline_skips_its_waits(server, browser, short_dead
     assert url is None
     # The banner tries, a read of ten links and leaving an idle page.
     assert seconds < SHORT_T + 1.2 + 3.0
+
+
+def _tree(root: Path) -> dict[str, str]:
+    """Every entry under *root*: a link's target, a file's bytes, a mode."""
+    import hashlib
+    import os
+
+    out: dict[str, str] = {}
+    for path in sorted(root.rglob("*")):
+        rel = str(path.relative_to(root))
+        if path.is_symlink():
+            out[rel] = "link:" + os.readlink(path)
+        elif path.is_file():
+            out[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
+        else:
+            out[rel] = f"dir:{path.stat().st_mode:o}"
+    return out
+
+
+def test_firefox_runs_on_a_private_copy_of_its_profile(server, tmp_path) -> None:
+    """Firefox ran on the user's profile in place and wrote into it
+    (owner decision: "Copy it like Chrome"). The copy must still carry the
+    profile's login, be private, keep a link a link, and go on close."""
+    import os
+    import stat
+
+    from playwright.sync_api import sync_playwright
+
+    profile = tmp_path / "scratch-firefox-profile"
+    with sync_playwright() as p:
+        context = p.firefox.launch_persistent_context(str(profile), headless=True)
+        page = context.pages[0] if context.pages else context.new_page()
+        page.goto(server.base + "/set-cookie")
+        context.close()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "sentinel.txt").write_text("outside")
+    (profile / "linkdir").symlink_to(outside)
+    os.chmod(profile, 0o755)
+    before = _tree(profile)
+
+    with _session("firefox", server, profile_path=str(profile)) as session:
+        copy = session._temp_profile
+        assert copy is not None and copy != profile
+        assert stat.S_IMODE(copy.stat().st_mode) == 0o700
+        assert (copy / "linkdir").is_symlink()
+        result = session.fetch_direct(server.base + "/login.pdf")
+        assert result.is_pdf(), "the profile's login cookie was not sent"
+    assert not copy.exists()
+    assert _tree(profile) == before
+    assert (outside / "sentinel.txt").read_text() == "outside"
